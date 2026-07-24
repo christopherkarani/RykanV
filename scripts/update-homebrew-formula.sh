@@ -1,11 +1,11 @@
 #!/usr/bin/env sh
 set -eu
 
-VERSION="${1:-${ORCA_VERSION:-}}"
-HOMEBREW_TAP_DIR="${ORCA_HOMEBREW_TAP_DIR:-${HOME}/code/homebrew-orca}"
-FORMULA_OUT="${ORCA_HOMEBREW_FORMULA:-${HOMEBREW_TAP_DIR}/Formula/orca.rb}"
-TEMPLATE="${ORCA_HOMEBREW_TEMPLATE:-packaging/homebrew/Formula/orca.rb}"
-TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/orca-homebrew.XXXXXX")"
+VERSION="${1:-${RYK_VERSION:-${ORCA_VERSION:-}}}"
+HOMEBREW_TAP_DIR="${RYK_HOMEBREW_TAP_DIR:-${ORCA_HOMEBREW_TAP_DIR:-${HOME}/code/homebrew-orca}}"
+FORMULA_OUT="${ORCA_HOMEBREW_FORMULA:-${RYK_HOMEBREW_FORMULA:-${HOMEBREW_TAP_DIR}/Formula/ryk.rb}}"
+TEMPLATE="${ORCA_HOMEBREW_TEMPLATE:-${RYK_HOMEBREW_TEMPLATE:-packaging/homebrew/Formula/ryk.rb}}"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ryk-homebrew.XXXXXX")"
 
 cleanup() {
   rm -rf "$TMP_DIR"
@@ -17,30 +17,37 @@ fail() {
   exit 1
 }
 
-[ -n "$VERSION" ] || fail "usage: $0 <version>  (or set ORCA_VERSION)"
+[ -n "$VERSION" ] || fail "usage: $0 <version>  (or set RYK_VERSION / ORCA_VERSION)"
 [ -f "$TEMPLATE" ] || fail "homebrew template not found: $TEMPLATE"
 
 BASE_URL="https://github.com/christopherkarani/Orca/releases/download/v${VERSION}"
-DIST_DIR="${ORCA_DIST_DIR:-}"
+DIST_DIR="${RYK_DIST_DIR:-${ORCA_DIST_DIR:-}}"
 
 if [ -n "$DIST_DIR" ]; then
-  printf 'Using local release assets for Orca %s from %s...\n' "$VERSION" "$DIST_DIR"
+  printf 'Using local release assets for ryk %s from %s...\n' "$VERSION" "$DIST_DIR"
 else
-  printf 'Downloading release assets for Orca %s...\n' "$VERSION"
+  printf 'Downloading release assets for ryk %s...\n' "$VERSION"
 fi
 
 for plat in darwin-arm64 darwin-amd64 linux-arm64 linux-amd64; do
-  artifact="orca-v${VERSION}-${plat}.tar.gz"
-  url="${BASE_URL}/${artifact}"
+  # Prefer primary ryk-v* artifacts; fall back to dual-published orca-v*.
+  artifact="ryk-v${VERSION}-${plat}.tar.gz"
+  legacy="orca-v${VERSION}-${plat}.tar.gz"
   output="${TMP_DIR}/${artifact}"
 
   printf '  → %s\n' "$artifact"
   if [ -n "$DIST_DIR" ] && [ -f "${DIST_DIR}/${artifact}" ]; then
     cp "${DIST_DIR}/${artifact}" "$output"
+  elif [ -n "$DIST_DIR" ] && [ -f "${DIST_DIR}/${legacy}" ]; then
+    cp "${DIST_DIR}/${legacy}" "$output"
   elif command -v curl >/dev/null 2>&1; then
-    curl -fsSL -o "$output" "$url" || fail "failed to download $url"
+    if ! curl -fsSL -o "$output" "${BASE_URL}/${artifact}"; then
+      curl -fsSL -o "$output" "${BASE_URL}/${legacy}" || fail "failed to download ryk or orca artifact for $plat"
+    fi
   elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "$output" "$url" || fail "failed to download $url"
+    if ! wget -q -O "$output" "${BASE_URL}/${artifact}"; then
+      wget -q -O "$output" "${BASE_URL}/${legacy}" || fail "failed to download ryk or orca artifact for $plat"
+    fi
   else
     fail "curl or wget is required"
   fi
@@ -57,10 +64,10 @@ sha256_file() {
   fi
 }
 
-darwin_arm64="$(sha256_file "${TMP_DIR}/orca-v${VERSION}-darwin-arm64.tar.gz")"
-darwin_amd64="$(sha256_file "${TMP_DIR}/orca-v${VERSION}-darwin-amd64.tar.gz")"
-linux_arm64="$(sha256_file "${TMP_DIR}/orca-v${VERSION}-linux-arm64.tar.gz")"
-linux_amd64="$(sha256_file "${TMP_DIR}/orca-v${VERSION}-linux-amd64.tar.gz")"
+darwin_arm64="$(sha256_file "${TMP_DIR}/ryk-v${VERSION}-darwin-arm64.tar.gz")"
+darwin_amd64="$(sha256_file "${TMP_DIR}/ryk-v${VERSION}-darwin-amd64.tar.gz")"
+linux_arm64="$(sha256_file "${TMP_DIR}/ryk-v${VERSION}-linux-arm64.tar.gz")"
+linux_amd64="$(sha256_file "${TMP_DIR}/ryk-v${VERSION}-linux-amd64.tar.gz")"
 
 printf 'Merging version and checksums into formula template...\n'
 
@@ -78,13 +85,14 @@ mv "${FORMULA_OUT}.tmp" "$FORMULA_OUT"
 
 printf 'Formula written to %s\n' "$FORMULA_OUT"
 
+formula_basename="$(basename "$FORMULA_OUT")"
 if [ -d "${HOMEBREW_TAP_DIR}/.git" ]; then
   cd "$HOMEBREW_TAP_DIR"
-  git add Formula/orca.rb
+  git add "Formula/${formula_basename}"
   if git diff --cached --quiet; then
     printf 'No changes to commit.\n'
   else
-    git commit -m "Update orca to ${VERSION}"
+    git commit -m "Update ${formula_basename%.rb} to ${VERSION}"
     printf 'Committed. Run `git push` to publish.\n'
   fi
 else

@@ -1,10 +1,10 @@
 {
   "name": "@orca-sec/pi-orca",
   "version": "1.2.8",
-  "description": "Official Orca integration for Pi bash/file protection with approval-gated discovery.",
+  "description": "Official ryk (formerly Orca) Pi integration for bash/file protection. Package id @orca-sec/pi-orca kept during dual-name window; prefer display brand ryk / slash /ryk-*. Do not treat as a separate product. Not publishing a hard rename in 5a.",
   "type": "module",
   "license": "Apache-2.0",
-  "author": "Orca Security",
+  "author": "ryk",
   "homepage": "https://github.com/christopherkarani/Orca#readme",
   "repository": {
     "type": "git",
@@ -18,6 +18,7 @@
     "pi-package",
     "pi",
     "pi-coding-agent",
+    "ryk",
     "orca",
     "security",
     "guardrails",

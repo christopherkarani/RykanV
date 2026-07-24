@@ -21,7 +21,7 @@ pub const Flags = struct {
     preset: []const u8 = default_preset,
 };
 
-/// Paid-beta protection paths configured by `orca start`.
+/// Paid-beta protection paths configured by `ryk start`.
 pub const ProtectionMode = enum {
     command_guard,
     firewall,
@@ -419,7 +419,7 @@ pub fn runVerification(
     return outcome;
 }
 
-/// Parses `orca start` flags.
+/// Parses `ryk start` flags.
 pub fn parseStartFlags(argv: []const []const u8, stderr: anytype) !StartFlags {
     var flags: StartFlags = .{};
     var index: usize = 0;
@@ -436,7 +436,7 @@ pub fn parseStartFlags(argv: []const []const u8, stderr: anytype) !StartFlags {
         if (std.mem.eql(u8, arg, "--preset")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca start: --preset requires a preset name.\n");
+                try stderr.writeAll("ryk start: --preset requires a preset name.\n");
                 return error.Usage;
             }
             flags.preset = argv[index];
@@ -448,13 +448,13 @@ pub fn parseStartFlags(argv: []const []const u8, stderr: anytype) !StartFlags {
         if (std.mem.eql(u8, arg, "--hosts")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca start: --hosts requires a comma-separated host list.\n");
+                try stderr.writeAll("ryk start: --hosts requires a comma-separated host list.\n");
                 return error.Usage;
             }
             flags.hosts_csv = argv[index];
             continue;
         }
-        try suggestions.writeUnknownOption(stderr, "orca start", arg, &.{ "--auto", "--yes", "--no-interact", "--skip-verify", "--preset", "--hosts" }, "start");
+        try suggestions.writeUnknownOption(stderr, "ryk start", arg, &.{ "--auto", "--yes", "--no-interact", "--skip-verify", "--preset", "--hosts" }, "start");
         return error.Usage;
     }
     return flags;

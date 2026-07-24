@@ -471,7 +471,8 @@ test "summary markdown is product neutral unless caller provides label" {
         .status = .{ .exited = 0 },
         .event_count = 3,
         .final_event_hash = "abc",
-        .product_label = "Orca",
+        // Literal (not cli/brand.zig): this file is also owned by core_engine module.
+        .product_label = "ryk",
     });
     const orca_heading_prefix = "# " ++ "Orca" ++ " Session ";
     try std.testing.expect(std.mem.indexOf(u8, orca.items, orca_heading_prefix) != null);

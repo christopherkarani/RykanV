@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Breaking
+- **Phase 5a brand cut — product identity is `ryk`** (absorbs draft “ryz”; one brand only).
+  - **CLI binary:** primary `ryk`; `orca` PATH alias / second install of same product (≥1 major).
+  - **Display:** help, TUI, status, plugins, dashboard say **ryk** (legacy “Orca” only in history).
+  - **Environment:** prefer `RYK_*`, fall back `ORCA_*`.
+  - **Release artifacts:** primary `ryk-v{version}-*`; dual-publish `orca-v*` when cheap.
+  - **npm:** `@orca-sec/ryk` (scope kept); `@orca-sec/orca` deprecated/shim; bin `orca` still installed.
+  - **Pi:** `@orca-sec/pi-ryk` (+ dual); keep `@orca-sec/pi-orca` and `/orca-*` aliases during window.
+  - **FM App Support (macOS):** prefer `…/ryk/fm-steward/`; first-run copy/fallback from `…/Orca/fm-steward/`.
+  - **Workspace policy paths:** still `.orca/` — **not** hard-cut in 5a (Phase 5b).
+  - **Audit stored `kind`:** still `"orca"` (display-only rename optional later).
+  - **Codex guard emit:** still `[[ORCA-GUARD]]`; dual-read `[[RYK-GUARD]]` if present.
+  - **Share install path:** still `~/.local/share/orca` (path migrate deferred to 5b).
+  - **Git remote / Zig package graph:** unchanged (`build.zig.zon` `.name = .orca` stays).
+
 ### Changed
 - **Full Zig shell evaluator (MVP)** — `orca hook` / `orca run` / shims evaluate shell commands in-process via `src/shell_engine` by default (`ORCA_SHELL_EVAL=zig`). Daemon-down no longer gates shell PreToolUse. `orca test` / `orca explain` are Zig-native. Former Rust ExecuteCli surfaces (`scan`, `simulate`, `packs`, `history`, allowlist mutators, …) stub until ported. The `orca-rs` crate is removed from the tree.
 - **Product language cut (Safe Launch)** — public day-1 path is now:

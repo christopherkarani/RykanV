@@ -1,26 +1,27 @@
 {
     "name": "orca",
     "version": "1.2.8",
-    "description": "Orca safety hooks and skills for Codex.",
+    "description": "ryk safety hooks and skills for Codex (orca plugin id kept for host registry compat).",
     "author": {
-        "name": "Orca"
+        "name": "ryk"
     },
-    "homepage": "https://github.com/chriskarani/orca",
-    "repository": "https://github.com/chriskarani/orca",
+    "homepage": "https://github.com/christopherkarani/Orca",
+    "repository": "https://github.com/christopherkarani/Orca",
     "license": "Apache-2.0",
     "keywords": [
         "security",
         "ai-agents",
         "policy",
         "audit",
-        "redteam"
+        "redteam",
+        "ryk"
     ],
     "skills": "./skills/",
     "hooks": "./hooks/hooks.json",
     "interface": {
-        "displayName": "Orca",
+        "displayName": "ryk",
         "shortDescription": "Runtime firewall helpers for Codex.",
-        "longDescription": "Run Orca doctor, policy checks, red-team fixtures, replay, and hook-based safety checks from Codex.",
-        "developerName": "Orca"
+        "longDescription": "Run ryk doctor, policy checks, red-team fixtures, replay, and hook-based safety checks from Codex. Hooks prefer ryk on PATH, falling back to orca.",
+        "developerName": "ryk"
     }
 }

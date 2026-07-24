@@ -1,7 +1,7 @@
 {
   "name": "orca-local-plugins",
   "interface": {
-    "displayName": "Orca Local Plugins"
+    "displayName": "ryk Local Plugins"
   },
   "plugins": [
     {

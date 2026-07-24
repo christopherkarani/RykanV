@@ -1,14 +1,14 @@
 {
   "name": "orca-local-plugins",
   "version": "1.0.0",
-  "description": "Local Orca plugins for Claude Code.",
+  "description": "Local ryk plugins for Claude Code.",
   "owner": {
-    "name": "Orca"
+    "name": "ryk"
   },
   "plugins": [
     {
       "name": "orca",
-      "description": "Orca safety hooks and skills for Claude Code.",
+      "description": "ryk safety hooks and skills for Claude Code.",
       "source": "../claude-code-plugin",
       "category": "developer-tools"
     }

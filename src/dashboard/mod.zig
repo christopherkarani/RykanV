@@ -11,6 +11,7 @@ const credentials_runtime = @import("../intercept/credentials.zig");
 const supervisor = core.supervisor;
 const license_mod = @import("../license.zig");
 const ci_check = @import("../ci_check.zig");
+const brand = @import("../cli/brand.zig");
 const rust_visibility = @import("../cli/rust_visibility.zig");
 const feed_writer = @import("../cli/feed_writer.zig");
 
@@ -63,17 +64,17 @@ pub fn writeStatusJson(io: std.Io, allocator: std.mem.Allocator, writer: anytype
     try writer.writeAll(",\"feed_health\":");
     try writeWorkspaceFeedHealthJson(io, allocator, writer, workspace_root);
     try writer.writeAll(",\"quick_actions\":[");
-    try writeQuickAction(writer, "doctor", "orca doctor");
+    try writeQuickAction(writer, "doctor", "ryk doctor");
     try writer.writeByte(',');
-    try writeQuickAction(writer, "policy-check", "orca policy check .orca/policy.yaml");
+    try writeQuickAction(writer, "policy-check", "ryk policy check .orca/policy.yaml");
     try writer.writeByte(',');
     try writeQuickAction(writer, "credentials-check", "orca credentials check");
     try writer.writeByte(',');
     try writeQuickAction(writer, "credentials-check-github", "orca credentials check github_pat");
     try writer.writeByte(',');
-    try writeQuickAction(writer, "proxy-smoke", "orca run --secretless --network-backend proxy -- /usr/bin/env");
+    try writeQuickAction(writer, "proxy-smoke", "ryk run --secretless --network-backend proxy -- /usr/bin/env");
     try writer.writeByte(',');
-    try writeQuickAction(writer, "policy-explain-github", "orca policy explain network https://api.github.com/repos/acme/app/issues --method POST");
+    try writeQuickAction(writer, "policy-explain-github", "ryk policy explain network https://api.github.com/repos/acme/app/issues --method POST");
     try writer.writeByte(',');
     try writeQuickAction(writer, "replay-last", "orca replay --session last --verify");
     try writer.writeByte(',');
@@ -91,7 +92,7 @@ pub fn writeStatusJson(io: std.Io, allocator: std.mem.Allocator, writer: anytype
     try writer.writeByte(',');
     try writeQuickAction(writer, "suggest-allowlist", "orca suggest-allowlist --confidence high");
     try writer.writeByte(',');
-    try writeQuickAction(writer, "allowlist-list", "orca allowlist list");
+    try writeQuickAction(writer, "allowlist-list", "ryk allowlist list");
     try writer.writeByte(',');
     try writeQuickAction(writer, "license-status", "orca license status");
     try writer.writeAll("]}");
@@ -138,7 +139,7 @@ pub fn writeMachineStatusJson(
     try writer.writeAll(",\"feed_health\":");
     try aggregate.writeGlobalFeedHealthJson(io, allocator, writer, dashboard_root);
     try writer.writeAll(",\"quick_actions\":[");
-    try writeQuickAction(writer, "doctor", "orca doctor");
+    try writeQuickAction(writer, "doctor", "ryk doctor");
     try writer.writeByte(',');
     try writeQuickAction(writer, "license-status", "orca license status");
     try writer.writeAll("]}");
@@ -222,7 +223,7 @@ fn writeSecretlessRuntimeJson(io: std.Io, allocator: std.mem.Allocator, writer: 
     try core.util.writeJsonString(writer, if (proxy_backend == .proxy) "127.0.0.1:<allocated-per-run>" else "");
     try writer.writeAll(",\"https_visibility\":\"host-port-only\",\"method_path_visibility\":\"http-and-cooperative-hooks\",\"backend\":");
     try core.util.writeJsonString(writer, proxy_backend.toString());
-    try writer.writeAll("},\"supported_brokers\":[{\"id\":\"local-dummy\",\"label\":\"Local dummy broker\",\"status\":\"available\",\"stores_raw_secrets\":false,\"notes\":\"Built in. Emits non-secret orca-secret:// references for local verification.\"},{\"id\":\"env-file-dev\",\"label\":\"Env-file dev broker\",\"status\":\"available\",\"stores_raw_secrets\":false,\"notes\":\"Local development only. Reads .orca/dev-secrets.env at runtime and never writes raw values to audit.\"},{\"id\":\"1password-cli\",\"label\":\"1Password CLI\",\"status\":\"available-when-op-installed\",\"stores_raw_secrets\":false,\"notes\":\"Runs op read without shell interpolation and discards resolved values after checks.\"},{\"id\":\"macos-keychain\",\"label\":\"macOS Keychain\",\"status\":\"available-on-macos\",\"stores_raw_secrets\":false,\"notes\":\"Uses /usr/bin/security find-generic-password for configured refs.\"},{\"id\":\"infisical-agent-vault\",\"label\":\"Infisical / Agent Vault\",\"status\":\"status-boundary\",\"stores_raw_secrets\":false,\"notes\":\"Configured as an extension boundary; resolution remains disabled until exact local API or CLI behavior is verified.\"}],\"capabilities\":[{\"label\":\"Env replacement\",\"state\":\"active\",\"detail\":\"orca run --secretless strips raw secret-like env values from the child and substitutes broker references.\"},{\"label\":\"Broker checks\",\"state\":\"active\",\"detail\":\"orca credentials check verifies broker config and refs without printing raw secret values.\"},{\"label\":\"Service policy\",\"state\":\"active\",\"detail\":\"services: rules support hosts, methods, allow/deny paths, credential references, unmatched behavior, and port-scoped hosts.\"},{\"label\":\"Proxy backend\",\"state\":\"limited\",\"detail\":\"orca run --network-backend proxy injects a loopback proxy. HTTPS CONNECT enforcement is host/port only without MITM.\"},{\"label\":\"Transparent OS interception\",\"state\":\"unavailable\",\"detail\":\"Orca does not claim OS-level transparent network interception.\"}],\"guarantees\":[\"Child processes launched with --secretless do not receive raw secret-like environment values that Orca detects.\",\"Broker references and checks never print or persist raw resolved secret values.\",\"Orca remains the runtime policy and audit layer; external brokers own secret storage.\"],\"limitations\":[\"Secretless mode only protects processes launched through orca run --secretless.\",\"HTTPS path and method enforcement is unavailable in proxy mode without MITM or cooperative metadata.\",\"Infisical/Agent Vault resolution is not enabled until its local contract is verified.\"],\"run_command\":\"orca run --secretless --network-backend proxy -- <agent-command>\",\"verify_commands\":[\"orca credentials check\",\"orca credentials check github_pat\",\"orca policy check .orca/policy.yaml\",\"orca policy explain network https://api.github.com/repos/acme/app/issues --method POST\",\"orca run --secretless --network-backend proxy -- /usr/bin/env\",\"orca replay --session last --verify\"],\"service_policy_template\":");
+    try writer.writeAll("},\"supported_brokers\":[{\"id\":\"local-dummy\",\"label\":\"Local dummy broker\",\"status\":\"available\",\"stores_raw_secrets\":false,\"notes\":\"Built in. Emits non-secret orca-secret:// references for local verification.\"},{\"id\":\"env-file-dev\",\"label\":\"Env-file dev broker\",\"status\":\"available\",\"stores_raw_secrets\":false,\"notes\":\"Local development only. Reads .orca/dev-secrets.env at runtime and never writes raw values to audit.\"},{\"id\":\"1password-cli\",\"label\":\"1Password CLI\",\"status\":\"available-when-op-installed\",\"stores_raw_secrets\":false,\"notes\":\"Runs op read without shell interpolation and discards resolved values after checks.\"},{\"id\":\"macos-keychain\",\"label\":\"macOS Keychain\",\"status\":\"available-on-macos\",\"stores_raw_secrets\":false,\"notes\":\"Uses /usr/bin/security find-generic-password for configured refs.\"},{\"id\":\"infisical-agent-vault\",\"label\":\"Infisical / Agent Vault\",\"status\":\"status-boundary\",\"stores_raw_secrets\":false,\"notes\":\"Configured as an extension boundary; resolution remains disabled until exact local API or CLI behavior is verified.\"}],\"capabilities\":[{\"label\":\"Env replacement\",\"state\":\"active\",\"detail\":\"ryk run --secretless strips raw secret-like env values from the child and substitutes broker references.\"},{\"label\":\"Broker checks\",\"state\":\"active\",\"detail\":\"orca credentials check verifies broker config and refs without printing raw secret values.\"},{\"label\":\"Service policy\",\"state\":\"active\",\"detail\":\"services: rules support hosts, methods, allow/deny paths, credential references, unmatched behavior, and port-scoped hosts.\"},{\"label\":\"Proxy backend\",\"state\":\"limited\",\"detail\":\"ryk run --network-backend proxy injects a loopback proxy. HTTPS CONNECT enforcement is host/port only without MITM.\"},{\"label\":\"Transparent OS interception\",\"state\":\"unavailable\",\"detail\":\"Orca does not claim OS-level transparent network interception.\"}],\"guarantees\":[\"Child processes launched with --secretless do not receive raw secret-like environment values that Orca detects.\",\"Broker references and checks never print or persist raw resolved secret values.\",\"Orca remains the runtime policy and audit layer; external brokers own secret storage.\"],\"limitations\":[\"Secretless mode only protects processes launched through ryk run --secretless.\",\"HTTPS path and method enforcement is unavailable in proxy mode without MITM or cooperative metadata.\",\"Infisical/Agent Vault resolution is not enabled until its local contract is verified.\"],\"run_command\":\"ryk run --secretless --network-backend proxy -- <agent-command>\",\"verify_commands\":[\"orca credentials check\",\"orca credentials check github_pat\",\"ryk policy check .orca/policy.yaml\",\"ryk policy explain network https://api.github.com/repos/acme/app/issues --method POST\",\"ryk run --secretless --network-backend proxy -- /usr/bin/env\",\"orca replay --session last --verify\"],\"service_policy_template\":");
     try core.util.writeJsonString(writer, service_policy_template);
     try writer.writeByte('}');
 }
@@ -461,10 +462,10 @@ fn writePluginCardJson(
     try writer.writeAll(",\"doctor_command\":");
     try core.util.writeJsonString(writer, doctor_command);
     try writer.writeAll(",\"setup_commands\":[");
-    // Safe Launch taught path only — orca start + host aliases + status (not demoted setup/init/run).
+    // Safe Launch taught path only — ryk start + host aliases + status (not demoted setup/init/run).
     if (std.mem.eql(u8, id, "openclaw")) {
         try writeStringArray(writer, &.{
-            "orca start",
+            "ryk start",
             "openclaw plugins install clawhub:orca-openclaw-plugin",
             "orca plugin doctor openclaw",
             "orca openclaw",
@@ -472,7 +473,7 @@ fn writePluginCardJson(
         });
     } else {
         try writeStringArray(writer, &.{
-            "orca start",
+            "ryk start",
             "orca plugin doctor hermes",
             "orca hermes",
             "orca status",
@@ -768,7 +769,7 @@ test "status json includes policy and protected agent cards" {
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"hermes\"") != null);
     // Phase 7 Safe Launch: plugin setup_commands must not re-teach demoted doors.
     try std.testing.expect(std.mem.indexOf(u8, out.items, "orca setup") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "orca start") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "ryk start") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "orca openclaw") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "orca hermes") != null);
 }
@@ -1038,7 +1039,7 @@ fn writeDeniedReplayFixture(allocator: std.mem.Allocator, root: []const u8) !voi
         .event_count = writer.event_count,
         .final_event_hash = writer.finalHash().?,
         .policy = ".orca/policy.yaml",
-        .product_label = "Orca",
+        .product_label = brand.product_display,
     });
     _ = &session;
 }
@@ -1067,7 +1068,7 @@ fn writeSecretlessEvidenceFixture(allocator: std.mem.Allocator, root: []const u8
         .event_count = writer.event_count,
         .final_event_hash = writer.finalHash().?,
         .policy = ".orca/policy.yaml",
-        .product_label = "Orca",
+        .product_label = brand.product_display,
     });
     _ = &session;
 }
@@ -1105,7 +1106,7 @@ test "status json exposes daemon health and rust shell decisions feed" {
         "claude",
         "healthy",
         "deny",
-        "blocked by Orca policy rule: destructive_rm",
+        "blocked by ryk policy rule: destructive_rm",
         "destructive_rm",
         "Critical",
         "Use a safer workflow.",
@@ -1154,7 +1155,7 @@ test "machine status aggregates registered workspaces and exposes only global ac
             "codex",
             "healthy",
             "deny",
-            "blocked by Orca policy",
+            "blocked by ryk policy",
             null,
             null,
             null,

@@ -420,13 +420,13 @@ test "doctor packs section labels are stable" {
     try std.testing.expect(std.mem.indexOf(u8, out, "baseline: core.*, system.disk") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "opt-in: 2 enabled") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "containers.docker") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "orca packs show") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "orca packs enable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "ryk packs show") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "ryk packs enable") != null);
 
     writer = .fixed(&buf);
     try writeDoctorPacksSection(&writer, unknownPacksSummary());
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "unknown (daemon unavailable") != null);
-    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "orca packs") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "ryk packs") != null);
 }
 
 test "merge does not promote disabled packs into enabled" {

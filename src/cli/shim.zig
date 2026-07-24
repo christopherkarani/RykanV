@@ -24,7 +24,7 @@ pub fn command(io: std.Io, environ_map: *const std.process.Environ.Map, argv: []
 
 fn exec(io: std.Io, environ_map: *const std.process.Environ.Map, command_argv: []const []const u8, _: anytype, stderr: anytype) !u8 {
     if (command_argv.len == 0) {
-        try stderr.writeAll("orca shim exec: missing command after '--'.\n");
+        try stderr.writeAll("ryk shim exec: missing command after '--'.\n");
         return exit_codes.usage;
     }
 
@@ -37,15 +37,15 @@ fn exec(io: std.Io, environ_map: *const std.process.Environ.Map, command_argv: [
 
 fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const []const u8, env_map: *const std.process.Environ.Map, stderr: anytype, shell_evaluator: ?shell_eval.ShellCommandEvaluatorFn) !u8 {
     const session_id = env_map.get("ORCA_SESSION_ID") orelse {
-        try stderr.writeAll("orca shim exec: missing ORCA_SESSION_ID; shims only work inside an Orca session.\n");
+        try stderr.writeAll("ryk shim exec: missing ORCA_SESSION_ID; shims only work inside an Orca session.\n");
         return exit_codes.general;
     };
     const workspace_root = env_map.get("ORCA_WORKSPACE_ROOT") orelse {
-        try stderr.writeAll("orca shim exec: missing ORCA_WORKSPACE_ROOT; shims only work inside an Orca session.\n");
+        try stderr.writeAll("ryk shim exec: missing ORCA_WORKSPACE_ROOT; shims only work inside an Orca session.\n");
         return exit_codes.general;
     };
     const shim_dir = env_map.get("ORCA_SHIM_DIR") orelse {
-        try stderr.writeAll("orca shim exec: missing ORCA_SHIM_DIR; refusing unsafe delegation.\n");
+        try stderr.writeAll("ryk shim exec: missing ORCA_SHIM_DIR; refusing unsafe delegation.\n");
         return exit_codes.general;
     };
     const path_value = env_map.get("PATH") orelse "";
@@ -64,13 +64,13 @@ fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const [
                 .ci_may_proceed = false,
             };
             var writer = core_api.openAuditWriter(io, allocator, workspace_root, session_id) catch |open_err| {
-                try stderr.print("orca shim exec: failed to open audit log: {s}\n", .{@errorName(open_err)});
+                try stderr.print("ryk shim exec: failed to open audit log: {s}\n", .{@errorName(open_err)});
                 return exit_codes.general;
             };
             defer writer.deinit();
             try appendCommandEvent(io, &writer, session_id, .command_attempt, display, null);
             try appendCommandEvent(io, &writer, session_id, .command_denied, display, decision);
-            try stderr.writeAll("orca shim exec: untrusted ORCA_POLICY_PATH; refusing child-controlled policy override.\n");
+            try stderr.writeAll("ryk shim exec: untrusted ORCA_POLICY_PATH; refusing child-controlled policy override.\n");
             return exit_codes.denial;
         },
         else => return err,
@@ -108,13 +108,13 @@ fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const [
             };
         } else {
             var writer = core_api.openAuditWriter(io, allocator, workspace_root, session_id) catch |open_err| {
-                try stderr.print("orca shim exec: failed to open audit log: {s}\n", .{@errorName(open_err)});
+                try stderr.print("ryk shim exec: failed to open audit log: {s}\n", .{@errorName(open_err)});
                 return exit_codes.general;
             };
             defer writer.deinit();
             try appendCommandEvent(io, &writer, session_id, .command_attempt, display, null);
             try appendCommandEvent(io, &writer, session_id, .command_denied, display, command_decision.decision);
-            try stderr.print("orca shim exec: command denied: {s}\n", .{command_decision.decision.reason});
+            try stderr.print("ryk shim exec: command denied: {s}\n", .{command_decision.decision.reason});
             const command_display = try intercept.commands.displayArgvRedactedAlloc(allocator, command_argv);
             defer allocator.free(command_display);
             const next = try rust_visibility.formatDenyNextSteps(
@@ -131,7 +131,7 @@ fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const [
 
     const real_binary = intercept.commands.resolveRealBinaryAlloc(io, allocator, command_argv[0], adjusted_path, shim_dir) catch |err| switch (err) {
         error.CommandNotFound => {
-            try stderr.print("orca shim exec: real command not found after removing shim path: {s}\n", .{command_argv[0]});
+            try stderr.print("ryk shim exec: real command not found after removing shim path: {s}\n", .{command_argv[0]});
             return exit_codes.general;
         },
         else => return err,
@@ -139,7 +139,7 @@ fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const [
     defer allocator.free(real_binary);
 
     var writer = core_api.openAuditWriter(io, allocator, workspace_root, session_id) catch |open_err| {
-        try stderr.print("orca shim exec: failed to open audit log: {s}\n", .{@errorName(open_err)});
+        try stderr.print("ryk shim exec: failed to open audit log: {s}\n", .{@errorName(open_err)});
         return exit_codes.general;
     };
     defer writer.deinit();
@@ -162,7 +162,7 @@ fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const [
         .stderr = .inherit,
     }) catch |err| switch (err) {
         error.FileNotFound => {
-            try stderr.print("orca shim exec: command not found: {s}\n", .{command_argv[0]});
+            try stderr.print("ryk shim exec: command not found: {s}\n", .{command_argv[0]});
             return exit_codes.general;
         },
         else => return err,
@@ -180,11 +180,11 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
         return error.HelpShown;
     }
     if (!std.mem.eql(u8, argv[0], "exec")) {
-        try stderr.writeAll("orca shim: expected subcommand 'exec'.\n");
+        try stderr.writeAll("ryk shim: expected subcommand 'exec'.\n");
         return error.Usage;
     }
     if (argv.len < 2 or !std.mem.eql(u8, argv[1], "--")) {
-        try stderr.writeAll("orca shim exec: expected '--' before command.\n");
+        try stderr.writeAll("ryk shim exec: expected '--' before command.\n");
         return error.Usage;
     }
     return .{ .command_argv = argv[2..] };
@@ -728,7 +728,7 @@ fn prepareShimExecFixture(opts: ShimFixtureOpts) !ShimTestEnv {
         try recordShimPolicyLoaded(std.testing.allocator, root, session_id, "builtin:strict");
     }
 
-    // Parent session mode recording (same as orca run installShims).
+    // Parent session mode recording (same as ryk run installShims).
     const mode = policy.schema.Mode.parse(opts.mode) orelse .strict;
     try writeSessionShimMode(std.testing.io, std.testing.allocator, root, session_id, mode);
 

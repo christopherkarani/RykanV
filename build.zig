@@ -139,8 +139,10 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // Primary product binary is `ryk`; legacy `orca` is installed as a same-product alias (Phase 5a).
+    // Zig module graph keeps the internal name `orca` — do not rename package imports here.
     const exe = b.addExecutable(.{
-        .name = "orca",
+        .name = "ryk",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -153,16 +155,31 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.link_libc = true;
     exe.root_module.addImport("vaxis", vaxis_mod);
-    // Attach once on `orca` (imported by the exe). Linking the same C shim on both
+    // Attach once on the lib module (imported by the exe). Linking the same C shim on both
     // exe.root_module and orca_mod duplicates _orca_regex_* symbols at link time.
     addPcre2Shim(b, orca_mod, target, optimize);
 
-    b.installArtifact(exe);
-    const install_orca = b.addInstallArtifact(exe, .{});
-    const install_orca_step = b.step("install-orca", "Install Orca CLI only");
-    install_orca_step.dependOn(&install_orca.step);
+    // Primary install name follows exe.name ("ryk"). Legacy "orca" is a second install of the
+    // same artifact (compat ≥1 major). Prefer dual install over fragile post-install symlinks
+    // so Windows and DESTDIR prefixes stay correct. On Windows, dest_sub_path must keep .exe
+    // because InstallArtifact uses it literally (does not re-append the target extension).
+    const install_ryk = b.addInstallArtifact(exe, .{});
+    const orca_alias_name: []const u8 = if (target.result.os.tag == .windows) "orca.exe" else "orca";
+    const install_orca_alias = b.addInstallArtifact(exe, .{
+        .dest_sub_path = orca_alias_name,
+    });
+    b.getInstallStep().dependOn(&install_ryk.step);
+    b.getInstallStep().dependOn(&install_orca_alias.step);
 
-    const run_step = b.step("run", "Run the Orca CLI");
+    const install_ryk_step = b.step("install-ryk", "Install ryk CLI (primary)");
+    install_ryk_step.dependOn(&install_ryk.step);
+    install_ryk_step.dependOn(&install_orca_alias.step);
+    // Legacy step name kept for scripts/docs that still call `zig build install-orca`.
+    const install_orca_step = b.step("install-orca", "Install ryk CLI + orca compat alias (legacy step name)");
+    install_orca_step.dependOn(&install_ryk.step);
+    install_orca_step.dependOn(&install_orca_alias.step);
+
+    const run_step = b.step("run", "Run the ryk CLI");
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {

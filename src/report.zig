@@ -24,7 +24,7 @@ pub fn writeMarkdown(io: std.Io, allocator: std.mem.Allocator, writer: anytype, 
     const safe_policy = try presentation.redact.redactOwned(allocator, session.policy);
     defer allocator.free(safe_policy);
 
-    try writer.print("# Orca Safety Report: {s}\n\n", .{session.session_id});
+    try writer.print("# ryk Safety Report: {s}\n\n", .{session.session_id});
     try writer.print("- Session id: `{s}`\n", .{session.session_id});
     try writer.print("- Command: `{s}`\n", .{safe_command});
     try writer.print("- Status: {s}\n", .{session.status_display});
@@ -42,11 +42,11 @@ pub fn writeMarkdown(io: std.Io, allocator: std.mem.Allocator, writer: anytype, 
     }
     try writer.writeAll("\n\n");
 
-    try writer.writeAll("## What Orca Prevented\n\n");
+    try writer.writeAll("## What ryk Prevented\n\n");
     if (session.events.len == 0) {
         try writer.writeAll("Orca did not record a denied action in this session.\n\n");
     } else {
-        try writer.print("Orca prevented {d} action{s} from continuing because the active local policy denied them.\n\n", .{ session.events.len, if (session.events.len == 1) "" else "s" });
+        try writer.print("ryk prevented {d} action{s} from continuing because the active local policy denied them.\n\n", .{ session.events.len, if (session.events.len == 1) "" else "s" });
         const views = try presentation.replay_event.deniedActionViews(allocator, session);
         defer {
             for (views) |*view| view.deinit(allocator);
@@ -215,7 +215,7 @@ test "report renders denied action and redaction summary" {
     try writeMarkdown(std.testing.io, std.testing.allocator, &aw.writer, root, replay);
     const out = try aw.toOwnedSlice();
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Orca Safety Report") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "ryk Safety Report") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "blocked") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Hash-chain verification: verified") != null);
 }

@@ -1,19 +1,19 @@
 #!/usr/bin/env sh
 set -eu
 
-# Orca installer (macOS / Linux)
+# ryk installer (macOS / Linux) — Phase 5a brand cut; orca is a PATH compat alias.
 #
 # Documented one-liner:
 #   curl -fsSL https://raw.githubusercontent.com/christopherkarani/Orca/main/scripts/install.sh | sh
 #
-# Environment:
-#   ORCA_VERSION         Pin release version (default: latest / local VERSION / 1.2.0)
-#   ORCA_INSTALL_DIR     Binary install dir (default: ~/.local/bin)
-#   ORCA_SHARE_DIR       Runtime share root (default: ~/.local/share/orca)
-#   ORCA_BASE_URL        Override release base URL
-#   ORCA_ARTIFACT_DIR    Offline install from a local dist/ folder
-#   ORCA_INSTALL_FORCE=1 Allow overwriting a non-Orca file at the destination
-#   ORCA_INSTALL_QUIET=1 Suppress non-error UI (still installs; prints activation line)
+# Environment (prefer RYK_*; fall back ORCA_* for one major):
+#   RYK_VERSION / ORCA_VERSION         Pin release version (default: latest / local VERSION / 1.2.0)
+#   RYK_INSTALL_DIR / ORCA_INSTALL_DIR Binary install dir (default: ~/.local/bin)
+#   RYK_SHARE_DIR / ORCA_SHARE_DIR     Runtime share root (default: ~/.local/share/orca — kept in 5a)
+#   RYK_BASE_URL / ORCA_BASE_URL       Override release base URL
+#   RYK_ARTIFACT_DIR / ORCA_ARTIFACT_DIR Offline install from a local dist/ folder
+#   RYK_INSTALL_FORCE / ORCA_INSTALL_FORCE=1 Allow overwriting a non-product file at the destination
+#   RYK_INSTALL_QUIET / ORCA_INSTALL_QUIET=1 Suppress non-error UI (still installs; prints activation line)
 #   NO_COLOR             Disable ANSI color even on a TTY
 #
 # Robust VERSION resolution (piped-safe):
@@ -32,7 +32,7 @@ fi
 # Glyphs align with src/tui/render.zig (active/done use success green).
 
 QUIET=0
-if [ "${ORCA_INSTALL_QUIET:-0}" = "1" ]; then
+if [ "${RYK_INSTALL_QUIET:-${ORCA_INSTALL_QUIET:-0}}" = "1" ]; then
   QUIET=1
 fi
 
@@ -76,13 +76,13 @@ ui_err() {
 print_banner() {
   [ "$QUIET" -eq 1 ] && return 0
   printf '\n'
-  printf '  %s🛡  Orca%s · %sv%s%s\n' "$C_BOLD$C_CYAN" "$C_RESET" "$C_BOLD" "$1" "$C_RESET"
+  printf '  %s🛡  ryk%s · %sv%s%s\n' "$C_BOLD$C_CYAN" "$C_RESET" "$C_BOLD" "$1" "$C_RESET"
   if [ "$USE_COLOR" -eq 1 ]; then
     printf '  %s────────────────────────────────%s\n' "$C_DIM" "$C_RESET"
   else
     printf '  --------------------------------\n'
   fi
-  ui_dim "  Agent runtime protection · policy + daemon"
+  ui_dim "  Agent runtime protection · policy + shell_engine"
   printf '  %sPlatform%s  %s\n' "$C_DIM" "$C_RESET" "$2"
   printf '  %sTarget%s    %s\n' "$C_DIM" "$C_RESET" "$3"
   printf '\n'
@@ -131,8 +131,8 @@ if [ -n "$SCRIPT_DIR" ] && [ -r "${SCRIPT_DIR}/../VERSION" ]; then
 fi
 
 RESOLVED_FROM="fallback 1.2.0"
-if [ -n "${ORCA_VERSION:-}" ]; then
-  RESOLVED_FROM="ORCA_VERSION"
+if [ -n "${RYK_VERSION:-${ORCA_VERSION:-}}" ]; then
+  RESOLVED_FROM="RYK_VERSION/ORCA_VERSION"
 elif [ -n "${DEFAULT_VERSION}" ]; then
   RESOLVED_FROM="local VERSION"
 else
@@ -140,9 +140,9 @@ else
   _url="https://api.github.com/repos/christopherkarani/Orca/releases/latest"
   _resp=""
   if command -v curl >/dev/null 2>&1; then
-    _resp="$(curl -fsSL --max-time 8 -H "User-Agent: orca-install-script/1.0 (github.com/christopherkarani/Orca)" "$_url" 2>/dev/null || true)"
+    _resp="$(curl -fsSL --max-time 8 -H "User-Agent: ryk-install-script/1.0 (github.com/christopherkarani/Orca)" "$_url" 2>/dev/null || true)"
   elif command -v wget >/dev/null 2>&1; then
-    _resp="$(wget -qO- --timeout=8 --user-agent="orca-install-script/1.0 (github.com/christopherkarani/Orca)" "$_url" 2>/dev/null || true)"
+    _resp="$(wget -qO- --timeout=8 --user-agent="ryk-install-script/1.0 (github.com/christopherkarani/Orca)" "$_url" 2>/dev/null || true)"
   fi
   if [ -n "${_resp:-}" ]; then
     _tag="$(printf '%s' "$_resp" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[vV]*[^"]*"' | head -n1 | \
@@ -154,14 +154,15 @@ else
   fi
 fi
 
-VERSION="${ORCA_VERSION:-${DEFAULT_VERSION:-1.2.0}}"
-BASE_URL="${ORCA_BASE_URL:-https://github.com/christopherkarani/Orca/releases/download/v${VERSION}}"
-INSTALL_DIR="${ORCA_INSTALL_DIR:-${HOME}/.local/bin}"
-SHARE_DIR="${ORCA_SHARE_DIR:-${HOME}/.local/share/orca}"
+VERSION="${RYK_VERSION:-${ORCA_VERSION:-${DEFAULT_VERSION:-1.2.0}}}"
+BASE_URL="${RYK_BASE_URL:-${ORCA_BASE_URL:-https://github.com/christopherkarani/Orca/releases/download/v${VERSION}}}"
+INSTALL_DIR="${RYK_INSTALL_DIR:-${ORCA_INSTALL_DIR:-${HOME}/.local/bin}}"
+# Phase 5a: keep existing share layout under share/orca (path migrate is Phase 5b).
+SHARE_DIR="${RYK_SHARE_DIR:-${ORCA_SHARE_DIR:-${HOME}/.local/share/orca}}"
 RESOURCE_ROOT="${SHARE_DIR}/${VERSION}"
 CURRENT_LINK="${SHARE_DIR}/current"
-ARTIFACT_DIR="${ORCA_ARTIFACT_DIR:-}"
-TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/orca-install.XXXXXX")"
+ARTIFACT_DIR="${RYK_ARTIFACT_DIR:-${ORCA_ARTIFACT_DIR:-}}"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ryk-install.XXXXXX")"
 RUNTIME_DIRS="integrations fixtures schemas policies"
 INSTALL_MARKER=".orca-installation"
 
@@ -254,24 +255,26 @@ Offline:  set ORCA_ARTIFACT_DIR after verifying checksums by hand."
   fi
 }
 
-# Exit 0 if candidate looks like the Orca CLI; print semver (may be empty) on stdout.
-probe_existing_orca() {
+# Exit 0 if candidate looks like the ryk/orca CLI; print semver (may be empty) on stdout.
+probe_existing_product() {
   candidate="$1"
   [ -e "$candidate" ] || return 1
   out="$("$candidate" version 2>/dev/null)" || out="$("$candidate" --version 2>/dev/null)" || return 1
-  printf '%s\n' "$out" | grep -Eqi '"product"[[:space:]]*:[[:space:]]*"orca"|^orca([[:space:]]|$)|^[0-9]+\.[0-9]+\.[0-9]+' || return 1
+  printf '%s\n' "$out" | grep -Eqi '"product"[[:space:]]*:[[:space:]]*"(ryk|orca)"|^(ryk|orca)([[:space:]]|$)|^[0-9]+\.[0-9]+\.[0-9]+' || return 1
   printf '%s\n' "$out" | sed -n 's/.*\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n1 || true
   return 0
 }
+# Compat name for callers/tests.
+probe_existing_orca() { probe_existing_product "$@"; }
 
 safe_install() {
   source_bin="$1"
   destination="$2"
 
-  if [ -e "$destination" ] && [ "${ORCA_INSTALL_FORCE:-0}" != "1" ]; then
-    if ! probe_existing_orca "$destination" >/dev/null; then
-      fail "refusing to overwrite non-Orca file at $destination" \
-        "Set ORCA_INSTALL_FORCE=1 to replace it, or choose another ORCA_INSTALL_DIR."
+  if [ -e "$destination" ] && [ "${RYK_INSTALL_FORCE:-${ORCA_INSTALL_FORCE:-0}}" != "1" ]; then
+    if ! probe_existing_product "$destination" >/dev/null; then
+      fail "refusing to overwrite non-ryk file at $destination" \
+        "Set RYK_INSTALL_FORCE=1 (or ORCA_INSTALL_FORCE=1) to replace it, or choose another install dir."
     fi
   fi
 
@@ -332,7 +335,7 @@ ensure_path_entry() {
     mkdir -p "$(dirname "$rc_file")"
   fi
 
-  marker="# Added by Orca installer"
+  marker="# Added by ryk installer"
   quoted_dir="$(shell_quote "$dir")"
   if [ "$shell_name" = "fish" ]; then
     path_line="fish_add_path -- $quoted_dir"
@@ -402,16 +405,16 @@ print_success() {
 
   printf '\n'
   if [ -n "$previous_version" ] && [ "$previous_version" != "$VERSION" ] && [ "$previous_version" != "installed" ]; then
-    printf '  %s✓%s  %sOrca v%s installed%s  %s(upgraded from %s)%s\n' \
+    printf '  %s✓%s  %sryk v%s installed%s  %s(upgraded from %s)%s\n' \
       "$C_GREEN" "$C_RESET" "$C_BOLD" "$VERSION" "$C_RESET" "$C_DIM" "$previous_version" "$C_RESET"
   elif [ -n "$previous_version" ]; then
-    printf '  %s✓%s  %sOrca v%s reinstalled%s\n' \
+    printf '  %s✓%s  %sryk v%s reinstalled%s\n' \
       "$C_GREEN" "$C_RESET" "$C_BOLD" "$VERSION" "$C_RESET"
   else
-    printf '  %s✓%s  %sOrca v%s installed%s\n' \
+    printf '  %s✓%s  %sryk v%s installed%s\n' \
       "$C_GREEN" "$C_RESET" "$C_BOLD" "$VERSION" "$C_RESET"
   fi
-  ui_dim "  Daemon + runtime ready"
+  ui_dim "  CLI + runtime ready (shell_engine in-process)"
 
   printf '\n'
   printf '  %sActivate this terminal%s\n' "$C_BOLD" "$C_RESET"
@@ -423,8 +426,9 @@ print_success() {
 
   printf '\n'
   printf '  %sThen%s\n' "$C_BOLD" "$C_RESET"
-  printf '    orca doctor\n'
-  printf '    orca start          %s# guided host wiring (TTY); --auto for CI%s\n' "$C_DIM" "$C_RESET"
+  printf '    ryk doctor\n'
+  printf '    ryk start          %s# guided host wiring (TTY); --auto for CI%s\n' "$C_DIM" "$C_RESET"
+  ui_dim "  (orca remains a PATH alias for one major)"
 
   if [ "$missing_dashboard" -eq 1 ]; then
     printf '\n'
@@ -435,7 +439,7 @@ print_success() {
   printf '\n'
   printf '  %sDetails%s\n' "$C_DIM" "$C_RESET"
   printf '  %s  binary   %s%s\n' "$C_DIM" "$DESTINATION" "$C_RESET"
-  printf '  %s  daemon   %s%s\n' "$C_DIM" "$DAEMON_DESTINATION" "$C_RESET"
+  printf '  %s  alias    %s%s\n' "$C_DIM" "$LEGACY_DESTINATION" "$C_RESET"
   printf '  %s  assets   %s → %s%s\n' "$C_DIM" "$CURRENT_LINK" "$RESOURCE_ROOT" "$C_RESET"
   printf '\n'
 }
@@ -444,12 +448,20 @@ print_success() {
 
 OS="$(detect_os)"
 ARCH="$(detect_arch)"
-ARTIFACT="orca-v${VERSION}-${OS}-${ARCH}.tar.gz"
-DESTINATION="$INSTALL_DIR/orca"
+# Prefer new ryk-v* artifact; fall back to legacy orca-v* during dual-publish window.
+ARTIFACT="ryk-v${VERSION}-${OS}-${ARCH}.tar.gz"
+LEGACY_ARTIFACT="orca-v${VERSION}-${OS}-${ARCH}.tar.gz"
+DESTINATION="$INSTALL_DIR/ryk"
+LEGACY_DESTINATION="$INSTALL_DIR/orca"
 
 # Empty = fresh install; semver or "installed" = existing CLI at destination.
 PREVIOUS_VERSION=""
-if previous_out="$(probe_existing_orca "$DESTINATION")"; then
+if previous_out="$(probe_existing_product "$DESTINATION")"; then
+  PREVIOUS_VERSION="$previous_out"
+  if [ -z "$PREVIOUS_VERSION" ]; then
+    PREVIOUS_VERSION="installed"
+  fi
+elif previous_out="$(probe_existing_product "$LEGACY_DESTINATION")"; then
   PREVIOUS_VERSION="$previous_out"
   if [ -z "$PREVIOUS_VERSION" ]; then
     PREVIOUS_VERSION="installed"
@@ -467,8 +479,14 @@ fi
 step_done "Resolve release" "$resolve_detail"
 
 if [ -n "$ARTIFACT_DIR" ]; then
-  [ -f "$ARTIFACT_DIR/$ARTIFACT" ] || fail "artifact not found: $ARTIFACT_DIR/$ARTIFACT" \
-    "Expected ${ARTIFACT} under ORCA_ARTIFACT_DIR."
+  if [ -f "$ARTIFACT_DIR/$ARTIFACT" ]; then
+    :
+  elif [ -f "$ARTIFACT_DIR/$LEGACY_ARTIFACT" ]; then
+    ARTIFACT="$LEGACY_ARTIFACT"
+  else
+    fail "artifact not found: $ARTIFACT_DIR/$ARTIFACT (or $LEGACY_ARTIFACT)" \
+      "Expected ryk-v* or orca-v* under RYK_ARTIFACT_DIR/ORCA_ARTIFACT_DIR."
+  fi
   cp "$ARTIFACT_DIR/$ARTIFACT" "$TMP_DIR/$ARTIFACT"
   [ -f "$ARTIFACT_DIR/checksums.txt" ] || fail "checksums.txt not found in $ARTIFACT_DIR" \
     "Place checksums.txt next to the archive for offline install."
@@ -476,7 +494,12 @@ if [ -n "$ARTIFACT_DIR" ]; then
   step_done "Use local artifacts" "$ARTIFACT_DIR"
 else
   step_active "Download archive"
-  download "$BASE_URL/$ARTIFACT" "$TMP_DIR/$ARTIFACT"
+  if download "$BASE_URL/$ARTIFACT" "$TMP_DIR/$ARTIFACT" 2>/dev/null; then
+    :
+  else
+    ARTIFACT="$LEGACY_ARTIFACT"
+    download "$BASE_URL/$ARTIFACT" "$TMP_DIR/$ARTIFACT"
+  fi
   download "$BASE_URL/checksums.txt" "$TMP_DIR/checksums.txt"
   step_done "Download archive" "$ARTIFACT"
 fi
@@ -499,17 +522,30 @@ EXTRACT_ROOT="$(find "$TMP_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 [ -n "$EXTRACT_ROOT" ] || fail "artifact did not contain an extracted release root" \
   "Unexpected archive layout for ${ARTIFACT}."
 
-FOUND_BIN="$(find "$EXTRACT_ROOT" -type f -name orca -perm -111 | head -n 1)"
-[ -n "$FOUND_BIN" ] || fail "artifact did not contain an executable orca binary" \
+FOUND_BIN=""
+if [ -x "$EXTRACT_ROOT/bin/ryk" ]; then
+  FOUND_BIN="$EXTRACT_ROOT/bin/ryk"
+elif [ -x "$EXTRACT_ROOT/bin/orca" ]; then
+  FOUND_BIN="$EXTRACT_ROOT/bin/orca"
+else
+  FOUND_BIN="$(find "$EXTRACT_ROOT" -type f \( -name ryk -o -name orca \) -perm -111 | head -n 1)"
+fi
+[ -n "$FOUND_BIN" ] || fail "artifact did not contain an executable ryk/orca binary" \
   "Unexpected archive layout for ${ARTIFACT}."
 
 safe_install "$FOUND_BIN" "$DESTINATION"
+# Compat alias: same product as ryk for ≥1 major.
+if [ -x "$EXTRACT_ROOT/bin/orca" ]; then
+  safe_install "$EXTRACT_ROOT/bin/orca" "$LEGACY_DESTINATION"
+else
+  safe_install "$FOUND_BIN" "$LEGACY_DESTINATION"
+fi
 install_runtime_assets "$EXTRACT_ROOT"
-step_done "Install binaries + runtime" "orca + assets (CLI-only; shell_engine in-process)"
+step_done "Install binaries + runtime" "ryk + orca alias + assets (CLI-only; shell_engine in-process)"
 
 ensure_path_entry "$INSTALL_DIR"
 ensure_resource_root_entry "$CURRENT_LINK"
-step_done "Configure shell" "PATH + ORCA_RESOURCE_ROOT"
+step_done "Configure shell" "PATH + ORCA_RESOURCE_ROOT (share path unchanged in 5a)"
 
 MISSING_DASHBOARD=0
 if [ ! -d "$RESOURCE_ROOT/orca-dashboard-ui" ]; then

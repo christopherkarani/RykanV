@@ -7,7 +7,7 @@ const std = @import("std");
 const env_util = @import("../env_util.zig");
 
 pub const managed_hosts = [_][]const u8{ "codex", "claude", "opencode", "openclaw", "hermes" };
-pub const pi_process_command = "orca run -- pi";
+pub const pi_process_command = "ryk run -- pi";
 
 pub const PiStatus = struct {
     binary_detected: bool = false,
@@ -148,7 +148,7 @@ pub fn formatFix(
     }
     // Degraded first: deny works but allow failed → daemon/policy, not reinstall.
     if (smoke.isDegraded() or (smoke.deny == .pass and smoke.allow == .fail)) {
-        return try allocator.dupe(u8, "orca doctor  # fix daemon/policy (deny ok, allow failed — not ready)");
+        return try allocator.dupe(u8, "ryk doctor  # fix daemon/policy (deny ok, allow failed — not ready)");
     }
     if (smoke.deny == .fail) {
         if (std.mem.eql(u8, host, "hermes")) {
@@ -161,7 +161,7 @@ pub fn formatFix(
     }
     if (std.mem.eql(u8, wired, "yes") or std.mem.eql(u8, wired, "partial")) {
         if (std.mem.eql(u8, host, "hermes") and hermes_fail_open) {
-            return try allocator.dupe(u8, "export ORCA_HERMES_FAIL_OPEN=0  # or: orca run -- hermes");
+            return try allocator.dupe(u8, "export ORCA_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes");
         }
         return try allocator.dupe(u8, "—");
     }
@@ -248,7 +248,8 @@ fn resolveSmokeBinary(io: std.Io, allocator: std.mem.Allocator) !?[]u8 {
     var env_map = env_util.createProcessMap(allocator) catch null;
     defer if (env_map) |*m| m.deinit();
     if (env_map) |*m| {
-        if (try env_util.getOwned(m, allocator, "ORCA_BIN")) |configured| {
+        // Prefer RYK_BIN, fall back to ORCA_BIN (Phase 5a dual-read).
+        if (try env_util.getOwnedBrand(m, allocator, "BIN")) |configured| {
             if (std.Io.Dir.accessAbsolute(io, configured, .{})) |_| {
                 return configured;
             } else |_| {
@@ -259,8 +260,9 @@ fn resolveSmokeBinary(io: std.Io, allocator: std.mem.Allocator) !?[]u8 {
 
     const self_exe = try std.process.executablePathAlloc(io, allocator);
     const base = std.fs.path.basename(self_exe);
-    // Real CLI binaries are named `orca` (or `orca.exe`). The zig test harness is not.
-    if (std.mem.eql(u8, base, "orca") or std.mem.eql(u8, base, "orca.exe")) {
+    // Real CLI binaries are named `ryk` or legacy `orca` (or `.exe`). The zig test harness is not.
+    const brand = @import("brand.zig");
+    if (brand.isPrimaryInvocation(base) or brand.isLegacyInvocation(base)) {
         return self_exe;
     }
     allocator.free(self_exe);
@@ -632,7 +634,7 @@ test "Pi extension installation requires registration and official package marke
 }
 
 test "Pi process command is exact and copyable" {
-    try std.testing.expectEqualStrings("orca run -- pi", pi_process_command);
+    try std.testing.expectEqualStrings("ryk run -- pi", pi_process_command);
     try std.testing.expect(std.mem.indexOf(u8, pi_process_command, "…") == null);
 }
 
@@ -656,7 +658,7 @@ test "formatFix degraded prefers daemon doctor not reinstall" {
     const allocator = std.testing.allocator;
     const fix = try formatFix(allocator, "claude", "yes", .{ .allow = .fail, .deny = .pass }, true);
     defer allocator.free(fix);
-    try std.testing.expect(std.mem.indexOf(u8, fix, "orca doctor") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fix, "ryk doctor") != null);
     try std.testing.expect(std.mem.indexOf(u8, fix, "not ready") != null);
 }
 

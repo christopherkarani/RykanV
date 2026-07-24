@@ -5,9 +5,9 @@
       "hooks": [
         {
           "type": "command",
-          "command": "orca hook codex SessionStart",
+          "command": "sh -c 'if command -v ryk >/dev/null 2>&1; then exec ryk hook codex SessionStart; else exec orca hook codex SessionStart; fi'",
           "timeout": 10,
-          "statusMessage": "Checking Orca plugin status"
+          "statusMessage": "Checking ryk plugin status"
         }
       ]
     }
@@ -18,9 +18,9 @@
       "hooks": [
         {
           "type": "command",
-          "command": "orca hook codex UserPromptSubmit",
+          "command": "sh -c 'if command -v ryk >/dev/null 2>&1; then exec ryk hook codex UserPromptSubmit; else exec orca hook codex UserPromptSubmit; fi'",
           "timeout": 10,
-          "statusMessage": "Checking prompt with Orca"
+          "statusMessage": "Checking prompt with ryk"
         }
       ]
     }
@@ -31,9 +31,9 @@
       "hooks": [
         {
           "type": "command",
-          "command": "orca hook codex PreToolUse",
+          "command": "sh -c 'if command -v ryk >/dev/null 2>&1; then exec ryk hook codex PreToolUse; else exec orca hook codex PreToolUse; fi'",
           "timeout": 15,
-          "statusMessage": "Checking tool use with Orca"
+          "statusMessage": "Checking tool use with ryk"
         }
       ]
     }
@@ -44,9 +44,9 @@
       "hooks": [
         {
           "type": "command",
-          "command": "orca hook codex PermissionRequest",
+          "command": "sh -c 'if command -v ryk >/dev/null 2>&1; then exec ryk hook codex PermissionRequest; else exec orca hook codex PermissionRequest; fi'",
           "timeout": 15,
-          "statusMessage": "Checking permission request with Orca"
+          "statusMessage": "Checking permission request with ryk"
         }
       ]
     }
@@ -57,9 +57,9 @@
       "hooks": [
         {
           "type": "command",
-          "command": "orca hook codex PostToolUse",
+          "command": "sh -c 'if command -v ryk >/dev/null 2>&1; then exec ryk hook codex PostToolUse; else exec orca hook codex PostToolUse; fi'",
           "timeout": 10,
-          "statusMessage": "Acknowledging tool use to Orca"
+          "statusMessage": "Acknowledging tool use to ryk"
         }
       ]
     }
@@ -70,9 +70,9 @@
       "hooks": [
         {
           "type": "command",
-          "command": "orca hook codex Stop",
+          "command": "sh -c 'if command -v ryk >/dev/null 2>&1; then exec ryk hook codex Stop; else exec orca hook codex Stop; fi'",
           "timeout": 10,
-          "statusMessage": "Notifying Orca of session stop"
+          "statusMessage": "Notifying ryk of session stop"
         }
       ]
     }

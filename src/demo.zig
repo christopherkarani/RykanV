@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const brand = @import("cli/brand.zig");
 const core_api = @import("orca_core").api;
 const core = @import("orca_core").core;
 
@@ -42,7 +43,7 @@ pub fn createBlockedActionSession(io: std.Io, allocator: std.mem.Allocator, work
         .event_count = writer.event_count,
         .final_event_hash = final_hash,
         .policy = ".orca/policy.yaml",
-        .product_label = "Orca",
+        .product_label = brand.product_display,
     });
     _ = &session;
     return try allocator.dupe(u8, writer.session_id.slice());

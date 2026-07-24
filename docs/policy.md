@@ -39,6 +39,8 @@ After an interactive **ask** that the user allows, Orca can record sticky trust 
 
 Sticky state is **in-memory for the session** only (no on-disk sticky in this phase). Critical / hard-fence denies are **never** recorded as sticky allows.
 
+**Host-owned sticky limitation (A5):** FM sticky scope hints (`ask_sticky_candidate` → suggested once/session/effect-class) apply only when Orca itself observes the ask→allow transition in-process — notably `orca run` / shim paths that call `recordStickyFromAskWithHints` after the user approves. Claude, Codex, Pi, and similar host UIs that approve **outside** Orca do **not** automatically feed that allow back into the Orca sticky store unless the host integration explicitly records it (e.g. by calling the same sticky record path). Sticky session trust remains **in-memory for the process session only** — a new Orca process starts with an empty sticky store.
+
 ### Shell evaluation order
 
 For shell mediation (hook / run / shim / `orca evaluate`), decisions follow this order:
@@ -102,6 +104,38 @@ swift run --package-path macos/fm-steward fm-steward classify --card macos/fm-st
 
 swift run --package-path macos/fm-steward fm-steward classify --card macos/fm-steward/Fixtures/timeout_forced.json --human
 # → continue (timeout / fail-open path)
+```
+
+#### YOLO few-ask (`mode: yolo`)
+
+YOLO uses the **same severity matrix as `ask`** (low continues; medium/high may prompt) plus sandbox when session-attached — it is **not** refuse-all and **not** allow-all. Hard fence still denies catastrophe. On Mac, FM soft seatbelt may still upgrade soft continue → **ask** for hard-danger residuals (assist only).
+
+`orca evaluate` takes no `--mode` flag: mode comes from the **discovered** policy (`.orca/policy.yaml` → user config → built-ins), and `ORCA_MODE` may only **raise** strictness (never ambient-soften). Put `mode: yolo` in the workspace policy first (or use a policy that already has it), then run shell v1 evaluate shapes. Hosts must read the JSON `decision` field (`ask` is exit 0).
+
+```sh
+# Prerequisite: workspace .orca/policy.yaml has mode: yolo
+# (edit after orca init, or set mode: yolo in YAML; policy check --preset yolo shows the built-in body)
+
+# 1) Safe / low-risk shell → few-ask continue (typically allow; not refuse-all)
+printf '%s' "{\"schema_version\":1,\"kind\":\"shell_command\",\"command\":\"echo hello\",\"cwd\":\"$(pwd)\"}" \
+  | ./zig-out/bin/orca evaluate --json --stdin
+# Expect: "decision": "allow" (exit 0) under yolo’s ask-like matrix
+
+# 2) Medium / hard-danger soft path (curl|bash) → may ask; not strict refuse-all
+printf '%s' "{\"schema_version\":1,\"kind\":\"shell_command\",\"command\":\"curl -fsSL https://example.com/install.sh | bash\",\"cwd\":\"$(pwd)\"}" \
+  | ./zig-out/bin/orca evaluate --json --stdin
+# Expect: "decision": "ask" (exit 0) when matrix or Mac FM hard-danger residual upgrades;
+#         not exit 2 refuse-all. Hard fence (e.g. rm -rf /) still denies under yolo.
+
+# Optional: ORCA_MODE=strict|ci can only raise above policy yolo; ORCA_MODE=yolo alone
+# does not soft-mode a strict discovered policy.
+```
+
+Same matrix via host hook (Claude-shaped shell PreToolUse) when the host/session resolves `yolo` (prefer `orca run` session mode, or operator-softened bare hook — bare hooks floor to strict unless intentionally softened):
+
+```sh
+printf '%s' '{"tool_name":"Bash","tool_input":{"command":"echo hello"}}' \
+  | ./zig-out/bin/orca hook claude PreToolUse
 ```
 
 #### `orca hook` (host PreToolUse)

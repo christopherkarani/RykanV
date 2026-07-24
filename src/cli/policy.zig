@@ -24,7 +24,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     if (std.mem.eql(u8, argv[0], "packs")) return packs(argv[1..], stdout, stderr);
     if (std.mem.eql(u8, argv[0], "apply-pack")) return applyPack(io, argv[1..], stdout, stderr);
 
-    try suggestions.writeUnknownSubcommand(stderr, "orca policy", argv[0], &.{ "check", "explain", "packs", "apply-pack" }, "policy");
+    try suggestions.writeUnknownSubcommand(stderr, "ryk policy", argv[0], &.{ "check", "explain", "packs", "apply-pack" }, "policy");
     return exit_codes.usage;
 }
 
@@ -37,10 +37,10 @@ fn check(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             try stdout.writeAll(
                 \\Usage:
-                \\  orca policy check
-                \\  orca policy check <policy-path>
-                \\  orca policy check --preset <observe|ask|strict|ci|redteam|trusted>
-                \\  orca policy check builtin:<preset>
+                \\  ryk policy check
+                \\  ryk policy check <policy-path>
+                \\  ryk policy check --preset <observe|ask|strict|ci|redteam|trusted>
+                \\  ryk policy check builtin:<preset>
                 \\
                 \\With no path, validates the workspace policy at .orca/policy.yaml.
                 \\Built-in presets require --preset or an explicit builtin:<name> path.
@@ -51,28 +51,28 @@ fn check(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
         if (std.mem.eql(u8, arg, "--preset")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca policy check: --preset requires a name.\n");
+                try stderr.writeAll("ryk policy check: --preset requires a name.\n");
                 return exit_codes.usage;
             }
             if (preset_name != null) {
-                try stderr.writeAll("orca policy check: --preset specified more than once.\n");
+                try stderr.writeAll("ryk policy check: --preset specified more than once.\n");
                 return exit_codes.usage;
             }
             preset_name = argv[index];
             continue;
         }
         if (std.mem.startsWith(u8, arg, "-")) {
-            try suggestions.writeUnknownOption(stderr, "orca policy check", arg, &.{ "--preset", "--help", "-h" }, "policy");
+            try suggestions.writeUnknownOption(stderr, "ryk policy check", arg, &.{ "--preset", "--help", "-h" }, "policy");
             return exit_codes.usage;
         }
         if (path_arg != null) {
-            try stderr.writeAll("orca policy check: expected at most one policy path.\n");
+            try stderr.writeAll("ryk policy check: expected at most one policy path.\n");
             return exit_codes.usage;
         }
         path_arg = arg;
     }
     if (preset_name != null and path_arg != null) {
-        try stderr.writeAll("orca policy check: use either --preset or a policy path, not both.\n");
+        try stderr.writeAll("ryk policy check: use either --preset or a policy path, not both.\n");
         return exit_codes.usage;
     }
 
@@ -92,7 +92,7 @@ fn check(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
         const preset = orca_policy.presets.Preset.parse(name) orelse {
             try suggestions.writeInvalidValue(
                 stderr,
-                "orca policy check",
+                "ryk policy check",
                 "--preset",
                 name,
                 &.{ "observe", "ask", "strict", "ci", "redteam", "trusted" },
@@ -116,7 +116,7 @@ fn check(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
         if (!onboarding.policyExists(io, workspace_root)) {
             defer allocator.free(discovered);
             try stderr.print(
-                "orca policy check: no workspace policy at {s}\nRun `orca init` to create one, or pass a path / --preset <name>.\n",
+                "ryk policy check: no workspace policy at {s}\nRun `ryk init` to create one, or pass a path / --preset <name>.\n",
                 .{discovered},
             );
             return exit_codes.general;
@@ -126,7 +126,7 @@ fn check(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
     };
 
     var policy_value = core_api.loadPolicyFile(io, allocator, source) catch |err| {
-        try suggestions.writeSanitizedValue(stderr, "orca policy check: invalid policy ", source, ": ");
+        try suggestions.writeSanitizedValue(stderr, "ryk policy check: invalid policy ", source, ": ");
         try stderr.print("{s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
@@ -139,7 +139,7 @@ fn explain(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytyp
     if (argv.len == 1 and (std.mem.eql(u8, argv[0], "--help") or std.mem.eql(u8, argv[0], "-h"))) {
         try stdout.writeAll(
             \\Usage:
-            \\  orca policy explain [--policy <path>] <file.read|file.write|env|command|network|mcp|tool> <target> [--method <HTTP_METHOD>] [--args '<json-object>']
+            \\  ryk policy explain [--policy <path>] <file.read|file.write|env|command|network|mcp|tool> <target> [--method <HTTP_METHOD>] [--args '<json-object>']
             \\
             \\  --args is only used for `tool` (structural effect classification). Size-bounded JSON object.
             \\
@@ -152,7 +152,7 @@ fn explain(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytyp
         if (std.mem.eql(u8, argv[start_index], "--policy")) {
             start_index += 1;
             if (start_index >= argv.len) {
-                try stderr.writeAll("orca policy explain: --policy requires a path.\n");
+                try stderr.writeAll("ryk policy explain: --policy requires a path.\n");
                 return exit_codes.usage;
             }
             policy_path = argv[start_index];
@@ -162,11 +162,11 @@ fn explain(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytyp
     }
     const positional = argv[start_index..];
     if (positional.len < 2) {
-        try stderr.writeAll("orca policy explain: expected a type and target.\n");
+        try stderr.writeAll("ryk policy explain: expected a type and target.\n");
         return exit_codes.usage;
     }
     const kind = orca_policy.explain.ExplainKind.parse(positional[0]) orelse {
-        try suggestions.writeSanitizedValue(stderr, "orca policy explain: unsupported type '", positional[0], "'.\n");
+        try suggestions.writeSanitizedValue(stderr, "ryk policy explain: unsupported type '", positional[0], "'.\n");
         return exit_codes.usage;
     };
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
@@ -181,9 +181,9 @@ fn explain(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytyp
     defer allocator.free(root);
     var loaded = core_api.discoverPolicy(io, allocator, policy_path, root) catch |err| {
         if (policy_path) |path| {
-            try stderr.print("orca policy explain: failed to load policy {s}: {s}\n", .{ path, @errorName(err) });
+            try stderr.print("ryk policy explain: failed to load policy {s}: {s}\n", .{ path, @errorName(err) });
         } else {
-            try stderr.print("orca policy explain: failed to load policy: {s}\n", .{@errorName(err)});
+            try stderr.print("ryk policy explain: failed to load policy: {s}\n", .{@errorName(err)});
         }
         return exit_codes.general;
     };
@@ -193,20 +193,20 @@ fn explain(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytyp
     defer if (owned_args) |*oa| oa.deinit(allocator);
     if (parsed_target.args_json) |args_json| {
         if (kind != .tool) {
-            try stderr.writeAll("orca policy explain: --args is only valid for tool explanations.\n");
+            try stderr.writeAll("ryk policy explain: --args is only valid for tool explanations.\n");
             return exit_codes.usage;
         }
         if (args_json.len > 8 * 1024) {
-            try stderr.writeAll("orca policy explain: --args JSON too large (max 8KiB).\n");
+            try stderr.writeAll("ryk policy explain: --args JSON too large (max 8KiB).\n");
             return exit_codes.usage;
         }
         var parsed_json = std.json.parseFromSlice(std.json.Value, allocator, args_json, .{}) catch {
-            try stderr.writeAll("orca policy explain: --args must be a JSON object.\n");
+            try stderr.writeAll("ryk policy explain: --args must be a JSON object.\n");
             return exit_codes.usage;
         };
         defer parsed_json.deinit();
         if (parsed_json.value != .object) {
-            try stderr.writeAll("orca policy explain: --args must be a JSON object.\n");
+            try stderr.writeAll("ryk policy explain: --args must be a JSON object.\n");
             return exit_codes.usage;
         }
         owned_args = try orca_policy.effects.toolArgsViewFromJsonObject(allocator, parsed_json.value);
@@ -223,7 +223,7 @@ fn explain(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytyp
             root,
             loaded.innerPtr().effects.isActive(),
         ) catch |err| {
-            try stderr.print("orca policy explain: invalid effect pack: {s}\n", .{@errorName(err)});
+            try stderr.print("ryk policy explain: invalid effect pack: {s}\n", .{@errorName(err)});
             return exit_codes.general;
         };
     }
@@ -233,7 +233,7 @@ fn explain(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytyp
         .tool_args = tool_args,
         .effect_packs = if (kind == .tool) &effect_packs else null,
     }) catch |err| {
-        try stderr.print("orca policy explain: failed to evaluate action: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk policy explain: failed to evaluate action: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer evaluation.deinit(allocator);
@@ -311,19 +311,19 @@ fn parseExplainTarget(allocator: std.mem.Allocator, kind: orca_policy.explain.Ex
         if (std.mem.eql(u8, arg, "--method")) {
             index += 1;
             if (index >= args.len) {
-                try stderr.writeAll("orca policy explain: --method requires an HTTP method.\n");
+                try stderr.writeAll("ryk policy explain: --method requires an HTTP method.\n");
                 return .{ .invalid = true };
             }
             if (method) |old| allocator.free(old);
             method = try allocator.dupe(u8, args[index]);
         } else if (std.mem.startsWith(u8, arg, "-")) {
-            try suggestions.writeUnknownOption(stderr, "orca policy explain", arg, &.{"--method"}, "policy");
+            try suggestions.writeUnknownOption(stderr, "ryk policy explain", arg, &.{"--method"}, "policy");
             if (target) |owned| allocator.free(owned);
             if (method) |owned| allocator.free(owned);
             return .{ .invalid = true };
         } else {
             if (target != null) {
-                try stderr.writeAll("orca policy explain: expected one network target.\n");
+                try stderr.writeAll("ryk policy explain: expected one network target.\n");
                 if (target) |owned| allocator.free(owned);
                 if (method) |owned| allocator.free(owned);
                 return .{ .invalid = true };
@@ -332,7 +332,7 @@ fn parseExplainTarget(allocator: std.mem.Allocator, kind: orca_policy.explain.Ex
         }
     }
     if (target == null) {
-        try stderr.writeAll("orca policy explain: expected a network target.\n");
+        try stderr.writeAll("ryk policy explain: expected a network target.\n");
         if (method) |owned| allocator.free(owned);
         return .{ .invalid = true };
     }
@@ -348,18 +348,18 @@ fn parseToolExplainTarget(allocator: std.mem.Allocator, args: []const []const u8
         if (std.mem.eql(u8, arg, "--args")) {
             index += 1;
             if (index >= args.len) {
-                try stderr.writeAll("orca policy explain: --args requires a JSON object string.\n");
+                try stderr.writeAll("ryk policy explain: --args requires a JSON object string.\n");
                 if (target) |owned| allocator.free(owned);
                 return .{ .invalid = true };
             }
             args_json = args[index];
         } else if (std.mem.startsWith(u8, arg, "-")) {
-            try suggestions.writeUnknownOption(stderr, "orca policy explain", arg, &.{"--args"}, "policy");
+            try suggestions.writeUnknownOption(stderr, "ryk policy explain", arg, &.{"--args"}, "policy");
             if (target) |owned| allocator.free(owned);
             return .{ .invalid = true };
         } else {
             if (target != null) {
-                try stderr.writeAll("orca policy explain: expected one tool name.\n");
+                try stderr.writeAll("ryk policy explain: expected one tool name.\n");
                 if (target) |owned| allocator.free(owned);
                 return .{ .invalid = true };
             }
@@ -367,7 +367,7 @@ fn parseToolExplainTarget(allocator: std.mem.Allocator, args: []const []const u8
         }
     }
     if (target == null) {
-        try stderr.writeAll("orca policy explain: expected a tool name.\n");
+        try stderr.writeAll("ryk policy explain: expected a tool name.\n");
         return .{ .invalid = true };
     }
     return .{ .target = target.?, .args_json = args_json };
@@ -375,7 +375,7 @@ fn parseToolExplainTarget(allocator: std.mem.Allocator, args: []const []const u8
 
 fn packs(argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     if (argv.len != 0) {
-        try stderr.writeAll("orca policy packs: expected no arguments.\n");
+        try stderr.writeAll("ryk policy packs: expected no arguments.\n");
         return exit_codes.usage;
     }
     try stdout.writeAll("Policy packs:\n");
@@ -390,24 +390,24 @@ fn packs(argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
 
 fn applyPack(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     if (argv.len < 1 or argv.len > 2) {
-        try stderr.writeAll("orca policy apply-pack: expected <pack> [--force].\n");
+        try stderr.writeAll("ryk policy apply-pack: expected <pack> [--force].\n");
         return exit_codes.usage;
     }
     var force = false;
     if (argv.len == 2) {
         if (!std.mem.eql(u8, argv[1], "--force")) {
-            try stderr.writeAll("orca policy apply-pack: only --force is supported after the pack name.\n");
+            try stderr.writeAll("ryk policy apply-pack: only --force is supported after the pack name.\n");
             return exit_codes.usage;
         }
         force = true;
     }
     const pack = orca_policy.presets.AgentPreset.parse(argv[0]) orelse {
-        try suggestions.writeInvalidValue(stderr, "orca policy apply-pack", "pack", argv[0], &.{ "solo-dev", "strict-local", "team-ci", "openclaw-hermes" }, "policy");
+        try suggestions.writeInvalidValue(stderr, "ryk policy apply-pack", "pack", argv[0], &.{ "solo-dev", "strict-local", "team-ci", "openclaw-hermes" }, "policy");
         return exit_codes.usage;
     };
     const pack_name = orca_policy.presets.agentPresetName(pack);
     if (!isProductPack(pack_name)) {
-        try stderr.print("orca policy apply-pack: '{s}' is an init preset, not a product policy pack.\n", .{pack_name});
+        try stderr.print("ryk policy apply-pack: '{s}' is an init preset, not a product policy pack.\n", .{pack_name});
         return exit_codes.usage;
     }
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
@@ -424,7 +424,7 @@ fn applyPack(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyt
     const flags: std.Io.File.CreateFlags = if (force) .{} else .{ .exclusive = true };
     const file = cwd.createFile(io, path, flags) catch |err| switch (err) {
         error.PathAlreadyExists => {
-            try stderr.writeAll("orca policy apply-pack: .orca/policy.yaml already exists; use --force to overwrite.\n");
+            try stderr.writeAll("ryk policy apply-pack: .orca/policy.yaml already exists; use --force to overwrite.\n");
             return exit_codes.general;
         },
         else => return err,
@@ -516,7 +516,7 @@ test "policy check without path validates workspace policy not builtin" {
     } else {
         try std.testing.expectEqual(exit_codes.general, code);
         try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "no workspace policy") != null);
-        try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca init") != null);
+        try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk init") != null);
     }
 }
 

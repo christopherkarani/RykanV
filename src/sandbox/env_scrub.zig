@@ -15,7 +15,7 @@
 //!
 //! ## Keep class (not scrubbed by denylist)
 //! - `PATH`, `HOME`, `LANG`, `TERM`
-//! - `ORCA_*` session vars when present
+//! - `ORCA_*` / `RYK_*` session vars when present
 //!
 //! ## Launch allowlist (complete form on sandbox attach path)
 //! After denylist scrub, `applyBeforeExec` applies a **launch allowlist** only
@@ -135,6 +135,7 @@ pub const launch_allow_exact = [_][]const u8{
 /// Prefixes retained by the launch allowlist (in addition to exact keys).
 pub const launch_allow_prefixes = [_][]const u8{
     "ORCA_",
+    "RYK_",
     "LC_",
     "XDG_",
 };
@@ -190,12 +191,13 @@ pub fn shouldScrubKey(name: []const u8) bool {
     return false;
 }
 
-/// True for documented keepers and `ORCA_*` session vars.
+/// True for documented keepers and `ORCA_*` / `RYK_*` session vars.
 pub fn isKeepClass(name: []const u8) bool {
     for (keep_keys) |key| {
         if (std.mem.eql(u8, name, key)) return true;
     }
     if (std.mem.startsWith(u8, name, "ORCA_")) return true;
+    if (std.mem.startsWith(u8, name, "RYK_")) return true;
     return false;
 }
 
@@ -407,19 +409,23 @@ test "shouldScrubKey removes BASH_FUNC_ prefix vars" {
     try std.testing.expect(!shouldScrubKey("MY_BASH_FUNC_X")); // not a prefix match
 }
 
-test "shouldScrubKey keeps PATH HOME LANG TERM and ORCA_ session vars" {
+test "shouldScrubKey keeps PATH HOME LANG TERM and ORCA_/RYK_ session vars" {
     try std.testing.expect(!shouldScrubKey("PATH"));
     try std.testing.expect(!shouldScrubKey("HOME"));
     try std.testing.expect(!shouldScrubKey("LANG"));
     try std.testing.expect(!shouldScrubKey("TERM"));
     try std.testing.expect(!shouldScrubKey("ORCA_SESSION_ID"));
     try std.testing.expect(!shouldScrubKey("ORCA_MODE"));
+    try std.testing.expect(!shouldScrubKey("RYK_SESSION_ID"));
+    try std.testing.expect(!shouldScrubKey("RYK_MODE"));
     try std.testing.expect(isKeepClass("PATH"));
     try std.testing.expect(isKeepClass("HOME"));
     try std.testing.expect(isKeepClass("LANG"));
     try std.testing.expect(isKeepClass("TERM"));
     try std.testing.expect(isKeepClass("ORCA_SESSION_ID"));
     try std.testing.expect(isKeepClass("ORCA_MODE"));
+    try std.testing.expect(isKeepClass("RYK_SESSION_ID"));
+    try std.testing.expect(isKeepClass("RYK_MODE"));
 }
 
 test "shouldScrubKey does not scrub unrelated vars" {

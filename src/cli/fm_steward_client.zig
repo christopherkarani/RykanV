@@ -148,7 +148,8 @@ pub fn fallbackContinue(why: []const u8, timed_out: bool) ClassifyResult {
 /// True when FM steward should be invoked (macOS and kill-switch not set).
 pub fn isEnabled() bool {
     if (builtin.os.tag != .macos) return false;
-    if (std.c.getenv("ORCA_FM_STEWARD")) |raw| {
+    // Prefer RYK_FM_STEWARD then ORCA_FM_STEWARD (Phase 5a dual-read).
+    if (env_util.getenvBrand("FM_STEWARD")) |raw| {
         const v = std.mem.span(raw);
         if (std.mem.eql(u8, v, "0")) return false;
     }
@@ -156,27 +157,12 @@ pub fn isEnabled() bool {
 }
 
 /// Resolve fm-steward binary path. Caller frees.
-/// Order: `ORCA_FM_STEWARD_BIN` → dev build paths → `"fm-steward"` (PATH).
+/// Product order: `RYK_FM_STEWARD_BIN` / `ORCA_FM_STEWARD_BIN` (if set) → `"fm-steward"` on PATH.
+/// Never resolves cwd-relative `.build/` candidates (those are developer-local only).
 pub fn resolveBinary(allocator: std.mem.Allocator) ![]const u8 {
-    if (std.c.getenv("ORCA_FM_STEWARD_BIN")) |raw| {
+    if (env_util.getenvBrand("FM_STEWARD_BIN")) |raw| {
         return try allocator.dupe(u8, std.mem.span(raw));
     }
-
-    var threaded = std.Io.Threaded.init(allocator, .{
-        .environ = env_util.processEnviron(),
-    });
-    defer threaded.deinit();
-    const io = threaded.io();
-
-    const candidates = [_][]const u8{
-        "macos/fm-steward/.build/debug/fm-steward",
-        "macos/fm-steward/.build/release/fm-steward",
-    };
-    for (candidates) |rel| {
-        std.Io.Dir.cwd().access(io, rel, .{}) catch continue;
-        return try allocator.dupe(u8, rel);
-    }
-
     return try allocator.dupe(u8, "fm-steward");
 }
 
@@ -374,6 +360,9 @@ fn writeCardTemp(allocator: std.mem.Allocator, card_json: []const u8) ![]const u
             },
             else => return err,
         };
+        // Exclusive create owned this path; delete on write failure so we do not
+        // orphan an empty/partial 0o600 card in TMPDIR.
+        errdefer deleteCardTemp(allocator, path);
         defer file.close(io);
         try file.writeStreamingAll(io, card_json);
         return path;
@@ -412,7 +401,8 @@ fn runClassifyCapture(
         } },
     }) catch |err| switch (err) {
         error.Timeout => {
-            // Child was killed; no stdout ownership to free from this catch.
+            // Hang residual is owned by std.process.run timeout kill (no custom
+            // spawn/wait path here). No stdout ownership to free from this catch.
             return SpawnCapture{
                 .stdout = try allocator.dupe(u8, ""),
                 .exit_code = 255,
@@ -445,7 +435,6 @@ fn runClassifyCapture(
 
 test "fm_steward default_timeout_ms is 3000 not 500" {
     try std.testing.expectEqual(@as(u32, 3000), default_timeout_ms);
-    try std.testing.expect(default_timeout_ms != 500);
 }
 
 test "fm_steward parseClassifyResponse continue" {
@@ -663,6 +652,34 @@ test "fm_steward ClassifyVerdict wire round-trip" {
     try std.testing.expectEqualStrings("ask", ClassifyVerdict.ask.toWire());
     try std.testing.expectEqualStrings("ask_sticky_candidate", ClassifyVerdict.ask_sticky_candidate.toWire());
     try std.testing.expect(ClassifyVerdict.fromWire("deny") == null);
+}
+
+test "fm_steward resolveBinary without ORCA_FM_STEWARD_BIN is PATH name not cwd .build" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const previous = std.c.getenv("ORCA_FM_STEWARD_BIN");
+    defer restoreEnv("ORCA_FM_STEWARD_BIN", previous);
+    _ = unsetenv("ORCA_FM_STEWARD_BIN");
+
+    const path = try resolveBinary(std.testing.allocator);
+    defer std.testing.allocator.free(path);
+
+    // Product resolve: PATH name only — never cwd-relative macos/fm-steward/.build/*.
+    try std.testing.expectEqualStrings("fm-steward", path);
+    try std.testing.expect(std.mem.indexOf(u8, path, "macos/fm-steward/.build/") == null);
+    try std.testing.expect(std.mem.indexOf(u8, path, ".build/") == null);
+}
+
+test "fm_steward resolveBinary honors ORCA_FM_STEWARD_BIN plant path" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const previous = std.c.getenv("ORCA_FM_STEWARD_BIN");
+    defer restoreEnv("ORCA_FM_STEWARD_BIN", previous);
+    try std.testing.expectEqual(@as(c_int, 0), setenv("ORCA_FM_STEWARD_BIN", "/planted/orca-fm-steward-bin", 1));
+
+    const path = try resolveBinary(std.testing.allocator);
+    defer std.testing.allocator.free(path);
+    try std.testing.expectEqualStrings("/planted/orca-fm-steward-bin", path);
 }
 
 test "fm_steward writeCardTemp exclusive skips pre-owned world-readable path" {

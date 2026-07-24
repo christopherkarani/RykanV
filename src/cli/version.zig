@@ -1,11 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
+const brand = @import("brand.zig");
 const daemon = @import("daemon.zig");
 const tui = @import("../tui/mod.zig");
 
 pub const Metadata = struct {
-    product: []const u8 = "orca",
+    product: []const u8 = brand.versionProduct(),
     version: []const u8,
     commit: ?[]const u8,
     target: []const u8,
@@ -13,7 +14,7 @@ pub const Metadata = struct {
     build_date: ?[]const u8,
     release_channel: []const u8 = "stable",
     safety_boundary_version: []const u8 = "cli-local-dev-v1",
-    safety_boundary: []const u8 = "Orca enforces local command, file, network, MCP, audit, and red-team controls; it does not provide hosted telemetry or cloud enforcement.",
+    safety_boundary: []const u8 = brand.safetyBoundary(),
 };
 
 pub const DaemonMetadata = struct {
@@ -254,7 +255,7 @@ test "version json writer emits valid object shape with null metadata" {
     });
 
     const json = stream_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"product\": \"orca\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"product\": \"ryk\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"version\": \"1.0.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"commit\": null") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"target\": \"x86_64-linux\"") != null);

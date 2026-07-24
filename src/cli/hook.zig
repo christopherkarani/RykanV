@@ -33,7 +33,7 @@ const max_payload_len = 256 * 1024; // 256 KiB
 // - Non-shell tools with incidental `command` fields stay on the Zig policy path.
 // - Shell tools with missing/invalid command fields fail closed before evaluation.
 // - File paths for PreToolUse writes and PermissionRequest file ops are normalized
-//   like `orca decide` (symlink escape / outside-workspace fail closed).
+//   like `ryk decide` (symlink escape / outside-workspace fail closed).
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -370,7 +370,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
     if (host == .opencode and isOpenCodeInformationalEvent(request_event)) {
         var redactions: std.ArrayList(RedactionEntry) = .empty;
         var limitations: std.ArrayList([]const u8) = .empty;
-        try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace orca run supervision."));
+        try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
         try limitations.append(allocator, try allocator.dupe(u8, "OpenCode informational event: no policy evaluation needed."));
 
         var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "OpenCode event acknowledged by Orca.", &redactions, &limitations);
@@ -383,7 +383,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
     if (host == .openclaw and isOpenClawInformationalEvent(request_event)) {
         var redactions: std.ArrayList(RedactionEntry) = .empty;
         var limitations: std.ArrayList([]const u8) = .empty;
-        try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace orca run supervision."));
+        try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
         try limitations.append(allocator, try allocator.dupe(u8, "OpenClaw informational event: no policy evaluation needed."));
 
         var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "OpenClaw event acknowledged by Orca.", &redactions, &limitations);
@@ -403,7 +403,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
     if (host == .hermes and isHermesInformationalEvent(request_event)) {
         var redactions: std.ArrayList(RedactionEntry) = .empty;
         var limitations: std.ArrayList([]const u8) = .empty;
-        try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace orca run supervision."));
+        try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
         try limitations.append(allocator, try allocator.dupe(u8, "Hermes informational event: no policy evaluation needed."));
 
         var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "Hermes event acknowledged by Orca.", &redactions, &limitations);
@@ -474,9 +474,17 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
 /// scraping stderr can distinguish a guard block from a program error. Provenance +
 /// consequence + recourse, parse-friendly, stable. Never shown to humans — it is emitted
 /// only on the Codex stderr block path (see `isCodexDenyOutput`), not the JSON host path.
+/// Primary emit stays `[[ORCA-GUARD]]` for one major (hosts already parse it).
+/// Do not dual-emit `[[RYK-GUARD]]` until a consumer+emit phase exists.
 const guard_sentinel_prefix: []const u8 =
     "[[ORCA-GUARD]] blocked. Command did not execute; no side effects. " ++
-    "Recourse: orca explain \"<command>\"; orca allow-once <code>; orca allowlist list\n";
+    "Recourse: ryk explain \"<command>\"; ryk allow-once <code>; ryk allowlist list\n";
+const guard_sentinel_tag = "[[ORCA-GUARD]]";
+
+/// True when stderr/agent text contains the guard sentinel.
+pub fn containsGuardSentinel(text: []const u8) bool {
+    return std.mem.indexOf(u8, text, guard_sentinel_tag) != null;
+}
 
 /// Codex hook deny exit code (documented Codex CLI contract; distinct from usage errors).
 const codex_deny_exit_code: u8 = 2;
@@ -530,7 +538,7 @@ fn emitPreEvalFailClosed(
 ) !u8 {
     var redactions: std.ArrayList(RedactionEntry) = .empty;
     var limitations: std.ArrayList([]const u8) = .empty;
-    try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace orca run supervision."));
+    try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
 
     var result = try makeFailClosedHookResponse(allocator, category, reason, message, &redactions, &limitations);
     defer result.deinit(allocator);
@@ -728,7 +736,7 @@ fn evaluateHook(
     }
 
     // Add host limitation note
-    try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace orca run supervision."));
+    try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
 
     switch (event) {
         .SessionStart => {
@@ -831,6 +839,7 @@ fn evaluateHook(
                     &redactions,
                     &limitations,
                     shell_evaluator,
+                    extractHookSessionId(payload),
                 );
             }
 
@@ -895,12 +904,12 @@ fn makeInformationalResponse(
 
 fn buildMessage(allocator: std.mem.Allocator, decision: PluginDecision, category: []const u8) ![]const u8 {
     return switch (decision) {
-        .allow => try std.fmt.allocPrint(allocator, "{s} allowed by Orca policy.", .{category}),
-        .block => try std.fmt.allocPrint(allocator, "{s} blocked by Orca policy.", .{category}),
-        .warn => try std.fmt.allocPrint(allocator, "{s} flagged by Orca policy. Review before proceeding.", .{category}),
-        .ask => try std.fmt.allocPrint(allocator, "{s} requires user approval per Orca policy.", .{category}),
+        .allow => try std.fmt.allocPrint(allocator, "{s} allowed by ryk policy.", .{category}),
+        .block => try std.fmt.allocPrint(allocator, "{s} blocked by ryk policy.", .{category}),
+        .warn => try std.fmt.allocPrint(allocator, "{s} flagged by ryk policy. Review before proceeding.", .{category}),
+        .ask => try std.fmt.allocPrint(allocator, "{s} requires user approval per ryk policy.", .{category}),
         .context_only => try std.fmt.allocPrint(allocator, "{s} allowed for context only. No side effects permitted.", .{category}),
-        .err => try std.fmt.allocPrint(allocator, "Orca could not evaluate {s}. Fail closed.", .{category}),
+        .err => try std.fmt.allocPrint(allocator, "ryk could not evaluate {s}. Fail closed.", .{category}),
     };
 }
 
@@ -929,6 +938,7 @@ fn evaluatePreToolUse(
             redactions,
             limitations,
             shell_evaluator,
+            extractHookSessionId(payload),
         ),
         .zig_native => |native_event| evaluateNativePreToolUseRoute(
             io,
@@ -963,6 +973,8 @@ fn evaluateShellCommandRoute(
     redactions: *std.ArrayList(RedactionEntry),
     limitations: *std.ArrayList([]const u8),
     evaluator_override: ?ShellCommandEvaluatorFn,
+    /// Host-provided session id for FM risk cards; null → product default `"orca-shell"`.
+    session_id: ?[]const u8,
 ) !HookResponse {
     const evaluator = evaluator_override orelse defaultShellCommandEvaluator;
     const daemon_response = evaluator(allocator, shell_event) catch |err| {
@@ -1002,6 +1014,7 @@ fn evaluateShellCommandRoute(
         .{
             .host = host_name,
             .cwd = shell_event.cwd,
+            .session_id = session_id orelse "orca-shell",
         },
     );
 }
@@ -1107,6 +1120,31 @@ fn extractHermesIdentifier(payload: std.json.Value, key: []const u8) ?[]const u8
     return candidate;
 }
 
+/// Session id from host hook JSON for FM risk-card-v1 cards.
+/// Accepts common top-level and nested shapes; invalid ids are skipped (default card id used).
+fn extractHookSessionId(payload: std.json.Value) ?[]const u8 {
+    if (extractString(payload, "session_id") orelse extractString(payload, "sessionId")) |candidate| {
+        if (core.session.validateSessionIdText(candidate)) |_| {
+            return candidate;
+        } else |_| {}
+    }
+    const nested_paths = [_][]const []const u8{
+        &.{ "kwargs", "session_id" },
+        &.{ "extra", "session_id" },
+        &.{ "source", "session_id" },
+        &.{ "kwargs", "sessionId" },
+        &.{ "extra", "sessionId" },
+    };
+    for (nested_paths) |path| {
+        if (extractNestedString(payload, path)) |candidate| {
+            if (core.session.validateSessionIdText(candidate)) |_| {
+                return candidate;
+            } else |_| continue;
+        }
+    }
+    return null;
+}
+
 fn hermesFeedDecisionTag(decision: PluginDecision) []const u8 {
     return switch (decision) {
         .allow => "allow",
@@ -1160,7 +1198,7 @@ fn shellEvalPluginDecisionToHook(decision: shell_eval.PluginDecision) PluginDeci
     };
 }
 
-/// Optional FM soft-seatbelt injection for shell hook paths (WP4c).
+/// Optional FM soft-seatbelt injection for shell hook paths.
 /// Production callers leave `client` null → `defaultClient()`; tests inject fakes.
 const HookShellFmOpts = struct {
     client: ?fm_steward_client.Client = null,
@@ -1233,10 +1271,11 @@ fn buildAgentVisibleDaemonDeny(
     const risk = hookRiskFromShellRisk(shell_risk);
     const ci_mode = mode == .ci;
 
-    // WP4 order when command is known: hard fence → sticky → strict refuse → matrix.
+    // Policy order when command is known: hard fence → sticky → strict refuse → matrix.
     // Live path: effect_class null (fingerprint-only sticky; not pack_id).
     // Without command, fall back to mode×severity only (legacy test callers).
     // Then FM soft seatbelt on non-block (block never reaches the Mac steward).
+    // Re-apply CI after FM so ask upgrades cannot leave soft ask under mode=.ci.
     var final_policy: shell_eval.ShellWithPolicyDecision = if (shell_command) |cmd| blk: {
         var out = shell_eval.decideShellWithPolicy(
             mode,
@@ -1249,7 +1288,9 @@ fn buildAgentVisibleDaemonDeny(
         );
         // CI hardens ask/warn → block before FM (same order as decisionFromDaemonResultWithPolicy).
         out.decision = out.decision.applyCiMode(ci_mode);
-        break :blk try shell_eval.applyFmSoftSeatbelt(allocator, out, fmShellContext(cmd, fm_opts));
+        var after_fm = try shell_eval.applyFmSoftSeatbelt(allocator, out, fmShellContext(cmd, fm_opts));
+        after_fm.decision = after_fm.decision.applyCiMode(ci_mode);
+        break :blk after_fm;
     } else .{
         .decision = shell_eval.pluginDecisionFromModeAndSeverity(mode, shell_risk).applyCiMode(ci_mode),
         .reason = null,
@@ -1264,7 +1305,7 @@ fn buildAgentVisibleDaemonDeny(
         if (deny.rule) |rule| allocator.free(rule);
     }
 
-    // Prefer FM owned / WP4 static reason; else daemon block reason or mode-softened.
+    // Prefer FM owned / policy static reason; else daemon block reason or mode-softened.
     const reason_src: []const u8 = if (decision == .block) blk: {
         if (final_policy.effectiveReason()) |r| break :blk r;
         break :blk deny.reason;
@@ -1289,7 +1330,7 @@ fn buildAgentVisibleDaemonDeny(
         if (daemon.responseStringField(result, "explanation")) |explanation| {
             const safe = try core_api.redactAlloc(allocator, explanation);
             defer allocator.free(safe);
-            break :blk try std.fmt.allocPrint(allocator, "command blocked by Orca policy: {s}", .{safe});
+            break :blk try std.fmt.allocPrint(allocator, "command blocked by ryk policy: {s}", .{safe});
         }
         break :blk try buildMessage(allocator, decision, "command");
     } else try buildMessage(allocator, decision, "command");
@@ -1356,12 +1397,12 @@ fn buildRemediationCommands(allocator: std.mem.Allocator, rule_id: ?[]const u8) 
         for (list.items) |s| allocator.free(s);
         list.deinit(allocator);
     }
-    try list.append(allocator, try allocator.dupe(u8, "orca explain \"<command>\""));
-    try list.append(allocator, try allocator.dupe(u8, "orca allow-once <code>"));
+    try list.append(allocator, try allocator.dupe(u8, "ryk explain \"<command>\""));
+    try list.append(allocator, try allocator.dupe(u8, "ryk allow-once <code>"));
     if (rule_id) |rid| {
-        try list.append(allocator, try std.fmt.allocPrint(allocator, "orca allowlist add {s} -r \"reason\"", .{rid}));
+        try list.append(allocator, try std.fmt.allocPrint(allocator, "ryk allowlist add {s} -r \"reason\"", .{rid}));
     } else {
-        try list.append(allocator, try allocator.dupe(u8, "orca allowlist list"));
+        try list.append(allocator, try allocator.dupe(u8, "ryk allowlist list"));
     }
     return try list.toOwnedSlice(allocator);
 }
@@ -1393,7 +1434,7 @@ fn hookResponseFromDaemonEvaluate(
                 );
                 if (policy_out.decision == .block) {
                     // Stage owned fields with errdefer so partial OOM does not leak.
-                    const reason_src = policy_out.reason orelse "blocked by Orca policy";
+                    const reason_src = policy_out.reason orelse "blocked by ryk policy";
                     const safe_reason = try core_api.redactAlloc(allocator, reason_src);
                     errdefer allocator.free(safe_reason);
                     const category = try allocator.dupe(u8, "command");
@@ -1419,6 +1460,7 @@ fn hookResponseFromDaemonEvaluate(
                 }
             }
             // Soft graduated allow/warn/ask → FM seatbelt may upgrade allow→ask.
+            // CI re-applied after FM so ask upgrades harden under mode=.ci.
             const shell_plugin = shell_eval.pluginDecisionFromDaemonAllow(result).applyCiMode(ci_mode);
             var after_fm: shell_eval.ShellWithPolicyDecision = .{
                 .decision = shell_plugin,
@@ -1431,6 +1473,7 @@ fn hookResponseFromDaemonEvaluate(
                     fmShellContext(cmd, fm_opts),
                 );
             }
+            after_fm.decision = after_fm.decision.applyCiMode(ci_mode);
             defer after_fm.freeOwned(allocator);
 
             const decision = shellEvalPluginDecisionToHook(after_fm.decision);
@@ -2069,7 +2112,7 @@ fn mockDaemonProtocolMismatchEvaluator(allocator: std.mem.Allocator, shell_event
 
 fn shellRouteSetup(allocator: std.mem.Allocator, redactions: *std.ArrayList(RedactionEntry), limitations: *std.ArrayList([]const u8)) !void {
     _ = redactions;
-    try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace orca run supervision."));
+    try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
 }
 
 fn runShellRoute(
@@ -2104,6 +2147,7 @@ fn runShellRouteWithMode(
         &redactions,
         &limitations,
         evaluator,
+        null,
     );
 }
 
@@ -2335,7 +2379,7 @@ test "hook response JSON format is valid" {
         .category = "command",
         .reason = "matched allow rule",
         .rule = "commands.allow[0]",
-        .message = "Allowed by Orca policy.",
+        .message = "Allowed by ryk policy.",
         .redactions = &.{},
         .host_limitations = &.{},
     };
@@ -2397,7 +2441,7 @@ test "hook opencode informational events are allowed" {
 
     var redactions: std.ArrayList(RedactionEntry) = .empty;
     var limitations: std.ArrayList([]const u8) = .empty;
-    try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace orca run supervision."));
+    try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
     try limitations.append(allocator, try allocator.dupe(u8, "OpenCode informational event: no policy evaluation needed."));
 
     var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "OpenCode event acknowledged by Orca.", &redactions, &limitations);
@@ -2453,7 +2497,7 @@ test "hook openclaw informational events are allowed" {
 
     var redactions: std.ArrayList(RedactionEntry) = .empty;
     var limitations: std.ArrayList([]const u8) = .empty;
-    try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace orca run supervision."));
+    try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
     try limitations.append(allocator, try allocator.dupe(u8, "OpenClaw informational event: no policy evaluation needed."));
 
     var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "OpenClaw event acknowledged by Orca.", &redactions, &limitations);
@@ -2852,7 +2896,7 @@ test "hookResponseFromDaemonEvaluate engine allow strict refuse off permit" {
 
 test "hookResponseFromDaemonEvaluate deny prefers policy strict refuse reason" {
     // Daemon Deny with its own reason + high severity + off-list permit under strict
-    // → agent-visible reason is WP4 strict refuse (non-null policy reason), not daemon echo.
+    // → agent-visible reason is policy strict refuse (non-null policy reason), not daemon echo.
     const allocator = std.testing.allocator;
     const json =
         \\{"status":"Deny","reason":"daemon-echo-reason","severity":"high","pack_id":"core.shell"}
@@ -2918,7 +2962,7 @@ test "hook guard sentinel format is machine-parseable and stable" {
     try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "did not execute") != null);
     try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "no side effects") != null);
     try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "Recourse") != null);
-    try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "orca explain") != null);
+    try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "ryk explain") != null);
     try std.testing.expect(guard_sentinel_prefix[guard_sentinel_prefix.len - 1] == '\n');
 }
 
@@ -2958,7 +3002,7 @@ test "hook daemon deny includes remediation fields for flexible hosts" {
     try std.testing.expect(result.rule != null);
     try std.testing.expect(result.suggestions.len >= 1);
     try std.testing.expect(result.remediation_commands.len >= 2);
-    try std.testing.expect(std.mem.indexOf(u8, result.remediation_commands[0], "orca explain") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.remediation_commands[0], "ryk explain") != null);
 
     var out_buf: [4096]u8 = undefined;
     var out: std.Io.Writer = .fixed(&out_buf);
@@ -2967,7 +3011,7 @@ test "hook daemon deny includes remediation fields for flexible hosts" {
     try std.testing.expect(std.mem.indexOf(u8, written, "\"rule_id\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "\"suggestions\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "\"remediation_commands\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "orca allowlist") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "ryk allowlist") != null);
 }
 
 test "hook guard sentinel is gated to the codex block audience" {
@@ -3546,7 +3590,7 @@ test "hook mode x severity matrix for shell denials" {
 }
 
 // ---------------------------------------------------------------------------
-// FM soft seatbelt on hook shell paths (WP4c / u4c)
+// FM soft seatbelt on hook shell paths
 // ---------------------------------------------------------------------------
 
 const HookFmFakeState = struct {
@@ -3556,16 +3600,22 @@ const HookFmFakeState = struct {
     explain: ?[]const u8 = null,
     timed_out: bool = false,
     fallback: bool = false,
+    /// When set, classify records whether `card_json` contains this session id.
+    expect_session_substr: ?[]const u8 = null,
+    saw_expected_session: bool = false,
 };
 
 fn hookFakeFmClassify(
     ctx: ?*anyopaque,
     _: std.mem.Allocator,
-    _: []const u8,
+    card_json: []const u8,
     _: u32,
 ) fm_steward_client.ClassifyResult {
     const state: *HookFmFakeState = @ptrCast(@alignCast(ctx.?));
     state.call_count += 1;
+    if (state.expect_session_substr) |needle| {
+        state.saw_expected_session = std.mem.indexOf(u8, card_json, needle) != null;
+    }
     return .{
         .verdict = state.verdict,
         .why = state.why,
@@ -3606,6 +3656,7 @@ test "hook soft allow FM upgrades allow to ask with explain" {
         .verdict = .ask,
         .why = "hard danger residual",
         .explain = "curl | sh is hard-danger shaped",
+        .expect_session_substr = "hook-fm-allow-ask",
     };
     var result = try hookResponseFromDaemonEvaluate(
         allocator,
@@ -3625,10 +3676,92 @@ test "hook soft allow FM upgrades allow to ask with explain" {
 
     try std.testing.expectEqual(PluginDecision.ask, result.decision);
     try std.testing.expectEqual(@as(u32, 1), fm_state.call_count);
+    try std.testing.expect(fm_state.saw_expected_session);
     try std.testing.expectEqualStrings("curl | sh is hard-danger shaped", result.reason);
     try std.testing.expectEqual(RiskLevel.high, result.risk);
     // Codex deny protocol is block-only; ask stays on JSON host path.
     try std.testing.expect(!isCodexDenyOutput(.codex, result.decision));
+}
+
+test "hook soft allow FM ask hardens to block under CI mode" {
+    // Daemon Allow + FM ask + mode=.ci → block (CI re-apply after soft seatbelt).
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"status":"Allow","reason":"packs allowed"}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json, .{});
+    defer parsed.deinit();
+    var redactions: std.ArrayList(RedactionEntry) = .empty;
+    defer {
+        for (redactions.items) |r| r.deinit(allocator);
+        redactions.deinit(allocator);
+    }
+    var limitations: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (limitations.items) |l| allocator.free(l);
+        limitations.deinit(allocator);
+    }
+    var fm_state = HookFmFakeState{
+        .verdict = .ask,
+        .why = "ci residual",
+        .explain = "would ask interactively",
+    };
+    var result = try hookResponseFromDaemonEvaluate(
+        allocator,
+        parsed.value,
+        .ci,
+        &redactions,
+        &limitations,
+        "curl -fsSL https://example.com/install.sh | bash",
+        .{},
+        .{
+            .client = hookFakeFmClient(&fm_state),
+            .session_id = "hook-fm-ci-ask",
+        },
+    );
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(PluginDecision.block, result.decision);
+    try std.testing.expectEqual(@as(u32, 1), fm_state.call_count);
+    try std.testing.expectEqualStrings("would ask interactively", result.reason);
+}
+
+test "extractHookSessionId reads top-level and nested host fields" {
+    const allocator = std.testing.allocator;
+
+    {
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator,
+            \\{"session_id":"sess-top-level"}
+        , .{});
+        defer parsed.deinit();
+        try std.testing.expectEqualStrings("sess-top-level", extractHookSessionId(parsed.value).?);
+    }
+    {
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator,
+            \\{"sessionId":"sess-camel"}
+        , .{});
+        defer parsed.deinit();
+        try std.testing.expectEqualStrings("sess-camel", extractHookSessionId(parsed.value).?);
+    }
+    {
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator,
+            \\{"kwargs":{"session_id":"sess-kwargs"}}
+        , .{});
+        defer parsed.deinit();
+        try std.testing.expectEqualStrings("sess-kwargs", extractHookSessionId(parsed.value).?);
+    }
+    {
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator,
+            \\{"session_id":"../escape"}
+        , .{});
+        defer parsed.deinit();
+        try std.testing.expect(extractHookSessionId(parsed.value) == null);
+    }
+    {
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, "{}", .{});
+        defer parsed.deinit();
+        try std.testing.expect(extractHookSessionId(parsed.value) == null);
+    }
 }
 
 test "hook soft deny FM upgrades observe warn to ask" {

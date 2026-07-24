@@ -8,7 +8,7 @@ import OutputDrawer from "./components/OutputDrawer";
 import ToastRegion from "./components/ToastRegion";
 
 export const metadata: Metadata = {
-  title: "Orca Dashboard",
+  title: "ryk Dashboard",
   description: "Local guardrail dashboard",
 };
 

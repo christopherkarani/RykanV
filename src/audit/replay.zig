@@ -713,7 +713,7 @@ test "verification accepts rust shell metadata in audit events" {
         .target = .{ .kind = .command, .value = "shell command (redacted)" },
         .decision = .{
             .result = .deny,
-            .reason = "blocked by Orca policy rule: destructive_rm",
+            .reason = "blocked by ryk policy rule: destructive_rm",
             .ci_may_proceed = false,
         },
         .metadata = metadata,

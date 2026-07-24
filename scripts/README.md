@@ -42,6 +42,11 @@ Coding agents and humans should use the **narrowest** gate. Full details and pat
 
 ---
 
+## Release cutter (primary)
+
+- **`cut-release.sh`**: Mac-local orchestrator — version bump, `verify-pre-merge`, multi-arch build (Linux via Docker), GitHub Release + assets, npm publish, Homebrew tap push. Default is dry-run (no publish); pass `--live` after confirm. Docs: `docs/dev/cut-release-shortcut.md`.
+- **`build-linux-release-docker.sh`**: Stage `linux-{amd64,arm64}/ryk` for `build-release.sh` via `RYK_CLI_ARTIFACT_DIR` (keep outside `dist/`).
+
 ## Phase 19 release helpers
 
 - `install.sh`: macOS/Linux installer with OS/arch detection, checksum verification, PATH/resource profile wiring, and a step-based TTY UI (banner, phases, activation hero). Set `ORCA_INSTALL_QUIET=1` for non-error silence; honors `NO_COLOR`.

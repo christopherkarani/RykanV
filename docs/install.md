@@ -5,14 +5,14 @@
 ```sh
 ./scripts/zig version   # must print 0.16.0
 ./scripts/build-all.sh  # or: ./scripts/zig build
-./zig-out/bin/orca version --json
+./zig-out/bin/ryk version --json
 ```
 
-Use Zig `0.16.0` (see `.zigversion`; prefer `./scripts/zig`). The product CLI is Zig-only: shell evaluation runs in-process via `shell_engine` (no Rust toolchain or `orca-daemon` companion). `./scripts/build-all.sh` and `./scripts/zig build` both produce `./zig-out/bin/orca`.
+Use Zig `0.16.0` (see `.zigversion`; prefer `./scripts/zig`). The product CLI is Zig-only: shell evaluation runs in-process via `shell_engine` (no Rust toolchain or `orca-daemon` companion). `./scripts/build-all.sh` and `./scripts/zig build` both produce `./zig-out/bin/ryk` (and `orca` compat alias).
 
 ## Release Artifacts
 
-Phase 41 release helpers build checksum-covered Orca and Edge archives into `dist/`:
+Release helpers build checksum-covered **ryk** archives (primary `ryk-v*`; dual-publish `orca-v*` when enabled) into `dist/`:
 
 ```sh
 ./scripts/build-release.sh
@@ -47,8 +47,8 @@ User install after the tap repository is published:
 
 ```sh
 brew tap christopherkarani/orca
-brew install --formula orca
-orca plugin install hermes --yes
+brew install --formula ryk   # or: brew install --formula orca (compat)
+ryk plugin install hermes --yes
 ```
 
 ## Manual Artifact Install
@@ -56,9 +56,9 @@ orca plugin install hermes --yes
 1. Download or build the archive for your OS and CPU.
 2. Verify its SHA-256 digest against `dist/checksums.txt`.
 3. Extract the archive, or run `scripts/install.sh` / `scripts/install.ps1` to install the binary and runtime assets together.
-4. Paste the activation command printed by the installer (the highlighted `eval "$(… env …)"` block on Unix). It invokes the absolute installed binary, so it also works in the shell that launched a first-time install before `orca` is on `PATH`. Then run `orca start` to get protected (policy + host integrations).
+4. Paste the activation command printed by the installer (the highlighted `eval "$(… env …)"` block on Unix). It invokes the absolute installed binary, so it also works in the shell that launched a first-time install before `ryk` is on `PATH`. Then run `ryk start` to get protected (policy + host integrations).
 
-The curl installer (`scripts/install.sh`) prints a step-based receipt (brand header, phases, activation hero). It honors `NO_COLOR` and `ORCA_INSTALL_QUIET=1` (non-error silence; activation line still printed). Host configuration is never performed by the installer — that remains `orca start`.
+The curl installer (`scripts/install.sh`) prints a step-based receipt (brand header, phases, activation hero). It honors `NO_COLOR` and `RYK_INSTALL_QUIET=1` / `ORCA_INSTALL_QUIET=1` (non-error silence; activation line still printed). Host configuration is never performed by the installer — that remains `ryk start` (orca alias works).
 
 Windows (`scripts/install.ps1`) shares the same core contracts (checksum verify, binary + runtime install, structured failures, quiet mode, activation handoff) with a smaller surface: it does not manage `PATH` (use your profile / user PATH) and does not soft-warn on a missing dashboard UI bundle.
 
@@ -66,9 +66,9 @@ Windows (`scripts/install.ps1`) shares the same core contracts (checksum verify,
 
 Templates exist under `packaging/`:
 
-- Homebrew: `packaging/homebrew/Formula/orca.rb`
-- Scoop: `packaging/scoop/orca.json`
-- WinGet: `packaging/winget/orca.yaml`
+- Homebrew: `packaging/homebrew/Formula/ryk.rb` (primary), `orca.rb` (compat)
+- Scoop: `packaging/scoop/ryk.json` (primary), `orca.json` (compat)
+- WinGet: `packaging/winget/ryk.yaml` (primary), `orca.yaml` (compat)
 - npm wrapper: `packaging/npm/package.json`
 - Docker: `packaging/docker/Dockerfile`
 
@@ -84,4 +84,4 @@ Linux builds use backend detection for namespace, seccomp, Landlock, cgroup, and
 
 ## Windows Notes
 
-Windows builds use `orca.exe`, PowerShell scripts, path normalization, command wrappers, and process cleanup support where implemented. Transparent filesystem and network enforcement are limited; there is no kernel OS filesystem session-attach backend on Windows in this release.
+Windows builds use `ryk.exe` (`orca.exe` alias), PowerShell scripts, path normalization, command wrappers, and process cleanup support where implemented. Transparent filesystem and network enforcement are limited; there is no kernel OS filesystem session-attach backend on Windows in this release.

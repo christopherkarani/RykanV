@@ -948,7 +948,7 @@ fn testSession(workspace_root: []const u8) !core.session.Session {
     return .{
         .id = try core.session.generateSessionId(ts),
         .started_at = ts,
-        .command = "orca mcp proxy",
+        .command = "ryk mcp proxy",
         .args = &.{"fake"},
         .workspace_root = workspace_root,
         .mode = .strict,

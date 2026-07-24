@@ -41,7 +41,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
                 // Points users at the reliable `orca env` activation primitive (post-audit DX win)
                 // while still offering the previous escape hatches.
                 try stderr.writeAll(
-                    "orca redteam: no fixtures directory found.\n\n" ++
+                    "ryk redteam: no fixtures directory found.\n\n" ++
                         "Fixtures are part of the Orca runtime assets. After a normal install, activate them in the current shell with:\n" ++
                         "    eval \"$(orca env 2>/dev/null || orca --print-install-env)\"\n\n" ++
                         "Then retry. Or set ORCA_RESOURCE_ROOT explicitly to the installed share/orca/current directory, pass an explicit fixture path, or run from a source checkout.\n",
@@ -56,21 +56,21 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     defer allocator.free(fixture_root);
 
     var fixture_set = redteam.fixtures.discover(io, allocator, fixture_root, options.fixture_id) catch |err| {
-        try stderr.print("orca redteam: failed to discover fixtures: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk redteam: failed to discover fixtures: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer fixture_set.deinit();
     if (fixture_set.fixtures.len == 0) {
         if (options.fixture_id) |id| {
-            try stderr.print("orca redteam: fixture not found: {s}\n", .{id});
+            try stderr.print("ryk redteam: fixture not found: {s}\n", .{id});
         } else {
-            try stderr.print("orca redteam: no fixtures found under {s}\n", .{fixture_root});
+            try stderr.print("ryk redteam: no fixtures found under {s}\n", .{fixture_root});
         }
         return exit_codes.general;
     }
 
     var suite = redteam.runner.runSuite(allocator, fixture_set, .{ .ci = options.ci }) catch |err| {
-        try stderr.print("orca redteam: fixture run failed: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk redteam: fixture run failed: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer suite.deinit();
@@ -101,16 +101,16 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
         } else if (std.mem.eql(u8, arg, "--fixture")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca redteam: --fixture requires a fixture id.\n");
+                try stderr.writeAll("ryk redteam: --fixture requires a fixture id.\n");
                 return error.Usage;
             }
             options.fixture_id = argv[index];
         } else if (std.mem.startsWith(u8, arg, "-")) {
-            try suggestions.writeUnknownOption(stderr, "orca redteam", arg, &.{ "--json", "--ci", "--fixture", "--help", "-h" }, "redteam");
+            try suggestions.writeUnknownOption(stderr, "ryk redteam", arg, &.{ "--json", "--ci", "--fixture", "--help", "-h" }, "redteam");
             return error.Usage;
         } else {
             if (saw_path) {
-                try stderr.writeAll("orca redteam: expected at most one fixture path.\n");
+                try stderr.writeAll("ryk redteam: expected at most one fixture path.\n");
                 return error.Usage;
             }
             options.root = arg;
@@ -181,8 +181,8 @@ test "redteam --json output is stable machine JSON without presentation" {
     try std.testing.expectEqualStrings("zig-in-process", provenance.object.get("evaluator").?.string);
     try std.testing.expect(provenance.object.get("real_action_attempted").?.bool == false);
     try std.testing.expect(std.mem.indexOfScalar(u8, output, 0x1b) == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Orca Redteam Score") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Orca Redteam — engine self-test") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk Redteam Score") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk Redteam — engine self-test") == null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 
@@ -222,7 +222,7 @@ test "redteam ci exits nonzero on failing fixture" {
 
     const code = try command(std.testing.io, &.{ root, "--ci" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.redteam_failure, code);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Orca Redteam — engine self-test") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "ryk Redteam — engine self-test") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "builtin:redteam") != null);
 }
 

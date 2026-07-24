@@ -310,7 +310,7 @@ pub fn matchCommandDetailedOpts(cmd: []const u8, opts: MatchOptions) MatchResult
                     .reason = if (pat.reason.len > 0)
                         pat.reason
                     else
-                        "Destructive command blocked by Orca pack.",
+                        "Destructive command blocked by ryk pack.",
                 } };
             }
         }

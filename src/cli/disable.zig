@@ -61,7 +61,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         }
         try suggestions.writeUnknownOption(
             stderr,
-            "orca stop",
+            "ryk stop",
             arg,
             &.{ "codex", "claude", "cursor", "opencode", "openclaw", "hermes", "all", "--yes", "--help" },
             "stop",
@@ -75,7 +75,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         var prompt_buf: [128]u8 = undefined;
         const prompt = std.fmt.bufPrint(&prompt_buf, "Stop Orca for {s}? This removes plugin registrations from host agents.", .{host_label}) catch "Stop Orca?";
         const decision = danger_confirmation.decide(io, stdout, prompt, false, try stdin.isTty(io), null) catch |err| {
-            try stderr.print("orca stop: confirmation failed: {s}\n", .{@errorName(err)});
+            try stderr.print("ryk stop: confirmation failed: {s}\n", .{@errorName(err)});
             return exit_codes.general;
         };
         switch (decision) {
@@ -85,7 +85,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
                 return exit_codes.success;
             },
             .requires_yes => {
-                try stderr.writeAll("orca stop: requires --yes or run interactively.\n");
+                try stderr.writeAll("ryk stop: requires --yes or run interactively.\n");
                 return exit_codes.usage;
             },
         }
@@ -135,7 +135,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         try stdout.print("⚠️  Disabled {d} plugin(s), {d} failed.\n", .{ success_count, fail_count });
     }
     try stdout.writeAll("Orca binary and policy files remain in place.\n");
-    try stdout.writeAll("Restart protection with: orca start\n");
+    try stdout.writeAll("Restart protection with: ryk start\n");
     return exit_codes.success;
 }
 
@@ -338,7 +338,7 @@ pub fn runOpenClawUninstall(allocator: std.mem.Allocator) !u8 {
     const argv = [_][]const u8{ "openclaw", "plugins", "uninstall", "orca-openclaw-plugin" };
 
     // Use the robust timed runner (10s) so a stuck/broken/misbehaving openclaw
-    // cannot hang `orca uninstall` or `orca stop` forever.
+    // cannot hang `orca uninstall` or `ryk stop` forever.
     const res = try child_process.runHostCommandTimed(allocator, &argv, 10_000, null, null);
     defer child_process.deinitHostCommandResult(res, allocator);
 
@@ -405,14 +405,14 @@ test "stop command help and invalid args" {
     stderr_writer = .fixed(&stderr_buf);
     const bad_code = try command(std.testing.io, &.{"--unknown"}, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.usage, bad_code);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca stop") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk stop") != null);
 
     stdout_writer = .fixed(&stdout_buf);
     stderr_writer = .fixed(&stderr_buf);
     const typo_code = try command(std.testing.io, &.{"codxe"}, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.usage, typo_code);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "Did you mean 'codex'?") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca help stop") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help stop") != null);
 }
 
 test "stop accepts legacy -all spelling but requires confirmation in non-TTY" {
@@ -426,7 +426,7 @@ test "stop accepts legacy -all spelling but requires confirmation in non-TTY" {
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "--yes") != null);
 }
 
-test "stop success output points at orca start not setup" {
+test "stop success output points at ryk start not setup" {
     var stdout_buf: [4096]u8 = undefined;
     var stderr_buf: [256]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
@@ -436,6 +436,6 @@ test "stop success output points at orca start not setup" {
     const code = try command(std.testing.io, &.{"--yes"}, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, code);
     const out = stdout_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "orca start") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "ryk start") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "orca setup") == null);
 }

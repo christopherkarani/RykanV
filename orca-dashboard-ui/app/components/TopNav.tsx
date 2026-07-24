@@ -74,10 +74,10 @@ export default function TopNav() {
           className="flex items-center gap-2.5 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         >
           <div className="flex h-7 w-7 items-center justify-center rounded-md border border-text-primary/80 bg-text-primary text-background font-bold text-xs">
-            O
+            R
           </div>
           <span className="hidden text-sm font-semibold tracking-tight text-text-primary md:inline">
-            Orca
+            ryk
           </span>
         </Link>
 

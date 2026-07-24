@@ -1,11 +1,15 @@
 # syntax=docker/dockerfile:1
 # CLI-only release image (Zig shell_engine in-process; no orca-daemon).
+# Primary binary: ryk; orca compat alias also installed.
 FROM debian:bookworm-slim AS build
 
 ARG TARGETARCH
 ARG ORCA_VERSION
 ARG ORCA_COMMIT
 ARG ORCA_BUILD_DATE
+ARG RYK_VERSION
+ARG RYK_COMMIT
+ARG RYK_BUILD_DATE
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl file xz-utils \
@@ -14,20 +18,28 @@ RUN apt-get update \
 WORKDIR /src
 COPY . .
 
-RUN case "$TARGETARCH" in \
+RUN version="${RYK_VERSION:-$ORCA_VERSION}" \
+    && commit="${RYK_COMMIT:-$ORCA_COMMIT}" \
+    && build_date="${RYK_BUILD_DATE:-$ORCA_BUILD_DATE}" \
+    && case "$TARGETARCH" in \
       amd64) zig_target=x86_64-linux ;; \
       arm64) zig_target=aarch64-linux ;; \
       *) echo "unsupported Docker target architecture: $TARGETARCH" >&2; exit 1 ;; \
     esac \
-    && ./scripts/zig build install-orca \
+    && ./scripts/zig build install-ryk \
       -Dtarget="$zig_target" \
       -Doptimize=ReleaseSafe \
-      -Dversion="$ORCA_VERSION" \
-      -Dcommit="$ORCA_COMMIT" \
-      -Dbuild-date="$ORCA_BUILD_DATE" \
-      --prefix /tmp/orca-cli \
+      -Dversion="$version" \
+      -Dcommit="$commit" \
+      -Dbuild-date="$build_date" \
+      --prefix /tmp/ryk-cli \
     && mkdir -p "/out/linux-$TARGETARCH" \
-    && cp -p /tmp/orca-cli/bin/orca "/out/linux-$TARGETARCH/orca"
+    && cp -p /tmp/ryk-cli/bin/ryk "/out/linux-$TARGETARCH/ryk" \
+    && if [ -f /tmp/ryk-cli/bin/orca ]; then \
+         cp -p /tmp/ryk-cli/bin/orca "/out/linux-$TARGETARCH/orca"; \
+       else \
+         cp -p /tmp/ryk-cli/bin/ryk "/out/linux-$TARGETARCH/orca"; \
+       fi
 
 FROM scratch
 COPY --from=build /out/ /

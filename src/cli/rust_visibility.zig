@@ -73,9 +73,9 @@ fn buildDaemonDenyReason(
     errdefer if (rule) |rule_name| allocator.free(rule_name);
 
     const reason = if (rule) |rule_name|
-        try std.fmt.allocPrint(allocator, "blocked by Orca rule: {s}", .{rule_name})
+        try std.fmt.allocPrint(allocator, "blocked by ryk rule: {s}", .{rule_name})
     else
-        try allocator.dupe(u8, "command denied by Orca policy");
+        try allocator.dupe(u8, "command denied by ryk policy");
 
     return .{ .reason = reason, .rule = rule };
 }
@@ -217,33 +217,33 @@ pub fn formatDenyNextStepsWithCode(
     }
     try list.appendSlice(allocator, "Next:\n");
     {
-        const line = try std.fmt.allocPrint(allocator, "  orca explain \"{s}\"\n", .{command_display});
+        const line = try std.fmt.allocPrint(allocator, "  ryk explain \"{s}\"\n", .{command_display});
         defer allocator.free(line);
         try list.appendSlice(allocator, line);
     }
     if (allow_once_code) |code| {
         if (code.len > 0) {
-            const line = try std.fmt.allocPrint(allocator, "  orca allow-once {s}   # if the approval prompt is gone\n", .{code});
+            const line = try std.fmt.allocPrint(allocator, "  ryk allow-once {s}   # if the approval prompt is gone\n", .{code});
             defer allocator.free(line);
             try list.appendSlice(allocator, line);
         }
     } else {
-        try list.appendSlice(allocator, "  orca allow-once <code>          # if the approval prompt is gone\n");
+        try list.appendSlice(allocator, "  ryk allow-once <code>          # if the approval prompt is gone\n");
     }
     // Advanced permanent path — keep available, de-emphasized vs prompt-native allow.
     if (rule_id) |rid| {
-        const line = try std.fmt.allocPrint(allocator, "  orca allowlist add {s} -r \"reason\"   # advanced\n", .{rid});
+        const line = try std.fmt.allocPrint(allocator, "  ryk allowlist add {s} -r \"reason\"   # advanced\n", .{rid});
         defer allocator.free(line);
         try list.appendSlice(allocator, line);
     } else {
-        try list.appendSlice(allocator, "  orca allowlist list              # advanced\n");
+        try list.appendSlice(allocator, "  ryk allowlist list              # advanced\n");
     }
     return try list.toOwnedSlice(allocator);
 }
 
 pub fn safeReasonFromDaemonResult(allocator: std.mem.Allocator, result: std.json.Value) ![]const u8 {
     return switch (daemon.responseStatus(result)) {
-        .allow => try allocator.dupe(u8, daemon.responseReason(result) orelse "command allowed by Orca policy"),
+        .allow => try allocator.dupe(u8, daemon.responseReason(result) orelse "command allowed by ryk policy"),
         .deny => blk: {
             const deny = try buildDaemonDenyReason(allocator, result);
             defer if (deny.rule) |rule| allocator.free(rule);
@@ -649,16 +649,16 @@ test "formatDenyNextSteps includes explain allowlist and allow-once" {
     const footer = try formatDenyNextSteps(allocator, "git reset --hard", "core.git:reset-hard", "Consider using 'git stash'");
     defer allocator.free(footer);
     try std.testing.expect(std.mem.indexOf(u8, footer, "Tip: Consider using 'git stash'") != null);
-    try std.testing.expect(std.mem.indexOf(u8, footer, "orca explain \"git reset --hard\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, footer, "orca allowlist add core.git:reset-hard") != null);
-    try std.testing.expect(std.mem.indexOf(u8, footer, "orca allow-once") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "ryk explain \"git reset --hard\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "ryk allowlist add core.git:reset-hard") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "ryk allow-once") != null);
     // Offline fallback: allow-once is "if the approval prompt is gone"; rule-id allowlist is advanced.
     try std.testing.expect(std.mem.indexOf(u8, footer, "if the approval prompt is gone") != null);
     try std.testing.expect(std.mem.indexOf(u8, footer, "# advanced") != null);
     // Next order: explain, then allow-once, then allowlist (not day-1 primary).
-    const explain_at = std.mem.indexOf(u8, footer, "orca explain").?;
-    const once_at = std.mem.indexOf(u8, footer, "orca allow-once").?;
-    const allowlist_at = std.mem.indexOf(u8, footer, "orca allowlist add").?;
+    const explain_at = std.mem.indexOf(u8, footer, "ryk explain").?;
+    const once_at = std.mem.indexOf(u8, footer, "ryk allow-once").?;
+    const allowlist_at = std.mem.indexOf(u8, footer, "ryk allowlist add").?;
     try std.testing.expect(explain_at < once_at);
     try std.testing.expect(once_at < allowlist_at);
 }
@@ -667,9 +667,9 @@ test "formatDenyNextStepsWithCode emits concrete allow-once code" {
     const allocator = std.testing.allocator;
     const footer = try formatDenyNextStepsWithCode(allocator, "rm -rf /", "core.filesystem:destructive_rm", null, "A1B2C3");
     defer allocator.free(footer);
-    try std.testing.expect(std.mem.indexOf(u8, footer, "orca allow-once A1B2C3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "ryk allow-once A1B2C3") != null);
     try std.testing.expect(std.mem.indexOf(u8, footer, "if the approval prompt is gone") != null);
-    try std.testing.expect(std.mem.indexOf(u8, footer, "orca allowlist add core.filesystem:destructive_rm") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "ryk allowlist add core.filesystem:destructive_rm") != null);
     try std.testing.expect(std.mem.indexOf(u8, footer, "# advanced") != null);
 }
 

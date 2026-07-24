@@ -6,6 +6,7 @@ const intercept = @import("../intercept/mod.zig");
 const mcp = @import("../mcp/mod.zig");
 const policy = @import("orca_core").policy;
 const sandbox = @import("../sandbox/mod.zig");
+const brand = @import("../cli/brand.zig");
 const fixtures = @import("fixtures.zig");
 const scorecard = @import("scorecard.zig");
 
@@ -225,7 +226,7 @@ pub fn runFixture(allocator: std.mem.Allocator, fixture: fixtures.Fixture, optio
         .event_count = writer.event_count,
         .final_event_hash = final_hash,
         .policy = "builtin:redteam",
-        .product_label = "Orca",
+        .product_label = brand.product_display,
     });
     try writer.writeLastPointer();
 

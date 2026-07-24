@@ -1,27 +1,33 @@
 {
   "version": "1.2.8",
-  "description": "Local runtime firewall for AI agents.",
+  "description": "Local runtime firewall for AI agents (compat manifest; prefer ryk).",
   "homepage": "https://github.com/christopherkarani/Orca",
   "license": "Apache-2.0",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/christopherkarani/Orca/releases/download/v1.2.8/orca-v1.2.8-windows-amd64.zip",
+      "url": "https://github.com/christopherkarani/Orca/releases/download/v1.2.8/ryk-v1.2.8-windows-amd64.zip",
       "hash": "PLACEHOLDER_WINDOWS_AMD64_SHA256"
     }
   },
-  "bin": "orca-v1.2.8-windows-amd64\\bin\\orca.exe",
+  "bin": [
+    "ryk-v1.2.8-windows-amd64\\bin\\ryk.exe",
+    [
+      "ryk-v1.2.8-windows-amd64\\bin\\orca.exe",
+      "orca"
+    ]
+  ],
   "checkver": {
     "github": "https://github.com/christopherkarani/Orca"
   },
   "autoupdate": {
     "architecture": {
       "64bit": {
-        "url": "https://github.com/christopherkarani/Orca/releases/download/v$version/orca-v$version-windows-amd64.zip",
+        "url": "https://github.com/christopherkarani/Orca/releases/download/v$version/ryk-v$version-windows-amd64.zip",
         "hash": {
           "url": "$baseurl/checksums.txt"
         }
       }
     }
   },
-  "notes": "PLACEHOLDER: verify checksums.txt from the release before publishing this manifest. The zip contains a top-level orca-v<version>-windows-amd64 directory."
+  "notes": "PLACEHOLDER: verify checksums.txt before publishing. Prefer the ryk scoop manifest; this orca entry is dual-name compat. Archive top-level is ryk-v<version>-windows-amd64."
 }

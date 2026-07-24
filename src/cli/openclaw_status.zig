@@ -1,13 +1,13 @@
 //! OpenClaw protection honesty for doctor/install surfaces.
 //! Standing product claim until live-host E2E exists (Wave 1): npm/ClawHub is
-//! unprotected; hook grade is unverified; prefer wrapper `orca run -- openclaw`.
+//! unprotected; hook grade is unverified; prefer wrapper `ryk run -- openclaw`.
 
 const std = @import("std");
 const core = @import("orca_core").core;
 
 /// Shared enforcement note (plain + JSON). Single source of truth for doctor copy.
 pub const enforcement_note =
-    "unprotected for npm/ClawHub (hooks no-op); prefer wrapper: orca run -- openclaw";
+    "unprotected for npm/ClawHub (hooks no-op); prefer wrapper: ryk run -- openclaw";
 
 /// Hook grade until real-host E2E proves veto. Not a boolean "enforcing" claim.
 pub const hook_grade = "unverified";
@@ -16,7 +16,7 @@ pub const hook_grade = "unverified";
 pub const npm_path_label = "unprotected";
 
 /// Preferred protection path (grade wrapper).
-pub const preferred_wrapper = "orca run -- openclaw";
+pub const preferred_wrapper = "ryk run -- openclaw";
 
 /// Plain-text honesty lines for `orca plugin doctor openclaw`.
 pub fn writeDoctorHonesty(stdout: anytype) !void {

@@ -3,7 +3,7 @@ const theme = @import("theme.zig");
 const terminal_text = @import("terminal_text.zig");
 const vaxis = @import("vaxis");
 
-/// Linear rich-output primitives for the Orca CLI.
+/// Linear rich-output primitives for the ryk CLI.
 ///
 /// Every primitive writes to a `std.Io.Writer`-like sink (duck-typed so unit
 /// tests can use `std.Io.Writer.fixed`). Colour is supplied by `theme`; when the
@@ -63,11 +63,11 @@ pub fn writePadded(stdout: anytype, s: []const u8, width: usize) !void {
 // Banner — compact brand header used at the top of human commands
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Write the compact brand header: `🛡  Orca · v<version>` plus an optional dim
+/// Write the compact brand header: `🛡  ryk · v<version>` plus an optional dim
 /// status suffix, under a rule line. Suppressed styling degrades to plain text.
 pub fn banner(io: std.Io, stdout: anytype, version: []const u8, status: ?[]const u8) !void {
     try stdout.writeAll("  ");
-    try theme.paintBold(io, stdout, .brand, "🛡  Orca");
+    try theme.paintBold(io, stdout, .brand, "🛡  ryk");
     try stdout.writeAll(" · v");
     try theme.paint(io, stdout, .text_bright, version);
     if (status) |s| {

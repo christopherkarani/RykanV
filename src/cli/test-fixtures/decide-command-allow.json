@@ -5,7 +5,7 @@
   "category": "command",
   "reason": "matched commands.allow rule \"echo *\"",
   "rule": "commands.allow[14]",
-  "message": "command allowed by Orca policy.",
+  "message": "command allowed by ryk policy.",
   "redactions": [
   ]
 }

@@ -43,15 +43,15 @@ pub fn applyForRun(
             // always claim the user passed `--os-sandbox on`.
             switch (mode) {
                 .on => try stderr.print(
-                    "orca run: OS sandbox required (--os-sandbox on) but unavailable ({s}).\n",
+                    "ryk run: OS sandbox required (--os-sandbox on) but unavailable ({s}).\n",
                     .{fail_reason},
                 ),
                 .auto => try stderr.print(
-                    "orca run: OS sandbox failed closed under --os-sandbox auto ({s}).\n",
+                    "ryk run: OS sandbox failed closed under --os-sandbox auto ({s}).\n",
                     .{fail_reason},
                 ),
                 .off => try stderr.print(
-                    "orca run: OS sandbox unavailable ({s}).\n",
+                    "ryk run: OS sandbox unavailable ({s}).\n",
                     .{fail_reason},
                 ),
             }
@@ -90,7 +90,7 @@ pub fn warnAutoDegrade(
         .unavailable, .failed => {
             const reason = apply_result.receipt.reason_code orelse "unknown";
             try stderr.print(
-                "orca run: WARNING: OS sandbox unavailable ({s}); continuing without OS FS isolation (grade drop). Use --os-sandbox on to require it, or --os-sandbox off to silence.\n",
+                "ryk run: WARNING: OS sandbox unavailable ({s}); continuing without OS FS isolation (grade drop). Use --os-sandbox on to require it, or --os-sandbox off to silence.\n",
                 .{reason},
             );
         },

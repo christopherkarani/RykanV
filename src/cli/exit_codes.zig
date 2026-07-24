@@ -5,7 +5,7 @@ pub const denial: u8 = 3;
 pub const unsupported: u8 = 4;
 pub const child_failure: u8 = 5;
 pub const redteam_failure: u8 = 6;
-/// `orca decide` ask outcome (non-interactive hosts should read JSON on stdout).
+/// `ryk decide` ask outcome (non-interactive hosts should read JSON on stdout).
 pub const ask: u8 = 7;
-/// `orca decide` warn / redact outcome.
+/// `ryk decide` warn / redact outcome.
 pub const warn: u8 = 8;

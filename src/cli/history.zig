@@ -17,7 +17,7 @@ pub fn commandWithExecutor(comptime execute_cli: anytype, io: std.Io, argv: []co
         try writeHelp(stdout);
         return exit_codes.success;
     }
-    // Day-2 loop discoverability: `orca history suggest` → suggest-allowlist.
+    // Day-2 loop discoverability: `ryk history suggest` → suggest-allowlist.
     if (std.mem.eql(u8, argv[0], "suggest")) {
         const allocator = std.heap.smp_allocator;
         const daemon_argv = try allocator.alloc([]const u8, argv.len);
@@ -52,7 +52,7 @@ pub fn commandWithExecutor(comptime execute_cli: anytype, io: std.Io, argv: []co
     }
 
     var parsed = contracts.parseHistoryStats(allocator, daemon_stdout.written()) catch |err| {
-        try stderr.print("orca history: daemon returned invalid structured data ({s}). Run 'orca doctor'.\n", .{@errorName(err)});
+        try stderr.print("ryk history: daemon returned invalid structured data ({s}). Run 'orca doctor'.\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer parsed.deinit();
@@ -77,12 +77,12 @@ fn passThrough(comptime execute_cli: anytype, io: std.Io, argv: []const []const 
 fn renderLiveStats(comptime execute_cli: anytype, io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     for (argv) |arg| {
         if (std.mem.eql(u8, arg, "--json") or std.mem.eql(u8, arg, "--robot")) {
-            try stderr.writeAll("orca history: --live cannot be combined with --json/--robot (machine output is frozen).\n");
+            try stderr.writeAll("ryk history: --live cannot be combined with --json/--robot (machine output is frozen).\n");
             return exit_codes.usage;
         }
     }
     if (!tui.theme.active(io, stdout).capability.hasColor()) {
-        try stderr.writeAll("orca history: --live needs an interactive colour terminal. Drop --live, or unset NO_COLOR / --no-rich.\n");
+        try stderr.writeAll("ryk history: --live needs an interactive colour terminal. Drop --live, or unset NO_COLOR / --no-rich.\n");
         return exit_codes.usage;
     }
 
@@ -106,7 +106,7 @@ fn renderLiveStats(comptime execute_cli: anytype, io: std.Io, argv: []const []co
     }
 
     var parsed = contracts.parseHistoryStats(allocator, daemon_stdout.written()) catch |err| {
-        try stderr.print("orca history: daemon returned invalid structured data ({s}). Run 'orca doctor'.\n", .{@errorName(err)});
+        try stderr.print("ryk history: daemon returned invalid structured data ({s}). Run 'orca doctor'.\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer parsed.deinit();
@@ -193,7 +193,7 @@ fn writeHelp(stdout: anytype) !void {
     try stdout.writeAll(
         \\Query command history tracked by Orca.
         \\
-        \\Usage: orca history <action> [options] [--live]
+        \\Usage: ryk history <action> [options] [--live]
         \\
         \\Actions:
         \\  stats        Show outcomes, patterns, projects, and agents
@@ -206,17 +206,17 @@ fn writeHelp(stdout: anytype) !void {
         \\  backup       Back up the history database
         \\
         \\Day-2 policy loop:
-        \\  orca history stats
-        \\  orca history suggest          # or: orca suggest-allowlist
+        \\  ryk history stats
+        \\  ryk history suggest          # or: orca suggest-allowlist
         \\  orca suggest-allowlist --apply N
-        \\  orca allowlist add-command …  # from high-confidence examples
+        \\  ryk allowlist add-command …  # from high-confidence examples
         \\
         \\Examples:
-        \\  orca history stats --days 7
-        \\  orca history stats --json
-        \\  orca history suggest --confidence high
-        \\  orca history check --strict
-        \\  orca history --live
+        \\  ryk history stats --days 7
+        \\  ryk history stats --json
+        \\  ryk history suggest --confidence high
+        \\  ryk history check --strict
+        \\  ryk history --live
         \\
         \\Options:
         \\  --live       Open a scrollable alt-screen stats view (TTY only; not with --json/--robot)
@@ -246,8 +246,8 @@ fn renderHumanAlloc(allocator: std.mem.Allocator, io: std.Io, stats: contracts.H
     if (stats.total_commands == 0) {
         const body = try std.fmt.allocPrint(allocator, "Orca hasn't seen any shell commands in the last {d} days.\n\n" ++
             "Run your first protected session to start building history:\n" ++
-            "  → orca run -- echo \"hello world\"\n" ++
-            "  → orca run -- npm install\n\n" ++
+            "  → ryk run -- echo \"hello world\"\n" ++
+            "  → ryk run -- npm install\n\n" ++
             "History powers the dashboard, replay, and pack recommendations.", .{stats.period_days});
         defer allocator.free(body);
         try tui.render.callout(io, stdout, .info, "No commands tracked yet", body);
@@ -283,7 +283,7 @@ fn renderHumanAlloc(allocator: std.mem.Allocator, io: std.Io, stats: contracts.H
     try renderProjects(allocator, io, stats.top_projects, stdout);
 
     if (stats.outcomes.denied > 0) {
-        try tui.render.callout(io, stdout, .info, "Next", "Turn denials into policy:\n  → orca history suggest\n  → orca suggest-allowlist --confidence high\n  → orca allowlist add-command \"…\" -r \"reason\"");
+        try tui.render.callout(io, stdout, .info, "Next", "Turn denials into policy:\n  → ryk history suggest\n  → orca suggest-allowlist --confidence high\n  → ryk allowlist add-command \"…\" -r \"reason\"");
     }
     return exit_codes.success;
 }
@@ -457,7 +457,7 @@ test "history help is Zig-owned and has no daemon branding" {
     const code = try commandWithExecutor(unexpectedExecutor, std.testing.io, &.{"--help"}, &stdout, &stderr);
     try std.testing.expectEqual(exit_codes.success, code);
     try std.testing.expect(std.mem.indexOf(u8, stdout.buffered(), "orca-daemon") == null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.buffered(), "orca history stats") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.buffered(), "ryk history stats") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.buffered(), "--live") != null);
 }
 
@@ -527,7 +527,7 @@ test "invalid structured history data is remediated without echoing payload" {
     var stderr: std.Io.Writer = .fixed(&err);
     const code = try commandWithExecutor(fakeInvalid, std.testing.io, &.{"stats"}, &stdout, &stderr);
     try std.testing.expectEqual(exit_codes.general, code);
-    try std.testing.expect(std.mem.indexOf(u8, stderr.buffered(), "orca doctor") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr.buffered(), "ryk doctor") != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr.buffered(), "SUPER_SECRET") == null);
 }
 

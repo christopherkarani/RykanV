@@ -202,12 +202,12 @@ struct SeedPathResolverTests {
 
     // MARK: - Product App Support seed path (uses store-path conventions)
 
-    @Test("product App Support seed URL sits under Orca/fm-steward as seed.json")
+    @Test("product App Support seed URL sits under ryk/fm-steward as seed.json")
     func productAppSupportSeedPath() {
         let url = SeedPathResolver.productAppSupportSeedURL()
         let path = url.path
         #expect(path.contains("Application Support"))
-        #expect(path.contains("Orca/fm-steward"))
+        #expect(path.contains("ryk/fm-steward"))
         #expect(url.lastPathComponent == "seed.json")
         #expect(url.lastPathComponent == SeedPathResolver.seedFileName)
     }

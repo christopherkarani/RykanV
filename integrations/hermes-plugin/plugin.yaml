@@ -1,4 +1,4 @@
 name: orca
 version: 1.2.8
-description: Orca runtime guardrails for Hermes Agent.
+description: ryk runtime guardrails for Hermes Agent (plugin id orca kept for host registry compat).
 entrypoint: __init__.py

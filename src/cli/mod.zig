@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 
 pub const args = @import("args.zig");
+pub const brand = @import("brand.zig");
 pub const exit_codes = @import("exit_codes.zig");
 pub const help = @import("help.zig");
 pub const run_command = @import("run.zig");
@@ -65,6 +66,7 @@ pub const danger_confirmation = @import("danger_confirmation.zig");
 pub const fm_steward_client = @import("fm_steward_client.zig");
 
 test {
+    _ = brand;
     _ = staged_mutation;
     // Ensure the child_process module (and its tests) are pulled into the test binary.
     _ = child_process;
@@ -132,6 +134,8 @@ const self_banner_commands = [_][]const u8{ "version", "--version", "help", "run
 /// lines, long-running servers) — never receive the human brand banner.
 const always_machine_commands = [_][]const u8{
     "evaluate", "hook", "shim", "completions", "env", "dashboard", "--print-install-env",
+    // Zig-native shell tools (formerly daemon-proxied): keep machine/banner-free.
+    "test", "explain",
 };
 
 fn isAlwaysMachineCommand(command: []const u8) bool {
@@ -363,16 +367,16 @@ fn runWithCwdUsing(
             return exit_codes.success;
         }
         if (argv.len > 2) {
-            try stderr.writeAll("orca help: expected at most one command.\n");
+            try stderr.writeAll("ryk help: expected at most one command.\n");
             return exit_codes.usage;
         }
         if (!try help.writeCommand(io, stdout, argv[1])) {
-            try stderr.writeAll("orca help: unknown command '");
+            try stderr.writeAll("ryk help: unknown command '");
             try tui.terminal_text.write(stderr, argv[1], .single_line);
             if (suggestCommand(argv[1])) |suggestion| {
-                try stderr.print("'. Did you mean '{s}'?\nRun 'orca help {s}' for usage.\n", .{ suggestion, suggestion });
+                try stderr.print("'. Did you mean '{s}'?\nRun 'ryk help {s}' for usage.\n", .{ suggestion, suggestion });
             } else {
-                try stderr.writeAll("'.\nRun 'orca help' to see all commands.\n");
+                try stderr.writeAll("'.\nRun 'ryk help' to see all commands.\n");
             }
             return exit_codes.usage;
         }
@@ -381,7 +385,7 @@ fn runWithCwdUsing(
 
     if (std.mem.eql(u8, command, "version") or std.mem.eql(u8, command, "--version")) {
         if (argv.len > 2) {
-            try stderr.writeAll("orca version: expected at most one argument. Run 'orca help version' for usage.\n");
+            try stderr.writeAll("ryk version: expected at most one argument. Run 'ryk help version' for usage.\n");
             return exit_codes.usage;
         }
         if (argv.len == 2) {
@@ -393,7 +397,7 @@ fn runWithCwdUsing(
                 try version_command.writeJsonWithDaemon(std.heap.smp_allocator, stdout);
                 return exit_codes.success;
             }
-            try stderr.writeAll("orca version: unsupported argument. Run 'orca help version' for usage.\n");
+            try stderr.writeAll("ryk version: unsupported argument. Run 'ryk help version' for usage.\n");
             return exit_codes.usage;
         }
         // Human path: compact brand banner + key-value grid (Phase 2).
@@ -437,7 +441,7 @@ fn runWithCwdUsing(
 
     if (std.mem.eql(u8, command, "run")) return run_command.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "start")) return start.command(io, cwd, argv[1..], stdout, stderr);
-    // Hard-remove public onboarding peers: single door is `orca start`.
+    // Hard-remove public onboarding peers: single door is `ryk start`.
     if (std.mem.eql(u8, command, "quickstart") or std.mem.eql(u8, command, "setup")) {
         try help.writeRemovedOnboardingPeer(stderr, command);
         return exit_codes.usage;
@@ -470,7 +474,7 @@ fn runWithCwdUsing(
     if (std.mem.eql(u8, command, "uninstall")) return uninstall.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "shutdown")) return shutdown.command(io, argv[1..], stdout, stderr);
 
-    // Host launch aliases after real Orca commands (Orca wins on name collision).
+    // Host launch aliases after real ryk commands (ryk wins on name collision).
     if (try host_launch.tryDispatch(allocator, command, argv[1..], run_command.command, io, stdout, stderr)) |code| {
         return code;
     }
@@ -479,16 +483,16 @@ fn runWithCwdUsing(
     try stderr.writeAll("orca: unknown command '");
     try tui.terminal_text.write(stderr, command, .single_line);
     if (suggestCommand(command)) |suggestion| {
-        try stderr.print("'. Did you mean '{s}'?\nRun 'orca help' for usage.\n", .{suggestion});
+        try stderr.print("'. Did you mean '{s}'?\nRun 'ryk help' for usage.\n", .{suggestion});
     } else {
-        try stderr.writeAll("'.\nRun 'orca help' for usage.\n");
+        try stderr.writeAll("'.\nRun 'ryk help' for usage.\n");
     }
     return exit_codes.usage;
 }
 
 fn proxyVersionCommand(comptime execute_cli: anytype, io: std.Io, stdout: anytype, stderr: anytype) !u8 {
     return execute_cli(io, &.{"version"}, stdout, stderr) catch |err| {
-        try stderr.print("orca version: {s}: {s}\n", .{ daemonErrorLabel(err), @errorName(err) });
+        try stderr.print("ryk version: {s}: {s}\n", .{ daemonErrorLabel(err), @errorName(err) });
         return exit_codes.general;
     };
 }
@@ -547,7 +551,7 @@ fn proxyDaemonCommand(comptime execute_cli: anytype, command: []const u8, comman
     if (command_args.len > 0) @memcpy(daemon_argv[1..], command_args);
 
     return execute_cli(io, daemon_argv, stdout, stderr) catch |err| {
-        try stderr.print("orca {s}: {s}: {s}\n", .{ command, daemonErrorLabel(err), @errorName(err) });
+        try stderr.print("ryk {s}: {s}: {s}\n", .{ command, daemonErrorLabel(err), @errorName(err) });
         return exit_codes.general;
     };
 }
@@ -561,7 +565,7 @@ fn runLocalDaemonCommand(command: []const u8, command_args: []const []const u8, 
     if (command_args.len > 0) @memcpy(daemon_argv[1..], command_args);
 
     return daemon.runLocalCli(allocator, daemon_argv, stdout, stderr) catch |err| {
-        try stderr.print("orca {s}: {s}: {s}\n", .{ command, daemonErrorLabel(err), @errorName(err) });
+        try stderr.print("ryk {s}: {s}: {s}\n", .{ command, daemonErrorLabel(err), @errorName(err) });
         return exit_codes.general;
     };
 }
@@ -580,9 +584,9 @@ fn realDaemonExecuteCli(_: std.Io, argv: []const []const u8, stdout: anytype, st
 
     if (daemon.responseStatus(parsed.value.result) == .error_status) {
         if (daemon.responseErrorMessage(parsed.value.result)) |message| {
-            stderr.print("orca daemon: {s}\n", .{message}) catch return error.SocketWriteFailed;
+            stderr.print("ryk daemon: {s}\n", .{message}) catch return error.SocketWriteFailed;
         } else {
-            stderr.writeAll("orca daemon: protocol error\n") catch return error.SocketWriteFailed;
+            stderr.writeAll("ryk daemon: protocol error\n") catch return error.SocketWriteFailed;
         }
         return exit_codes.general;
     }
@@ -620,12 +624,12 @@ test "help output is grouped, complete, and excludes hidden commands" {
     try std.testing.expectEqual(exit_codes.success, code);
 
     const output = stdout_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "Orca") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Common tasks") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Get protected") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "orca start") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "orca explain") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "orca replay") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk start") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk explain") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk replay") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "help --all") != null);
     // Phase 7 Task E: the --no-rich / ORCA_NO_RICH escape hatch is discoverable
     // from the top-level help (global-options surface).
@@ -713,9 +717,9 @@ test "command-specific help works through help command and command flag" {
     const code = try testRun(&.{ "help", "run" }, &stdout_writer, &stderr_writer);
 
     try std.testing.expectEqual(exit_codes.success, code);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "orca run") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "ryk run") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Examples:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "orca run -- <custom-command>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "ryk run -- <custom-command>") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "network mode is ask") != null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 
@@ -737,8 +741,8 @@ test "help run includes examples section" {
 
     const output = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "Examples:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "orca run -- <custom-command>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "orca claude") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk run -- <custom-command>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk claude") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Secretless stays off") != null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
@@ -953,7 +957,7 @@ test "phase 1 proxy reports daemon unavailable explicitly" {
 
     try std.testing.expectEqual(exit_codes.general, code);
     try std.testing.expectEqualStrings("", stdout_writer.buffered());
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca packs: daemon unavailable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk packs: daemon unavailable") != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "DaemonBinaryNotFound") != null);
 }
 
@@ -1005,7 +1009,7 @@ test "phase A proxy reports daemon unavailable with command label" {
     const code = try proxyDaemonCommand(fakeAllowOnceProxyUnavailable, "allow-once", &.{}, std.testing.io, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.general, code);
     try std.testing.expectEqualStrings("", stdout_writer.buffered());
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca allow-once: daemon unavailable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk allow-once: daemon unavailable") != null);
 }
 
 test "simulate proxy routes argv to daemon ExecuteCli" {
@@ -1064,7 +1068,7 @@ test "version supports json, help, and rejects extra arguments" {
     stderr_writer = .fixed(&stderr_buf);
     const help_code = try testRun(&.{ "version", "--help" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, help_code);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "orca version") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "ryk version") != null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 
     stdout_writer = .fixed(&stdout_buf);
@@ -1110,7 +1114,7 @@ test "help unknown command suggests the closest command" {
     const code = try testRun(&.{ "help", "docter" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.usage, code);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "Did you mean 'doctor'?") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca help doctor") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help doctor") != null);
 }
 
 test "human parser families suggest valid flags and exact help remediation" {
@@ -1142,7 +1146,7 @@ test "human parser families suggest valid flags and exact help remediation" {
         try std.testing.expectEqual(exit_codes.usage, code);
         try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), case.suggestion) != null);
         var remediation_buf: [64]u8 = undefined;
-        const remediation = try std.fmt.bufPrint(&remediation_buf, "orca help {s}", .{case.help_command});
+        const remediation = try std.fmt.bufPrint(&remediation_buf, "ryk help {s}", .{case.help_command});
         try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), remediation) != null);
         try std.testing.expect(std.mem.indexOfScalar(u8, stderr_writer.buffered(), 0x1b) == null);
     }
@@ -1174,10 +1178,10 @@ test "human parser invalid values sanitize terminal controls and suggest valid v
 
 // ---------------------------------------------------------------------------
 // Phase 2 TDD: brand cohesion banner system (written FIRST — RED).
-// The compact `🛡  Orca · v<version>` header must open every HUMAN command,
+// The compact `🛡  ryk · v<version>` header must open every HUMAN command,
 // be suppressed for --json / raw / machine / help-reference paths, and stay
 // byte-identical on --json. Banner marker in the plain-text degrade path is
-// the literal `🛡  Orca` glyph run (colour is suppressed under builtin.is_test).
+// the literal `🛡  ryk` glyph run (colour is suppressed under builtin.is_test).
 // ---------------------------------------------------------------------------
 
 test "version human path renders brand banner and key-value grid" {
@@ -1190,7 +1194,7 @@ test "version human path renders brand banner and key-value grid" {
     try std.testing.expectEqual(exit_codes.success, code);
     const out = stdout_writer.buffered();
     // Compact brand header.
-    try std.testing.expect(std.mem.indexOf(u8, out, "\u{1F6E1}  Orca") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\u{1F6E1}  ryk") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, version) != null);
     // Key-value grid labels.
     try std.testing.expect(std.mem.indexOf(u8, out, "Version") != null);
@@ -1209,7 +1213,7 @@ test "version --json suppresses the brand banner (machine contract)" {
     const code = try testRun(&.{ "version", "--json" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, code);
     const out = stdout_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "\u{1F6E1}  Orca") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\u{1F6E1}  ryk") == null);
     try std.testing.expect(out.len > 0 and out[0] == '{');
     var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, out, .{});
     defer parsed.deinit();
@@ -1226,9 +1230,9 @@ test "top help renders brand banner, accent categories, and try-next hint" {
     const code = try testRun(&.{"--help"}, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, code);
     const out = stdout_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "\u{1F6E1}  Orca") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\u{1F6E1}  ryk") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Common tasks") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "orca start") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "ryk start") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "help --all") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "shim") == null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
@@ -1257,7 +1261,7 @@ test "banner renders on a human command (doctor)" {
     const code = try testRun(&.{"doctor"}, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, code);
     const out = stdout_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "\u{1F6E1}  Orca") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\u{1F6E1}  ryk") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Summary:") != null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
@@ -1272,7 +1276,7 @@ test "banner suppressed for raw env output" {
     try std.testing.expectEqual(exit_codes.success, code);
     const out = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "PATH") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "\u{1F6E1}  Orca") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\u{1F6E1}  ryk") == null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 
@@ -1286,7 +1290,7 @@ test "banner suppressed for completions raw output" {
     try std.testing.expectEqual(exit_codes.success, code);
     const out = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "complete -F") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "\u{1F6E1}  Orca") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\u{1F6E1}  ryk") == null);
 }
 
 test "report generated exports are classified as raw at top level" {
@@ -1430,13 +1434,13 @@ test "top-level CI generated formats preserve exact bytes" {
     defer std.process.setCurrentPath(std.testing.io, previous_cwd) catch {};
 
     const expected_markdown =
-        \\# Orca CI Check
+        \\# ryk CI Check
         \\
-        \\- policy: **fail** - Missing .orca/policy.yaml. Run: orca init --preset team-ci
+        \\- policy: **fail** - Missing .orca/policy.yaml. Run: ryk init --preset team-ci
         \\
     ;
     const expected_json =
-        \\{"ok":false,"checks":[{"name":"policy","status":"fail","message":"Missing .orca/policy.yaml. Run: orca init --preset team-ci"}]}
+        \\{"ok":false,"checks":[{"name":"policy","status":"fail","message":"Missing .orca/policy.yaml. Run: ryk init --preset team-ci"}]}
         \\
     ;
     inline for (.{
@@ -1530,7 +1534,7 @@ fn writeTopLevelReportFixture(io: std.Io, allocator: std.mem.Allocator, workspac
         .event_count = audit_writer.event_count,
         .final_event_hash = audit_writer.finalHash() orelse "",
         .policy = ".orca/policy.yaml",
-        .product_label = "Orca",
+        .product_label = brand.product_display,
     });
     return allocator.dupe(u8, audit_writer.session_id.slice());
 }
@@ -1580,19 +1584,19 @@ test "top-level report exports preserve exact generated bytes" {
     defer std.process.setCurrentPath(std.testing.io, previous_cwd) catch {};
 
     const expected_markdown =
-        \\# Orca Safety Report: report-output-fixture
+        \\# ryk Safety Report: report-output-fixture
         \\
         \\- Session id: `report-output-fixture`
-        \\- Command: `orca run -- rm -rf ./fixture`
+        \\- Command: `ryk run -- rm -rf ./fixture`
         \\- Status: exit 1
         \\- Policy path: .orca/policy.yaml
         \\- Hash-chain verification: verified
         \\- Denied/prevented actions: 1
         \\- Redactions: 1 (fixture-label)
         \\
-        \\## What Orca Prevented
+        \\## What ryk Prevented
         \\
-        \\Orca prevented 1 action from continuing because the active local policy denied them.
+        \\ryk prevented 1 action from continuing because the active local policy denied them.
         \\
         \\- `rm -rf ./fixture` was blocked. Reason: blocked by fixture policy
         \\
@@ -1603,7 +1607,7 @@ test "top-level report exports preserve exact generated bytes" {
         \\
     ;
     const expected_json =
-        \\{"session_id":"report-output-fixture","command":"orca run -- rm -rf ./fixture","status":"exit 1","policy_path":".orca/policy.yaml","hash_chain_verified":true,"denied_count":1,"redactions":{"count":1,"labels":["fixture-label"]},"denied_actions":[{"event_type":"command_denied","target":"rm -rf ./fixture","reason":"blocked by fixture policy"}],"plugins":[{"id":"openclaw","host_detected":false,"integration_present":false},{"id":"hermes","host_detected":false,"integration_present":false}]}
+        \\{"session_id":"report-output-fixture","command":"ryk run -- rm -rf ./fixture","status":"exit 1","policy_path":".orca/policy.yaml","hash_chain_verified":true,"denied_count":1,"redactions":{"count":1,"labels":["fixture-label"]},"denied_actions":[{"event_type":"command_denied","target":"rm -rf ./fixture","reason":"blocked by fixture policy"}],"plugins":[{"id":"openclaw","host_detected":false,"integration_present":false},{"id":"hermes","host_detected":false,"integration_present":false}]}
         \\
     ;
 
@@ -1640,7 +1644,7 @@ test "banner suppressed on machine proxy path (packs --format json)" {
 
     _ = try testRun(&.{ "packs", "--format", "json" }, &stdout_writer, &stderr_writer);
     // Machine path must not emit a brand banner to stdout (byte-identity).
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "\u{1F6E1}  Orca") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "\u{1F6E1}  ryk") == null);
 }
 
 test "decide human mode gets a banner while default JSON remains machine output" {
@@ -1735,8 +1739,8 @@ test "banner suppressed on command-specific help (help run)" {
     const code = try testRun(&.{ "help", "run" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, code);
     const out = stdout_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "orca run") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "\u{1F6E1}  Orca") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "ryk run") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\u{1F6E1}  ryk") == null);
 }
 
 test "banner suppressed on subcommand --help (doctor --help)" {
@@ -1748,8 +1752,8 @@ test "banner suppressed on subcommand --help (doctor --help)" {
     const code = try testRun(&.{ "doctor", "--help" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, code);
     const out = stdout_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "orca doctor") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "\u{1F6E1}  Orca") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "ryk doctor") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\u{1F6E1}  ryk") == null);
 }
 
 // ---------------------------------------------------------------------------
@@ -1845,7 +1849,7 @@ test "start dispatch appears in help and runs with --auto --skip-verify (no prot
     const code = try testRunWithCwd(tmp.dir, &.{ "start", "--auto", "--skip-verify" }, &stdout_writer, &stderr_writer);
     const output = stdout_writer.buffered();
     try std.testing.expect(code == exit_codes.success or code == exit_codes.general);
-    try std.testing.expect(std.mem.indexOf(u8, output, "\u{1F6E1}  Orca") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\u{1F6E1}  ryk") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Ask on risk") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Choose your protection mode") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "command-guard") == null);
@@ -1864,7 +1868,7 @@ test "start auto-runs on non-TTY without --auto and without protection flag" {
     const code = try testRunWithCwd(tmp.dir, &.{ "start", "--skip-verify" }, &stdout_writer, &stderr_writer);
     const output = stdout_writer.buffered();
     try std.testing.expect(code == exit_codes.success or code == exit_codes.general);
-    try std.testing.expect(std.mem.indexOf(u8, output, "\u{1F6E1}  Orca") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\u{1F6E1}  ryk") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Ask on risk") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Choose your protection mode") == null);
 }
@@ -1880,7 +1884,7 @@ test "start rejects public --protection flag with usage" {
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "unknown option") != null or std.mem.indexOf(u8, stderr_writer.buffered(), "--protection") != null);
 }
 
-test "quickstart dispatch is hard-removed and points to orca start" {
+test "quickstart dispatch is hard-removed and points to ryk start" {
     var stdout_buf: [4096]u8 = undefined;
     var stderr_buf: [1024]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
@@ -1888,11 +1892,11 @@ test "quickstart dispatch is hard-removed and points to orca start" {
 
     const code = try testRun(&.{"quickstart"}, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.usage, code);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca start") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk start") != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "removed") != null or std.mem.indexOf(u8, stderr_writer.buffered(), "Use") != null);
 }
 
-test "setup dispatch is hard-removed and points to orca start" {
+test "setup dispatch is hard-removed and points to ryk start" {
     var stdout_buf: [4096]u8 = undefined;
     var stderr_buf: [1024]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
@@ -1900,7 +1904,7 @@ test "setup dispatch is hard-removed and points to orca start" {
 
     const code = try testRun(&.{"setup"}, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.usage, code);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca start") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk start") != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "removed") != null or std.mem.indexOf(u8, stderr_writer.buffered(), "Use") != null);
 }
 
@@ -1912,14 +1916,14 @@ test "stop dispatch is the public disable command" {
 
     const help_code = try testRun(&.{ "help", "stop" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, help_code);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "orca stop") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "ryk stop") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "cursor") != null);
 
     stdout_writer = .fixed(&stdout_buf);
     stderr_writer = .fixed(&stderr_buf);
     const code = try testRun(&.{ "stop", "-all" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.usage, code);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca stop") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk stop") != null);
 }
 
 test "completions dispatch prints shell script" {
@@ -1944,7 +1948,7 @@ test "policy command rejects unknown subcommands" {
     try std.testing.expectEqual(exit_codes.usage, code);
     // The brand banner opens the command (presentation only); the usage error
     // still goes to stderr.
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "\u{1F6E1}  Orca") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "\u{1F6E1}  ryk") != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "unknown subcommand") != null);
 }
 
@@ -1959,7 +1963,7 @@ test "run dispatch launches child command" {
     // Phase 2: printSessionStart now renders the shared brand banner + key-value
     // grid (the hand-rolled shield line is retired). The session shield +
     // first-run celebration remain in printSessionEnd.
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "\u{1F6E1}  Orca") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "\u{1F6E1}  ryk") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "watching this session") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Session ended cleanly") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "OS sandbox: disabled") != null);
@@ -1982,7 +1986,7 @@ test "start help does not advertise protection grade menu or --protection" {
     try std.testing.expectEqual(exit_codes.success, code);
 
     const output = stdout_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "orca start") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk start") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "--protection") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "command-guard") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "firewall") == null);
@@ -2001,8 +2005,8 @@ test "plugin help and disable re-enable messaging de-emphasize --yes in favor of
     try std.testing.expectEqual(exit_codes.success, code);
 
     const output = stdout_writer.buffered();
-    // Primary path is `orca start` (guided on TTY); demoted `orca setup` must not be re-taught.
-    try std.testing.expect(std.mem.indexOf(u8, output, "orca start") != null);
+    // Primary path is `ryk start` (guided on TTY); demoted `orca setup` must not be re-taught.
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk start") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "guided") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "orca setup") == null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());

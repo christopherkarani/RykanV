@@ -40,7 +40,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
             keep_config = true;
             continue;
         }
-        try suggestions.writeUnknownOption(stderr, "orca uninstall", arg, &.{ "--plugins-only", "--keep-config", "--yes", "--help" }, "uninstall");
+        try suggestions.writeUnknownOption(stderr, "ryk uninstall", arg, &.{ "--plugins-only", "--keep-config", "--yes", "--help" }, "uninstall");
         return exit_codes.usage;
     }
 
@@ -49,11 +49,11 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         const prompt = if (plugins_only)
             "Remove all Orca plugins from host agents?"
         else if (keep_config)
-            "Uninstall Orca (keep config files)? This removes plugins and the binary."
+            "Uninstall ryk (keep config files)? This removes plugins and the binary."
         else
             "Fully uninstall Orca (plugins, binary, and config)?";
         const decision = danger_confirmation.decide(io, stdout, prompt, false, try stdin.isTty(io), null) catch |err| {
-            try stderr.print("orca uninstall: confirmation failed: {s}\n", .{@errorName(err)});
+            try stderr.print("ryk uninstall: confirmation failed: {s}\n", .{@errorName(err)});
             return exit_codes.general;
         };
         switch (decision) {
@@ -63,13 +63,13 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
                 return exit_codes.success;
             },
             .requires_yes => {
-                try stderr.writeAll("orca uninstall: requires --yes or run interactively.\n");
+                try stderr.writeAll("ryk uninstall: requires --yes or run interactively.\n");
                 return exit_codes.usage;
             },
         }
     }
 
-    try stdout.writeAll("Orca Uninstall\n\n");
+    try stdout.writeAll("ryk Uninstall\n\n");
 
     // 1. Disable / remove all plugins
     try stdout.writeAll("→ Step 1 of 3: Removing plugins...\n");
@@ -78,13 +78,13 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     try stdout.writeAll("  ✓ Step 1 done\n");
 
     if (plugins_only) {
-        try stdout.writeAll("\n✅ Plugins removed. Orca binary and config remain in place.\n");
-        try stdout.writeAll("To fully uninstall later, run: orca uninstall --yes\n");
+        try stdout.writeAll("\n✅ Plugins removed. ryk binary and config remain in place.\n");
+        try stdout.writeAll("To fully uninstall later, run: ryk uninstall --yes\n");
         return exit_codes.success;
     }
 
     // 2. Remove installed binaries and runtime assets
-    try stdout.writeAll("\n→ Step 2 of 3: Removing Orca installation...\n");
+    try stdout.writeAll("\n→ Step 2 of 3: Removing ryk installation...\n");
     const binary_removed = try removeBinary(io, allocator, stdout);
     _ = try removeInstallerRuntimes(io, allocator, stdout);
     _ = try removeInstallerProfileEntries(io, allocator, stdout);
@@ -106,7 +106,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     }
 
     if (!all_disabled and !binary_removed) {
-        try stdout.writeAll("\nNote: no Orca plugins or binary were found.\n");
+        try stdout.writeAll("\nNote: no ryk plugins or binary were found.\n");
     }
 
     try stdout.writeAll(
@@ -186,8 +186,11 @@ fn daemonBinaryName(os: std.Target.Os.Tag) []const u8 {
 fn removeInstallerRuntimes(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) !bool {
     var removed_any = false;
 
-    if (std.c.getenv("ORCA_RESOURCE_ROOT")) |resource_root| {
-        removed_any = try removeInstallerRuntimeAt(io, allocator, std.mem.span(resource_root), stdout) or removed_any;
+    {
+        const env_util = @import("../env_util.zig");
+        if (env_util.getenvBrand("RESOURCE_ROOT")) |resource_root| {
+            removed_any = try removeInstallerRuntimeAt(io, allocator, std.mem.span(resource_root), stdout) or removed_any;
+        }
     }
 
     if (std.c.getenv("HOME")) |home| {
@@ -405,7 +408,7 @@ test "uninstall command help and invalid args" {
     try std.testing.expectEqual(exit_codes.usage, bad_code);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "unknown option") != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "Did you mean '--plugins-only'?") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca help uninstall") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help uninstall") != null);
 }
 
 test "uninstall without --yes in non-TTY returns usage" {

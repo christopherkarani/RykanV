@@ -1,7 +1,7 @@
 {
-  "name": "@orca-sec/orca",
+  "name": "@orca-sec/ryk",
   "version": "1.2.8",
-  "description": "npm launcher for the Zig-built Orca binary.",
+  "description": "npm launcher for the Zig-built ryk binary (orca PATH alias included). Scope remains @orca-sec; do not publish until release checksums are injected.",
   "license": "Apache-2.0",
   "homepage": "https://github.com/christopherkarani/Orca",
   "repository": {
@@ -9,10 +9,11 @@
     "url": "git+https://github.com/christopherkarani/Orca.git"
   },
   "bin": {
+    "ryk": "bin/ryk.js",
     "orca": "bin/orca.js"
   },
   "scripts": {
-    "postinstall": "node bin/orca.js --install",
+    "postinstall": "node bin/ryk.js --install",
     "checksum:note": "node -e \"console.log('Release automation replaces PLACEHOLDER checksums before publish')\""
   },
   "os": [
@@ -27,6 +28,21 @@
     "bin",
     "README.md"
   ],
+  "ryk": {
+    "artifactBaseUrl": "https://github.com/christopherkarani/Orca/releases/download/v1.2.8",
+    "supportedTargets": [
+      "darwin-amd64",
+      "darwin-arm64",
+      "linux-amd64",
+      "linux-arm64"
+    ],
+    "checksums": {
+      "darwin-amd64": "PLACEHOLDER_DARWIN_AMD64_SHA256",
+      "darwin-arm64": "PLACEHOLDER_DARWIN_ARM64_SHA256",
+      "linux-amd64": "PLACEHOLDER_LINUX_AMD64_SHA256",
+      "linux-arm64": "PLACEHOLDER_LINUX_ARM64_SHA256"
+    }
+  },
   "orca": {
     "artifactBaseUrl": "https://github.com/christopherkarani/Orca/releases/download/v1.2.8",
     "supportedTargets": [

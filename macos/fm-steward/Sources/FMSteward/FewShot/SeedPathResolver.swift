@@ -34,7 +34,7 @@ public enum SeedPathResolver: Sendable {
 
     /// Product App Support seed copy URL (same directory as `ambig.wax`).
     ///
-    /// Path: Application Support / `Orca/fm-steward` / `seed.json`.
+    /// Path: Application Support / `ryk/fm-steward` / `seed.json` (legacy: Orca/fm-steward).
     /// Built from `FewShotStorePaths.productRelativeDirectory`.
     public static func productAppSupportSeedURL(fileManager: FileManager = .default) -> URL {
         FewShotStorePaths.productStoreURL(fileManager: fileManager)

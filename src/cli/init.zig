@@ -23,18 +23,18 @@ pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: an
     };
 
     cwd.createDirPath(io, ".orca") catch |err| {
-        try stderr.print("orca init: failed to create .orca: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk init: failed to create .orca: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
 
     const flags: std.Io.Dir.CreateFileOptions = if (options.force) .{} else .{ .exclusive = true };
     const file = cwd.createFile(io, ".orca/policy.yaml", flags) catch |err| switch (err) {
         error.PathAlreadyExists => {
-            try stderr.writeAll("orca init: .orca/policy.yaml already exists; use --force to overwrite.\n");
+            try stderr.writeAll("ryk init: .orca/policy.yaml already exists; use --force to overwrite.\n");
             return exit_codes.general;
         },
         else => {
-            try stderr.print("orca init: failed to write .orca/policy.yaml: {s}\n", .{@errorName(err)});
+            try stderr.print("ryk init: failed to write .orca/policy.yaml: {s}\n", .{@errorName(err)});
             return exit_codes.general;
         },
     };
@@ -89,10 +89,10 @@ pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: an
             "Your policy is ready.\n" ++
             "\n" ++
             "Next steps:\n" ++
-            "  orca policy check .orca/policy.yaml\n" ++
+            "  ryk policy check .orca/policy.yaml\n" ++
             "  orca status\n" ++
             "  orca doctor\n" ++
-            "  orca run -- <command>\n" ++
+            "  ryk run -- <command>\n" ++
             "\n");
     }
     return exit_codes.success;
@@ -115,28 +115,28 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
         } else if (std.mem.eql(u8, arg, "--preset")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca init: --preset requires a preset name.\n");
+                try stderr.writeAll("ryk init: --preset requires a preset name.\n");
                 return error.Usage;
             }
             const preset = orca_policy.presets.AgentPreset.parse(argv[index]) orelse {
-                try suggestions.writeInvalidValue(stderr, "orca init", "--preset", argv[index], &.{ "generic-agent", "claude-code", "codex", "cursor-agent", "opencode", "cline-roo", "mcp-dev", "github-actions", "solo-dev", "strict-local", "team-ci", "openclaw-hermes", "trusted-local" }, "init");
+                try suggestions.writeInvalidValue(stderr, "ryk init", "--preset", argv[index], &.{ "generic-agent", "claude-code", "codex", "cursor-agent", "opencode", "cline-roo", "mcp-dev", "github-actions", "solo-dev", "strict-local", "team-ci", "openclaw-hermes", "trusted-local" }, "init");
                 return error.Usage;
             };
             options.preset = preset;
         } else if (std.mem.eql(u8, arg, "--mode")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca init: --mode requires strict, ask, observe, ci, or trusted.\n");
+                try stderr.writeAll("ryk init: --mode requires strict, ask, observe, ci, or trusted.\n");
                 return error.Usage;
             }
             const mode = argv[index];
             if (!isValidMode(mode)) {
-                try suggestions.writeInvalidValue(stderr, "orca init", "--mode", mode, &.{ "strict", "ask", "observe", "ci", "trusted" }, "init");
+                try suggestions.writeInvalidValue(stderr, "ryk init", "--mode", mode, &.{ "strict", "ask", "observe", "ci", "trusted" }, "init");
                 return error.Usage;
             }
             options.mode = mode;
         } else {
-            try suggestions.writeUnknownOption(stderr, "orca init", arg, &.{ "--force", "--ci", "--quiet", "--preset", "--mode", "--help", "-h" }, "init");
+            try suggestions.writeUnknownOption(stderr, "ryk init", arg, &.{ "--force", "--ci", "--quiet", "--preset", "--mode", "--help", "-h" }, "init");
             return error.Usage;
         }
     }

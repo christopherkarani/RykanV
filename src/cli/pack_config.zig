@@ -577,7 +577,7 @@ fn renderNewPackConfigWithDisabled(
     errdefer buf.deinit(allocator);
     try buf.appendSlice(allocator,
         \\# Orca pack configuration
-        \\# Written by `orca init` / `orca setup` / `orca start` / `orca packs enable|disable`.
+        \\# Written by `ryk init` / `orca setup` / `ryk start` / `orca packs enable|disable`.
         \\# Prefer project `.orca.toml` in a git repo; otherwise user config.
         \\# Baseline packs (core.*, system.disk) are always on and need not be listed.
         \\# Additive: re-running setup merges packs and does not wipe customizations.

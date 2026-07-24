@@ -25,30 +25,81 @@ jobs:
       ORCA_VERSION: ${{ github.event.inputs.version || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
+
+      # Mac cut-release (scripts/cut-release.sh) is the primary publisher. When a
+      # v* tag is pushed after assets already exist (checksums.txt on the release),
+      # skip the full CI rebuild so we do not double-upload or race the Mac cutter.
+      # workflow_dispatch remains a manual backup path and always runs.
+      - name: Resolve skip flag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          VER="${ORCA_VERSION#v}"
+          echo "ORCA_VERSION=${VER}" >> "$GITHUB_ENV"
+          if [ "${{ github.event_name }}" != "push" ]; then
+            echo "SKIP_RELEASE=0" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if gh release view "v${VER}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # Require a minimum inventory before skipping: checksums + primary ryk archive + SBOM.
+            # checksums.txt alone is too weak (partial/hostile upload could green-path skip).
+            assets="$(gh release view "v${VER}" --repo "$GITHUB_REPOSITORY" --json assets \
+              --jq '.assets[].name' 2>/dev/null || true)"
+            has_checksums=0
+            has_primary=0
+            has_sbom=0
+            while IFS= read -r name; do
+              [ -n "$name" ] || continue
+              case "$name" in
+                checksums.txt) has_checksums=1 ;;
+                sbom.json) has_sbom=1 ;;
+                ryk-v*.tar.gz|ryk-v*.zip) has_primary=1 ;;
+              esac
+            done <<EOF
+${assets}
+EOF
+            if [ "$has_checksums" = 1 ] && [ "$has_primary" = 1 ] && [ "$has_sbom" = 1 ]; then
+              echo "Release v${VER} has checksums.txt + primary ryk-v* + sbom.json; skipping CI release job (Mac cut-release primary)."
+              echo "SKIP_RELEASE=1" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "Release v${VER} incomplete (checksums=${has_checksums} primary_ryk=${has_primary} sbom=${has_sbom}); running CI release."
+          fi
+          echo "SKIP_RELEASE=0" >> "$GITHUB_ENV"
+
+      - name: Early exit when skipped
+        if: env.SKIP_RELEASE == '1'
+        run: echo "No-op: assets already published for this tag."
+
       - uses: mlugg/setup-zig@v2
+        if: env.SKIP_RELEASE != '1'
         with:
           version: 0.16.0
       # PCRE2 is Zig-built from source for each -Dtarget in build-release.sh; no host libpcre2-dev.
-      - name: Normalize version
+      - name: Normalize version metadata
+        if: env.SKIP_RELEASE != '1'
         shell: bash
         run: |
-          ORCA_VERSION="${ORCA_VERSION#v}"
-          echo "ORCA_VERSION=$ORCA_VERSION" >> "$GITHUB_ENV"
           echo "ORCA_COMMIT=${GITHUB_SHA::12}" >> "$GITHUB_ENV"
           echo "ORCA_BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
       - name: Setup Node.js
+        if: env.SKIP_RELEASE != '1'
         uses: actions/setup-node@v4
         with:
           node-version: 22.6.0
           cache: npm
           cache-dependency-path: orca-dashboard-ui/package-lock.json
       - name: Build Next.js dashboard
+        if: env.SKIP_RELEASE != '1'
         shell: bash
         working-directory: orca-dashboard-ui
         run: |
           npm ci
           npm run build
       - name: Verify dashboard build
+        if: env.SKIP_RELEASE != '1'
         shell: bash
         run: |
           if [ ! -f "orca-dashboard-ui/dist/index.html" ]; then
@@ -61,30 +112,37 @@ jobs:
           fi
           echo "Dashboard build verified: dark Next.js dashboard present with _next/static/ output."
       - name: Test before release
+        if: env.SKIP_RELEASE != '1'
         run: ./scripts/zig build test
       - name: Red-team CI
+        if: env.SKIP_RELEASE != '1'
         run: |
           ./scripts/zig build -Dversion="$ORCA_VERSION" -Dcommit="$ORCA_COMMIT" -Dbuild-date="$ORCA_BUILD_DATE"
           ./zig-out/bin/orca redteam --ci
       - name: Build release artifacts
+        if: env.SKIP_RELEASE != '1'
         shell: bash
         env:
           ORCA_SIGNING_ENABLED: ${{ github.event.inputs.signing_enabled || '0' }}
           ORCA_SIGNING_COMMAND: ${{ secrets.ORCA_SIGNING_COMMAND }}
         run: ORCA_VERSION="$ORCA_VERSION" ORCA_COMMIT="$ORCA_COMMIT" ORCA_BUILD_DATE="$ORCA_BUILD_DATE" ./scripts/build-release.sh
       - name: Package plugins
+        if: env.SKIP_RELEASE != '1'
         shell: bash
         run: ./scripts/package-plugins.sh
       - name: Verify plugin artifacts
+        if: env.SKIP_RELEASE != '1'
         shell: bash
         run: |
           ls -la dist/plugins/
           cat dist/plugins/orca-plugin-checksums.txt
       - name: Verify plugin checksums
+        if: env.SKIP_RELEASE != '1'
         shell: bash
         run: |
           cd dist/plugins && shasum -a 256 -c orca-plugin-checksums.txt
       - name: Secret scan over plugin artifacts
+        if: env.SKIP_RELEASE != '1'
         shell: bash
         run: |
           SCAN_ISSUES=0
@@ -104,19 +162,25 @@ jobs:
           fi
           echo "Secret scan passed."
       - name: Verify checksums
+        if: env.SKIP_RELEASE != '1'
         shell: bash
         run: |
           ./scripts/verify-release.sh dist
       - name: Installed layout smoke
+        if: env.SKIP_RELEASE != '1'
         shell: bash
         run: ORCA_DIST_DIR=dist ./scripts/install-layout-smoke-test.sh
       - name: Ensure SBOM hook output exists
+        if: env.SKIP_RELEASE != '1'
         run: test -s dist/sbom.json
       - name: Upload release artifacts
+        if: env.SKIP_RELEASE != '1'
         uses: actions/upload-artifact@v4
         with:
           name: orca-release-${{ env.ORCA_VERSION }}
           path: |
+            dist/ryk-v*.tar.gz
+            dist/ryk-v*.zip
             dist/orca-v*.tar.gz
             dist/orca-v*.zip
             dist/checksums.txt
@@ -131,6 +195,7 @@ jobs:
       # reach the release page, so install.sh's checksum download 404s.
       # Hard-gate on checksums.txt so a release can never publish without it.
       - name: Attach assets to GitHub Release
+        if: env.SKIP_RELEASE != '1'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -142,16 +207,22 @@ jobs:
           }
           gh release create "v${ORCA_VERSION}" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Orca v${ORCA_VERSION}" \
+            --title "ryk v${ORCA_VERSION}" \
             --verify-tag \
             --generate-notes || true
+          shopt -s nullglob
+          assets=(
+            dist/ryk-v*.tar.gz
+            dist/ryk-v*.zip
+            dist/orca-v*.tar.gz
+            dist/orca-v*.zip
+            dist/checksums.txt
+            dist/sbom.json
+            dist/release-manifest.json
+            dist/plugins/*.zip
+            dist/plugins/orca-plugin-checksums.txt
+          )
           gh release upload "v${ORCA_VERSION}" \
             --repo "$GITHUB_REPOSITORY" \
             --clobber \
-            dist/orca-v*.tar.gz \
-            dist/orca-v*.zip \
-            dist/checksums.txt \
-            dist/sbom.json \
-            dist/release-manifest.json \
-            dist/plugins/*.zip \
-            dist/plugins/orca-plugin-checksums.txt
+            "${assets[@]}"

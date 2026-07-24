@@ -11,6 +11,8 @@ dist-dry-run/
 .release-zig/
 .release-clean-*
 .release-npm-cache/
+.release-cli-bins/
+.release-cut/
 *.o
 *.obj
 *.a

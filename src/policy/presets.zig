@@ -686,7 +686,7 @@ test "no-external-comms on-disk YAML matches embedded effect rules" {
     }
 }
 
-// Quick-install DX invariants: the presets used by `orca init --preset` and `setup --auto`
+// Quick-install DX invariants: the presets used by `ryk init --preset` and `setup --auto`
 // (generic-agent and friends via common_strict_rules) must remain conservative.
 // These properties are the "source of truth" for the generated .orca/policy.yaml.
 // A future semantic sync test will also load the on-disk YAMLs in policies/presets/ and assert parity.

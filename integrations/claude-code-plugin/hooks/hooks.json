@@ -5,9 +5,9 @@
       "hooks": [
         {
           "type": "command",
-          "command": "orca hook claude SessionStart",
+          "command": "sh -c 'if command -v ryk >/dev/null 2>&1; then exec ryk hook claude SessionStart; else exec orca hook claude SessionStart; fi'",
           "timeout": 10,
-          "statusMessage": "Checking Orca plugin status"
+          "statusMessage": "Checking ryk plugin status"
         }
       ]
     }
@@ -18,9 +18,9 @@
       "hooks": [
         {
           "type": "command",
-          "command": "orca hook claude UserPromptSubmit",
+          "command": "sh -c 'if command -v ryk >/dev/null 2>&1; then exec ryk hook claude UserPromptSubmit; else exec orca hook claude UserPromptSubmit; fi'",
           "timeout": 10,
-          "statusMessage": "Checking prompt with Orca"
+          "statusMessage": "Checking prompt with ryk"
         }
       ]
     }
@@ -31,9 +31,9 @@
       "hooks": [
         {
           "type": "command",
-          "command": "orca hook claude PreToolUse",
+          "command": "sh -c 'if command -v ryk >/dev/null 2>&1; then exec ryk hook claude PreToolUse; else exec orca hook claude PreToolUse; fi'",
           "timeout": 15,
-          "statusMessage": "Checking tool use with Orca"
+          "statusMessage": "Checking tool use with ryk"
         }
       ]
     }
@@ -44,9 +44,9 @@
       "hooks": [
         {
           "type": "command",
-          "command": "orca hook claude PermissionRequest",
+          "command": "sh -c 'if command -v ryk >/dev/null 2>&1; then exec ryk hook claude PermissionRequest; else exec orca hook claude PermissionRequest; fi'",
           "timeout": 15,
-          "statusMessage": "Checking permission request with Orca"
+          "statusMessage": "Checking permission request with ryk"
         }
       ]
     }
@@ -57,9 +57,9 @@
       "hooks": [
         {
           "type": "command",
-          "command": "orca hook claude PostToolUse",
+          "command": "sh -c 'if command -v ryk >/dev/null 2>&1; then exec ryk hook claude PostToolUse; else exec orca hook claude PostToolUse; fi'",
           "timeout": 10,
-          "statusMessage": "Acknowledging tool use to Orca"
+          "statusMessage": "Acknowledging tool use to ryk"
         }
       ]
     }
@@ -70,9 +70,9 @@
       "hooks": [
         {
           "type": "command",
-          "command": "orca hook claude SessionEnd",
+          "command": "sh -c 'if command -v ryk >/dev/null 2>&1; then exec ryk hook claude SessionEnd; else exec orca hook claude SessionEnd; fi'",
           "timeout": 10,
-          "statusMessage": "Notifying Orca of session end"
+          "statusMessage": "Notifying ryk of session end"
         }
       ]
     }

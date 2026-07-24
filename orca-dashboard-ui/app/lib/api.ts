@@ -26,6 +26,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
+      "X-Ryk-Dashboard-Token": getToken(),
       "X-Orca-Dashboard-Token": getToken(),
     },
     body: JSON.stringify(body),

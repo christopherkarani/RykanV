@@ -20,7 +20,7 @@ pub fn reasonForRule(rule_id: []const u8) []const u8 {
     if (std.mem.eql(u8, rule_id, "sudo-escalation")) return "Escalates privileges; sudo is restricted by policy.";
     if (std.mem.eql(u8, rule_id, "curl-pipe-shell")) return "Pipes a remote script straight into a shell (untrusted execution).";
     if (std.mem.eql(u8, rule_id, "history-cleanup")) return "Erases shell history, hiding evidence of activity.";
-    return "Matched a deny rule in your Orca policy.";
+    return "Matched a deny rule in your ryk policy.";
 }
 
 /// Coarse risk classification for a rule id, used to label the risk meter colour.

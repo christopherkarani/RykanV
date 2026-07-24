@@ -37,7 +37,9 @@ const packageJson = JSON.parse(
 ) as {
 	dependencies: Record<string, string>;
 };
-const requiredRuntimeVersion = packageJson.dependencies["@orca-sec/orca"];
+const requiredRuntimeVersion =
+	packageJson.dependencies["@orca-sec/ryk"] ??
+	packageJson.dependencies["@orca-sec/orca"];
 
 class FakeChild {
 	stdinWrites: string[] = [];
@@ -214,18 +216,46 @@ test("resolveOrcaBin honors executable ORCA_BIN before other candidates", () => 
 	assert.deepEqual(result, { orcaBin: "/trusted/orca", source: "explicit" });
 });
 
+test("resolveOrcaBin prefers RYK_BIN over ORCA_BIN", () => {
+	const result = resolveOrcaBin({
+		env: { RYK_BIN: "/trusted/ryk", ORCA_BIN: "/trusted/orca" },
+		bundledPackageRoot: "/package",
+		isExecutable: (path) => path === "/trusted/ryk" || path === "/trusted/orca",
+		isCompatiblePathOrca: () => true,
+	});
+	assert.deepEqual(result, { orcaBin: "/trusted/ryk", source: "explicit" });
+});
+
 test("resolveOrcaBin prefers the bundled runtime and requires opt-in for PATH", () => {
 	const defaults = {
 		bundledPackageRoot: "/package",
-		isExecutable: () => true,
+		// Prefer ryk vendor binary when present (Phase 5a).
+		isExecutable: (path: string) =>
+			path.includes("/vendor/ryk") ||
+			path.includes("/vendor/orca") ||
+			path.includes("/vendor/orca-daemon"),
 		isCompatiblePathOrca: () => true,
 	};
 
 	assert.deepEqual(resolveOrcaBin({ ...defaults, env: {} }), {
-		orcaBin: resolve("/package/vendor/orca"),
+		orcaBin: resolve("/package/vendor/ryk"),
 		daemonBin: resolve("/package/vendor/orca-daemon"),
 		source: "bundled",
 	});
+	// When only legacy orca vendor exists (no ryk), fall back to orca.
+	assert.deepEqual(
+		resolveOrcaBin({
+			...defaults,
+			isExecutable: (path: string) =>
+				path.includes("/vendor/orca") && !path.includes("/vendor/ryk"),
+			env: {},
+		}),
+		{
+			orcaBin: resolve("/package/vendor/orca"),
+			daemonBin: resolve("/package/vendor/orca-daemon"),
+			source: "bundled",
+		},
+	);
 	assert.deepEqual(
 		resolveOrcaBin({
 			...defaults,
@@ -234,13 +264,13 @@ test("resolveOrcaBin prefers the bundled runtime and requires opt-in for PATH", 
 			env: { ORCA_PI_USE_PATH: "true" },
 		}),
 		{
-			orcaBin: "orca",
+			orcaBin: "ryk",
 			source: "path",
 		},
 	);
 });
 
-test("resolveOrcaBin uses bundled Orca when PATH is incompatible", () => {
+test("resolveOrcaBin uses bundled ryk when PATH is incompatible", () => {
 	const result = resolveOrcaBin({
 		env: {},
 		bundledPackageRoot: "/package",
@@ -248,7 +278,7 @@ test("resolveOrcaBin uses bundled Orca when PATH is incompatible", () => {
 		isCompatiblePathOrca: () => false,
 	});
 
-	assert.equal(result.orcaBin, resolve("/package/vendor/orca"));
+	assert.equal(result.orcaBin, resolve("/package/vendor/ryk"));
 	assert.equal(result.daemonBin, resolve("/package/vendor/orca-daemon"));
 	assert.equal(result.source, "bundled");
 });
@@ -258,12 +288,13 @@ test("resolveOrcaBin validates opted-in PATH version output", () => {
 		env: { ORCA_PI_USE_PATH: "true" },
 		bundledPackageRoot: "/missing-package",
 		isExecutable: () => false,
-		spawnSync: () => ({
+		spawnSync: (cmd: string) => ({
 			status: 0,
-			stdout: `orca ${requiredRuntimeVersion}\n`,
+			stdout: `${cmd === "ryk" ? "ryk" : "orca"} ${requiredRuntimeVersion}\n`,
 		}),
 	});
 	assert.equal(compatible.source, "path");
+	assert.equal(compatible.orcaBin, "ryk");
 
 	for (const result of [
 		{ status: 0, stdout: "orca 0.0.0\n" },

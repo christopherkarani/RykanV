@@ -18,7 +18,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     }
 
     if (shell_eval.resolveShellEvalBackend() == .rust) {
-        try stderr.writeAll("orca test: ORCA_SHELL_EVAL=rust is no longer supported; Zig shell_engine is the sole Evaluate authority\n");
+        try stderr.writeAll("ryk test: ORCA_SHELL_EVAL=rust is no longer supported; Zig shell_engine is the sole Evaluate authority\n");
         return 3;
     }
 
@@ -26,11 +26,11 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     var cmd_start: usize = 0;
     if (std.mem.eql(u8, argv[0], "--format")) {
         if (argv.len < 3) {
-            try stderr.writeAll("orca test: --format requires a value and a command\n");
+            try stderr.writeAll("ryk test: --format requires a value and a command\n");
             return 64;
         }
         if (!std.mem.eql(u8, argv[1], "json")) {
-            try stderr.writeAll("orca test: only --format json is supported\n");
+            try stderr.writeAll("ryk test: only --format json is supported\n");
             return 64;
         }
         format_json = true;
@@ -48,7 +48,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         error.OutOfMemory => return error.OutOfMemory,
         error.HomeDirectoryNotFound, error.FileNotFound => pack_config.LoadedPackIds{},
         else => {
-            try stderr.writeAll("orca test: pack configuration could not be loaded (fail-closed)\n");
+            try stderr.writeAll("ryk test: pack configuration could not be loaded (fail-closed)\n");
             return 2;
         },
     };

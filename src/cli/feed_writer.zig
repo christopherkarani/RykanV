@@ -98,8 +98,9 @@ pub fn appendRecordBestEffort(io: std.Io, allocator: std.mem.Allocator, workspac
 
 pub fn processGlobalWritesDisabled() bool {
     if (builtin.is_test) return true;
-    const value = std.c.getenv("ORCA_DISABLE_GLOBAL_DASHBOARD_FEED") orelse return false;
-    return std.mem.eql(u8, std.mem.span(value), "1");
+    const value_z = env_util.getenvBrand("DISABLE_GLOBAL_DASHBOARD_FEED") orelse return false;
+    const value = std.mem.span(value_z);
+    return std.mem.eql(u8, value, "1");
 }
 
 pub fn resolveGlobalDashboardRoot(allocator: std.mem.Allocator) ![]u8 {
@@ -600,7 +601,7 @@ test "feed writer round-trips rust shell decision without raw command" {
         "claude",
         "healthy",
         "deny",
-        "blocked by Orca policy rule: destructive_rm",
+        "blocked by ryk policy rule: destructive_rm",
         "destructive_rm",
         "Critical",
         "Use a safer workflow.",
@@ -617,7 +618,8 @@ test "feed writer round-trips rust shell decision without raw command" {
         std.testing.allocator.free(loaded);
     }
     try std.testing.expectEqual(@as(usize, 1), loaded.len);
-    try std.testing.expectEqualStrings("rust-daemon", loaded[0].record.decision_source);
+    // Shell decisions are recorded as zig-native after the shell_engine cutover.
+    try std.testing.expectEqualStrings("zig-native", loaded[0].record.decision_source);
     try std.testing.expectEqualStrings("hook", loaded[0].record.event_source);
     try std.testing.expectEqualStrings(root, loaded[0].record.workspace_root);
     try std.testing.expectEqualStrings("claude", loaded[0].record.host.?);
@@ -969,7 +971,7 @@ test "global feed append records workspace and updates registry" {
         "codex",
         "healthy",
         "deny",
-        "blocked by Orca policy",
+        "blocked by ryk policy",
         null,
         null,
         null,

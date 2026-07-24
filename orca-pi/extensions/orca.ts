@@ -279,11 +279,15 @@ const STATUS_KEY = "orca";
 const BLOCK_WIDGET_KEY = "orca-block";
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_CHILD_OUTPUT_BYTES = 1024 * 1024;
-const REQUIRED_ORCA_VERSION = (
-	createRequire(import.meta.url)("../package.json") as {
-		dependencies: Record<string, string>;
-	}
-).dependencies["@orca-sec/orca"];
+const REQUIRED_ORCA_VERSION = (() => {
+	const deps = (
+		createRequire(import.meta.url)("../package.json") as {
+			dependencies: Record<string, string>;
+		}
+	).dependencies;
+	// Prefer @orca-sec/ryk when present; keep @orca-sec/orca during dual-name window.
+	return deps["@orca-sec/ryk"] ?? deps["@orca-sec/orca"];
+})();
 const ASK_OPTIONS = [
 	"Block",
 	"Run once anyway",
@@ -339,30 +343,53 @@ export function resolveOrcaBin(
 ): ResolvedOrcaBin {
 	const env = options.env ?? process.env;
 	const isExecutable = options.isExecutable ?? isExecutableFile;
-	const explicit = env.ORCA_BIN?.trim();
+	// Phase 5a: prefer RYK_BIN, fall back ORCA_BIN.
+	const explicit = (env.RYK_BIN ?? env.ORCA_BIN)?.trim();
 	if (explicit && isExecutable(explicit))
 		return { orcaBin: explicit, source: "explicit" };
 
 	const packageRoot = options.bundledPackageRoot ?? resolveBundledPackageRoot();
 	if (packageRoot) {
 		const executableSuffix = process.platform === "win32" ? ".exe" : "";
+		const rykBin = resolve(packageRoot, "vendor", `ryk${executableSuffix}`);
 		const orcaBin = resolve(packageRoot, "vendor", `orca${executableSuffix}`);
 		const daemonBin = resolve(
 			packageRoot,
 			"vendor",
 			`orca-daemon${executableSuffix}`,
 		);
+		// Prefer ryk vendor binary when present; daemon optional (shell_engine in-process).
+		if (isExecutable(rykBin)) {
+			return {
+				orcaBin: rykBin,
+				daemonBin: isExecutable(daemonBin) ? daemonBin : undefined,
+				source: "bundled",
+			};
+		}
 		if (isExecutable(orcaBin) && isExecutable(daemonBin)) {
 			return { orcaBin, daemonBin, source: "bundled" };
 		}
+		if (isExecutable(orcaBin)) {
+			return { orcaBin, source: "bundled" };
+		}
 	}
 
-	const allowPath = env.ORCA_PI_USE_PATH === "true";
-	const pathIsCompatible =
-		options.isCompatiblePathOrca ??
-		(() => isCompatiblePathOrca(env, options.spawnSync ?? spawnSync));
-	if (allowPath && pathIsCompatible())
-		return { orcaBin: "orca", source: "path" };
+	const allowPath =
+		env.RYK_PI_USE_PATH === "true" || env.ORCA_PI_USE_PATH === "true";
+	if (allowPath) {
+		if (options.isCompatiblePathOrca) {
+			if (options.isCompatiblePathOrca()) {
+				// Injected compat checks historically meant "orca on PATH"; prefer ryk name when unknown.
+				return { orcaBin: "ryk", source: "path" };
+			}
+		} else {
+			const pathBin = resolveCompatiblePathCli(
+				env,
+				options.spawnSync ?? spawnSync,
+			);
+			if (pathBin) return { orcaBin: pathBin, source: "path" };
+		}
+	}
 
 	return { orcaBin: "__orca_bundled_runtime_missing__", source: "missing" };
 }
@@ -890,111 +917,127 @@ export function installOrcaExtension(
 		);
 	};
 
-	pi.registerCommand("orca-setup", {
-		description:
-			"Ensure the workspace policy exists and probe Orca daemon health.",
-		handler: setupHandler,
-	});
+	const startHandler = async (_args: string | undefined, ctx: PiContext) => {
+		stateFor(ctx).bypass = false;
+		const result = await setupOrca(ctx, runtime);
+		stateFor(ctx).status = result.status;
+		updateStatus(ctx);
+		const suffix =
+			result.status === "ready"
+				? "ryk protection is enabled for this Pi session."
+				: result.message;
+		const type =
+			result.status === "ready"
+				? "info"
+				: result.status === "missing"
+					? "error"
+					: "warning";
+		notify(ctx, suffix, type);
+	};
 
-	pi.registerCommand("orca-start", {
-		description:
-			"Re-enable Orca protection for this Pi session and verify setup.",
-		handler: async (_args, ctx) => {
-			stateFor(ctx).bypass = false;
-			const result = await setupOrca(ctx, runtime);
-			stateFor(ctx).status = result.status;
-			updateStatus(ctx);
-			const suffix =
-				result.status === "ready"
-					? "Orca protection is enabled for this Pi session."
-					: result.message;
-			const type =
-				result.status === "ready"
-					? "info"
-					: result.status === "missing"
-						? "error"
-						: "warning";
-			notify(ctx, suffix, type);
-		},
-	});
+	const stopHandler = (_args: string | undefined, ctx: PiContext) => {
+		stateFor(ctx).bypass = true;
+		updateStatus(ctx);
+		notify(
+			ctx,
+			`ryk disabled for this Pi session only. Protected tools (${piCoverageLabel()}) run without ryk until /ryk-start (or /orca-start).`,
+			"warning",
+		);
+	};
 
-	pi.registerCommand("orca-stop", {
-		description:
-			"Disable Orca protection for this Pi session until /orca-start.",
-		handler: (_args, ctx) => {
+	const doctorHandler = async (_args: string | undefined, ctx: PiContext) => {
+		const result = await runOrcaCommand(["doctor"], runtime);
+		if (result.error) {
+			notify(
+				ctx,
+				`${orcaInstallMessage()}\n\nCoverage: ${piCoverageLabel()}`,
+				"error",
+			);
+			return;
+		}
+		const body =
+			summarizeCommandOutput(result) ||
+			`ryk doctor exited with ${result.code ?? "unknown"}`;
+		notify(
+			ctx,
+			`${body}\n\nCoverage: ${piCoverageLabel()}`,
+			result.code === 0 ? "info" : "warning",
+		);
+	};
+
+	// Primary slash names are /ryk-*; /orca-* kept as aliases for one major.
+	for (const name of ["ryk-setup", "orca-setup"] as const) {
+		pi.registerCommand(name, {
+			description:
+				"Ensure the workspace policy exists and probe ryk CLI health.",
+			handler: setupHandler,
+		});
+	}
+	for (const name of ["ryk-start", "orca-start"] as const) {
+		pi.registerCommand(name, {
+			description:
+				"Re-enable ryk protection for this Pi session and verify setup.",
+			handler: startHandler,
+		});
+	}
+	for (const name of ["ryk-stop", "orca-stop"] as const) {
+		pi.registerCommand(name, {
+			description:
+				"Disable ryk protection for this Pi session until /ryk-start.",
+			handler: stopHandler,
+		});
+	}
+	for (const name of ["ryk-doctor", "orca-doctor"] as const) {
+		pi.registerCommand(name, {
+			description: "Run ryk doctor and show setup or health diagnostics.",
+			handler: doctorHandler,
+		});
+	}
+
+	const modeHandler = async (args: string | undefined, ctx: PiContext) => {
+		const requested = args?.trim().toLowerCase();
+		if (!requested) {
+			notify(ctx, modeSummary(unavailableMode, stateFor(ctx).bypass), "info");
+			return;
+		}
+
+		if (requested === "bypass on") {
 			stateFor(ctx).bypass = true;
 			updateStatus(ctx);
+			notify(ctx, "ryk bypass enabled for this Pi session only.", "warning");
+			return;
+		}
+		if (requested === "bypass off") {
+			stateFor(ctx).bypass = false;
+			updateStatus(ctx);
 			notify(
 				ctx,
-				`Orca disabled for this Pi session only. Protected tools (${piCoverageLabel()}) run without Orca until /orca-start.`,
+				`ryk bypass disabled. Protected tools (${piCoverageLabel()}) will be evaluated by ryk.`,
+				"info",
+			);
+			return;
+		}
+
+		const nextMode = parseMode(requested);
+		if (!nextMode) {
+			notify(
+				ctx,
+				"Usage: /ryk-mode (or /orca-mode) [auto|ask|noninteractive-block|strict|allow-with-warning|bypass on|bypass off]",
 				"warning",
 			);
-		},
-	});
+			return;
+		}
+		unavailableMode = nextMode;
+		updateStatus(ctx);
+		notify(ctx, modeSummary(unavailableMode, stateFor(ctx).bypass), "info");
+	};
 
-	pi.registerCommand("orca-doctor", {
-		description: "Run Orca doctor and show setup or daemon health diagnostics.",
-		handler: async (_args, ctx) => {
-			const result = await runOrcaCommand(["doctor"], runtime);
-			if (result.error) {
-				notify(
-					ctx,
-					`${orcaInstallMessage()}\n\nCoverage: ${piCoverageLabel()}`,
-					"error",
-				);
-				return;
-			}
-			const body =
-				summarizeCommandOutput(result) ||
-				`orca doctor exited with ${result.code ?? "unknown"}`;
-			notify(
-				ctx,
-				`${body}\n\nCoverage: ${piCoverageLabel()}`,
-				result.code === 0 ? "info" : "warning",
-			);
-		},
-	});
-
-	pi.registerCommand("orca-mode", {
-		description: "View or change Orca Pi unavailable-mode and session bypass.",
-		handler: async (args, ctx) => {
-			const requested = args?.trim().toLowerCase();
-			if (!requested) {
-				notify(ctx, modeSummary(unavailableMode, stateFor(ctx).bypass), "info");
-				return;
-			}
-
-			if (requested === "bypass on") {
-				stateFor(ctx).bypass = true;
-				updateStatus(ctx);
-				notify(ctx, "Orca bypass enabled for this Pi session only.", "warning");
-				return;
-			}
-			if (requested === "bypass off") {
-				stateFor(ctx).bypass = false;
-				updateStatus(ctx);
-				notify(
-					ctx,
-					`Orca bypass disabled. Protected tools (${piCoverageLabel()}) will be evaluated by Orca.`,
-					"info",
-				);
-				return;
-			}
-
-			const nextMode = parseMode(requested);
-			if (!nextMode) {
-				notify(
-					ctx,
-					"Usage: /orca-mode [auto|ask|noninteractive-block|strict|allow-with-warning|bypass on|bypass off]",
-					"warning",
-				);
-				return;
-			}
-			unavailableMode = nextMode;
-			updateStatus(ctx);
-			notify(ctx, modeSummary(unavailableMode, stateFor(ctx).bypass), "info");
-		},
-	});
+	for (const name of ["ryk-mode", "orca-mode"] as const) {
+		pi.registerCommand(name, {
+			description: "View or change ryk Pi unavailable-mode and session bypass.",
+			handler: modeHandler,
+		});
+	}
 }
 
 async function applyToolDecision(
@@ -1431,20 +1474,32 @@ function isExecutableFile(path: string): boolean {
 	}
 }
 
+/** Prefer ryk on PATH, fall back to orca; version line may say either product name. */
+function resolveCompatiblePathCli(
+	env: NodeJS.ProcessEnv,
+	runner: SpawnSyncLike,
+): string | null {
+	const versionRe = new RegExp(
+		`\\b(?:ryk|orca)\\s+${REQUIRED_ORCA_VERSION.replaceAll(".", "\\.")}\\b`,
+	);
+	for (const name of ["ryk", "orca"] as const) {
+		const result = runner(name, ["--version"], {
+			encoding: "utf8",
+			env,
+			shell: false,
+			timeout: 2_000,
+		});
+		if (result.error || result.status !== 0) continue;
+		if (versionRe.test(result.stdout ?? "")) return name;
+	}
+	return null;
+}
+
 function isCompatiblePathOrca(
 	env: NodeJS.ProcessEnv,
 	runner: SpawnSyncLike,
 ): boolean {
-	const result = runner("orca", ["--version"], {
-		encoding: "utf8",
-		env,
-		shell: false,
-		timeout: 2_000,
-	});
-	if (result.error || result.status !== 0) return false;
-	return new RegExp(
-		`\\borca\\s+${REQUIRED_ORCA_VERSION.replaceAll(".", "\\.")}\\b`,
-	).test(result.stdout ?? "");
+	return resolveCompatiblePathCli(env, runner) !== null;
 }
 
 function appendBounded(
@@ -1713,7 +1768,7 @@ function modeSummary(mode: UnavailableMode, sessionBypass: boolean): string {
 }
 
 function orcaInstallMessage(): string {
-	return "Orca CLI was not found. Reinstall npm:@orca-sec/pi-orca, or set ORCA_BIN to an executable Orca path, then run /orca-setup.";
+	return "ryk CLI was not found. Reinstall npm:@orca-sec/pi-orca (or @orca-sec/ryk), set RYK_BIN/ORCA_BIN to an executable path, then run /ryk-setup (or /orca-setup).";
 }
 
 function summarizeCommandOutput(result: RunProcessResult): string {

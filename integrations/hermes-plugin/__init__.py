@@ -208,33 +208,38 @@ def _supports_hermes_host(orca: str) -> bool:
 
 def _orca_candidates() -> list[str]:
     candidates: list[str] = []
-    configured = os.environ.get("ORCA_BIN")
-    if configured:
-        resolved = _orca_executable(configured)
-        if resolved:
-            candidates.append(resolved)
+    # Phase 5a dual-read: prefer RYK_BIN then ORCA_BIN.
+    for env_key in ("RYK_BIN", "ORCA_BIN"):
+        configured = os.environ.get(env_key)
+        if configured:
+            resolved = _orca_executable(configured)
+            if resolved:
+                candidates.append(resolved)
 
     directory = Path.cwd()
     for _ in range(3):
-        zig_out = directory / "zig-out" / "bin" / "orca"
-        resolved = _orca_executable(str(zig_out))
-        if resolved:
-            candidates.append(resolved)
+        for name in ("ryk", "orca"):
+            zig_out = directory / "zig-out" / "bin" / name
+            resolved = _orca_executable(str(zig_out))
+            if resolved:
+                candidates.append(resolved)
         if directory.parent == directory:
             break
         directory = directory.parent
 
     home = Path.home()
-    for path in (home / ".local" / "bin" / "orca", home / ".orca" / "bin" / "orca"):
-        resolved = _orca_executable(str(path))
-        if resolved:
-            candidates.append(resolved)
+    for name in ("ryk", "orca"):
+        for path in (home / ".local" / "bin" / name, home / ".orca" / "bin" / name, home / ".ryk" / "bin" / name):
+            resolved = _orca_executable(str(path))
+            if resolved:
+                candidates.append(resolved)
 
-    found = shutil.which("orca")
-    if found:
-        resolved = _orca_executable(found)
-        if resolved:
-            candidates.append(resolved)
+    for name in ("ryk", "orca"):
+        found = shutil.which(name)
+        if found:
+            resolved = _orca_executable(found)
+            if resolved:
+                candidates.append(resolved)
 
     deduped: list[str] = []
     seen: set[str] = set()
@@ -247,7 +252,8 @@ def _orca_candidates() -> list[str]:
 
 def _find_orca() -> str | None:
     global _orca_cache_env, _orca_cache_path
-    env_bin = os.environ.get("ORCA_BIN")
+    # Cache key tracks both brand env vars.
+    env_bin = os.environ.get("RYK_BIN") or os.environ.get("ORCA_BIN")
     if _orca_cache_path is not None and _orca_cache_env == env_bin:
         return _orca_cache_path
 

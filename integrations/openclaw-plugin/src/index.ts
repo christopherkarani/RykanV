@@ -90,17 +90,18 @@ function buildPayload(event: string, data: unknown, sessionId?: string): object 
 }
 
 /**
- * Resolve the Orca binary.
- * Prefer absolute ORCA_BIN, then PATH. Relative ORCA_BIN and workspace
- * zig-out paths are agent-plantable (fake always-allow binary), so:
- * - path-shaped ORCA_BIN must be absolute
+ * Resolve the ryk/orca binary (Phase 5a dual-name).
+ * Prefer absolute RYK_BIN / ORCA_BIN, then PATH (`ryk` then `orca`). Relative
+ * env bins and workspace zig-out paths are agent-plantable (fake always-allow
+ * binary), so:
+ * - path-shaped env must be absolute
  * - workspace zig-out candidates require ORCA_ALLOW_WORKSPACE_BIN=1 (dev only)
  */
 export function findOrca(cwd?: string): string | null {
-  const envBin = process.env.ORCA_BIN?.trim();
+  const envBin = (process.env.RYK_BIN ?? process.env.ORCA_BIN)?.trim();
   if (envBin) {
     if (envBin.includes('/') || envBin.includes('\\')) {
-      // Relative paths like ./zig-out/bin/orca or evil/orca are agent-writable.
+      // Relative paths like ./zig-out/bin/ryk or evil/orca are agent-writable.
       // Require an absolute path (no PATH fallback for path-shaped values).
       if (!isAbsolute(envBin)) return null;
       return existsSync(envBin) ? envBin : null;
@@ -119,27 +120,33 @@ export function findOrca(cwd?: string): string | null {
     return null;
   }
 
-  try {
-    const which = execFileSync('which', ['orca'], {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'ignore'],
-    });
-    const bin = which.trim();
-    if (bin) return bin;
-  } catch {
-    // orca not in PATH
+  for (const name of ['ryk', 'orca'] as const) {
+    try {
+      const which = execFileSync('which', [name], {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'ignore'],
+      });
+      const bin = which.trim();
+      if (bin) return bin;
+    } catch {
+      // not on PATH
+    }
   }
 
   // Dev-only: never trust agent-writable workspace bins in production loads.
-  if (process.env.ORCA_ALLOW_WORKSPACE_BIN === '1') {
-    const candidates = [
-      cwd ? join(cwd, 'zig-out', 'bin', 'orca') : null,
-      cwd ? join(cwd, '..', 'zig-out', 'bin', 'orca') : null,
-      cwd ? join(cwd, '..', '..', 'zig-out', 'bin', 'orca') : null,
-      resolve('zig-out', 'bin', 'orca'),
-      resolve('..', 'zig-out', 'bin', 'orca'),
-      resolve('..', '..', 'zig-out', 'bin', 'orca'),
-    ].filter((p): p is string => p !== null);
+  if (process.env.ORCA_ALLOW_WORKSPACE_BIN === '1' || process.env.RYK_ALLOW_WORKSPACE_BIN === '1') {
+    const names = ['ryk', 'orca'] as const;
+    const candidates: string[] = [];
+    for (const name of names) {
+      if (cwd) {
+        candidates.push(join(cwd, 'zig-out', 'bin', name));
+        candidates.push(join(cwd, '..', 'zig-out', 'bin', name));
+        candidates.push(join(cwd, '..', '..', 'zig-out', 'bin', name));
+      }
+      candidates.push(resolve('zig-out', 'bin', name));
+      candidates.push(resolve('..', 'zig-out', 'bin', name));
+      candidates.push(resolve('..', '..', 'zig-out', 'bin', name));
+    }
 
     for (const p of candidates) {
       if (existsSync(p)) return p;

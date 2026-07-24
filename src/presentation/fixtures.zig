@@ -22,7 +22,7 @@ pub fn syntheticSecretReplaySession(allocator: std.mem.Allocator, options: Sessi
         .allocator = allocator,
         .session_id = try allocator.dupe(u8, options.session_id),
         .session_dir_path = try std.fmt.allocPrint(allocator, "/tmp/{s}", .{options.session_id}),
-        .command_display = try allocator.dupe(u8, "orca run"),
+        .command_display = try allocator.dupe(u8, "ryk run"),
         .policy = try allocator.dupe(u8, ".orca/policy.yaml"),
         .status_display = try allocator.dupe(u8, "exited 1"),
         .events = try allocator.alloc(core_api.ReplayEvent, 1),

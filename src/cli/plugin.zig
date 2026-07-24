@@ -41,7 +41,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         if (std.mem.eql(u8, argv[0], host)) return installAliasCommand(io, host, argv[1..], stdout, stderr);
     }
 
-    try suggestions.writeUnknownSubcommand(stderr, "orca plugin", argv[0], &.{ "doctor", "list", "manifest", "install", "mcp-server", "codex", "claude", "opencode", "openclaw", "hermes" }, "plugin");
+    try suggestions.writeUnknownSubcommand(stderr, "ryk plugin", argv[0], &.{ "doctor", "list", "manifest", "install", "mcp-server", "codex", "claude", "opencode", "openclaw", "hermes" }, "plugin");
     return exit_codes.usage;
 }
 
@@ -70,18 +70,18 @@ fn doctorCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: 
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             try stdout.writeAll(
                 \\Usage:
-                \\  orca plugin doctor
-                \\  orca plugin doctor [--json]
-                \\  orca plugin doctor codex
-                \\  orca plugin doctor claude
-                \\  orca plugin doctor opencode
-                \\  orca plugin doctor openclaw
-                \\  orca plugin doctor hermes
-                \\  orca plugin doctor codex [--json]
-                \\  orca plugin doctor claude [--json]
-                \\  orca plugin doctor opencode [--json]
-                \\  orca plugin doctor openclaw [--json]
-                \\  orca plugin doctor hermes [--json]
+                \\  ryk plugin doctor
+                \\  ryk plugin doctor [--json]
+                \\  ryk plugin doctor codex
+                \\  ryk plugin doctor claude
+                \\  ryk plugin doctor opencode
+                \\  ryk plugin doctor openclaw
+                \\  ryk plugin doctor hermes
+                \\  ryk plugin doctor codex [--json]
+                \\  ryk plugin doctor claude [--json]
+                \\  ryk plugin doctor opencode [--json]
+                \\  ryk plugin doctor openclaw [--json]
+                \\  ryk plugin doctor hermes [--json]
                 \\
             );
             return exit_codes.success;
@@ -110,7 +110,7 @@ fn doctorCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: 
             target = .hermes;
             continue;
         }
-        try suggestions.writeUnknownOption(stderr, "orca plugin doctor", arg, &.{ "--json", "--help", "-h", "codex", "claude", "opencode", "openclaw", "hermes" }, "plugin");
+        try suggestions.writeUnknownOption(stderr, "ryk plugin doctor", arg, &.{ "--json", "--help", "-h", "codex", "claude", "opencode", "openclaw", "hermes" }, "plugin");
         return exit_codes.usage;
     }
 
@@ -223,10 +223,10 @@ pub fn collectPluginDoctorReport(io: std.Io, allocator: std.mem.Allocator) !Plug
 fn listCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     if (argv.len > 0) {
         if (argv.len == 1 and (std.mem.eql(u8, argv[0], "--help") or std.mem.eql(u8, argv[0], "-h"))) {
-            try stdout.writeAll("Usage:\n  orca plugin list\n");
+            try stdout.writeAll("Usage:\n  ryk plugin list\n");
             return exit_codes.success;
         }
-        try suggestions.writeUnknownOption(stderr, "orca plugin list", argv[0], &.{ "--help", "-h" }, "plugin");
+        try suggestions.writeUnknownOption(stderr, "ryk plugin list", argv[0], &.{ "--help", "-h" }, "plugin");
         return exit_codes.usage;
     }
 
@@ -288,10 +288,10 @@ fn writePluginList(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, re
         .{ .name = "HOST" }, .{ .name = "DETECTED" }, .{ .name = "INSTALLED" }, .{ .name = "STATUS" },
     }, rows);
     if (detected_count == 0) {
-        try stdout.writeAll("\nNo supported host CLIs detected. Install a host, then run 'orca plugin list' again.\n");
+        try stdout.writeAll("\nNo supported host CLIs detected. Install a host, then run 'ryk plugin list' again.\n");
     }
     if (installed_count == 0) {
-        try stdout.writeAll("Preview setup with 'orca plugin codex --dry-run' (or replace codex with your host).\n");
+        try stdout.writeAll("Preview setup with 'ryk plugin codex --dry-run' (or replace codex with your host).\n");
     }
 }
 
@@ -520,7 +520,7 @@ fn writeDoctorPlain(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, r
         }
     } else {
         try stdout.writeAll("  .orca/policy.yaml: missing\n");
-        try stdout.writeAll("    → Fix: orca init --preset generic-agent\n");
+        try stdout.writeAll("    → Fix: ryk init --preset generic-agent\n");
     }
 
     try stdout.writeAll("\nAudit / replay:\n");
@@ -534,35 +534,35 @@ fn writeDoctorPlain(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, r
 
     try stdout.writeAll("\nPlugin directories:\n");
     try stdout.print("  integrations/common: {s}\n", .{if (report.plugin_directories.common) "found" else "missing"});
-    if (!report.plugin_directories.common) try stdout.writeAll("    → Fix: orca start or orca plugin install all\n");
+    if (!report.plugin_directories.common) try stdout.writeAll("    → Fix: ryk start or ryk plugin install all\n");
     try stdout.print("  integrations/codex-plugin: {s}\n", .{if (report.plugin_directories.codex) "found" else "missing"});
-    if (!report.plugin_directories.codex) try stdout.writeAll("    → Fix: orca start or orca plugin install codex\n");
+    if (!report.plugin_directories.codex) try stdout.writeAll("    → Fix: ryk start or ryk plugin install codex\n");
     try stdout.print("  integrations/claude-code-plugin: {s}\n", .{if (report.plugin_directories.claude) "found" else "missing"});
-    if (!report.plugin_directories.claude) try stdout.writeAll("    → Fix: orca start or orca plugin install claude\n");
+    if (!report.plugin_directories.claude) try stdout.writeAll("    → Fix: ryk start or ryk plugin install claude\n");
     try stdout.print("  integrations/opencode-plugin: {s}\n", .{if (report.plugin_directories.opencode) "found" else "missing"});
-    if (!report.plugin_directories.opencode) try stdout.writeAll("    → Fix: orca start or orca plugin install opencode\n");
+    if (!report.plugin_directories.opencode) try stdout.writeAll("    → Fix: ryk start or ryk plugin install opencode\n");
     try stdout.print("  integrations/openclaw-plugin: {s}\n", .{if (report.plugin_directories.openclaw) "found" else "missing"});
-    if (!report.plugin_directories.openclaw) try stdout.writeAll("    → Fix: orca start or orca plugin install openclaw\n");
+    if (!report.plugin_directories.openclaw) try stdout.writeAll("    → Fix: ryk start or ryk plugin install openclaw\n");
     try stdout.print("  integrations/hermes-plugin: {s}\n", .{if (report.plugin_directories.hermes) "found" else "missing"});
-    if (!report.plugin_directories.hermes) try stdout.writeAll("    → Fix: orca start or orca plugin install hermes\n");
+    if (!report.plugin_directories.hermes) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
 
     try stdout.writeAll("\nHost binaries:\n");
     try stdout.print("  codex: {s}\n", .{if (report.host_binaries.codex) "found in PATH" else "not found"});
-    if (!report.host_binaries.codex) try stdout.writeAll("    → Fix: orca start or orca plugin install codex\n");
+    if (!report.host_binaries.codex) try stdout.writeAll("    → Fix: ryk start or ryk plugin install codex\n");
     try stdout.print("  claude: {s}\n", .{if (report.host_binaries.claude) "found in PATH" else "not found"});
-    if (!report.host_binaries.claude) try stdout.writeAll("    → Fix: orca start or orca plugin install claude\n");
+    if (!report.host_binaries.claude) try stdout.writeAll("    → Fix: ryk start or ryk plugin install claude\n");
     try stdout.print("  opencode: {s}\n", .{if (report.host_binaries.opencode) "found in PATH" else "not found"});
-    if (!report.host_binaries.opencode) try stdout.writeAll("    → Fix: orca start or orca plugin install opencode\n");
+    if (!report.host_binaries.opencode) try stdout.writeAll("    → Fix: ryk start or ryk plugin install opencode\n");
     try stdout.print("  openclaw: {s}\n", .{if (report.host_binaries.openclaw) "found in PATH" else "not found"});
-    if (!report.host_binaries.openclaw) try stdout.writeAll("    → Fix: orca start or orca plugin install openclaw\n");
+    if (!report.host_binaries.openclaw) try stdout.writeAll("    → Fix: ryk start or ryk plugin install openclaw\n");
     try stdout.print("  hermes: {s}\n", .{if (report.host_binaries.hermes) "found in PATH" else "not found"});
-    if (!report.host_binaries.hermes) try stdout.writeAll("    → Fix: orca start or orca plugin install hermes\n");
+    if (!report.host_binaries.hermes) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
 
     try stdout.writeAll("\nMarketplace files:\n");
     try stdout.print("  .agents/plugins/marketplace.json: {s}\n", .{if (report.marketplace.codex_marketplace) "present" else "missing"});
-    if (!report.marketplace.codex_marketplace) try stdout.writeAll("    → Fix: orca start or orca plugin install codex\n");
+    if (!report.marketplace.codex_marketplace) try stdout.writeAll("    → Fix: ryk start or ryk plugin install codex\n");
     try stdout.print("  .claude-plugin/marketplace.json: {s}\n", .{if (report.marketplace.claude_marketplace) "present" else "missing"});
-    if (!report.marketplace.claude_marketplace) try stdout.writeAll("    → Fix: orca start or orca plugin install claude\n");
+    if (!report.marketplace.claude_marketplace) try stdout.writeAll("    → Fix: ryk start or ryk plugin install claude\n");
 
     try stdout.writeAll("\nPlatform:\n");
     try stdout.print("  {s}\n", .{report.platform_summary});
@@ -580,54 +580,54 @@ fn writeDoctorPlain(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, r
         .codex => {
             try stdout.writeAll("\nCodex plugin status:\n");
             try stdout.print("  host binary: {s}\n", .{if (report.host_binaries.codex) "detected" else "not detected"});
-            if (!report.host_binaries.codex) try stdout.writeAll("    → Fix: install Codex and re-run orca start or orca plugin install codex\n");
+            if (!report.host_binaries.codex) try stdout.writeAll("    → Fix: install Codex and re-run ryk start or ryk plugin install codex\n");
             try stdout.print("  bundled plugin directory: {s}\n", .{if (report.plugin_directories.codex) "present" else "missing"});
             if (!report.plugin_directories.codex) try stdout.writeAll("    → Fix: install Orca runtime assets or set ORCA_RESOURCE_ROOT\n");
             try stdout.print("  user plugin registration: {s}\n", .{if (report.marketplace.codex_user_plugin) "installed" else "missing"});
-            if (!report.marketplace.codex_user_plugin) try stdout.writeAll("    → Fix: orca start or orca plugin install codex\n");
+            if (!report.marketplace.codex_user_plugin) try stdout.writeAll("    → Fix: ryk start or ryk plugin install codex\n");
             try stdout.print("  marketplace file: {s}\n", .{if (report.marketplace.codex_marketplace) "present" else "missing"});
-            if (!report.marketplace.codex_marketplace) try stdout.writeAll("    → Fix: orca start or orca plugin install codex\n");
+            if (!report.marketplace.codex_marketplace) try stdout.writeAll("    → Fix: ryk start or ryk plugin install codex\n");
             try stdout.print("  bundled plugin manifest: {s}\n", .{if (report.marketplace.codex_plugin_manifest) "present" else "missing"});
             if (!report.marketplace.codex_plugin_manifest) try stdout.writeAll("    → Fix: install Orca runtime assets or set ORCA_RESOURCE_ROOT\n");
-            try stdout.writeAll("  install: use 'orca plugin install codex --dry-run' to preview\n");
+            try stdout.writeAll("  install: use 'ryk plugin install codex --dry-run' to preview\n");
         },
         .claude => {
             try stdout.writeAll("\nClaude Code plugin status:\n");
             try stdout.print("  host binary: {s}\n", .{if (report.host_binaries.claude) "detected" else "not detected"});
-            if (!report.host_binaries.claude) try stdout.writeAll("    → Fix: install Claude Code and re-run orca start or orca plugin install claude\n");
+            if (!report.host_binaries.claude) try stdout.writeAll("    → Fix: install Claude Code and re-run ryk start or ryk plugin install claude\n");
             try stdout.print("  bundled plugin directory: {s}\n", .{if (report.plugin_directories.claude) "present" else "missing"});
             if (!report.plugin_directories.claude) try stdout.writeAll("    → Fix: install Orca runtime assets or set ORCA_RESOURCE_ROOT\n");
             try stdout.print("  user plugin registration: {s}\n", .{if (report.marketplace.claude_user_plugin) "installed" else "missing"});
-            if (!report.marketplace.claude_user_plugin) try stdout.writeAll("    → Fix: orca start or orca plugin install claude\n");
+            if (!report.marketplace.claude_user_plugin) try stdout.writeAll("    → Fix: ryk start or ryk plugin install claude\n");
             try stdout.print("  marketplace file: {s}\n", .{if (report.marketplace.claude_marketplace) "present" else "missing"});
-            if (!report.marketplace.claude_marketplace) try stdout.writeAll("    → Fix: orca start or orca plugin install claude\n");
+            if (!report.marketplace.claude_marketplace) try stdout.writeAll("    → Fix: ryk start or ryk plugin install claude\n");
             try stdout.print("  bundled plugin manifest: {s}\n", .{if (report.marketplace.claude_plugin_manifest) "present" else "missing"});
             if (!report.marketplace.claude_plugin_manifest) try stdout.writeAll("    → Fix: install Orca runtime assets or set ORCA_RESOURCE_ROOT\n");
-            try stdout.writeAll("  install: use 'orca plugin install claude --dry-run' to preview\n");
+            try stdout.writeAll("  install: use 'ryk plugin install claude --dry-run' to preview\n");
         },
         .opencode => {
             try stdout.writeAll("\nOpenCode plugin status:\n");
             try stdout.print("  host binary: {s}\n", .{if (report.host_binaries.opencode) "detected" else "not detected"});
-            if (!report.host_binaries.opencode) try stdout.writeAll("    → Fix: orca start or orca plugin install opencode\n");
+            if (!report.host_binaries.opencode) try stdout.writeAll("    → Fix: ryk start or ryk plugin install opencode\n");
             try stdout.print("  plugin directory: {s}\n", .{if (report.plugin_directories.opencode) "present" else "not yet created"});
-            if (!report.plugin_directories.opencode) try stdout.writeAll("    → Fix: orca start or orca plugin install opencode\n");
+            if (!report.plugin_directories.opencode) try stdout.writeAll("    → Fix: ryk start or ryk plugin install opencode\n");
             try stdout.print("  project plugin path (.opencode/plugins/orca.ts): {s}\n", .{if (report.opencode_paths.project_plugin_exists) "exists" else "not found"});
-            if (!report.opencode_paths.project_plugin_exists) try stdout.writeAll("    → Fix: orca start or orca plugin install opencode\n");
+            if (!report.opencode_paths.project_plugin_exists) try stdout.writeAll("    → Fix: ryk start or ryk plugin install opencode\n");
             try stdout.print("  global plugin path (~/.config/opencode/plugins/orca.ts): {s}\n", .{if (report.opencode_paths.global_plugin_exists) "exists" else "not found"});
-            if (!report.opencode_paths.global_plugin_exists) try stdout.writeAll("    → Fix: orca start or orca plugin install opencode\n");
-            try stdout.writeAll("  install: use 'orca plugin install opencode --dry-run' to preview\n");
+            if (!report.opencode_paths.global_plugin_exists) try stdout.writeAll("    → Fix: ryk start or ryk plugin install opencode\n");
+            try stdout.writeAll("  install: use 'ryk plugin install opencode --dry-run' to preview\n");
             try stdout.writeAll("  note: OpenCode plugin uses TypeScript hooks, not a manifest file\n");
         },
         .openclaw => {
             try stdout.writeAll("\nOpenClaw plugin status:\n");
             try stdout.print("  host binary: {s}\n", .{if (report.host_binaries.openclaw) "detected" else "not detected"});
-            if (!report.host_binaries.openclaw) try stdout.writeAll("    → Fix: install OpenClaw and re-run orca start or orca plugin install openclaw\n");
+            if (!report.host_binaries.openclaw) try stdout.writeAll("    → Fix: install OpenClaw and re-run ryk start or ryk plugin install openclaw\n");
             try stdout.print("  bundled plugin directory: {s}\n", .{if (report.plugin_directories.openclaw) "present" else "missing"});
             if (!report.plugin_directories.openclaw) try stdout.writeAll("    → Fix: install Orca runtime assets or set ORCA_RESOURCE_ROOT\n");
             try stdout.print("  host plugin installed: {s}\n", .{if (report.openclaw_paths.host_plugin_installed) "yes" else "no"});
-            if (!report.openclaw_paths.host_plugin_installed) try stdout.writeAll("    → Fix: orca start or orca plugin install openclaw\n");
+            if (!report.openclaw_paths.host_plugin_installed) try stdout.writeAll("    → Fix: ryk start or ryk plugin install openclaw\n");
             try stdout.print("  host plugin manifest (openclaw.plugin.json): {s}\n", .{if (report.openclaw_paths.plugin_manifest_exists) "exists" else "not found"});
-            if (!report.openclaw_paths.plugin_manifest_exists) try stdout.writeAll("    → Fix: orca start or orca plugin install openclaw\n");
+            if (!report.openclaw_paths.plugin_manifest_exists) try stdout.writeAll("    → Fix: ryk start or ryk plugin install openclaw\n");
             try stdout.print("  host package.json: {s}\n", .{if (report.openclaw_paths.package_json_exists) "exists" else "not found"});
             try stdout.print("  host source (src/index.ts): {s}\n", .{if (report.openclaw_paths.source_exists) "exists" else "not found"});
             try stdout.print("  detection note: {s}\n", .{report.openclaw_paths.detection_note});
@@ -636,27 +636,27 @@ fn writeDoctorPlain(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, r
         .hermes => {
             try stdout.writeAll("\nHermes plugin status:\n");
             try stdout.print("  host binary: {s}\n", .{if (report.host_binaries.hermes) "detected" else "not detected"});
-            if (!report.host_binaries.hermes) try stdout.writeAll("    → Fix: orca start or orca plugin install hermes\n");
+            if (!report.host_binaries.hermes) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
             try stdout.print("  plugin directory: {s}\n", .{if (report.plugin_directories.hermes) "present" else "not yet created"});
-            if (!report.plugin_directories.hermes) try stdout.writeAll("    → Fix: orca start or orca plugin install hermes\n");
+            if (!report.plugin_directories.hermes) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
             try stdout.print("  repo plugin.yaml: {s}\n", .{if (report.hermes_paths.repo_manifest_exists) "exists" else "not found"});
-            if (!report.hermes_paths.repo_manifest_exists) try stdout.writeAll("    → Fix: orca start or orca plugin install hermes\n");
+            if (!report.hermes_paths.repo_manifest_exists) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
             try stdout.print("  repo __init__.py: {s}\n", .{if (report.hermes_paths.repo_source_exists) "exists" else "not found"});
-            if (!report.hermes_paths.repo_source_exists) try stdout.writeAll("    → Fix: orca start or orca plugin install hermes\n");
+            if (!report.hermes_paths.repo_source_exists) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
             try stdout.print("  user plugin path (~/.hermes/plugins/orca/plugin.yaml): {s}\n", .{if (report.hermes_paths.user_manifest_exists) "exists" else "not found"});
-            if (!report.hermes_paths.user_manifest_exists) try stdout.writeAll("    → Fix: orca start or orca plugin install hermes\n");
+            if (!report.hermes_paths.user_manifest_exists) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
             try stdout.print("  config references plugin: {s}\n", .{if (report.hermes_paths.config_references_plugin) "yes" else "unknown/no"});
-            if (!report.hermes_paths.config_references_plugin) try stdout.writeAll("    → Fix: orca start or orca plugin install hermes\n");
+            if (!report.hermes_paths.config_references_plugin) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
             const hermes_fail_open = host_status.hermesFailOpenFromEnv();
             try stdout.print("  fail stance: {s}\n", .{host_status.failStance("hermes", hermes_fail_open)});
             if (hermes_fail_open) {
                 try stdout.writeAll("    → WARN: Hermes is fail-open when Orca is degraded (default product stance).\n");
-                try stdout.writeAll("    → Fix: export ORCA_HERMES_FAIL_OPEN=0  # or: orca run -- hermes\n");
+                try stdout.writeAll("    → Fix: export ORCA_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes\n");
             }
             try stdout.print("  hook smoke test (pre_tool_call allow): {s}\n", .{if (report.hermes_hook_smoke_passed) "passed" else "FAILED"});
             if (!report.hermes_hook_smoke_passed) try stdout.writeAll("    → Fix: upgrade Orca (./scripts/install-orca-plugin.sh hermes) or set ORCA_BIN to a build with Hermes host support\n");
-            try stdout.writeAll("  install: use 'orca plugin install hermes --dry-run' to preview\n");
-            try stdout.writeAll("  note: Hermes hooks are additive; strongest protection remains 'orca run -- hermes'\n");
+            try stdout.writeAll("  install: use 'ryk plugin install hermes --dry-run' to preview\n");
+            try stdout.writeAll("  note: Hermes hooks are additive; strongest protection remains 'ryk run -- hermes'\n");
             try stdout.writeAll("  note: Gateway (Telegram/Discord) may omit the block reason in chat; check agent tool errors.\n");
         },
     }
@@ -785,11 +785,11 @@ fn writeUnifiedHostStatusTable(
         try stdout.print("  fix {s}: {s}\n", .{ line.host, line.fix });
     }
     if (include_pi) {
-        try stdout.writeAll("  note pi: not managed by `orca plugin install`; extension coverage unknown until live smoke\n");
-        try stdout.writeAll("    → install: pi install npm:@orca-sec/pi-orca · process: orca run -- pi\n");
+        try stdout.writeAll("  note pi: not managed by `ryk plugin install`; extension coverage unknown until live smoke\n");
+        try stdout.writeAll("    → install: pi install npm:@orca-sec/pi-orca · process: ryk run -- pi\n");
     }
     if (hostPluginInstalledFromReport("hermes", report) and hermes_fail_open and (target == .all or target == .hermes)) {
-        try stdout.writeAll("  warn hermes: effective fail-open when Orca degraded — set ORCA_HERMES_FAIL_OPEN=0 or use orca run -- hermes\n");
+        try stdout.writeAll("  warn hermes: effective fail-open when Orca degraded — set ORCA_HERMES_FAIL_OPEN=0 or use ryk run -- hermes\n");
     }
 }
 
@@ -921,13 +921,13 @@ fn manifestCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             try stdout.writeAll(
                 \\Usage:
-                \\  orca plugin manifest codex
-                \\  orca plugin manifest claude
-                \\  orca plugin manifest opencode
-                \\  orca plugin manifest openclaw
-                \\  orca plugin manifest hermes
-                \\  orca plugin manifest all
-                \\  orca plugin manifest <target> [--json]
+                \\  ryk plugin manifest codex
+                \\  ryk plugin manifest claude
+                \\  ryk plugin manifest opencode
+                \\  ryk plugin manifest openclaw
+                \\  ryk plugin manifest hermes
+                \\  ryk plugin manifest all
+                \\  ryk plugin manifest <target> [--json]
                 \\
             );
             return exit_codes.success;
@@ -960,7 +960,7 @@ fn manifestCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr
             target = .all;
             continue;
         }
-        try suggestions.writeUnknownOption(stderr, "orca plugin manifest", arg, &.{ "--json", "--help", "-h", "codex", "claude", "opencode", "openclaw", "hermes", "all" }, "plugin");
+        try suggestions.writeUnknownOption(stderr, "ryk plugin manifest", arg, &.{ "--json", "--help", "-h", "codex", "claude", "opencode", "openclaw", "hermes", "all" }, "plugin");
         return exit_codes.usage;
     }
 
@@ -1239,18 +1239,18 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             try stdout.writeAll(
                 \\Usage:
-                \\  orca plugin install                     # dry-run preview of all hosts (no mutation)
-                \\  orca plugin install codex [--dry-run|--yes]
-                \\  orca plugin install claude [--dry-run|--yes]
-                \\  orca plugin install opencode [--dry-run|--yes]
-                \\  orca plugin install openclaw [--dry-run|--yes]
-                \\  orca plugin install hermes [--dry-run|--yes]
-                \\  orca plugin install all [--dry-run|--yes]
-                \\  orca plugin install all --all-detected [--dry-run|--yes]
-                \\  orca plugin install <target> --path <plugin-path> [--dry-run|--yes]
-                \\  orca plugin install opencode --scope project|global [--dry-run|--yes]
+                \\  ryk plugin install                     # dry-run preview of all hosts (no mutation)
+                \\  ryk plugin install codex [--dry-run|--yes]
+                \\  ryk plugin install claude [--dry-run|--yes]
+                \\  ryk plugin install opencode [--dry-run|--yes]
+                \\  ryk plugin install openclaw [--dry-run|--yes]
+                \\  ryk plugin install hermes [--dry-run|--yes]
+                \\  ryk plugin install all [--dry-run|--yes]
+                \\  ryk plugin install all --all-detected [--dry-run|--yes]
+                \\  ryk plugin install <target> --path <plugin-path> [--dry-run|--yes]
+                \\  ryk plugin install opencode --scope project|global [--dry-run|--yes]
                 \\
-                \\Primary flow: `orca start` (guided auto-select on TTY). For advanced installs: `orca plugin install <host>`. Mutation requires an explicit host or `all` plus --yes (or interactive confirm default No).
+                \\Primary flow: `ryk start` (guided auto-select on TTY). For advanced installs: `ryk plugin install <host>`. Mutation requires an explicit host or `all` plus --yes (or interactive confirm default No).
                 \\Options:
                 \\  --dry-run       Preview changes without mutating host config
                 \\  --all-detected  Only install for hosts found in PATH
@@ -1277,7 +1277,7 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
         }
         if (std.mem.eql(u8, arg, "--path")) {
             if (index + 1 >= argv.len) {
-                try stderr.writeAll("orca plugin install: --path requires a value.\n");
+                try stderr.writeAll("ryk plugin install: --path requires a value.\n");
                 return exit_codes.usage;
             }
             custom_path = argv[index + 1];
@@ -1286,7 +1286,7 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
         }
         if (std.mem.eql(u8, arg, "--scope")) {
             if (index + 1 >= argv.len) {
-                try stderr.writeAll("orca plugin install: --scope requires a value.\n");
+                try stderr.writeAll("ryk plugin install: --scope requires a value.\n");
                 return exit_codes.usage;
             }
             const value = argv[index + 1];
@@ -1295,7 +1295,7 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
             } else if (std.mem.eql(u8, value, "global")) {
                 scope = .global;
             } else {
-                try suggestions.writeInvalidValue(stderr, "orca plugin install", "--scope", value, &.{ "project", "global" }, "plugin");
+                try suggestions.writeInvalidValue(stderr, "ryk plugin install", "--scope", value, &.{ "project", "global" }, "plugin");
                 return exit_codes.usage;
             }
             index += 1;
@@ -1331,7 +1331,7 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
             target_explicit = true;
             continue;
         }
-        try suggestions.writeUnknownOption(stderr, "orca plugin install", arg, &.{ "--dry-run", "--yes", "--all-detected", "--path", "--scope", "--help", "-h", "codex", "claude", "opencode", "openclaw", "hermes", "all" }, "plugin");
+        try suggestions.writeUnknownOption(stderr, "ryk plugin install", arg, &.{ "--dry-run", "--yes", "--all-detected", "--path", "--scope", "--help", "-h", "codex", "claude", "opencode", "openclaw", "hermes", "all" }, "plugin");
         return exit_codes.usage;
     }
 
@@ -1339,8 +1339,8 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
     if (!target_explicit) {
         if (yes and !dry_run_explicit) {
             try stderr.writeAll(
-                "orca plugin install: mutation requires an explicit host or `all` (e.g. `orca plugin install codex --yes`).\n" ++
-                    "Bare `orca plugin install` is a dry-run preview only.\n",
+                "ryk plugin install: mutation requires an explicit host or `all` (e.g. `ryk plugin install codex --yes`).\n" ++
+                    "Bare `ryk plugin install` is a dry-run preview only.\n",
             );
             return exit_codes.usage;
         }
@@ -1354,7 +1354,7 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
             const prompt = std.fmt.bufPrint(&prompt_buf, "Install {s} plugin?", .{host_label}) catch "Install plugin?";
             // Canonical confirm: empty Enter = default No (cancel).
             const accepted = interactive.askConfirmInteractive(io, stdout, prompt, false) catch |err| {
-                try stderr.print("orca plugin install: confirmation failed: {s}\n", .{@errorName(err)});
+                try stderr.print("ryk plugin install: confirmation failed: {s}\n", .{@errorName(err)});
                 return exit_codes.general;
             };
             if (!accepted) {
@@ -1363,7 +1363,7 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
             }
             dry_run = false;
         } else {
-            try stderr.writeAll("orca plugin install: actual installation requires --yes or --dry-run to preview.\n");
+            try stderr.writeAll("ryk plugin install: actual installation requires --yes or --dry-run to preview.\n");
             return exit_codes.usage;
         }
     }
@@ -1541,10 +1541,10 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
                         try writeHermesFailClosedStance(allocator, destination_path);
                         try stdout.writeAll("  fail stance: fail-closed (new install default)\n");
                         try stdout.writeAll("    → Written: ~/.hermes/plugins/orca/.orca_fail_stance\n");
-                        try stdout.writeAll("    → Override: export ORCA_HERMES_FAIL_OPEN=1  (or: orca run -- hermes for process wrap)\n");
+                        try stdout.writeAll("    → Override: export ORCA_HERMES_FAIL_OPEN=1  (or: ryk run -- hermes for process wrap)\n");
                     } else {
                         try stdout.writeAll("  fail stance: left unchanged (existing install; product default is fail-open unless env/stance set)\n");
-                        try stdout.writeAll("    → Safer path: export ORCA_HERMES_FAIL_OPEN=0  # or: orca run -- hermes\n");
+                        try stdout.writeAll("    → Safer path: export ORCA_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes\n");
                     }
                     if (binaryInPath(io, allocator, "hermes")) {
                         const status = try runHermesEnable(allocator);
@@ -1637,15 +1637,15 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
             }
             if (t == .hermes and host_status.hermesFailOpenFromEnv()) {
                 try stdout.writeAll("  warn: Hermes effective stance is fail-open — tools may run if Orca is degraded.\n");
-                try stdout.writeAll("    → export ORCA_HERMES_FAIL_OPEN=0  # or: orca run -- hermes\n");
+                try stdout.writeAll("    → export ORCA_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes\n");
             }
         }
     }
 
     // Pi is never managed by plugin install / install-all (honest non-management).
     if (!dry_run and (target == .all or all_detected)) {
-        try stdout.writeAll("\nPi: not managed by `orca plugin install`; extension coverage requires live smoke.\n");
-        try stdout.writeAll("  Install: pi install npm:@orca-sec/pi-orca · process: orca run -- pi\n");
+        try stdout.writeAll("\nPi: not managed by `ryk plugin install`; extension coverage requires live smoke.\n");
+        try stdout.writeAll("  Install: pi install npm:@orca-sec/pi-orca · process: ryk run -- pi\n");
         try stdout.writeAll("  Live check: ./scripts/host-live-e2e.sh pi\n");
     }
 
@@ -1653,7 +1653,7 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
     // Exit non-zero only when install claimed success but deny smoke failed.
     if (smoke_deny_failed) {
         try stdout.writeAll("Install completed but smoke deny failed — host is NOT protected.\n");
-        try stdout.writeAll("Run: orca plugin doctor <host>\n");
+        try stdout.writeAll("Run: ryk plugin doctor <host>\n");
         return exit_codes.general;
     }
     if (smoke_degraded) {
@@ -1673,7 +1673,7 @@ fn mcpServerCommand(_: std.Io, argv: []const []const u8, stdout: anytype, stderr
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             try stdout.writeAll(
                 \\Usage:
-                \\  orca plugin mcp-server [--help]
+                \\  ryk plugin mcp-server [--help]
                 \\
                 \\Status: limited / deferred
                 \\  The Orca MCP plugin server is planned but not yet active.
@@ -1695,7 +1695,7 @@ fn mcpServerCommand(_: std.Io, argv: []const []const u8, stdout: anytype, stderr
             );
             return exit_codes.success;
         }
-        try suggestions.writeUnknownOption(stderr, "orca plugin mcp-server", arg, &.{ "--help", "-h" }, "plugin");
+        try suggestions.writeUnknownOption(stderr, "ryk plugin mcp-server", arg, &.{ "--help", "-h" }, "plugin");
         return exit_codes.usage;
     }
 
@@ -1718,7 +1718,7 @@ fn mcpServerCommand(_: std.Io, argv: []const []const u8, stdout: anytype, stderr
     try stdout.writeAll("  - raw audit log dumping without redaction\n");
     try stdout.writeAll("  - credential access\n");
     try stdout.writeAll("  - policy mutation without explicit approval\n\n");
-    try stdout.writeAll("Use 'orca plugin mcp-server --help' for full details.\n");
+    try stdout.writeAll("Use 'ryk plugin mcp-server --help' for full details.\n");
     return exit_codes.success;
 }
 
@@ -2180,9 +2180,9 @@ fn writeHermesFailClosedStance(allocator: std.mem.Allocator, plugin_dir: []const
     defer file.close(io);
     try file.writeStreamingAll(io,
         \\fail-closed
-        \\# Written by `orca plugin install hermes` for new installs.
+        \\# Written by `ryk plugin install hermes` for new installs.
         \\# Env ORCA_HERMES_FAIL_OPEN overrides this file (0=fail-closed, 1=fail-open).
-        \\# Easy full protection: orca run -- hermes
+        \\# Easy full protection: ryk run -- hermes
         \\
     );
     try file.sync(io);
@@ -2225,7 +2225,7 @@ test "plugin doctor prints expected sections" {
     try std.testing.expect(std.mem.indexOf(u8, output, "Host status:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "SMOKE ALLOW") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "pi") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "orca run -- pi") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk run -- pi") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "pi …") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Plugin directories:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Host binaries:") != null);
@@ -3027,7 +3027,7 @@ test "plugin list renders deterministic host inventory and empty guidance" {
     try std.testing.expect(std.mem.indexOf(u8, output, "Codex").? < std.mem.indexOf(u8, output, "Claude Code").?);
     try std.testing.expect(std.mem.indexOf(u8, output, "Claude Code").? < std.mem.indexOf(u8, output, "OpenCode").?);
     try std.testing.expect(std.mem.indexOf(u8, output, "No supported host CLIs detected") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "orca plugin codex --dry-run") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk plugin codex --dry-run") != null);
 }
 
 test "friendly plugin host alias preserves install dry-run output" {

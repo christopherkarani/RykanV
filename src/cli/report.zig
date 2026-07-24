@@ -54,7 +54,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
                 stderr,
                 .info,
                 "No reportable session found",
-                "Run a protected command first: orca run -- echo hello. Then retry: orca report --session last",
+                "Run a protected command first: ryk run -- echo hello. Then retry: orca report --session last",
             );
             return exit_codes.general;
         },
@@ -173,7 +173,7 @@ test "report public errors render license remediation and missing-session guidan
     try std.testing.expectEqual(exit_codes.unsupported, unlicensed_code);
     try std.testing.expectEqualStrings("", stdout_writer.buffered());
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ℹ  Report export requires a license") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca license activate dev-pro") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk license activate dev-pro") != null);
     try std.testing.expect(std.mem.indexOfScalar(u8, stderr_writer.buffered(), 0x1b) == null);
 
     const license_path = try std.fs.path.join(std.testing.allocator, &.{ root, "orca", "license.json" });
@@ -188,6 +188,6 @@ test "report public errors render license remediation and missing-session guidan
     try std.testing.expectEqual(exit_codes.general, missing_code);
     try std.testing.expectEqualStrings("", stdout_writer.buffered());
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "No reportable session found") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca run -- echo") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk run -- echo") != null);
     try std.testing.expect(std.mem.indexOfScalar(u8, stderr_writer.buffered(), 0x1b) == null);
 }

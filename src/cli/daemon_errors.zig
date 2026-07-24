@@ -166,9 +166,9 @@ fn detail(err: anyerror, audience: Audience, probe: ProbeContext) []const u8 {
             .version => "daemon handshake fields were present but malformed.",
         },
         error.ProtocolMismatch => switch (audience) {
-            .doctor => "daemon protocol version or capability set does not match this Orca CLI.",
+            .doctor => "daemon protocol version or capability set does not match this ryk CLI.",
             .onboarding => "Protocol version mismatch between orca and orca-daemon.",
-            .version => "daemon protocol version or capability set does not match this Orca CLI.",
+            .version => "daemon protocol version or capability set does not match this ryk CLI.",
         },
         error.OutOfMemory => switch (audience) {
             .doctor => "out of memory while probing daemon compatibility.",

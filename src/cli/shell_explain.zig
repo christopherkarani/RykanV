@@ -1,4 +1,4 @@
-//! `orca explain` — explain why a shell command would be allowed or denied.
+//! `ryk explain` — explain why a shell command would be allowed or denied.
 const std = @import("std");
 const shell_engine = @import("../shell_engine/mod.zig");
 const shell_eval = @import("shell_eval.zig");
@@ -8,7 +8,7 @@ const core = @import("orca_core").core;
 pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     if (argv.len == 0 or std.mem.eql(u8, argv[0], "--help") or std.mem.eql(u8, argv[0], "-h")) {
         try stderr.writeAll(
-            \\Usage: orca explain [--format json] <command>
+            \\Usage: ryk explain [--format json] <command>
             \\
             \\Explain the Zig shell-engine decision for a command.
             \\
@@ -17,7 +17,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     }
 
     if (shell_eval.resolveShellEvalBackend() == .rust) {
-        try stderr.writeAll("orca explain: ORCA_SHELL_EVAL=rust is no longer supported; Zig shell_engine is the sole Evaluate authority\n");
+        try stderr.writeAll("ryk explain: ORCA_SHELL_EVAL=rust is no longer supported; Zig shell_engine is the sole Evaluate authority\n");
         return 3;
     }
 
@@ -25,11 +25,11 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     var cmd_start: usize = 0;
     if (std.mem.eql(u8, argv[0], "--format")) {
         if (argv.len < 3) {
-            try stderr.writeAll("orca explain: --format requires a value and a command\n");
+            try stderr.writeAll("ryk explain: --format requires a value and a command\n");
             return 64;
         }
         if (!std.mem.eql(u8, argv[1], "json")) {
-            try stderr.writeAll("orca explain: only --format json is supported\n");
+            try stderr.writeAll("ryk explain: only --format json is supported\n");
             return 64;
         }
         format_json = true;
@@ -47,7 +47,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         error.OutOfMemory => return error.OutOfMemory,
         error.HomeDirectoryNotFound, error.FileNotFound => pack_config.LoadedPackIds{},
         else => {
-            try stderr.writeAll("orca explain: pack configuration could not be loaded (fail-closed)\n");
+            try stderr.writeAll("ryk explain: pack configuration could not be loaded (fail-closed)\n");
             return 2;
         },
     };

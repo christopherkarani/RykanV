@@ -18,7 +18,8 @@ pub fn resolveResourcePath(io: std.Io, allocator: std.mem.Allocator, options: Re
     } else {
         var env_map = env_util.createProcessMap(allocator) catch return error.ResourceNotFound;
         defer env_map.deinit();
-        if (try env_util.getOwned(&env_map, allocator, "ORCA_RESOURCE_ROOT")) |resource_root| {
+        // Prefer RYK_RESOURCE_ROOT, fall back to ORCA_RESOURCE_ROOT (Phase 5a dual-read).
+        if (try env_util.getOwnedBrand(&env_map, allocator, "RESOURCE_ROOT")) |resource_root| {
             defer allocator.free(resource_root);
             const candidate = try std.fs.path.join(allocator, &.{ resource_root, relative_path });
             if (pathExists(io, candidate)) return candidate;
@@ -44,7 +45,7 @@ pub fn resolveResourcePath(io: std.Io, allocator: std.mem.Allocator, options: Re
         // The standard layout produced by our curl|sh installer (and recommended
         // by doctor/Homebrew) places the binary at $PREFIX/bin/orca and assets at
         // $PREFIX/share/orca/current. Auto-discover this when no explicit
-        // ORCA_RESOURCE_ROOT is set. This makes `sh -c 'orca redteam --ci'` work
+        // ORCA_RESOURCE_ROOT is set. This makes `sh -c 'ryk redteam --ci'` work
         // out of the box after a fresh install in many environments.
         if (std.fs.path.dirname(exe_dir)) |prefix_dir| {
             const packaged = try std.fs.path.join(allocator, &.{ prefix_dir, "share", "orca", "current", relative_path });
@@ -116,7 +117,7 @@ test "resource resolver prefers workspace resources" {
 // Test for the packaged ~/.local layout recommendation (Tier-0 DX).
 // Simulates ORCA_RESOURCE_ROOT or the auto-discovered $PREFIX/share/orca/current
 // that install.sh, doctor, and Homebrew all converge on. This path must resolve
-// fixtures/integrations for non-interactive `sh -c 'orca redteam --ci'` flows.
+// fixtures/integrations for non-interactive `sh -c 'ryk redteam --ci'` flows.
 test "resource resolver supports packaged share/orca/current layout via override" {
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();

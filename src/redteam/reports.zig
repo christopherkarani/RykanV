@@ -26,7 +26,7 @@ pub const uncovered_boundaries = [_][]const u8{
 
 pub fn writeHuman(io: std.Io, writer: anytype, suite: runner.SuiteResult) !void {
     const totals = suite.totals();
-    try writer.writeAll("Orca Redteam — engine self-test\n\n");
+    try writer.writeAll("ryk Redteam — engine self-test\n\n");
     try writeHumanProvenance(writer);
     try writer.writeByte('\n');
 
@@ -326,7 +326,7 @@ test "redteam human output renders fixture and category scorecard tables" {
     var writer: std.Io.Writer = .fixed(&output);
     try writeHuman(std.testing.io, &writer, suite);
     const rendered = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "Orca Redteam — engine self-test") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "ryk Redteam — engine self-test") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Provenance") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "engine-self-test") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "builtin:redteam") != null);

@@ -188,7 +188,7 @@ test "evidence manifest rejects capability_probe as CTRL-ATTACH (S-GLO-09)" {
         .platform_os = "linux",
         .platform_arch = "x86_64",
         .backend_id = "landlock",
-        .command = "orca run -- true",
+        .command = "ryk run -- true",
         .ctrl_baseline = .{ .ok = true },
         .ctrl_prepare = .{ .ok = true, .detail = "applySelf" },
         .ctrl_attach = .{ .ok = true, .detail = "capability_probe" },
@@ -244,7 +244,7 @@ test "evidence manifest rejects zig_real_fs_deny_canary as CTRL-ATTACH" {
         .platform_os = "linux",
         .platform_arch = "x86_64",
         .backend_id = "landlock",
-        .command = "orca run -- true",
+        .command = "ryk run -- true",
         .ctrl_baseline = .{ .ok = true },
         .ctrl_prepare = .{ .ok = true },
         .ctrl_attach = .{ .ok = true, .detail = "zig_real_fs_deny_canary" },
@@ -265,7 +265,7 @@ test "valid enforcement manifest serializes and reports all controls" {
         .platform_arch = "arm64",
         .backend_id = "none",
         .profile_hash = "",
-        .command = "orca run --os-sandbox off -- true",
+        .command = "ryk run --os-sandbox off -- true",
         .ctrl_baseline = .{ .ok = true, .detail = "canary readable" },
         .ctrl_prepare = .{ .ok = true, .detail = "platform_prepare" },
         .ctrl_attach = .{ .ok = false, .detail = "no_apply_wired" },
@@ -303,7 +303,7 @@ test "dual-proof attach detail with handshake is allowed" {
         .platform_os = "macos",
         .platform_arch = "arm64",
         .backend_id = "seatbelt",
-        .command = "orca run -- true",
+        .command = "ryk run -- true",
         .ctrl_baseline = .{ .ok = true },
         .ctrl_attach = .{ .ok = true, .detail = "zig_real_fs_deny_canary_and_handshake" },
         .test_deny = .{ .ok = true },
@@ -324,7 +324,7 @@ test "writeJson escapes quotes backslash and newlines in string fields" {
         .platform_os = "linux",
         .platform_arch = "x86_64",
         .backend_id = "landlock",
-        .command = "orca run -- \"foo\\bar\"\nbaz",
+        .command = "ryk run -- \"foo\\bar\"\nbaz",
         .ctrl_baseline = .{ .ok = true, .detail = "line1\nline2" },
         .ctrl_prepare = .{ .ok = false, .detail = "prep \"x\"" },
         .ctrl_attach = .{ .ok = false, .detail = "has \"quotes\" and\\slash" },
@@ -347,7 +347,7 @@ test "writeJson escapes quotes backslash and newlines in string fields" {
     defer parsed.deinit();
     const root = parsed.value.object;
     try std.testing.expectEqualStrings("quote\"case", root.get("case_id").?.string);
-    try std.testing.expectEqualStrings("orca run -- \"foo\\bar\"\nbaz", root.get("command").?.string);
+    try std.testing.expectEqualStrings("ryk run -- \"foo\\bar\"\nbaz", root.get("command").?.string);
     const controls = root.get("controls").?.object;
     try std.testing.expectEqualStrings("has \"quotes\" and\\slash", controls.get("CTRL-ATTACH").?.object.get("detail").?.string);
     try std.testing.expectEqualStrings("line1\nline2", controls.get("CTRL-BASELINE").?.object.get("detail").?.string);
@@ -364,7 +364,7 @@ test "ctrl_attach ok requires allowlisted dual-proof detail" {
         .platform_os = "linux",
         .platform_arch = "x86_64",
         .backend_id = "landlock",
-        .command = "orca run -- true",
+        .command = "ryk run -- true",
         .ctrl_baseline = .{ .ok = true },
         .ctrl_attach = .{ .ok = true, .detail = "" },
         .test_deny = .{ .ok = true },
@@ -438,7 +438,7 @@ test "e2e-shaped packaged orca_run attach requires 64-hex profile_hash" {
         .platform_arch = "x86_64",
         .backend_id = "landlock",
         .profile_hash = "",
-        .command = "orca run --os-sandbox on -- /usr/bin/true (+ test-fast dual-proof support)",
+        .command = "ryk run --os-sandbox on -- /usr/bin/true (+ test-fast dual-proof support)",
         .exit_code = 0,
         .ctrl_baseline = .{ .ok = true, .detail = "binary_present" },
         .ctrl_prepare = .{ .ok = true, .detail = "zig_fork_apply_handshake" },
@@ -471,7 +471,7 @@ test "e2e-shaped attach without TEST-DENY fails validate" {
         .platform_arch = "x86_64",
         .backend_id = "landlock",
         .profile_hash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-        .command = "orca run --os-sandbox on",
+        .command = "ryk run --os-sandbox on",
         .ctrl_baseline = .{ .ok = true },
         .ctrl_attach = .{ .ok = true, .detail = "orca_run_os_sandbox_on_active" },
         .test_deny = .{ .ok = false, .detail = "not_proven" },
