@@ -13,7 +13,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         return exit_codes.success;
     }
     if (argv.len != 1) {
-        try stderr.writeAll("orca completions: expected one shell: bash, zsh, fish, or powershell.\n");
+        try stderr.writeAll("ryk completions: expected one shell: bash, zsh, fish, or powershell.\n");
         return exit_codes.usage;
     }
 
@@ -27,7 +27,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     } else if (std.mem.eql(u8, shell, "powershell")) {
         try writePowerShell(stdout);
     } else {
-        try stderr.print("orca completions: unsupported shell '{s}'. Expected bash, zsh, fish, or powershell.\n", .{shell});
+        try stderr.print("ryk completions: unsupported shell '{s}'. Expected bash, zsh, fish, or powershell.\n", .{shell});
         return exit_codes.usage;
     }
     return exit_codes.success;
@@ -439,7 +439,7 @@ test "completions expose canonical init history and onboarding flags" {
 test "GitHub Actions documentation includes Orca run and redteam commands" {
     const doc = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "docs/ci/github-actions.md", std.testing.allocator, .limited(32 * 1024));
     defer std.testing.allocator.free(doc);
-    try std.testing.expect(std.mem.indexOf(u8, doc, "orca run --mode ci -- ./scripts/agent-task.sh") != null);
-    try std.testing.expect(std.mem.indexOf(u8, doc, "orca redteam --ci") != null);
+    try std.testing.expect(std.mem.indexOf(u8, doc, "ryk run --mode ci -- ./scripts/agent-task.sh") != null);
+    try std.testing.expect(std.mem.indexOf(u8, doc, "ryk redteam --ci") != null);
     try std.testing.expect(std.mem.indexOf(u8, doc, "actions/upload-artifact@v4") != null);
 }

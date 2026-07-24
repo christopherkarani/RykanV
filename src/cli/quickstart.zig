@@ -1,5 +1,5 @@
 //! Legacy quickstart flow retained as a library for tests/internal composition.
-//! Public CLI door is `orca start` — top-level `orca quickstart` is hard-removed from the dispatcher.
+//! Public CLI door is `ryk start` — top-level `orca quickstart` is hard-removed from the dispatcher.
 
 const std = @import("std");
 
@@ -12,7 +12,7 @@ const readiness = @import("readiness.zig");
 const build_options = @import("build_options");
 const tui = @import("../tui/mod.zig");
 
-/// Library entry (doctor → policy → setup). Prefer `orca start` for the public product path.
+/// Library entry (doctor → policy → setup). Prefer `ryk start` for the public product path.
 pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     return commandWithDaemonChecker(null, io, cwd, argv, stdout, stderr);
 }
@@ -100,7 +100,7 @@ fn commandWithDaemonChecker(
         try stdout.print("{s}\n", .{daemon_check.remediation});
         // Cached assessment — do not re-probe daemon/policy for the receipt.
         try writeReceipt(stdout, readiness.assess(daemon_check.status, false, false), false);
-        try stdout.writeAll("Fix the daemon, then re-run `orca start` (or `orca doctor --check`).\n");
+        try stdout.writeAll("Fix the daemon, then re-run `ryk start` (or `orca doctor --check`).\n");
         return exit_codes.general;
     }
     try tui.render.stepLine(io, stdout, .done, "Step 1 — System check", "daemon compatible", 0);
@@ -129,7 +129,7 @@ fn commandWithDaemonChecker(
     if (!core.ready) {
         try stdout.writeAll("\n");
         try writeReceipt(stdout, core, false);
-        try stdout.writeAll("Policy missing or invalid. Fix with `orca init` / policy edits, then re-run `orca status --check`.\n");
+        try stdout.writeAll("Policy missing or invalid. Fix with `ryk init` / policy edits, then re-run `orca status --check`.\n");
         return exit_codes.general;
     }
     try stdout.writeAll("\n");
@@ -156,11 +156,11 @@ fn commandWithDaemonChecker(
     try writeReceipt(stdout, core, true);
     try stdout.writeAll("Core protection is ready (daemon + policy). Host integrations reported above may still need setup.\n");
     try stdout.writeAll("\nStart protecting your sessions:\n");
-    try stdout.writeAll("  orca claude   # or codex / pi / opencode / …\n");
+    try stdout.writeAll("  ryk claude   # or codex / pi / opencode / …\n");
     try stdout.writeAll("\nUseful next steps:\n");
     try stdout.writeAll("  orca status\n");
     try stdout.writeAll("  orca replay\n");
-    try stdout.writeAll("  orca start    Re-run Safe Launch if hosts need repair\n");
+    try stdout.writeAll("  ryk start    Re-run Safe Launch if hosts need repair\n");
 
     return exit_codes.success;
 }
@@ -186,7 +186,7 @@ test "quickstart step labels render with brand banner" {
 
     const code = try command(std.testing.io, tmp.dir, &.{"--auto"}, &stdout_writer, &stderr_writer);
     const output = stdout_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "\u{1F6E1}  Orca") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\u{1F6E1}  ryk") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Step 1 — System check") != null);
 
     if (code != exit_codes.success) {

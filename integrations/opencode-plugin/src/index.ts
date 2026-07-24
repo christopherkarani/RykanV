@@ -1,6 +1,6 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { existsSync } from 'fs';
-import { join, resolve } from 'path';
+import { isAbsolute, join, resolve } from 'path';
 
 interface OrcaResponse {
   version?: number;
@@ -245,6 +245,12 @@ export function parseHookResponse(stdout: string, blocking: boolean): OrcaRespon
   });
 }
 
+/**
+ * Resolve the ryk/orca binary (Phase 5a dual-name).
+ * Prefer absolute RYK_BIN / ORCA_BIN, then PATH (`ryk` then `orca`).
+ * Relative path-shaped env bins are agent-plantable — rejected.
+ * Bare names and hook spawns use argv (no shell interpolation).
+ */
 export function findOrca(cwd?: string): string | null {
   // Phase 5a: prefer RYK_BIN, then ORCA_BIN, then PATH ryk then orca.
   const envBin = (process.env.RYK_BIN ?? process.env.ORCA_BIN)?.trim();
@@ -253,8 +259,9 @@ export function findOrca(cwd?: string): string | null {
       if (!isAbsolute(envBin)) return null;
       return existsSync(envBin) ? envBin : null;
     }
+    // Bare name — resolve via PATH only (no shell interpolation).
     try {
-      const which = execSync(`which ${envBin}`, {
+      const which = execFileSync('which', [envBin], {
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'ignore'],
       });
@@ -268,7 +275,7 @@ export function findOrca(cwd?: string): string | null {
 
   for (const name of ['ryk', 'orca'] as const) {
     try {
-      const which = execSync(`which ${name}`, {
+      const which = execFileSync('which', [name], {
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'ignore'],
       });
@@ -311,7 +318,8 @@ function callOrca(
   const payloadJson = JSON.stringify(buildPayload(event, data, sessionId));
 
   try {
-    const stdout = execSync(`${orcaBin} hook opencode ${event}`, {
+    // argv array — no shell interpolation of orcaBin or event
+    const stdout = execFileSync(orcaBin, ['hook', 'opencode', event], {
       input: payloadJson,
       encoding: 'utf-8',
       timeout: blocking ? 15000 : 10000,
@@ -421,7 +429,15 @@ const MISSING_BINARY_MSG = 'Orca binary not found; blocking as a precaution.';
 
 export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHooks> {
   const cwd = ctx.worktree || ctx.directory || process.cwd();
-  const orcaBin = findOrca(cwd);
+  // Fail closed on unexpected resolve errors so hooks still register.
+  let orcaBin: string | null = null;
+  try {
+    orcaBin = findOrca(cwd);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[orca] Binary resolve failed (fail-closed): ${message}`);
+    orcaBin = null;
+  }
 
   if (!orcaBin) {
     console.warn(

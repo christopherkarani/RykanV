@@ -68,7 +68,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
 
     const workspace_root_for_policy = supervisor.resolveWorkspaceRoot(io, allocator, options.workspace, ".") catch |err| switch (err) {
         error.FileNotFound => {
-            try suggestions.writeSanitizedValue(stderr, "orca run: workspace not found: ", options.workspace orelse ".", "\n");
+            try suggestions.writeSanitizedValue(stderr, "ryk run: workspace not found: ", options.workspace orelse ".", "\n");
             return exit_codes.general;
         },
         else => return err,
@@ -76,7 +76,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     defer allocator.free(workspace_root_for_policy);
 
     var loaded_policy = core_api.discoverPolicy(io, allocator, options.policy_path, workspace_root_for_policy) catch |err| {
-        try stderr.print("orca run: invalid policy: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk run: invalid policy: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer loaded_policy.deinit();
@@ -99,11 +99,11 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     else
         intercept.env.filterCurrent(allocator, loaded_policy.innerPtr(), effective_policy_mode, env_request)) catch |err| switch (err) {
         error.InheritEnvDenied => {
-            try stderr.writeAll("orca run: --inherit-env is not allowed by the selected policy/mode.\n");
+            try stderr.writeAll("ryk run: --inherit-env is not allowed by the selected policy/mode.\n");
             return exit_codes.general;
         },
         else => {
-            try stderr.print("orca run: failed to filter environment: {s}\n", .{@errorName(err)});
+            try stderr.print("ryk run: failed to filter environment: {s}\n", .{@errorName(err)});
             return exit_codes.general;
         },
     };
@@ -120,10 +120,10 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         // startServing runs after the agent child is forked (after_process_spawn).
         proxy_runtime = intercept.proxy.listen(allocator, loaded_policy.innerPtr(), effective_policy_mode) catch |err| blk: {
             if (effective_policy_mode == .strict or effective_policy_mode == .ci or requiresBackend(options, .network_proxy_enforce)) {
-                try stderr.print("orca run: proxy network backend unavailable: {s}\n", .{@errorName(err)});
+                try stderr.print("ryk run: proxy network backend unavailable: {s}\n", .{@errorName(err)});
                 return exit_codes.unsupported;
             }
-            try stderr.print("orca run: proxy network backend unavailable; continuing without proxy in observe-compatible mode: {s}\n", .{@errorName(err)});
+            try stderr.print("ryk run: proxy network backend unavailable; continuing without proxy in observe-compatible mode: {s}\n", .{@errorName(err)});
             break :blk null;
         };
         if (proxy_runtime) |runtime| {
@@ -528,7 +528,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
             if (self.effective_mode == .ci) return .deny;
             const stdin_file = std.Io.File.stdin();
             if (!(try stdin_file.isTty(self.io))) {
-                try self.stderr.writeAll("orca run: command requires approval, but stdin is non-interactive; denying.\n");
+                try self.stderr.writeAll("ryk run: command requires approval, but stdin is non-interactive; denying.\n");
                 return .deny;
             }
             var stdin_buf: [1024]u8 = undefined;
@@ -660,15 +660,15 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         .health_monitor = health_monitor,
     }) catch |err| switch (err) {
         error.CommandNotFound => {
-            try suggestions.writeSanitizedValue(stderr, "orca run: command not found: ", options.command_argv[0], "\n");
+            try suggestions.writeSanitizedValue(stderr, "ryk run: command not found: ", options.command_argv[0], "\n");
             return exit_codes.general;
         },
         error.InvalidCommand => {
-            try stderr.writeAll("orca run: missing command after '--'.\n");
+            try stderr.writeAll("ryk run: missing command after '--'.\n");
             return exit_codes.usage;
         },
         error.FileNotFound => {
-            try suggestions.writeSanitizedValue(stderr, "orca run: workspace not found: ", options.workspace orelse ".", "\n");
+            try suggestions.writeSanitizedValue(stderr, "ryk run: workspace not found: ", options.workspace orelse ".", "\n");
             return exit_codes.general;
         },
         error.CommandDenied => {
@@ -689,7 +689,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
             ) catch |render_err| {
                 // Never let a presentation failure mask the deny or alter the exit
                 // code; fall back to a minimal message and continue to denial.
-                stderr.print("orca run: command denied by command guard ({s}).\n", .{@errorName(render_err)}) catch {};
+                stderr.print("ryk run: command denied by command guard ({s}).\n", .{@errorName(render_err)}) catch {};
             };
             if (command_guard_context.last_denied_rule_id) |rid| allocator.free(rid);
             command_guard_context.last_denied_rule_id = null;
@@ -699,7 +699,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         },
         error.BackendRequirementUnavailable => {
             try finalizeFailedSession(&audit_context, allocator, exit_codes.unsupported, loaded_policy.path);
-            try stderr.writeAll("orca run: required backend feature is unavailable.\n");
+            try stderr.writeAll("ryk run: required backend feature is unavailable.\n");
             return exit_codes.unsupported;
         },
         else => |launch_err| {
@@ -714,21 +714,21 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 try finalizeFailedSession(&audit_context, allocator, exit_codes.unsupported, loaded_policy.path);
                 switch (options.os_sandbox) {
                     .on => try stderr.print(
-                        "orca run: OS sandbox required (--os-sandbox on) but attach failed ({s}).\n",
+                        "ryk run: OS sandbox required (--os-sandbox on) but attach failed ({s}).\n",
                         .{reason},
                     ),
                     .auto => try stderr.print(
-                        "orca run: OS sandbox attach failed under --os-sandbox auto ({s}); not launching unboxed agent.\n",
+                        "ryk run: OS sandbox attach failed under --os-sandbox auto ({s}); not launching unboxed agent.\n",
                         .{reason},
                     ),
                     .off => try stderr.print(
-                        "orca run: OS sandbox attach failed ({s}).\n",
+                        "ryk run: OS sandbox attach failed ({s}).\n",
                         .{reason},
                     ),
                 }
                 return exit_codes.unsupported;
             }
-            try stderr.print("orca run: failed to launch child: {s}\n", .{@errorName(launch_err)});
+            try stderr.print("ryk run: failed to launch child: {s}\n", .{@errorName(launch_err)});
             return exit_codes.general;
         },
     };
@@ -748,19 +748,19 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         if (agent_failed) {
             switch (result.status) {
                 .exited => |code| try stderr.print(
-                    "orca run: note: OS sandbox attach succeeded; agent exited with code {d} (pre-exec handshake residual).\n",
+                    "ryk run: note: OS sandbox attach succeeded; agent exited with code {d} (pre-exec handshake residual).\n",
                     .{code},
                 ),
                 .signal => |sig| try stderr.print(
-                    "orca run: note: OS sandbox attach succeeded; agent terminated by signal {d} (pre-exec handshake residual).\n",
+                    "ryk run: note: OS sandbox attach succeeded; agent terminated by signal {d} (pre-exec handshake residual).\n",
                     .{sig},
                 ),
                 .stopped => |sig| try stderr.print(
-                    "orca run: note: OS sandbox attach succeeded; agent stopped by signal {d} (pre-exec handshake residual).\n",
+                    "ryk run: note: OS sandbox attach succeeded; agent stopped by signal {d} (pre-exec handshake residual).\n",
                     .{sig},
                 ),
                 .unknown => |st| try stderr.print(
-                    "orca run: note: OS sandbox attach succeeded; agent ended with unknown status {d} (pre-exec handshake residual).\n",
+                    "ryk run: note: OS sandbox attach succeeded; agent ended with unknown status {d} (pre-exec handshake residual).\n",
                     .{st},
                 ),
             }
@@ -818,22 +818,22 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     try printSessionEnd(io, stdout, result, is_first_session);
 
     if (required_proxy_failed) {
-        try stderr.writeAll("orca run: required proxy backend failed during child run; child was terminated.\n");
+        try stderr.writeAll("ryk run: required proxy backend failed during child run; child was terminated.\n");
         return exit_codes.unsupported;
     }
 
     return switch (result.status) {
         .exited => |code| code,
         .signal => |signal| {
-            try stderr.print("orca run: child terminated by signal {d}.\n", .{signal});
+            try stderr.print("ryk run: child terminated by signal {d}.\n", .{signal});
             return exit_codes.child_failure;
         },
         .stopped => |signal| {
-            try stderr.print("orca run: child stopped by signal {d}.\n", .{signal});
+            try stderr.print("ryk run: child stopped by signal {d}.\n", .{signal});
             return exit_codes.child_failure;
         },
         .unknown => |status| {
-            try stderr.print("orca run: child ended with unknown status {d}.\n", .{status});
+            try stderr.print("ryk run: child ended with unknown status {d}.\n", .{status});
             return exit_codes.child_failure;
         },
     };
@@ -857,32 +857,32 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
         } else if (std.mem.eql(u8, arg, "--workspace")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca run: --workspace requires a path.\n");
+                try stderr.writeAll("ryk run: --workspace requires a path.\n");
                 return error.Usage;
             }
             options.workspace = argv[index];
         } else if (std.mem.eql(u8, arg, "--mode")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca run: --mode requires observe, ask, strict, or ci.\n");
+                try stderr.writeAll("ryk run: --mode requires observe, ask, strict, or ci.\n");
                 return error.Usage;
             }
             options.mode = parseMode(argv[index]) orelse {
-                try suggestions.writeInvalidValue(stderr, "orca run", "--mode", argv[index], &.{ "observe", "ask", "strict", "ci" }, "run");
+                try suggestions.writeInvalidValue(stderr, "ryk run", "--mode", argv[index], &.{ "observe", "ask", "strict", "ci" }, "run");
                 return error.Usage;
             };
             options.mode_explicit = true;
         } else if (std.mem.eql(u8, arg, "--policy")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca run: --policy requires a path.\n");
+                try stderr.writeAll("ryk run: --policy requires a path.\n");
                 return error.Usage;
             }
             options.policy_path = argv[index];
         } else if (std.mem.eql(u8, arg, "--session-name")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca run: --session-name requires a name.\n");
+                try stderr.writeAll("ryk run: --session-name requires a name.\n");
                 return error.Usage;
             }
             options.session_name = argv[index];
@@ -897,11 +897,11 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
         } else if (std.mem.eql(u8, arg, "--allow-network")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca run: --allow-network requires a domain or IP destination.\n");
+                try stderr.writeAll("ryk run: --allow-network requires a domain or IP destination.\n");
                 return error.Usage;
             }
             if (options.allow_network_count >= options.allow_network_values.len) {
-                try stderr.writeAll("orca run: too many --allow-network rules.\n");
+                try stderr.writeAll("ryk run: too many --allow-network rules.\n");
                 return error.Usage;
             }
             options.allow_network_values[options.allow_network_count] = argv[index];
@@ -909,68 +909,68 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
         } else if (std.mem.eql(u8, arg, "--network")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca run: --network requires observe, ask, allowlist, open, or off.\n");
+                try stderr.writeAll("ryk run: --network requires observe, ask, allowlist, open, or off.\n");
                 return error.Usage;
             }
             options.network_mode = policy.schema.NetworkMode.parse(argv[index]) orelse {
-                try suggestions.writeInvalidValue(stderr, "orca run", "--network", argv[index], &.{ "observe", "ask", "allowlist", "open", "off" }, "run");
+                try suggestions.writeInvalidValue(stderr, "ryk run", "--network", argv[index], &.{ "observe", "ask", "allowlist", "open", "off" }, "run");
                 return error.Usage;
             };
         } else if (std.mem.eql(u8, arg, "--network-backend")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca run: --network-backend requires decision-only or proxy.\n");
+                try stderr.writeAll("ryk run: --network-backend requires decision-only or proxy.\n");
                 return error.Usage;
             }
             options.network_backend = policy.schema.NetworkBackend.parse(argv[index]) orelse {
-                try suggestions.writeInvalidValue(stderr, "orca run", "--network-backend", argv[index], &.{ "decision-only", "proxy" }, "run");
+                try suggestions.writeInvalidValue(stderr, "ryk run", "--network-backend", argv[index], &.{ "decision-only", "proxy" }, "run");
                 return error.Usage;
             };
         } else if (std.mem.eql(u8, arg, "--os-sandbox")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca run: --os-sandbox requires auto, on, or off.\n");
+                try stderr.writeAll("ryk run: --os-sandbox requires auto, on, or off.\n");
                 return error.Usage;
             }
             options.os_sandbox = sandbox.posture.OsSandboxMode.parse(argv[index]) orelse {
-                try suggestions.writeInvalidValue(stderr, "orca run", "--os-sandbox", argv[index], &.{ "auto", "on", "off" }, "run");
+                try suggestions.writeInvalidValue(stderr, "ryk run", "--os-sandbox", argv[index], &.{ "auto", "on", "off" }, "run");
                 return error.Usage;
             };
         } else if (std.mem.eql(u8, arg, "--require-backend")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca run: --require-backend requires a capability name.\n");
+                try stderr.writeAll("ryk run: --require-backend requires a capability name.\n");
                 return error.Usage;
             }
             if (options.required_backend_count >= options.required_backend_values.len) {
-                try stderr.writeAll("orca run: too many --require-backend values.\n");
+                try stderr.writeAll("ryk run: too many --require-backend values.\n");
                 return error.Usage;
             }
             options.required_backend_values[options.required_backend_count] = sandbox.backend.Feature.parse(argv[index]) orelse {
-                try suggestions.writeInvalidValue(stderr, "orca run", "--require-backend", argv[index], &.{ "policy-engine", "audit", "env-filtering", "path-staging", "shell-wrapping", "path-shims", "mcp-stdio-proxy", "network-observe", "network-proxy", "network-enforce", "process-supervision", "user-namespaces", "mount-namespaces", "seccomp", "landlock", "cgroups", "strong-sandbox" }, "run");
+                try suggestions.writeInvalidValue(stderr, "ryk run", "--require-backend", argv[index], &.{ "policy-engine", "audit", "env-filtering", "path-staging", "shell-wrapping", "path-shims", "mcp-stdio-proxy", "network-observe", "network-proxy", "network-enforce", "process-supervision", "user-namespaces", "mount-namespaces", "seccomp", "landlock", "cgroups", "strong-sandbox" }, "run");
                 return error.Usage;
             };
             options.required_backend_count += 1;
         } else if (std.mem.startsWith(u8, arg, "-")) {
-            try suggestions.writeUnknownOption(stderr, "orca run", arg, &.{ "--workspace", "--mode", "--policy", "--session-name", "--no-secrets", "--secretless", "--inherit-env", "--no-network", "--allow-network", "--network", "--network-backend", "--os-sandbox", "--require-backend", "--help", "-h" }, "run");
+            try suggestions.writeUnknownOption(stderr, "ryk run", arg, &.{ "--workspace", "--mode", "--policy", "--session-name", "--no-secrets", "--secretless", "--inherit-env", "--no-network", "--allow-network", "--network", "--network-backend", "--os-sandbox", "--require-backend", "--help", "-h" }, "run");
             return error.Usage;
         } else {
-            try stderr.writeAll("orca run: expected '--' before the command you want to run.\n" ++
+            try stderr.writeAll("ryk run: expected '--' before the command you want to run.\n" ++
                 "\n" ++
                 "Example:\n" ++
-                "  orca run -- ./scripts/agent-task.sh\n" ++
-                "  orca run --mode strict -- npm install\n" ++
+                "  ryk run -- ./scripts/agent-task.sh\n" ++
+                "  ryk run --mode strict -- npm install\n" ++
                 "\n" ++
-                "Run 'orca help run' for more examples.\n");
+                "Run 'ryk help run' for more examples.\n");
             return error.Usage;
         }
     }
 
     if (options.command_argv.len == 0) {
-        try stderr.writeAll("orca run: missing command after '--'.\n" ++
+        try stderr.writeAll("ryk run: missing command after '--'.\n" ++
             "\n" ++
             "Example:\n" ++
-            "  orca run -- echo 'hello world'\n");
+            "  ryk run -- echo 'hello world'\n");
         return error.Usage;
     }
 
@@ -1147,10 +1147,10 @@ fn printSessionEnd(io: std.Io, stdout: anytype, result: supervisor.SessionResult
         try tui.theme.paint(io, stdout, .text_bright, "orca replay --session last");
         try stdout.writeAll("  (review what happened)\n");
         try stdout.writeAll("  → ");
-        try tui.theme.paint(io, stdout, .text_bright, "orca policy explain command \"<your-command>\"");
+        try tui.theme.paint(io, stdout, .text_bright, "ryk policy explain command \"<your-command>\"");
         try stdout.writeAll("  (understand your rules)\n");
         try stdout.writeAll("  → ");
-        try tui.theme.paint(io, stdout, .text_bright, "orca <agent>");
+        try tui.theme.paint(io, stdout, .text_bright, "ryk <agent>");
         try stdout.writeAll("  (launch another protected agent)\n");
         try stdout.writeAll("\n");
     }
@@ -1172,9 +1172,9 @@ fn printSessionEnd(io: std.Io, stdout: anytype, result: supervisor.SessionResult
 ///     → <alt>  (<note>)
 ///   Tip / Next
 ///     Tip: <daemon suggestion when present>
-///     → orca explain "…"
-///     → orca allowlist add <rule> -r "reason"
-///     → orca allow-once <code>
+///     → ryk explain "…"
+///     → ryk allowlist add <rule> -r "reason"
+///     → ryk allow-once <code>
 ///
 /// Graceful degrade: when `rule_id` is null (fail-closed / user-denial paths) or
 /// not in the reason table, a generic reason + medium risk meter are used and
@@ -1332,7 +1332,7 @@ test "run rejects missing child command" {
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "missing command") != null);
     // TDD: warm multi-line error message with examples (foundation UX)
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "Example:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca run -- echo") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk run -- echo") != null);
 }
 
 test "run rejects child command without separator" {
@@ -1346,7 +1346,7 @@ test "run rejects child command without separator" {
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "expected '--'") != null);
     // TDD: warm multi-line error message with examples + help pointer (foundation UX)
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "Example:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca help run") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help run") != null);
 }
 
 test "run reports missing command usefully" {
@@ -2047,7 +2047,7 @@ test "denial panel and remediation redact argv while evaluator receives original
     try std.testing.expectEqual(exit_codes.denial, code);
     const rendered = stderr_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "ryk blocked") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "orca explain") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "ryk explain") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, sentinel) == null);
     try std.testing.expect(std.mem.indexOf(u8, shell_eval.test_last_evaluate_command.?, sentinel) != null);
 }
@@ -2139,7 +2139,7 @@ test "first successful run prints celebration" {
     try std.testing.expect(std.mem.indexOf(u8, out, "replay --session last") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Next steps") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "policy explain") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "orca <agent>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "ryk <agent>") != null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 
@@ -2206,9 +2206,9 @@ test "deny block renders rich guardian block for rm -rf /" {
     try std.testing.expect(std.mem.indexOf(u8, err, "rm -rf ./build") != null or std.mem.indexOf(u8, err, "./build") != null);
     // Next-step footer with pack tools (not policy.yaml explain).
     try std.testing.expect(std.mem.indexOf(u8, err, "Next") != null);
-    try std.testing.expect(std.mem.indexOf(u8, err, "orca explain") != null);
-    try std.testing.expect(std.mem.indexOf(u8, err, "orca allowlist add") != null);
-    try std.testing.expect(std.mem.indexOf(u8, err, "orca allow-once") != null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "ryk explain") != null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "ryk allowlist add") != null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "ryk allow-once") != null);
     // The old flat line is gone.
     try std.testing.expect(std.mem.indexOf(u8, err, "command denied by command guard") == null);
 }
@@ -2273,7 +2273,7 @@ test "deny block keeps exit code and does not print the flat line" {
     // Invariant: exit code stays exit_codes.denial.
     try std.testing.expectEqual(exit_codes.denial, code);
     // The flat one-liner is fully replaced.
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca run: command denied by command guard.\n") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk run: command denied by command guard.\n") == null);
 }
 
 test "parse --os-sandbox accepts auto|on|off; invalid and missing fail usage" {
@@ -2417,7 +2417,7 @@ fn skipUnlessOsSandboxBackend() !void {
 
 // Full production `orca run` attach when OS backend is available.
 // Full multi-agent / long-running agent smoke remains manual.
-test "orca run --os-sandbox on attaches and banners active when backend available" {
+test "ryk run --os-sandbox on attaches and banners active when backend available" {
     try skipUnlessOsSandboxBackend();
 
     var tmp = std.testing.tmpDir(.{});
@@ -2451,7 +2451,7 @@ test "orca run --os-sandbox on attaches and banners active when backend availabl
 }
 
 // M-18: active attach must emit sandbox_posture with posture=active and 64-hex profile_hash.
-test "orca run --os-sandbox on active audit has posture=active and 64-hex profile_hash" {
+test "ryk run --os-sandbox on active audit has posture=active and 64-hex profile_hash" {
     try skipUnlessOsSandboxBackend();
 
     var tmp = std.testing.tmpDir(.{});
@@ -2491,7 +2491,7 @@ test "orca run --os-sandbox on active audit has posture=active and 64-hex profil
 }
 
 // M-20 residual honesty: active attach + non-zero agent exit emits follow-up note.
-test "orca run notes attach-ok residual when agent exits non-zero after active attach" {
+test "ryk run notes attach-ok residual when agent exits non-zero after active attach" {
     try skipUnlessOsSandboxBackend();
 
     var tmp = std.testing.tmpDir(.{});
@@ -2524,7 +2524,7 @@ test "orca run notes attach-ok residual when agent exits non-zero after active a
 }
 
 // M-31: fail-closed spawn/handshake under on and auto (preflight fails → ApplyFailed).
-test "orca run --os-sandbox on fail-closed when child handshake fails" {
+test "ryk run --os-sandbox on fail-closed when child handshake fails" {
     try skipUnlessOsSandboxBackend();
 
     var tmp = std.testing.tmpDir(.{});
@@ -2561,7 +2561,7 @@ test "orca run --os-sandbox on fail-closed when child handshake fails" {
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "OS sandbox: active") == null);
 }
 
-test "orca run --os-sandbox auto fail-closed when child handshake fails (no unboxed launch)" {
+test "ryk run --os-sandbox auto fail-closed when child handshake fails (no unboxed launch)" {
     try skipUnlessOsSandboxBackend();
 
     var tmp = std.testing.tmpDir(.{});
@@ -2595,7 +2595,7 @@ test "orca run --os-sandbox auto fail-closed when child handshake fails (no unbo
 }
 
 // F-5: default auto path (omit --os-sandbox) attaches when backend present.
-test "orca run default auto attaches when backend available" {
+test "ryk run default auto attaches when backend available" {
     try skipUnlessOsSandboxBackend();
 
     var tmp = std.testing.tmpDir(.{});

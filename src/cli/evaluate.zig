@@ -157,7 +157,7 @@ fn commandWithEvaluator(io: std.Io, argv: []const []const u8, stdout: anytype, s
             try writeInvalidInput(stdout, null, "expected --json --stdin");
             return exit_invalid_input;
         }
-        try stderr.writeAll("orca evaluate: expected --json --stdin. Run 'orca help evaluate' for usage.\n");
+        try stderr.writeAll("orca evaluate: expected --json --stdin. Run 'ryk help evaluate' for usage.\n");
         return exit_codes.usage;
     }
 
@@ -239,9 +239,10 @@ fn moreRestrictiveMode(a: policy.schema.Mode, b: policy.schema.Mode) policy.sche
 }
 
 /// Resolve evaluate mode like product hooks: discovered policy mode, with
-/// `ORCA_MODE` only allowed to raise strictness (never ambient soften).
+/// `RYK_MODE`/`ORCA_MODE` only allowed to raise strictness (never ambient soften).
 fn resolveEvaluateMode(base: policy.schema.Mode) policy.schema.Mode {
-    if (std.c.getenv("ORCA_MODE")) |raw_c| {
+    const env_util = @import("../env_util.zig");
+    if (env_util.getenvBrand("MODE")) |raw_c| {
         const raw = std.mem.span(raw_c);
         if (policy.schema.Mode.parse(raw)) |env_mode| {
             return moreRestrictiveMode(base, env_mode);
@@ -742,7 +743,7 @@ fn classifyDaemonError(err: daemon.DaemonError) ClassifiedDaemonError {
         error.ProtocolMismatch, error.MissingHandshake, error.HandshakeMalformed => .{
             .code = .daemon_incompatible,
             .status = .incompatible,
-            .message = "daemon protocol is incompatible with this Orca CLI",
+            .message = "daemon protocol is incompatible with this ryk CLI",
         },
         error.DaemonStartTimeout => .{
             .code = .daemon_timeout,
@@ -823,7 +824,7 @@ fn writeResponseJson(stdout: anytype, response: MachineResponse) !void {
     // Additive machine-usable next steps for Pi / evaluate consumers.
     try stdout.writeAll("  \"remediation_commands\": [");
     if (std.mem.eql(u8, response.decision, "deny")) {
-        try stdout.writeAll("\"orca explain \\\"<command>\\\"\",\"orca allow-once <code>\",\"orca allowlist list\"");
+        try stdout.writeAll("\"ryk explain \\\"<command>\\\"\",\"ryk allow-once <code>\",\"ryk allowlist list\"");
     }
     try stdout.writeAll("],\n");
     try stdout.writeAll("  \"daemon\": {\n");

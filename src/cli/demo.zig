@@ -17,7 +17,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         return exit_codes.usage;
     }
     if (argv.len != 1) {
-        try stderr.writeAll("orca demo blocked-action: expected no additional arguments.\nRun 'orca help demo' for usage.\n");
+        try stderr.writeAll("orca demo blocked-action: expected no additional arguments.\nRun 'ryk help demo' for usage.\n");
         return exit_codes.usage;
     }
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
@@ -49,5 +49,5 @@ test "demo command rejects unknown demos" {
     const code = try command(std.testing.io, &.{"blocked-acton"}, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.usage, code);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "Did you mean 'blocked-action'?") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca help demo") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help demo") != null);
 }

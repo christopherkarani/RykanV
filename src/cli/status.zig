@@ -75,7 +75,7 @@ fn parseOptions(argv: []const []const u8, stderr: anytype) !Options {
             options.check = true;
             continue;
         }
-        try suggestions.writeUnknownOption(stderr, "orca status", arg, &.{ "--json", "--check", "--help", "-h" }, "status");
+        try suggestions.writeUnknownOption(stderr, "ryk status", arg, &.{ "--json", "--check", "--help", "-h" }, "status");
         return error.Usage;
     }
     return options;
@@ -274,7 +274,7 @@ fn chooseNextStep(
         .degraded => try allocator.dupe(u8, "Restart the daemon: `orca shutdown --daemon` then `orca status`."),
         .compatible => blk: {
             if (!policy_present) {
-                break :blk try allocator.dupe(u8, "Run `orca start` to create a policy and get protected.");
+                break :blk try allocator.dupe(u8, "Run `ryk start` to create a policy and get protected.");
             }
             if (!policy_valid) {
                 break :blk try allocator.dupe(u8, "Fix invalid policy (parse/load failed), then re-run `orca status --check` or `orca doctor --check`.");
@@ -282,7 +282,7 @@ fn chooseNextStep(
             if (!packs_known) {
                 break :blk try allocator.dupe(u8, "Daemon is up but packs could not be listed; run `orca doctor`.");
             }
-            break :blk try allocator.dupe(u8, "Protected path looks healthy. Try `orca claude` (or another host), then `orca replay`.");
+            break :blk try allocator.dupe(u8, "Protected path looks healthy. Try `ryk claude` (or another host), then `orca replay`.");
         },
     };
 }
@@ -675,14 +675,14 @@ test "status rejects unknown options" {
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
     const code = try commandWithDeps(fakePacksHealthy, mockDaemonOk, std.testing.io, &.{"--nope"}, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.usage, code);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca help status") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help status") != null);
 }
 
 test "chooseNextStep requires valid policy for healthy copy" {
     const missing = try chooseNextStep(std.testing.allocator, .compatible, false, false, true);
     defer std.testing.allocator.free(missing);
-    // Limited / no policy: teach public door `orca start` first (not demoted `init`).
-    try std.testing.expect(std.mem.indexOf(u8, missing, "orca start") != null);
+    // Limited / no policy: teach public door `ryk start` first (not demoted `init`).
+    try std.testing.expect(std.mem.indexOf(u8, missing, "ryk start") != null);
     try std.testing.expect(std.mem.indexOf(u8, missing, "init") == null);
 
     const invalid = try chooseNextStep(std.testing.allocator, .compatible, true, false, true);
@@ -693,10 +693,10 @@ test "chooseNextStep requires valid policy for healthy copy" {
     const healthy = try chooseNextStep(std.testing.allocator, .compatible, true, true, true);
     defer std.testing.allocator.free(healthy);
     try std.testing.expect(std.mem.indexOf(u8, healthy, "Protected path looks healthy") != null);
-    // Healthy path: host alias + replay — not demoted `orca run -- <agent>`.
-    try std.testing.expect(std.mem.indexOf(u8, healthy, "orca claude") != null);
-    try std.testing.expect(std.mem.indexOf(u8, healthy, "orca replay") != null);
-    try std.testing.expect(std.mem.indexOf(u8, healthy, "orca run") == null);
+    // Healthy path: host alias + replay — not demoted `ryk run -- <agent>`.
+    try std.testing.expect(std.mem.indexOf(u8, healthy, "ryk claude") != null);
+    try std.testing.expect(std.mem.indexOf(u8, healthy, "ryk replay") != null);
+    try std.testing.expect(std.mem.indexOf(u8, healthy, "ryk run") == null);
 }
 
 // Silence unused imports when tests are filtered

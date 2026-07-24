@@ -23,7 +23,7 @@ brew install --formula orca   # installs ryk + orca alias
 
 # Get protected (policy + hosts + Ask on risk)
 ryk start
-# or: orca start   # same product
+# or: ryk start   # same product
 
 # Run your agent
 ryk claude
@@ -191,7 +191,7 @@ Actions on a mediation path are evaluated against your policy. Paths that bypass
 
 | Agent                  | Usage                                |
 | ---------------------- | ------------------------------------ |
-| Claude Code            | `orca claude`                        |
+| Claude Code            | `ryk claude`                        |
 | Codex CLI              | `orca codex`                         |
 | Pi                     | `orca pi`                            |
 | OpenCode               | `orca opencode`                      |
@@ -199,7 +199,7 @@ Actions on a mediation path are evaluated against your policy. Paths that bypass
 | Hermes                 | `orca hermes`                        |
 | Custom commands        | advanced: `orca run -- <command>`    |
 
-One policy file can protect multiple agents. Host aliases (`orca <agent>`) are the taught launch path; `orca run` remains the advanced engine for custom commands and CI flags.
+One policy file can protect multiple agents. Host aliases (`ryk <agent>`) are the taught launch path; `orca run` remains the advanced engine for custom commands and CI flags.
 
 ---
 
@@ -223,10 +223,10 @@ curl -fsSL https://raw.githubusercontent.com/christopherkarani/Orca/main/scripts
 ### 2. Get protected
 
 ```bash
-orca start
+ryk start
 ```
 
-`orca start` is the only day-1 onboarding door. It creates a policy when missing (Ask on risk), wires host integrations, and verifies core readiness. Re-run it to repair or update hosts.
+`ryk start` is the only day-1 onboarding door. It creates a policy when missing (Ask on risk), wires host integrations, and verifies core readiness. Re-run it to repair or update hosts.
 
 Then check the traffic light:
 
@@ -241,7 +241,7 @@ You should see **Protected** or **Limited**, plus a plain-language note that som
 ### 3. Run your agent
 
 ```bash
-orca claude
+ryk claude
 ```
 
 ```bash
@@ -263,7 +263,7 @@ orca replay
 Bare `orca replay` shows the last session; denied actions are highlighted. Off-ramp:
 
 ```bash
-orca stop
+ryk stop
 ```
 
 For CI / automation (fails closed, no prompts), use the run engine:
@@ -285,7 +285,7 @@ Orca is **graded mediation**, not a universal OS sandbox. Canonical definitions 
 | `proxy` | Traffic must traverse an Orca proxy | MCP / optional network proxies |
 | `OS-enforced` | Kernel/sandbox backend enforcing for that session | After protected child session-attach succeeds; doctor probes alone are not enough |
 
-**Safe Launch default:** `orca start` auto-selects the best available **Ask on risk** posture (hooks + wrappers when available). Day-1 status is **Protected | Limited | Off** with an honest caveat — not a grade matrix. **`OS-enforced`** FS isolation only after a successful Landlock (Linux) or Seatbelt (macOS) attach for that child.
+**Safe Launch default:** `ryk start` auto-selects the best available **Ask on risk** posture (hooks + wrappers when available). Day-1 status is **Protected | Limited | Off** with an honest caveat — not a grade matrix. **`OS-enforced`** FS isolation only after a successful Landlock (Linux) or Seatbelt (macOS) attach for that child.
 
 Power users: `orca help --all` lists the full surface (`run`, `doctor`, `policy`, …).
 
@@ -346,8 +346,8 @@ No cloud service is required.
 Let Claude Code, Codex, or Hermes work longer without babysitting every command.
 
 ```bash
-orca start
-orca claude
+ryk start
+ryk claude
 ```
 
 Use Orca to ask (Once / Always / Never) before risky actions and block destructive ones.
@@ -370,7 +370,7 @@ Protect:
 * destructive shell commands
 
 ```bash
-orca start
+ryk start
 orca hermes
 ```
 
@@ -422,7 +422,7 @@ Orca is designed to be honest about what it does and does not protect.
 
 ### What Orca does (when mediation is active)
 
-* launches agents through a policy-controlled process (`orca <agent>` / wrapper grade; `orca run` is the engine)
+* launches agents through a policy-controlled process (`ryk <agent>` / wrapper grade; `orca run` is the engine)
 * evaluates shell commands that hit PATH shims or host hooks that fire and honor veto
 * mediates file access on Orca-mediated write paths (staged writes; OS FS enforcement only after session-attach succeeds)
 * filters sensitive environment variables for Orca-launched children
@@ -531,14 +531,14 @@ orca run --secretless -- <custom-command>
 
 ## Native plugins
 
-Safe Launch (`orca start` + `orca <agent>`) wires the usual wrapper path and host hooks when available. Wrapper mediation is **not** OS-enforced by default and is not automatically stronger than a host **`hook`** that actually fires and honors veto — those grades stack when both are active. Kernel-level FS strength requires **`OS-enforced`** session-attach (successful Landlock/Seatbelt child attach; doctor probes alone do not claim a live session).
+Safe Launch (`ryk start` + `ryk <agent>`) wires the usual wrapper path and host hooks when available. Wrapper mediation is **not** OS-enforced by default and is not automatically stronger than a host **`hook`** that actually fires and honors veto — those grades stack when both are active. Kernel-level FS strength requires **`OS-enforced`** session-attach (successful Landlock/Seatbelt child attach; doctor probes alone do not claim a live session).
 
-Some agents also support native plugins or hooks for deeper integration (grade **`hook`** when hooks fire and honor veto). Prefer `orca start` for first-time host wiring.
+Some agents also support native plugins or hooks for deeper integration (grade **`hook`** when hooks fire and honor veto). Prefer `ryk start` for first-time host wiring.
 
 ### Hermes
 
 ```bash
-orca start --hosts hermes
+ryk start --hosts hermes
 # or repair later:
 orca plugin install hermes --yes
 hermes plugins enable orca

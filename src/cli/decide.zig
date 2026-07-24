@@ -31,7 +31,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     const kind = DecisionKind.parse(argv[0]) orelse {
         try suggestions.writeUnknownSubcommand(
             stderr,
-            "orca decide",
+            "ryk decide",
             argv[0],
             &.{ "command", "file", "prompt", "tool" },
             "decide",
@@ -88,14 +88,14 @@ fn decideCommandWithPolicy(
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             try stdout.writeAll(
                 \\Usage:
-                \\  orca decide command --json '{"command":"<cmd>"}'
-                \\  orca decide file    --json '{"path":"<p>","operation":"read|write"}'
-                \\  orca decide prompt  --json '{"text":"<text>"}'
-                \\  orca decide tool    --json '{"name":"<name>"}'
-                \\  orca decide <kind> --stdin
-                \\  orca decide <kind> --json <payload> [--ci]
-                \\  orca decide <kind> --stdin [--ci]
-                \\  orca decide <kind> --human (--json <payload>|--stdin) [--ci]
+                \\  ryk decide command --json '{"command":"<cmd>"}'
+                \\  ryk decide file    --json '{"path":"<p>","operation":"read|write"}'
+                \\  ryk decide prompt  --json '{"text":"<text>"}'
+                \\  ryk decide tool    --json '{"name":"<name>"}'
+                \\  ryk decide <kind> --stdin
+                \\  ryk decide <kind> --json <payload> [--ci]
+                \\  ryk decide <kind> --stdin [--ci]
+                \\  ryk decide <kind> --human (--json <payload>|--stdin) [--ci]
                 \\
                 \\Options:
                 \\  --json   Provide JSON payload inline.
@@ -108,7 +108,7 @@ fn decideCommandWithPolicy(
         }
         if (std.mem.eql(u8, arg, "--json")) {
             if (index + 1 >= argv.len) {
-                try stderr.writeAll("orca decide: --json requires a value.\n");
+                try stderr.writeAll("ryk decide: --json requires a value.\n");
                 return exit_codes.usage;
             }
             json_payload = argv[index + 1];
@@ -127,17 +127,17 @@ fn decideCommandWithPolicy(
             human = true;
             continue;
         }
-        try suggestions.writeUnknownOption(stderr, "orca decide", arg, &.{ "--json", "--stdin", "--ci", "--human", "--help", "-h" }, "decide");
+        try suggestions.writeUnknownOption(stderr, "ryk decide", arg, &.{ "--json", "--stdin", "--ci", "--human", "--help", "-h" }, "decide");
         return exit_codes.usage;
     }
 
     if (json_payload == null and !use_stdin) {
-        try stderr.writeAll("orca decide: expected --json <payload> or --stdin.\n");
+        try stderr.writeAll("ryk decide: expected --json <payload> or --stdin.\n");
         return exit_codes.usage;
     }
     if (!use_stdin) {
         if (json_payload.?.len > max_payload_len) {
-            try stderr.writeAll("orca decide: JSON payload exceeds maximum size.\n");
+            try stderr.writeAll("ryk decide: JSON payload exceeds maximum size.\n");
             return exit_codes.general;
         }
     }
@@ -150,7 +150,7 @@ fn decideCommandWithPolicy(
     const payload_text = if (use_stdin)
         readBoundedStdin(io, allocator, max_payload_len) catch |err| {
             if (err == error.PayloadTooLarge) {
-                try stderr.writeAll("orca decide: JSON payload exceeds maximum size.\n");
+                try stderr.writeAll("ryk decide: JSON payload exceeds maximum size.\n");
                 return exit_codes.general;
             }
             return err;
@@ -161,7 +161,7 @@ fn decideCommandWithPolicy(
 
     // Parse JSON payload
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, payload_text, .{}) catch |err| {
-        try stderr.print("orca decide: invalid JSON ({s}).\n", .{@errorName(err)});
+        try stderr.print("ryk decide: invalid JSON ({s}).\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer parsed.deinit();
@@ -170,14 +170,14 @@ fn decideCommandWithPolicy(
     const root = supervisor.resolveWorkspaceRoot(io, allocator, null, ".") catch try allocator.dupe(u8, ".");
     defer allocator.free(root);
     var loaded = core_api.discoverPolicy(io, allocator, explicit_policy_path, root) catch |err| {
-        try stderr.print("orca decide: failed to load policy: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk decide: failed to load policy: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer loaded.deinit();
 
     // Evaluate decision
     var result = evaluateDecision(io, allocator, loaded.innerPtr(), kind, parsed.value, ci_mode, root) catch |err| {
-        try stderr.print("orca decide: evaluation failed: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk decide: evaluation failed: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer result.deinit(allocator);
@@ -402,7 +402,7 @@ fn evaluateDecision(
                 owned_args = try policy.effects.toolArgsViewFromJsonObject(allocator, args_obj);
             }
             const args_view: ?policy.effects.ToolArgsView = if (owned_args) |oa| oa.view else null;
-            // Use .tool (MCP surface ∩ effect-class), not pure .mcp, so `orca decide tool`
+            // Use .tool (MCP surface ∩ effect-class), not pure .mcp, so `ryk decide tool`
             // matches host PreToolUse / MCP proxy enforcement when effects: is configured.
             // Phase C: load packs when effects: is active so pack-mapped names match hook/proxy.
             var pack_set = policy.effects.loadPacksForEnforcement(
@@ -705,7 +705,7 @@ test "decide command help and invalid kind" {
     const bad_code = try command(std.testing.io, &.{"unknown"}, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.usage, bad_code);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "unknown subcommand") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca help decide") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help decide") != null);
 }
 
 test "decide command with safe command returns allow" {

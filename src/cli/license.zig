@@ -12,7 +12,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     }
     if (std.mem.eql(u8, argv[0], "status")) return status(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, argv[0], "activate")) return activate(io, argv[1..], stdout, stderr);
-    try suggestions.writeUnknownSubcommand(stderr, "orca license", argv[0], &.{ "status", "activate" }, "license");
+    try suggestions.writeUnknownSubcommand(stderr, "ryk license", argv[0], &.{ "status", "activate" }, "license");
     return exit_codes.usage;
 }
 
@@ -20,7 +20,7 @@ fn status(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype
     var json = false;
     for (argv) |arg| {
         if (std.mem.eql(u8, arg, "--json")) json = true else {
-            try suggestions.writeUnknownOption(stderr, "orca license status", arg, &.{"--json"}, "license");
+            try suggestions.writeUnknownOption(stderr, "ryk license status", arg, &.{"--json"}, "license");
             return exit_codes.usage;
         }
     }
@@ -29,7 +29,7 @@ fn status(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype
     const allocator = gpa_state.allocator();
     var current = license.status(io, allocator) catch |err| switch (err) {
         error.InvalidLicense, error.InvalidLicenseSignature, error.UnsupportedLicenseIssuer, error.UnsupportedLicenseTier => {
-            try stderr.print("orca license status: stored license is invalid: {s}\n", .{@errorName(err)});
+            try stderr.print("ryk license status: stored license is invalid: {s}\n", .{@errorName(err)});
             return exit_codes.general;
         },
         else => return err,
@@ -49,7 +49,7 @@ fn status(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype
 
 fn activate(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     if (argv.len != 1) {
-        try stderr.writeAll("orca license activate: expected a development key or license file path.\n");
+        try stderr.writeAll("ryk license activate: expected a development key or license file path.\n");
         return exit_codes.usage;
     }
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
@@ -57,11 +57,11 @@ fn activate(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyty
     const allocator = gpa_state.allocator();
     var result = license.activate(io, allocator, argv[0]) catch |err| switch (err) {
         error.FileNotFound => {
-            try stderr.writeAll("orca license activate: key is not a known development key and file was not found.\n");
+            try stderr.writeAll("ryk license activate: key is not a known development key and file was not found.\n");
             return exit_codes.general;
         },
         error.InvalidLicense, error.InvalidLicenseSignature, error.UnsupportedLicenseIssuer, error.UnsupportedLicenseTier => {
-            try stderr.print("orca license activate: invalid license: {s}\n", .{@errorName(err)});
+            try stderr.print("ryk license activate: invalid license: {s}\n", .{@errorName(err)});
             return exit_codes.general;
         },
         else => return err,
@@ -119,5 +119,5 @@ test "license command rejects unknown subcommands" {
     try std.testing.expectEqual(exit_codes.usage, code);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "unknown subcommand") != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "Did you mean 'status'?") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca help license") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help license") != null);
 }

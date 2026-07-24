@@ -1,5 +1,5 @@
 //! Discovery CLI for effect-class classification (Phase C).
-//! `orca tools classify` and `orca tools packs` — not shell `orca classify`.
+//! `ryk tools classify` and `ryk tools packs` — not shell `orca classify`.
 
 const std = @import("std");
 const orca_policy = @import("orca_core").policy;
@@ -22,7 +22,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     }
     if (std.mem.eql(u8, argv[0], "classify")) return classify(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, argv[0], "packs")) return listPacks(io, argv[1..], stdout, stderr);
-    try suggestions.writeUnknownSubcommand(stderr, "orca tools", argv[0], &.{ "classify", "packs" }, "tools");
+    try suggestions.writeUnknownSubcommand(stderr, "ryk tools", argv[0], &.{ "classify", "packs" }, "tools");
     return exit_codes.usage;
 }
 
@@ -30,7 +30,7 @@ fn classify(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyty
     if (argv.len > 0 and (std.mem.eql(u8, argv[0], "--help") or std.mem.eql(u8, argv[0], "-h"))) {
         try stdout.writeAll(
             \\Usage:
-            \\  orca tools classify <tool-name> [--args '<json-object>'] [--policy <path>]
+            \\  ryk tools classify <tool-name> [--args '<json-object>'] [--policy <path>]
             \\
             \\Classify a tool name (and optional args) into effect hits.
             \\With --policy, also print the policy decision when effects: is configured.
@@ -54,30 +54,30 @@ fn classify(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyty
         if (std.mem.eql(u8, arg, "--args")) {
             i += 1;
             if (i >= argv.len) {
-                try stderr.writeAll("orca tools classify: --args requires a JSON object string.\n");
+                try stderr.writeAll("ryk tools classify: --args requires a JSON object string.\n");
                 return exit_codes.usage;
             }
             args_json = argv[i];
         } else if (std.mem.eql(u8, arg, "--policy")) {
             i += 1;
             if (i >= argv.len) {
-                try stderr.writeAll("orca tools classify: --policy requires a path.\n");
+                try stderr.writeAll("ryk tools classify: --policy requires a path.\n");
                 return exit_codes.usage;
             }
             policy_path = argv[i];
         } else if (std.mem.startsWith(u8, arg, "--")) {
-            try suggestions.writeUnknownOption(stderr, "orca tools classify", arg, &.{ "--args", "--policy" }, "tools");
+            try suggestions.writeUnknownOption(stderr, "ryk tools classify", arg, &.{ "--args", "--policy" }, "tools");
             return exit_codes.usage;
         } else if (tool_name == null) {
             tool_name = arg;
         } else {
-            try stderr.writeAll("orca tools classify: unexpected extra argument.\n");
+            try stderr.writeAll("ryk tools classify: unexpected extra argument.\n");
             return exit_codes.usage;
         }
     }
 
     const name = tool_name orelse {
-        try stderr.writeAll("orca tools classify: expected a tool name.\n");
+        try stderr.writeAll("ryk tools classify: expected a tool name.\n");
         return exit_codes.usage;
     };
 
@@ -85,16 +85,16 @@ fn classify(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyty
     defer if (owned_args) |*oa| oa.deinit(allocator);
     if (args_json) |raw| {
         if (raw.len > max_args_json_bytes) {
-            try stderr.writeAll("orca tools classify: --args JSON too large (max 8KiB).\n");
+            try stderr.writeAll("ryk tools classify: --args JSON too large (max 8KiB).\n");
             return exit_codes.usage;
         }
         var parsed_json = std.json.parseFromSlice(std.json.Value, allocator, raw, .{}) catch {
-            try stderr.writeAll("orca tools classify: --args must be a JSON object.\n");
+            try stderr.writeAll("ryk tools classify: --args must be a JSON object.\n");
             return exit_codes.usage;
         };
         defer parsed_json.deinit();
         if (parsed_json.value != .object) {
-            try stderr.writeAll("orca tools classify: --args must be a JSON object.\n");
+            try stderr.writeAll("ryk tools classify: --args must be a JSON object.\n");
             return exit_codes.usage;
         }
         owned_args = try orca_policy.effects.toolArgsViewFromJsonObject(allocator, parsed_json.value);
@@ -105,7 +105,7 @@ fn classify(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyty
     defer allocator.free(root);
 
     var pack_set = orca_policy.effects.loadPacks(io, allocator, root, null) catch |err| {
-        try stderr.print("orca tools classify: invalid effect pack: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk tools classify: invalid effect pack: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer pack_set.deinit();
@@ -116,7 +116,7 @@ fn classify(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyty
 
     if (policy_path) |path| {
         loaded_policy = orca_policy.load.loadFile(io, allocator, path) catch |err| {
-            try stderr.print("orca tools classify: failed to load policy {s}: {s}\n", .{ path, @errorName(err) });
+            try stderr.print("ryk tools classify: failed to load policy {s}: {s}\n", .{ path, @errorName(err) });
             return exit_codes.general;
         };
         if (loaded_policy.?.effects.isActive()) {
@@ -127,7 +127,7 @@ fn classify(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyty
     const classified = try orca_policy.effects.classifyToolCallWithResidual(allocator, &pack_set, name, args_view, classifier_enabled);
     defer classified.deinit(allocator);
     if (classified.unavailable) {
-        try stderr.writeAll("orca tools classify: effects.classifier unavailable\n");
+        try stderr.writeAll("ryk tools classify: effects.classifier unavailable\n");
         return exit_codes.general;
     }
     try orca_policy.effects.writeHitsHuman(stdout, classified.hits);
@@ -150,7 +150,7 @@ fn listPacks(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyt
     if (argv.len > 0 and (std.mem.eql(u8, argv[0], "--help") or std.mem.eql(u8, argv[0], "-h"))) {
         try stdout.writeAll(
             \\Usage:
-            \\  orca tools packs
+            \\  ryk tools packs
             \\
             \\List loaded user effect pack ids and source paths.
             \\Search order: ~/.config/orca/effect-packs then .orca/effect-packs
@@ -159,7 +159,7 @@ fn listPacks(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyt
         return exit_codes.success;
     }
     if (argv.len > 0) {
-        try stderr.writeAll("orca tools packs: unexpected arguments.\n");
+        try stderr.writeAll("ryk tools packs: unexpected arguments.\n");
         return exit_codes.usage;
     }
 
@@ -171,7 +171,7 @@ fn listPacks(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyt
     defer allocator.free(root);
 
     var pack_set = orca_policy.effects.loadPacks(io, allocator, root, null) catch |err| {
-        try stderr.print("orca tools packs: invalid effect pack: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk tools packs: invalid effect pack: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer pack_set.deinit();

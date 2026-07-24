@@ -58,7 +58,7 @@ pub fn runStart(
     try stdout.writeAll(
         \\Orca will configure protection for your workspace, verify shell evaluation when needed,
         \\install host integrations you choose, and run safe verification checks.
-        \\Existing policy files are kept unless you run `orca init --force`.
+        \\Existing policy files are kept unless you run `ryk init --force`.
         \\
         \\
     );
@@ -271,7 +271,7 @@ fn resolveSelectedHosts(
     }
     if (detected_count == 0) {
         try stdout.writeAll("\nNo supported agent hosts detected in PATH.\n");
-        try stdout.writeAll("Install an agent (claude, codex, …) then re-run `orca start`, or launch with `orca <agent>` once protected.\n\n");
+        try stdout.writeAll("Install an agent (claude, codex, …) then re-run `ryk start`, or launch with `ryk <agent>` once protected.\n\n");
         return .{ .items = &.{}, .owned = false };
     }
 
@@ -365,7 +365,7 @@ fn runChild(io: std.Io, argv: []const []const u8) !u8 {
     };
 }
 
-/// Stable first-run end-card after successful `orca start`.
+/// Stable first-run end-card after successful `ryk start`.
 /// Works on non-TTY (plain text, no broken ANSI via tui theme degrade).
 fn writeSuccessEndCard(
     io: std.Io,
@@ -450,13 +450,13 @@ fn writeSuccessEndCard(
 
     try tui.theme.paintBold(io, stdout, .brand, "Try next");
     try stdout.writeAll("\n");
-    try stdout.writeAll("  orca claude          # or codex / pi / opencode / …\n");
+    try stdout.writeAll("  ryk claude          # or codex / pi / opencode / …\n");
     try stdout.writeAll("  orca status\n");
     try stdout.writeAll("  orca replay\n");
     try stdout.writeAll("\n");
     try tui.theme.paint(io, stdout, .muted, "Pi: pi install npm:@orca-sec/pi-orca");
     try stdout.writeAll("\n");
-    try tui.theme.paint(io, stdout, .muted, "Re-run safely: orca start · off-ramp: orca stop");
+    try tui.theme.paint(io, stdout, .muted, "Re-run safely: ryk start · off-ramp: ryk stop");
     try stdout.writeAll("\n");
 }
 
@@ -512,7 +512,7 @@ fn writeFailureSummary(
     try stdout.print("  {s}\n", .{daemon_check.remediation});
     try stdout.writeAll("  orca plugin doctor\n");
     try stdout.writeAll("  orca doctor --verbose\n");
-    try stdout.writeAll("  orca start --auto\n");
+    try stdout.writeAll("  ryk start --auto\n");
 }
 
 fn flushIfSupported(writer: anytype) !void {
@@ -558,14 +558,14 @@ test "start auto mode with mock daemon completes in temp workspace" {
     try std.testing.expectEqual(exit_codes.success, code);
 
     const output = stdout_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "\u{1F6E1}  Orca") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\u{1F6E1}  ryk") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Ask on risk") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "You are protected") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Daemon") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Policy") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Hosts") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "orca claude") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "orca status") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk claude") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk status") != null);
     // No interactive grade menu on the Safe Launch path.
     try std.testing.expect(std.mem.indexOf(u8, output, "Choose your protection mode") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "command-guard") == null);

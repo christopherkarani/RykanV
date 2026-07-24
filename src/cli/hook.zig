@@ -33,7 +33,7 @@ const max_payload_len = 256 * 1024; // 256 KiB
 // - Non-shell tools with incidental `command` fields stay on the Zig policy path.
 // - Shell tools with missing/invalid command fields fail closed before evaluation.
 // - File paths for PreToolUse writes and PermissionRequest file ops are normalized
-//   like `orca decide` (symlink escape / outside-workspace fail closed).
+//   like `ryk decide` (symlink escape / outside-workspace fail closed).
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -370,7 +370,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
     if (host == .opencode and isOpenCodeInformationalEvent(request_event)) {
         var redactions: std.ArrayList(RedactionEntry) = .empty;
         var limitations: std.ArrayList([]const u8) = .empty;
-        try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace orca run supervision."));
+        try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
         try limitations.append(allocator, try allocator.dupe(u8, "OpenCode informational event: no policy evaluation needed."));
 
         var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "OpenCode event acknowledged by Orca.", &redactions, &limitations);
@@ -383,7 +383,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
     if (host == .openclaw and isOpenClawInformationalEvent(request_event)) {
         var redactions: std.ArrayList(RedactionEntry) = .empty;
         var limitations: std.ArrayList([]const u8) = .empty;
-        try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace orca run supervision."));
+        try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
         try limitations.append(allocator, try allocator.dupe(u8, "OpenClaw informational event: no policy evaluation needed."));
 
         var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "OpenClaw event acknowledged by Orca.", &redactions, &limitations);
@@ -403,7 +403,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
     if (host == .hermes and isHermesInformationalEvent(request_event)) {
         var redactions: std.ArrayList(RedactionEntry) = .empty;
         var limitations: std.ArrayList([]const u8) = .empty;
-        try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace orca run supervision."));
+        try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
         try limitations.append(allocator, try allocator.dupe(u8, "Hermes informational event: no policy evaluation needed."));
 
         var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "Hermes event acknowledged by Orca.", &redactions, &limitations);
@@ -475,17 +475,15 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
 /// consequence + recourse, parse-friendly, stable. Never shown to humans — it is emitted
 /// only on the Codex stderr block path (see `isCodexDenyOutput`), not the JSON host path.
 /// Primary emit stays `[[ORCA-GUARD]]` for one major (hosts already parse it).
-/// Dual-read both ORCA-GUARD and RYK-GUARD when matching host smoke/output.
+/// Do not dual-emit `[[RYK-GUARD]]` until a consumer+emit phase exists.
 const guard_sentinel_prefix: []const u8 =
     "[[ORCA-GUARD]] blocked. Command did not execute; no side effects. " ++
     "Recourse: ryk explain \"<command>\"; ryk allow-once <code>; ryk allowlist list\n";
-const guard_sentinel_legacy = "[[ORCA-GUARD]]";
-const guard_sentinel_primary_alias = "[[RYK-GUARD]]";
+const guard_sentinel_tag = "[[ORCA-GUARD]]";
 
-/// True when stderr/agent text contains either brand guard sentinel.
+/// True when stderr/agent text contains the guard sentinel.
 pub fn containsGuardSentinel(text: []const u8) bool {
-    return std.mem.indexOf(u8, text, guard_sentinel_legacy) != null or
-        std.mem.indexOf(u8, text, guard_sentinel_primary_alias) != null;
+    return std.mem.indexOf(u8, text, guard_sentinel_tag) != null;
 }
 
 /// Codex hook deny exit code (documented Codex CLI contract; distinct from usage errors).
@@ -540,7 +538,7 @@ fn emitPreEvalFailClosed(
 ) !u8 {
     var redactions: std.ArrayList(RedactionEntry) = .empty;
     var limitations: std.ArrayList([]const u8) = .empty;
-    try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace orca run supervision."));
+    try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
 
     var result = try makeFailClosedHookResponse(allocator, category, reason, message, &redactions, &limitations);
     defer result.deinit(allocator);
@@ -738,7 +736,7 @@ fn evaluateHook(
     }
 
     // Add host limitation note
-    try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace orca run supervision."));
+    try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
 
     switch (event) {
         .SessionStart => {
@@ -906,12 +904,12 @@ fn makeInformationalResponse(
 
 fn buildMessage(allocator: std.mem.Allocator, decision: PluginDecision, category: []const u8) ![]const u8 {
     return switch (decision) {
-        .allow => try std.fmt.allocPrint(allocator, "{s} allowed by Orca policy.", .{category}),
-        .block => try std.fmt.allocPrint(allocator, "{s} blocked by Orca policy.", .{category}),
-        .warn => try std.fmt.allocPrint(allocator, "{s} flagged by Orca policy. Review before proceeding.", .{category}),
-        .ask => try std.fmt.allocPrint(allocator, "{s} requires user approval per Orca policy.", .{category}),
+        .allow => try std.fmt.allocPrint(allocator, "{s} allowed by ryk policy.", .{category}),
+        .block => try std.fmt.allocPrint(allocator, "{s} blocked by ryk policy.", .{category}),
+        .warn => try std.fmt.allocPrint(allocator, "{s} flagged by ryk policy. Review before proceeding.", .{category}),
+        .ask => try std.fmt.allocPrint(allocator, "{s} requires user approval per ryk policy.", .{category}),
         .context_only => try std.fmt.allocPrint(allocator, "{s} allowed for context only. No side effects permitted.", .{category}),
-        .err => try std.fmt.allocPrint(allocator, "Orca could not evaluate {s}. Fail closed.", .{category}),
+        .err => try std.fmt.allocPrint(allocator, "ryk could not evaluate {s}. Fail closed.", .{category}),
     };
 }
 
@@ -1332,7 +1330,7 @@ fn buildAgentVisibleDaemonDeny(
         if (daemon.responseStringField(result, "explanation")) |explanation| {
             const safe = try core_api.redactAlloc(allocator, explanation);
             defer allocator.free(safe);
-            break :blk try std.fmt.allocPrint(allocator, "command blocked by Orca policy: {s}", .{safe});
+            break :blk try std.fmt.allocPrint(allocator, "command blocked by ryk policy: {s}", .{safe});
         }
         break :blk try buildMessage(allocator, decision, "command");
     } else try buildMessage(allocator, decision, "command");
@@ -1399,12 +1397,12 @@ fn buildRemediationCommands(allocator: std.mem.Allocator, rule_id: ?[]const u8) 
         for (list.items) |s| allocator.free(s);
         list.deinit(allocator);
     }
-    try list.append(allocator, try allocator.dupe(u8, "orca explain \"<command>\""));
-    try list.append(allocator, try allocator.dupe(u8, "orca allow-once <code>"));
+    try list.append(allocator, try allocator.dupe(u8, "ryk explain \"<command>\""));
+    try list.append(allocator, try allocator.dupe(u8, "ryk allow-once <code>"));
     if (rule_id) |rid| {
-        try list.append(allocator, try std.fmt.allocPrint(allocator, "orca allowlist add {s} -r \"reason\"", .{rid}));
+        try list.append(allocator, try std.fmt.allocPrint(allocator, "ryk allowlist add {s} -r \"reason\"", .{rid}));
     } else {
-        try list.append(allocator, try allocator.dupe(u8, "orca allowlist list"));
+        try list.append(allocator, try allocator.dupe(u8, "ryk allowlist list"));
     }
     return try list.toOwnedSlice(allocator);
 }
@@ -1436,7 +1434,7 @@ fn hookResponseFromDaemonEvaluate(
                 );
                 if (policy_out.decision == .block) {
                     // Stage owned fields with errdefer so partial OOM does not leak.
-                    const reason_src = policy_out.reason orelse "blocked by Orca policy";
+                    const reason_src = policy_out.reason orelse "blocked by ryk policy";
                     const safe_reason = try core_api.redactAlloc(allocator, reason_src);
                     errdefer allocator.free(safe_reason);
                     const category = try allocator.dupe(u8, "command");
@@ -2114,7 +2112,7 @@ fn mockDaemonProtocolMismatchEvaluator(allocator: std.mem.Allocator, shell_event
 
 fn shellRouteSetup(allocator: std.mem.Allocator, redactions: *std.ArrayList(RedactionEntry), limitations: *std.ArrayList([]const u8)) !void {
     _ = redactions;
-    try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace orca run supervision."));
+    try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
 }
 
 fn runShellRoute(
@@ -2381,7 +2379,7 @@ test "hook response JSON format is valid" {
         .category = "command",
         .reason = "matched allow rule",
         .rule = "commands.allow[0]",
-        .message = "Allowed by Orca policy.",
+        .message = "Allowed by ryk policy.",
         .redactions = &.{},
         .host_limitations = &.{},
     };
@@ -2443,7 +2441,7 @@ test "hook opencode informational events are allowed" {
 
     var redactions: std.ArrayList(RedactionEntry) = .empty;
     var limitations: std.ArrayList([]const u8) = .empty;
-    try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace orca run supervision."));
+    try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
     try limitations.append(allocator, try allocator.dupe(u8, "OpenCode informational event: no policy evaluation needed."));
 
     var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "OpenCode event acknowledged by Orca.", &redactions, &limitations);
@@ -2499,7 +2497,7 @@ test "hook openclaw informational events are allowed" {
 
     var redactions: std.ArrayList(RedactionEntry) = .empty;
     var limitations: std.ArrayList([]const u8) = .empty;
-    try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace orca run supervision."));
+    try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
     try limitations.append(allocator, try allocator.dupe(u8, "OpenClaw informational event: no policy evaluation needed."));
 
     var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "OpenClaw event acknowledged by Orca.", &redactions, &limitations);
@@ -2964,7 +2962,7 @@ test "hook guard sentinel format is machine-parseable and stable" {
     try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "did not execute") != null);
     try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "no side effects") != null);
     try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "Recourse") != null);
-    try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "orca explain") != null);
+    try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "ryk explain") != null);
     try std.testing.expect(guard_sentinel_prefix[guard_sentinel_prefix.len - 1] == '\n');
 }
 
@@ -3004,7 +3002,7 @@ test "hook daemon deny includes remediation fields for flexible hosts" {
     try std.testing.expect(result.rule != null);
     try std.testing.expect(result.suggestions.len >= 1);
     try std.testing.expect(result.remediation_commands.len >= 2);
-    try std.testing.expect(std.mem.indexOf(u8, result.remediation_commands[0], "orca explain") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.remediation_commands[0], "ryk explain") != null);
 
     var out_buf: [4096]u8 = undefined;
     var out: std.Io.Writer = .fixed(&out_buf);
@@ -3013,7 +3011,7 @@ test "hook daemon deny includes remediation fields for flexible hosts" {
     try std.testing.expect(std.mem.indexOf(u8, written, "\"rule_id\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "\"suggestions\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "\"remediation_commands\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "orca allowlist") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "ryk allowlist") != null);
 }
 
 test "hook guard sentinel is gated to the codex block audience" {

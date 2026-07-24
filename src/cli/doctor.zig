@@ -147,7 +147,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     // --check/--json are probe contracts: never spawn/ensure the daemon.
     const ensure_running = !(options.check or options.json);
     var context = collectIntegrationContext(io, allocator, ensure_running) catch |err| {
-        try stderr.print("orca doctor: failed to collect integration context: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk doctor: failed to collect integration context: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer context.deinit();
@@ -187,7 +187,7 @@ fn parseDoctorOptions(argv: []const []const u8, stderr: anytype) !DoctorOptions 
             options.json = true;
             continue;
         }
-        try suggestions.writeUnknownOption(stderr, "orca doctor", arg, &.{ "--verbose", "-v", "--check", "--json", "--help", "-h" }, "doctor");
+        try suggestions.writeUnknownOption(stderr, "ryk doctor", arg, &.{ "--verbose", "-v", "--check", "--json", "--help", "-h" }, "doctor");
         return error.Usage;
     }
     return options;
@@ -248,7 +248,7 @@ fn daemonDetailFromError(allocator: std.mem.Allocator, err: anyerror) !DaemonHea
 }
 
 fn writeReport(io: std.Io, stdout: anytype, os: core.platform.Os, backend_report: sandbox.backend.ReportSet, context: IntegrationContext, verbose: bool) !void {
-    try stdout.writeAll("Orca Doctor\n\n");
+    try stdout.writeAll("ryk Doctor\n\n");
 
     const counts = countCapabilitySummary(os, backend_report);
     const policy_status = if (!context.policy_present)
@@ -342,7 +342,7 @@ fn writeReport(io: std.Io, stdout: anytype, os: core.platform.Os, backend_report
         try writeBackendLine(io, stdout, backend_report, .env_filtering);
         try writeBackendLine(io, stdout, backend_report, .path_staging);
         if (os == .macos) {
-            try stdout.writeAll("  transparent file enforcement: limited (no transparent macOS filesystem monitor is installed; Orca-mediated staging and protected path matching are active)\n");
+            try stdout.writeAll("  transparent file enforcement: limited (no transparent macOS filesystem monitor is installed; ryk-mediated staging and protected path matching are active)\n");
         }
         try writeBackendLine(io, stdout, backend_report, .shell_wrapping);
         try writeBackendLine(io, stdout, backend_report, .path_shims);
@@ -501,7 +501,7 @@ fn writeWindowsBackendReport(io: std.Io, stdout: anytype, backend_report: sandbo
     } else {
         try stdout.print("  process cleanup: {s} ({s})\n", .{ cleanup.level.toString(), cleanup.note });
     }
-    try stdout.writeAll("  transparent file enforcement: limited (no transparent Windows filesystem enforcement is installed; Orca-mediated staging and protected path matching are active)\n");
+    try stdout.writeAll("  transparent file enforcement: limited (no transparent Windows filesystem enforcement is installed; ryk-mediated staging and protected path matching are active)\n");
     try writeBackendLine(io, stdout, backend_report, .network_enforce);
     try writeBackendLine(io, stdout, backend_report, .strong_sandbox);
     try writeBackendLine(io, stdout, backend_report, .mcp_stdio_proxy);
@@ -581,13 +581,13 @@ fn writeHermesFailOpenWarning(io: std.Io, stdout: anytype, context: IntegrationC
         stdout,
         .warn,
         "Hermes effective fail-open",
-        "Hermes allows tools when Orca is missing/old. Not silent (warning each degraded allow). New installs write fail-closed stance; existing stay open until you set ORCA_HERMES_FAIL_OPEN=0 or use `orca run -- hermes`. Gateway chats may omit the block reason — check agent tool errors.",
+        "Hermes allows tools when Orca is missing/old. Not silent (warning each degraded allow). New installs write fail-closed stance; existing stay open until you set ORCA_HERMES_FAIL_OPEN=0 or use `ryk run -- hermes`. Gateway chats may omit the block reason — check agent tool errors.",
     );
 }
 
 fn writePiNote(stdout: anytype) !void {
     try stdout.writeAll("\nPi: not managed by `orca plugin install`; extension coverage is unknown until live smoke.\n");
-    try stdout.writeAll("  Install: pi install npm:@orca-sec/pi-orca · process env/network: orca run -- pi · bypass: /orca-stop\n");
+    try stdout.writeAll("  Install: pi install npm:@orca-sec/pi-orca · process env/network: ryk run -- pi · bypass: /orca-stop\n");
     try stdout.writeAll("  Live: ./scripts/host-live-e2e.sh pi\n");
 }
 
@@ -634,16 +634,16 @@ fn writeRecommendations(stdout: anytype, context: IntegrationContext) !void {
             try stdout.writeAll("  Ensure a compatible `orca-daemon` is installed and startable. Rebuild both binaries with `./scripts/build-all.sh`, then re-run `orca doctor`.\n");
         }
         if (!context.policy_present) {
-            try stdout.writeAll("  Then run `orca init --preset generic-agent` and review .orca/policy.yaml.\n");
+            try stdout.writeAll("  Then run `ryk init --preset generic-agent` and review .orca/policy.yaml.\n");
         } else if (!context.policy_valid) {
-            try stdout.writeAll("  After the daemon is healthy, fix `.orca/policy.yaml`, then run `orca policy check .orca/policy.yaml`.\n");
+            try stdout.writeAll("  After the daemon is healthy, fix `.orca/policy.yaml`, then run `ryk policy check .orca/policy.yaml`.\n");
         }
     } else if (!context.policy_present) {
-        try stdout.writeAll("  Run `orca init --preset generic-agent` and review .orca/policy.yaml.\n");
+        try stdout.writeAll("  Run `ryk init --preset generic-agent` and review .orca/policy.yaml.\n");
     } else if (!context.policy_valid) {
-        try stdout.writeAll("  Fix `.orca/policy.yaml`, then run `orca policy check .orca/policy.yaml`.\n");
+        try stdout.writeAll("  Fix `.orca/policy.yaml`, then run `ryk policy check .orca/policy.yaml`.\n");
     } else if (context.mcp_manifest_invalid_count > 0) {
-        try stdout.writeAll("  Fix invalid MCP manifests with `orca mcp manifest check <path>`.\n");
+        try stdout.writeAll("  Fix invalid MCP manifests with `ryk mcp manifest check <path>`.\n");
     } else if (!context.redteam_fixtures_present) {
         try stdout.writeAll("  Runtime assets (fixtures, integrations) not found.\n");
         try stdout.writeAll("  This is common after a fresh packaged install (curl|sh, Homebrew, npm).\n\n");
@@ -652,7 +652,7 @@ fn writeRecommendations(stdout: anytype, context: IntegrationContext) !void {
         try stdout.writeAll("      export ORCA_RESOURCE_ROOT=\"$HOME/.local/share/orca/current\"\n\n");
         try stdout.writeAll("  (Use the exact paths printed by your installer if they differ.)\n");
     } else {
-        try stdout.writeAll("  Run `orca run -- <command>` or `orca redteam --ci` for a local smoke test.\n");
+        try stdout.writeAll("  Run `ryk run -- <command>` or `ryk redteam --ci` for a local smoke test.\n");
     }
 }
 
@@ -942,7 +942,7 @@ test "doctor prints OS and planned capabilities" {
     const code = try command(std.testing.io, &.{"--verbose"}, &stdout_writer, &stderr_writer);
 
     try std.testing.expectEqual(exit_codes.success, code);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Orca Doctor") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "ryk Doctor") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Integration checks:") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "OS:") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "process supervision:") != null);
@@ -1244,14 +1244,14 @@ test "doctor integration report includes daemon health details" {
     const report = sandbox.backend.detect(.linux);
     var context = try testContext(std.testing.allocator, .{
         .daemon_health = .incompatible,
-        .daemon_detail = "daemon protocol version or capability set does not match this Orca CLI.",
+        .daemon_detail = "daemon protocol version or capability set does not match this ryk CLI.",
     });
     defer context.deinit();
 
     try writeReport(std.testing.io, &stdout_writer, .linux, report, context, true);
     const written = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, written, "daemon health: incompatible") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "does not match this Orca CLI") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "does not match this ryk CLI") != null);
 }
 
 test "doctor integration report warns on world-writable ORCA_DAEMON path" {
@@ -1286,7 +1286,7 @@ test "doctor recommendations prioritize daemon remediation over missing policy" 
     const written = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, written, "Daemon health issue: no running daemon answered on the expected socket.") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "./scripts/build-all.sh") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "orca init --preset generic-agent") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "ryk init --preset generic-agent") != null);
 }
 
 test "doctor packs section is unknown when daemon is unavailable" {
@@ -1327,7 +1327,7 @@ test "doctor host table lists managed hosts and shell gates" {
     try std.testing.expect(std.mem.indexOf(u8, written, "SMOKE ALLOW") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "SMOKE DENY") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "Pi: not managed by") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "orca run -- pi") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "ryk run -- pi") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "pi …") == null);
     try std.testing.expect(std.mem.indexOf(u8, written, "fix pi:") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "plugin install") != null);
@@ -1347,7 +1347,7 @@ test "doctor warns when Hermes is installed with fail-open default" {
     const written = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, written, "Hermes effective fail-open") != null or std.mem.indexOf(u8, written, "fail-open") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_HERMES_FAIL_OPEN=0") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "orca run -- hermes") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "ryk run -- hermes") != null);
 }
 
 test "hermesFailOpenFromEnvValue defaults to fail-open" {
@@ -1463,7 +1463,7 @@ fn testHostRows(allocator: std.mem.Allocator) ![]HostDoctorRow {
     }
     for (hosts) |h| {
         const fix = if (std.mem.eql(u8, h.name, "hermes"))
-            try allocator.dupe(u8, "export ORCA_HERMES_FAIL_OPEN=0  # or: orca run -- hermes")
+            try allocator.dupe(u8, "export ORCA_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes")
         else if (std.mem.eql(u8, h.name, "pi"))
             try allocator.dupe(u8, "pi install npm:@orca-sec/pi-orca")
         else

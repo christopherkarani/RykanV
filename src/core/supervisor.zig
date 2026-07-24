@@ -447,7 +447,7 @@ test "workspace detection finds nearest git parent" {
     try std.testing.expectEqualStrings(root, resolved);
 }
 
-test "workspace detection finds nearest orca policy parent" {
+test "workspace detection finds nearest ryk policy parent" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 

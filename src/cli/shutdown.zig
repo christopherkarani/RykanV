@@ -25,7 +25,7 @@ test "shutdown defaults to daemon stop and retains daemon qualifier" {
         var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
         const code = try commandWithShutdown(mockStopped, std.testing.io, argv, &stdout_writer, &stderr_writer);
         try std.testing.expectEqual(exit_codes.success, code);
-        try std.testing.expectEqualStrings("orca daemon stopped\n", stdout_writer.buffered());
+        try std.testing.expectEqualStrings("ryk daemon stopped\n", stdout_writer.buffered());
         try std.testing.expectEqualStrings("", stderr_writer.buffered());
     }
 }
@@ -53,7 +53,7 @@ fn commandWithShutdownImpl(comptime shutdown_fn: anytype, io: std.Io, argv: []co
     };
 
     switch (result) {
-        .stopped => try stdout.writeAll("orca daemon stopped\n"),
+        .stopped => try stdout.writeAll("ryk daemon stopped\n"),
         .not_running => try stdout.writeAll("orca daemon not running\n"),
         .stale_cleaned => try stdout.writeAll("orca daemon stale artifacts cleaned\n"),
     }
@@ -87,7 +87,7 @@ test "shutdown unknown flag suggests daemon qualifier" {
     const code = try command(std.testing.io, &.{"--daemn"}, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.usage, code);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "Did you mean '--daemon'?") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca help shutdown") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help shutdown") != null);
 }
 
 test "ShutdownResult enum values are distinct" {

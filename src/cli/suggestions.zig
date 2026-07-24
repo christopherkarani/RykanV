@@ -71,7 +71,7 @@ pub fn writeUnknownOption(
     try terminal_text.write(writer, unknown, .single_line);
     try writer.writeAll("'.");
     if (closest(unknown, candidates)) |candidate| try writer.print(" Did you mean '{s}'?", .{candidate});
-    try writer.print("\nRun 'orca help {s}' for usage.\n", .{help_command});
+    try writer.print("\nRun 'ryk help {s}' for usage.\n", .{help_command});
 }
 
 pub fn writeUnknownSubcommand(
@@ -85,7 +85,7 @@ pub fn writeUnknownSubcommand(
     try terminal_text.write(writer, unknown, .single_line);
     try writer.writeAll("'.");
     if (closest(unknown, candidates)) |candidate| try writer.print(" Did you mean '{s}'?", .{candidate});
-    try writer.print("\nRun 'orca help {s}' for usage.\n", .{help_command});
+    try writer.print("\nRun 'ryk help {s}' for usage.\n", .{help_command});
 }
 
 pub fn writeInvalidValue(
@@ -104,7 +104,7 @@ pub fn writeInvalidValue(
         try writer.writeAll(candidate);
     }
     if (closest(unknown, candidates)) |candidate| try writer.print(". Did you mean '{s}'?", .{candidate});
-    try writer.print(".\nRun 'orca help {s}' for usage.\n", .{help_command});
+    try writer.print(".\nRun 'ryk help {s}' for usage.\n", .{help_command});
 }
 
 pub fn writeSanitizedValue(writer: anytype, prefix: []const u8, value: []const u8, suffix: []const u8) !void {
@@ -131,9 +131,9 @@ test "closest requires an unambiguous best candidate" {
 test "unknown option writer always includes exact usage remediation" {
     var buffer: [256]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
-    try writeUnknownOption(&writer, "orca test", "--formt", &.{ "--format", "--help" }, "test");
+    try writeUnknownOption(&writer, "ryk test", "--formt", &.{ "--format", "--help" }, "test");
     try std.testing.expectEqualStrings(
-        "orca test: unknown option '--formt'. Did you mean '--format'?\nRun 'orca help test' for usage.\n",
+        "ryk test: unknown option '--formt'. Did you mean '--format'?\nRun 'ryk help test' for usage.\n",
         writer.buffered(),
     );
 }
@@ -141,7 +141,7 @@ test "unknown option writer always includes exact usage remediation" {
 test "unknown argument writers flatten hostile terminal controls" {
     var buffer: [256]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
-    try writeUnknownSubcommand(&writer, "orca test", "bad\x1b[2J\nvalue", &.{"good"}, "test");
+    try writeUnknownSubcommand(&writer, "ryk test", "bad\x1b[2J\nvalue", &.{"good"}, "test");
     try std.testing.expect(std.mem.indexOfScalar(u8, writer.buffered(), 0x1b) == null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "\nvalue") == null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "bad value") != null);

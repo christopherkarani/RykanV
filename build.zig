@@ -161,10 +161,12 @@ pub fn build(b: *std.Build) void {
 
     // Primary install name follows exe.name ("ryk"). Legacy "orca" is a second install of the
     // same artifact (compat ≥1 major). Prefer dual install over fragile post-install symlinks
-    // so Windows and DESTDIR prefixes stay correct.
+    // so Windows and DESTDIR prefixes stay correct. On Windows, dest_sub_path must keep .exe
+    // because InstallArtifact uses it literally (does not re-append the target extension).
     const install_ryk = b.addInstallArtifact(exe, .{});
+    const orca_alias_name: []const u8 = if (target.result.os.tag == .windows) "orca.exe" else "orca";
     const install_orca_alias = b.addInstallArtifact(exe, .{
-        .dest_sub_path = "orca",
+        .dest_sub_path = orca_alias_name,
     });
     b.getInstallStep().dependOn(&install_ryk.step);
     b.getInstallStep().dependOn(&install_orca_alias.step);

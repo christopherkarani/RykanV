@@ -38,7 +38,7 @@ fn hostAliasCommand(comptime host: []const u8) CommandInfo {
         .examples = &.{"ryk " ++ host},
         .details = &.{
             "Public protected launch path for " ++ host ++ "; internally uses the run engine for session setup.",
-            "Inherits agent-primary defaults (network ask; secretless off). ryk run flags stay on `orca run` only — everything after the host name is agent argv.",
+            "Inherits agent-primary defaults (network ask; secretless off). ryk run flags stay on `ryk run` only — everything after the host name is agent argv.",
         },
     };
 }
@@ -71,7 +71,7 @@ pub const commands =
             .details = &.{
                 "Starts a protected session, filters the child environment through policy, checks the command through a command safety check, writes audit artifacts, and mirrors the child exit code.",
                 "Agent-primary defaults: network mode is ask when --network/--no-network are omitted (overrides policy network.mode for this run). Secretless stays off unless --secretless. Opt-outs: --network open|allowlist|observe|off|ask, --no-network.",
-                "Host launch aliases (orca claude, orca pi, …) rewrite to this command with no extra flags — same defaults. Pass ryk run flags only on `orca run`, not after a host alias name.",
+                "Host launch aliases (ryk claude, ryk pi, …) rewrite to this command with no extra flags — same defaults. Pass ryk run flags only on `ryk run`, not after a host alias name.",
                 "Options: --workspace <path>, --mode observe|ask|yolo|strict|ci, --policy <path>, --session-name <name>, --no-secrets, --secretless, --inherit-env, --no-network, --allow-network <domain>, --network observe|ask|allowlist|open|off, --network-backend decision-only|proxy, --os-sandbox auto|on|off, --require-backend <capability>, --help",
                 "Strict and CI modes default to environments without secret access. --secretless replaces policy-visible secret env values with non-resolving orca-secret:// local-dummy references (not usable as raw model API keys; opt-in strip/demo only — not day-1 model auth). --inherit-env is allowed only when the selected policy permits inheritance.",
                 "Network flags update the run-time policy and audit network decisions. --network-backend proxy starts an explicit localhost proxy and injects HTTP_PROXY/HTTPS_PROXY/ALL_PROXY; HTTPS CONNECT is host/port only without interception.",
@@ -120,30 +120,30 @@ pub const commands =
                 "On non-TTY terminals, auto-selects safe defaults (no --auto required).",
                 "Use --auto to force non-interactive mode on a TTY; optional --hosts and --preset.",
                 "Compatibility flags --yes and --no-interact also select non-interactive mode.",
-                "Next steps after start: orca <agent> · orca status · orca replay.",
+                "Next steps after start: ryk <agent> · ryk status · ryk replay.",
                 "Re-run safely to repair or update an existing setup.",
             },
         },
         .{
             .name = "quickstart",
-            .summary = "Removed — use orca start",
+            .summary = "Removed — use ryk start",
             .usage = "ryk start",
             .category = .getting_started,
             .hidden = true,
             .examples = &.{},
             .details = &.{
-                "`orca quickstart` was removed. Use `orca start` instead.",
+                "`ryk quickstart` was removed. Use `ryk start` instead.",
             },
         },
         .{
             .name = "setup",
-            .summary = "Removed — use orca start",
+            .summary = "Removed — use ryk start",
             .usage = "ryk start",
             .category = .getting_started,
             .hidden = true,
             .examples = &.{},
             .details = &.{
-                "`orca setup` was removed. Use `orca start` instead.",
+                "`ryk setup` was removed. Use `ryk start` instead.",
             },
         },
         .{
@@ -171,7 +171,7 @@ pub const commands =
             .additional_completion_flags = &.{ "--json", "--check" },
             .details = &.{
                 "Shows daemon health, policy path/mode/valid, hosts summary, enabled packs, and one next step.",
-                "Status is the glance; `orca doctor` is the deep diagnostic.",
+                "Status is the glance; `ryk doctor` is the deep diagnostic.",
                 "Packs summary uses the daemon registry (fail-closed note when the daemon is unavailable).",
                 "Pack enablement is written to project `.orca.toml` when in a git repo, else user config (`$XDG_CONFIG_HOME/orca/config.toml` or `~/.config/orca/config.toml`).",
                 "Use --json for scripting (includes schema_version, ready, state, policy.valid).",
@@ -196,7 +196,7 @@ pub const commands =
                 "Use --verbose for the full platform, integration, and capability report.",
                 "Use --check for automation: exit non-zero when core readiness fails (daemon not compatible, or policy missing/invalid).",
                 "Use --json for a minimal readiness report (ready, state, policy.valid).",
-                "For a one-glance snapshot, prefer `orca status`.",
+                "For a one-glance snapshot, prefer `ryk status`.",
             },
         },
         .{
@@ -239,7 +239,7 @@ pub const commands =
             },
             .details = &.{
                 "Human stats are rendered by ryk from structured history data.",
-                "Use 'orca history --help' for actions and examples.",
+                "Use 'ryk history --help' for actions and examples.",
                 "--live opens a scrollable alt-screen view of the current stats snapshot (TTY only; not with --json).",
                 "Use --json, --robot, or --format for machine-readable daemon output.",
             },
@@ -300,7 +300,7 @@ pub const commands =
             .details = &.{
                 "Proxies to the Rust daemon allowlist manager.",
                 "Shortcuts: 'orca allow <rule>' and 'orca unallow <rule>' also proxy.",
-                "Use 'orca allowlist --help' for actions and options.",
+                "Use 'ryk allowlist --help' for actions and options.",
             },
         },
         .{
@@ -312,7 +312,7 @@ pub const commands =
                 "ryk allow core.git:reset-hard -r \"recovering local branch\"",
             },
             .details = &.{
-                "Shortcut for 'orca allowlist add'. Proxies to the Rust daemon.",
+                "Shortcut for 'ryk allowlist add'. Proxies to the Rust daemon.",
             },
         },
         .{
@@ -324,7 +324,7 @@ pub const commands =
                 "ryk unallow core.git:reset-hard",
             },
             .details = &.{
-                "Shortcut for 'orca allowlist remove'. Proxies to the Rust daemon.",
+                "Shortcut for 'ryk allowlist remove'. Proxies to the Rust daemon.",
             },
         },
         .{
@@ -338,7 +338,7 @@ pub const commands =
             },
             .details = &.{
                 "Proxies to the Rust daemon pending-exception / allow-once store.",
-                "Use 'orca allow-once --help' for apply and management subcommands.",
+                "Use 'ryk allow-once --help' for apply and management subcommands.",
             },
         },
         .{
@@ -357,7 +357,7 @@ pub const commands =
                 "Day-2 policy loop: denials → suggestions → allowlist.",
                 "Proxies to the Rust daemon; requires history to be enabled.",
                 "Human output includes copy-pasteable next commands (`suggest-allowlist --apply N` / `allowlist add-command`) for high-confidence items.",
-                "Alias: `orca history suggest` (same as suggest-allowlist).",
+                "Alias: `ryk history suggest` (same as suggest-allowlist).",
                 "Use 'orca suggest-allowlist --help' for filters and confidence options.",
             },
         },
@@ -427,7 +427,7 @@ pub const commands =
             .additional_completion_flags = &.{ "--robot", "--no-patterns", "--verbose" },
             .details = &.{
                 "Safety packs are Rust shell-rule sets evaluated by the daemon (not policy presets).",
-                "Policy presets use `orca policy packs` / `orca policy apply-pack` instead.",
+                "Policy presets use `ryk policy packs` / `ryk policy apply-pack` instead.",
                 "List is sorted and paginated locally; --installed is an alias for --enabled.",
                 "Baseline packs (core.*, system.disk) are always on; opt-in packs are enabled via config or `orca packs enable`.",
                 "Enable/disable writes project `.orca.toml` in a git repo, otherwise user config (`$XDG_CONFIG_HOME/orca/config.toml` or `~/.config/orca/config.toml`).",
@@ -443,16 +443,16 @@ pub const commands =
         }, .details = &.{
             "Subcommands:",
             "  ryk policy check [policy-path]   # default: workspace .orca/policy.yaml (not builtin)",
-            "  orca policy check --preset <observe|ask|yolo|strict|ci|redteam|trusted>",
-            "  orca policy check builtin:<preset>",
-            "  orca policy explain [--policy <path>] <file.read|file.write|env|command|network|mcp|tool> <target> [--method <HTTP_METHOD>]",
-            "  orca policy packs",
-            "  orca policy apply-pack <solo-dev|strict-local|team-ci|openclaw-hermes> [--force]",
+            "  ryk policy check --preset <observe|ask|yolo|strict|ci|redteam|trusted>",
+            "  ryk policy check builtin:<preset>",
+            "  ryk policy explain [--policy <path>] <file.read|file.write|env|command|network|mcp|tool> <target> [--method <HTTP_METHOD>]",
+            "  ryk policy packs",
+            "  ryk policy apply-pack <solo-dev|strict-local|team-ci|openclaw-hermes> [--force]",
             "policy check with no path validates the workspace policy only; missing policy fails (run ryk init).",
             "Built-in presets require --preset or an explicit builtin:<name> path.",
             "policy explain covers Zig policy.yaml rules (file/env/network/mcp).",
-            "For shell pack traces use 'orca explain \"<command>\"' instead.",
-            "For effect-class tool classification use 'orca tools classify <name>'.",
+            "For shell pack traces use 'ryk explain \"<command>\"' instead.",
+            "For effect-class tool classification use 'ryk tools classify <name>'.",
         } },
         .{
             .name = "tools",
@@ -468,8 +468,8 @@ pub const commands =
             },
             .details = &.{
                 "Discovery helpers for effect-class policy (not shell `orca classify`).",
-                "  orca tools classify <name> [--args '<json-object>'] [--policy <path>]",
-                "  orca tools packs",
+                "  ryk tools classify <name> [--args '<json-object>'] [--policy <path>]",
+                "  ryk tools packs",
                 "Prints effect ids, confidence, and matcher labels only (never raw arg values).",
                 "User effect packs load from ~/.config/orca/effect-packs and .orca/effect-packs.",
                 "Packs extend classification only; allow/deny still requires policy effects:.",
@@ -518,12 +518,12 @@ pub const commands =
             "OpenClaw: runs 'openclaw plugins uninstall orca-openclaw-plugin'",
             "Hermes: runs 'hermes plugins disable orca' and removes ~/.hermes/plugins/orca/",
             "Codex / Claude: removes known plugin paths (host-managed install locations).",
-            "Restart protection later with: orca start",
+            "Restart protection later with: ryk start",
         } },
         .{ .name = "uninstall", .summary = "Uninstall ryk from this machine", .usage = "ryk uninstall [--plugins-only] [--keep-config] [--yes]", .category = .integrations, .details = &.{
             "Completely removes ryk and its integrations from the machine.",
             "Steps:",
-            "  1. Removes all plugins from host agents (same as 'orca stop').",
+            "  1. Removes all plugins from host agents (same as 'ryk stop').",
             "  2. Removes the ryk binary from known locations (~/.local/bin/orca, PATH).",
             "  3. Removes user config and data (~/.config/orca/, ~/.orca).",
             "Options:",
@@ -583,12 +583,12 @@ pub const commands =
         },
         .{ .name = "mcp", .summary = "Inspect and proxy MCP servers", .usage = "ryk mcp <inspect|proxy|list|trust|manifest> [options]", .category = .advanced, .additional_completion_flags = &.{ "--command", "--name", "--policy", "--manifest", "--mode", "--tool", "--server" }, .details = &.{
             "Subcommands:",
-            "  orca mcp inspect --command <server> [--name <server-name>] [--policy <path>]",
-            "  orca mcp proxy --command <server> [--name <server-name>] [--policy <path>] [--manifest <path>] [--mode observe|ask|yolo|strict|ci]",
-            "  orca mcp list",
-            "  orca mcp trust <server> --tool <tool>",
-            "  orca mcp manifest check <manifest.yaml>",
-            "  orca mcp manifest generate --command <server-command> | --server <name>",
+            "  ryk mcp inspect --command <server> [--name <server-name>] [--policy <path>]",
+            "  ryk mcp proxy --command <server> [--name <server-name>] [--policy <path>] [--manifest <path>] [--mode observe|ask|yolo|strict|ci]",
+            "  ryk mcp list",
+            "  ryk mcp trust <server> --tool <tool>",
+            "  ryk mcp manifest check <manifest.yaml>",
+            "  ryk mcp manifest generate --command <server-command> | --server <name>",
             "The proxy handles MCP server communication over stdio and forwards messages transparently.",
             "Remote HTTP MCP, OAuth, and hosted gateway behavior are limited/deferred in Phase 17.",
         } },
@@ -620,19 +620,19 @@ pub const commands =
             "  orca plugin manifest [codex|claude|opencode|openclaw|hermes|all] [--json]",
             "  orca plugin install                                 # dry-run preview of all hosts (no mutation)",
             "  orca plugin install <codex|claude|opencode|openclaw|hermes|all> [--dry-run|--yes] [--path <path>]",
-            "Primary onboarding path: run `orca start` (guided interactive selection on TTY terminals).",
+            "Primary onboarding path: run `ryk start` (guided interactive selection on TTY terminals).",
             "Bare install never mutates; mutation requires an explicit host or `all` plus --yes (confirm default No on TTY).",
             "Plugin doctor does not print secrets.",
         } },
         .{ .name = "decide", .summary = "Ask ryk whether an action is allowed by policy", .usage = "ryk decide <command|file|prompt|tool> (--json <payload>|--stdin) [--ci] [--human]", .category = .advanced, .details = &.{
             "Evaluates a policy decision for host plugins (Codex, Claude Code, OpenCode, etc.).",
             "Subcommands:",
-            "  orca decide command --json '{\"command\":\"<cmd>\"}'",
-            "  orca decide file    --json '{\"path\":\"<p>\",\"operation\":\"read|write\"}'",
-            "  orca decide prompt  --json '{\"text\":\"<text>\"}'",
-            "  orca decide tool    --json '{\"name\":\"<name>\"}'",
-            "  orca decide <kind> --stdin",
-            "  orca decide <kind> --json <payload> [--ci]",
+            "  ryk decide command --json '{\"command\":\"<cmd>\"}'",
+            "  ryk decide file    --json '{\"path\":\"<p>\",\"operation\":\"read|write\"}'",
+            "  ryk decide prompt  --json '{\"text\":\"<text>\"}'",
+            "  ryk decide tool    --json '{\"name\":\"<name>\"}'",
+            "  ryk decide <kind> --stdin",
+            "  ryk decide <kind> --json <payload> [--ci]",
             "Default output is stable JSON; add --human for a decision badge, details, and risk meter.",
             "Debug logs go to stderr only.",
         } },
@@ -697,8 +697,8 @@ pub const commands =
         } },
         .{ .name = "help", .summary = "Show help", .usage = "ryk help [command|--all]", .category = .getting_started, .details = &.{
             "Shows Safe Launch help by default (public verbs only).",
-            "Use `orca help --all` for the full command surface.",
-            "Use `orca help <command>` for command-specific help.",
+            "Use `ryk help --all` for the full command surface.",
+            "Use `ryk help <command>` for command-specific help.",
         } },
     };
 
@@ -708,9 +708,9 @@ const public_help_prefix = [_][]const u8{ "start", "stop" };
 const public_help_suffix = [_][]const u8{ "status", "replay", "explain" };
 
 pub const WriteMode = enum {
-    /// Safe Launch surface only (default `orca` / `orca help`).
+    /// Safe Launch surface only (default `ryk` / `ryk help`).
     public,
-    /// Full command surface (`orca help --all`).
+    /// Full command surface (`ryk help --all`).
     all,
 };
 
@@ -773,7 +773,7 @@ pub fn writeWithMode(io: std.Io, writer: anytype, mode: WriteMode) !void {
     try writer.writeAll("\n");
     if (mode == .all) {
         try writer.writeAll("  ");
-        try tui.theme.paint(io, writer, .muted, "Shell deny remediation: orca explain / allow-once / allowlist (daemon). Policy files: orca policy explain.");
+        try tui.theme.paint(io, writer, .muted, "Shell deny remediation: ryk explain / allow-once / allowlist (daemon). Policy files: ryk policy explain.");
         try writer.writeAll("\n\n");
     }
 
@@ -842,7 +842,7 @@ pub fn writeWithMode(io: std.Io, writer: anytype, mode: WriteMode) !void {
     try tui.theme.paint(io, writer, .muted, "Also ORCA_NO_RICH=1.");
     try writer.writeAll("\n");
     try writer.writeAll("                 Use this for piping, scripting, or terminals that mis-render colour.\n");
-    try writer.writeAll("    --json      Per-command machine output (byte-stable). See `orca help <command>`.\n");
+    try writer.writeAll("    --json      Per-command machine output (byte-stable). See `ryk help <command>`.\n");
     try writer.writeAll("\n");
 
     // Try-next hint.
@@ -886,19 +886,19 @@ fn writeCommandRow(io: std.Io, writer: anytype, name: []const u8, name_width: us
 /// Used by top-level dispatch and `writeCommand` so wording cannot drift.
 pub fn writeRemovedOnboardingPeer(writer: anytype, name: []const u8) !void {
     try writer.print(
-        "orca: `{s}` was removed. Use `orca start` instead.\nRun 'orca help start' for usage.\n",
+        "ryk: `{s}` was removed. Use `ryk start` instead.\nRun 'ryk help start' for usage.\n",
         .{name},
     );
 }
 
 pub fn writeCommand(io: std.Io, writer: anytype, name: []const u8) !bool {
-    // Progressive disclosure: `orca help --all` reuses the existing single-arg
+    // Progressive disclosure: `ryk help --all` reuses the existing single-arg
     // help dispatch path without changing top-level argv parsing.
     if (std.mem.eql(u8, name, "--all") or std.mem.eql(u8, name, "all")) {
         try writeAll(io, writer);
         return true;
     }
-    // Hard-removed onboarding peers: do not re-teach live usage; point at `orca start`.
+    // Hard-removed onboarding peers: do not re-teach live usage; point at `ryk start`.
     if (std.mem.eql(u8, name, "setup") or std.mem.eql(u8, name, "quickstart")) {
         try writeRemovedOnboardingPeer(writer, name);
         return true;

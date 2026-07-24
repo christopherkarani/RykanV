@@ -78,7 +78,7 @@ pub fn commandWithExecutor(comptime execute_cli: anytype, io: std.Io, argv: []co
     }
 
     var parsed = contracts.parsePacks(std.heap.smp_allocator, daemon_stdout.written()) catch |err| {
-        try stderr.print("orca packs: daemon returned invalid JSON ({s}). Try 'orca doctor'.\n", .{@errorName(err)});
+        try stderr.print("ryk packs: daemon returned invalid JSON ({s}). Try 'orca doctor'.\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer parsed.deinit();
@@ -101,7 +101,7 @@ fn runShow(comptime execute_cli: anytype, io: std.Io, argv: []const []const u8, 
 
     const code = execute_cli(io, daemon_argv, &daemon_stdout.writer, &daemon_stderr.writer) catch |err| {
         try stderr.print(
-            "orca packs show: daemon {s}. Upgrade/restart orca-daemon so `pack info` is available, then retry. Or run 'orca doctor'.\n",
+            "ryk packs show: daemon {s}. Upgrade/restart orca-daemon so `pack info` is available, then retry. Or run 'orca doctor'.\n",
             .{@errorName(err)},
         );
         return exit_codes.general;
@@ -111,7 +111,7 @@ fn runShow(comptime execute_cli: anytype, io: std.Io, argv: []const []const u8, 
             try stderr.writeAll(daemon_stderr.written());
         } else {
             try stderr.print(
-                "orca packs: pack '{s}' not found or daemon unavailable. Try 'orca packs --filter {s}' or 'orca doctor'.\n",
+                "ryk packs: pack '{s}' not found or daemon unavailable. Try 'orca packs --filter {s}' or 'orca doctor'.\n",
                 .{ options.pack_id, options.pack_id },
             );
         }
@@ -127,7 +127,7 @@ fn runShow(comptime execute_cli: anytype, io: std.Io, argv: []const []const u8, 
     }
 
     var detail = contracts.parsePackDetail(allocator, daemon_stdout.written()) catch |err| {
-        try stderr.print("orca packs: daemon returned invalid pack JSON ({s}). Try 'orca doctor'.\n", .{@errorName(err)});
+        try stderr.print("ryk packs: daemon returned invalid pack JSON ({s}). Try 'orca doctor'.\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer detail.deinit();
@@ -338,20 +338,20 @@ fn runEnable(comptime execute_cli: anytype, io: std.Io, argv: []const []const u8
 
     if (unknown.items.len > 0) {
         try stderr.print(
-            "orca packs: unknown pack id '{s}'. Run 'orca packs --filter {s}' or 'orca packs show {s}'.\n",
+            "ryk packs: unknown pack id '{s}'. Run 'orca packs --filter {s}' or 'orca packs show {s}'.\n",
             .{ unknown.items[0], unknown.items[0], unknown.items[0] },
         );
         return exit_codes.usage;
     }
 
     const workspace_root = onboarding.resolveWorkspaceRoot(io, allocator) catch {
-        try stderr.writeAll("orca packs: could not resolve workspace root.\n");
+        try stderr.writeAll("ryk packs: could not resolve workspace root.\n");
         return exit_codes.general;
     };
     defer allocator.free(workspace_root);
 
     var result = pack_state.enablePacks(io, allocator, workspace_root, ids) catch |err| {
-        try stderr.print("orca packs enable: {s}. Run 'orca help packs' for usage.\n", .{@errorName(err)});
+        try stderr.print("ryk packs enable: {s}. Run 'ryk help packs' for usage.\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer result.deinit(allocator);
@@ -364,13 +364,13 @@ fn runDisable(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: any
     const ids = parseIdList(argv, stderr) catch return exit_codes.usage;
 
     const workspace_root = onboarding.resolveWorkspaceRoot(io, allocator) catch {
-        try stderr.writeAll("orca packs: could not resolve workspace root.\n");
+        try stderr.writeAll("ryk packs: could not resolve workspace root.\n");
         return exit_codes.general;
     };
     defer allocator.free(workspace_root);
 
     var result = pack_state.disablePacks(io, allocator, workspace_root, ids) catch |err| {
-        try stderr.print("orca packs disable: {s}. Run 'orca help packs' for usage.\n", .{@errorName(err)});
+        try stderr.print("ryk packs disable: {s}. Run 'ryk help packs' for usage.\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer result.deinit(allocator);
@@ -449,7 +449,7 @@ fn parseOptions(argv: []const []const u8, stderr: anytype) !Options {
             options.page_size = std.fmt.parseInt(usize, argv[i], 10) catch return usageError(stderr, "--page-size requires a positive integer");
             if (options.page_size == 0) return usageError(stderr, "--page-size requires a positive integer");
         } else {
-            suggestions.writeUnknownOption(stderr, "orca packs", arg, &.{ "--installed", "--enabled", "--filter", "--page", "--page-size" }, "packs") catch {};
+            suggestions.writeUnknownOption(stderr, "ryk packs", arg, &.{ "--installed", "--enabled", "--filter", "--page", "--page-size" }, "packs") catch {};
             return error.InvalidArguments;
         }
     }
@@ -457,7 +457,7 @@ fn parseOptions(argv: []const []const u8, stderr: anytype) !Options {
 }
 
 fn usageError(stderr: anytype, message: []const u8) error{InvalidArguments} {
-    stderr.print("orca packs: {s}. Run 'orca help packs' for usage.\n", .{message}) catch {};
+    stderr.print("ryk packs: {s}. Run 'ryk help packs' for usage.\n", .{message}) catch {};
     return error.InvalidArguments;
 }
 
@@ -653,7 +653,7 @@ test "packs --help is Zig-owned and does not call the daemon" {
     try std.testing.expect(std.mem.indexOf(u8, out, "enable") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "disable") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "show") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "orca packs") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "ryk packs") != null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 
@@ -668,7 +668,7 @@ test "packs rejects missing and invalid Zig option values with remediation" {
         var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
         const code = try commandWithExecutor(failIfCalled, std.testing.io, args, &stdout_writer, &stderr_writer);
         try std.testing.expectEqual(exit_codes.usage, code);
-        try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca help packs") != null);
+        try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help packs") != null);
     }
 }
 
@@ -718,7 +718,7 @@ test "packs rejects pages beyond filtered results including max usize" {
         const code = try commandWithExecutor(fakeUnsortedPacksJson, std.testing.io, args, &stdout_writer, &stderr_writer);
         try std.testing.expectEqual(exit_codes.usage, code);
         try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "page") != null);
-        try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca help packs") != null);
+        try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help packs") != null);
     }
 }
 
@@ -741,7 +741,7 @@ test "packs invalid daemon JSON gives doctor remediation without leaking payload
     const code = try commandWithExecutor(fakeInvalidJson, std.testing.io, &.{}, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.general, code);
     try std.testing.expectEqualStrings("", stdout_writer.buffered());
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca doctor") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk doctor") != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "TOP_SECRET") == null);
 }
 
@@ -888,7 +888,7 @@ test "packs show requires pack id" {
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
     const code = try commandWithExecutor(failIfCalled, std.testing.io, &.{"show"}, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.usage, code);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca help packs") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help packs") != null);
 }
 
 test "packs enable and disable require pack ids" {
@@ -903,7 +903,7 @@ test "packs enable and disable require pack ids" {
         var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
         const code = try commandWithExecutor(failIfCalled, std.testing.io, args, &stdout_writer, &stderr_writer);
         try std.testing.expectEqual(exit_codes.usage, code);
-        try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca help packs") != null);
+        try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help packs") != null);
     }
 }
 
@@ -915,7 +915,7 @@ test "packs enable rejects unknown pack ids when registry is available" {
     const code = try commandWithExecutor(fakeRegistryForEnable, std.testing.io, &.{ "enable", "no.such.pack" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.usage, code);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "unknown pack id") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca packs --filter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk packs --filter") != null);
 }
 
 test "packs info is an alias for show" {

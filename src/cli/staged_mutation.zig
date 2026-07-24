@@ -75,13 +75,13 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     const workspace_root = try supervisor.resolveWorkspaceRoot(io, allocator, null, ".");
     defer allocator.free(workspace_root);
     const session_id = intercept.files.resolveSessionId(io, allocator, workspace_root, options.session) catch |err| {
-        try stderr.print("orca {s}: failed to resolve session '{s}': {s}\n", .{ name, options.session, @errorName(err) });
+        try stderr.print("ryk {s}: failed to resolve session '{s}': {s}\n", .{ name, options.session, @errorName(err) });
         return exit_codes.general;
     };
     defer allocator.free(session_id);
 
     var preview = intercept.files.previewStaged(io, allocator, workspace_root, session_id, options.file) catch |err| {
-        try stderr.print("orca {s}: failed to list staged files: {s}\n", .{ name, @errorName(err) });
+        try stderr.print("ryk {s}: failed to list staged files: {s}\n", .{ name, @errorName(err) });
         return exit_codes.general;
     };
     defer preview.deinit();
@@ -98,7 +98,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
             .discard => "Discard these proposed staged changes? This cannot be undone.",
         };
         const accepted = interactive.askConfirmInteractive(io, stdout, prompt, false) catch |err| {
-            try stderr.print("orca {s}: confirmation failed: {s}\n", .{ name, @errorName(err) });
+            try stderr.print("ryk {s}: confirmation failed: {s}\n", .{ name, @errorName(err) });
             return exit_codes.general;
         };
         if (!accepted) {
@@ -109,7 +109,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
 
     const audit_session = commandAuditSession(io, session_id, workspace_root, kind.auditCommand());
     var session_writer = core_api.openAuditWriter(io, allocator, workspace_root, session_id) catch |err| {
-        try stderr.print("orca {s}: failed to open session audit log: {s}\n", .{ name, @errorName(err) });
+        try stderr.print("ryk {s}: failed to open session audit log: {s}\n", .{ name, @errorName(err) });
         return exit_codes.general;
     };
     defer session_writer.deinit();
@@ -119,7 +119,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         .apply => intercept.files.applyStagedConfirmed(io, allocator, workspace_root, session_id, options.file, preview.fingerprint, audit_context),
         .discard => intercept.files.discardStagedConfirmed(io, allocator, workspace_root, session_id, options.file, preview.fingerprint, audit_context),
     } catch |err| {
-        try stderr.print("orca {s}: failed to {s} staged files: {s}\n", .{ name, name, @errorName(err) });
+        try stderr.print("ryk {s}: failed to {s} staged files: {s}\n", .{ name, name, @errorName(err) });
         return exit_codes.general;
     };
     if (session_writer.finalHash()) |hash| {
@@ -151,14 +151,14 @@ pub fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stder
         } else if (std.mem.eql(u8, arg, "--session")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.print("orca {s}: --session requires an id or 'last'.\n", .{name});
+                try stderr.print("ryk {s}: --session requires an id or 'last'.\n", .{name});
                 return error.Usage;
             }
             options.session = argv[index];
         } else if (std.mem.eql(u8, arg, "--file")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.print("orca {s}: --file requires a workspace path.\n", .{name});
+                try stderr.print("ryk {s}: --file requires a workspace path.\n", .{name});
                 return error.Usage;
             }
             options.file = argv[index];

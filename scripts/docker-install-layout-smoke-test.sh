@@ -20,10 +20,18 @@ esac
 command -v docker >/dev/null 2>&1 || fail "docker is required"
 docker info >/dev/null 2>&1 || fail "docker daemon is unavailable"
 
-artifact="orca-v${VERSION}-linux-${arch}.tar.gz"
+# Phase 5a: prefer primary ryk-v* archive; accept dual-publish orca-v* filename.
+artifact=""
+for prefix in ryk orca; do
+  candidate="${prefix}-v${VERSION}-linux-${arch}.tar.gz"
+  if [[ -f "${DIST_DIR}/${candidate}" ]]; then
+    artifact="${candidate}"
+    break
+  fi
+done
+[[ -n "${artifact}" ]] || fail "missing Linux artifact: ${DIST_DIR}/ryk-v${VERSION}-linux-${arch}.tar.gz"
 artifact_path="${DIST_DIR}/${artifact}"
 checksums="${DIST_DIR}/checksums.txt"
-[[ -f "${artifact_path}" ]] || fail "missing Linux artifact: ${artifact_path}"
 [[ -f "${checksums}" ]] || fail "missing checksums file: ${checksums}"
 
 expected="$(awk -v name="${artifact}" '$2 == name { print $1 }' "${checksums}")"
@@ -35,8 +43,8 @@ else
 fi
 [[ "${actual}" == "${expected}" ]] || fail "artifact checksum mismatch"
 
-tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/orca-docker-smoke.XXXXXX")"
-image="orca-install-layout-smoke:${VERSION}-${arch}-$$"
+tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/ryk-docker-smoke.XXXXXX")"
+image="ryk-install-layout-smoke:${VERSION}-${arch}-$$"
 cleanup() {
   docker image rm -f "${image}" >/dev/null 2>&1 || true
   rm -rf "${tmp_root}"
@@ -44,20 +52,32 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 tar -xzf "${artifact_path}" -C "${tmp_root}"
-mv "${tmp_root}/orca-v${VERSION}-linux-${arch}" "${tmp_root}/orca"
+# Dual-publish orca-v* filenames still unpack to ryk-v… root (byte copy of primary).
+stage_root=""
+for prefix in ryk orca; do
+  if [[ -d "${tmp_root}/${prefix}-v${VERSION}-linux-${arch}" ]]; then
+    stage_root="${tmp_root}/${prefix}-v${VERSION}-linux-${arch}"
+    break
+  fi
+done
+[[ -n "${stage_root}" ]] || fail "archive root not found after extract"
+mv "${stage_root}" "${tmp_root}/orca"
 cp "${REPO_ROOT}/packaging/docker/Dockerfile" "${tmp_root}/Dockerfile"
 
 docker build --pull=false -t "${image}" "${tmp_root}" >/dev/null
 
 version_output="$(docker run --rm "${image}" version)"
-[[ "${version_output}" == *"Orca"* ]] || fail "container version output is missing the product name"
+[[ "${version_output}" == *"ryk"* || "${version_output}" == *"orca"* ]] || fail "container version output is missing the product name"
 [[ "${version_output}" == *"${VERSION}"* ]] || fail "container version output is missing ${VERSION}"
 run_output="$(docker run --rm --entrypoint sh "${image}" -ec '
   mkdir -p "$HOME/workspace"
   cd "$HOME/workspace"
-  orca init --preset generic-agent >/dev/null
-  orca policy check .orca/policy.yaml >/dev/null
-  orca run -- echo docker-smoke-ok
+  # Prefer primary binary; fall back to orca alias.
+  CLI=ryk
+  command -v ryk >/dev/null 2>&1 || CLI=orca
+  "$CLI" init --preset generic-agent >/dev/null
+  "$CLI" policy check .orca/policy.yaml >/dev/null
+  "$CLI" run -- echo docker-smoke-ok
 ')"
 [[ "${run_output}" == *"docker-smoke-ok"* ]] || fail "container could not protect and run a command"
 

@@ -34,8 +34,8 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 | Command | Summary | Source File |
 |---------|---------|-------------|
 | `start` | Get protected: policy, hosts, Ask on risk, verify | `src/cli/start.zig` |
-| `stop` | Stop Orca protection for host agents | `src/cli/disable.zig` |
-| `claude` / `codex` / `pi` / `opencode` / `openclaw` / `hermes` | Launch host under Orca (alias → run engine) | `src/cli/host_launch.zig` |
+| `stop` | Stop ryk protection for host agents | `src/cli/disable.zig` |
+| `claude` / `codex` / `pi` / `opencode` / `openclaw` / `hermes` | Launch host under ryk (alias → run engine) | `src/cli/host_launch.zig` |
 | `status` | Traffic light: Protected \| Limited \| Off + caveat | `src/cli/status.zig` |
 | `replay` | Replay last session (denials dominant) | `src/cli/replay.zig` |
 | `explain` | Why a shell command is blocked or allowed | (Rust packs / CLI) |
@@ -121,7 +121,7 @@ Disable Orca plugins from host agents (binary and policy remain). Restart with `
 
 ### `ryk run`
 
-**Advanced / engine.** Run a command under Orca supervision — filters environment through policy, checks the command through Command Guard, writes audit artifacts, and mirrors the child exit code. Day-1 launch uses host aliases (`ryk claude`, …) instead of teaching `ryk run`.
+**Advanced / engine.** Run a command under ryk supervision — filters environment through policy, checks the command through Command Guard, writes audit artifacts, and mirrors the child exit code. Day-1 launch uses host aliases (`ryk claude`, …) instead of teaching `ryk run`.
 
 **Usage:** `ryk run [options] -- <command> [args...]`
 
@@ -460,7 +460,7 @@ No optional flags.
 
 ### `ryk disable`
 
-Disable Orca plugins from host agents without removing the Orca binary or policy files.
+Disable Orca plugins from host agents without removing the ryk binary or policy files.
 
 **Usage:** `ryk disable [codex|claude|opencode|openclaw|hermes|all] [--yes]`
 

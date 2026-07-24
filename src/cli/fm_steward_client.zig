@@ -148,7 +148,8 @@ pub fn fallbackContinue(why: []const u8, timed_out: bool) ClassifyResult {
 /// True when FM steward should be invoked (macOS and kill-switch not set).
 pub fn isEnabled() bool {
     if (builtin.os.tag != .macos) return false;
-    if (std.c.getenv("ORCA_FM_STEWARD")) |raw| {
+    // Prefer RYK_FM_STEWARD then ORCA_FM_STEWARD (Phase 5a dual-read).
+    if (env_util.getenvBrand("FM_STEWARD")) |raw| {
         const v = std.mem.span(raw);
         if (std.mem.eql(u8, v, "0")) return false;
     }
@@ -156,10 +157,10 @@ pub fn isEnabled() bool {
 }
 
 /// Resolve fm-steward binary path. Caller frees.
-/// Product order: `ORCA_FM_STEWARD_BIN` (if set) → `"fm-steward"` on PATH.
+/// Product order: `RYK_FM_STEWARD_BIN` / `ORCA_FM_STEWARD_BIN` (if set) → `"fm-steward"` on PATH.
 /// Never resolves cwd-relative `.build/` candidates (those are developer-local only).
 pub fn resolveBinary(allocator: std.mem.Allocator) ![]const u8 {
-    if (std.c.getenv("ORCA_FM_STEWARD_BIN")) |raw| {
+    if (env_util.getenvBrand("FM_STEWARD_BIN")) |raw| {
         return try allocator.dupe(u8, std.mem.span(raw));
     }
     return try allocator.dupe(u8, "fm-steward");

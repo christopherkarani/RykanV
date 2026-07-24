@@ -219,22 +219,22 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
         } else if (std.mem.eql(u8, arg, "--host")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca dashboard: --host requires an address.\n");
+                try stderr.writeAll("ryk dashboard: --host requires an address.\n");
                 return error.Usage;
             }
             if (!std.mem.eql(u8, argv[index], "127.0.0.1") and !std.mem.eql(u8, argv[index], "localhost")) {
-                try stderr.writeAll("orca dashboard: only localhost bindings are supported by default.\n");
+                try stderr.writeAll("ryk dashboard: only localhost bindings are supported by default.\n");
                 return error.Usage;
             }
             options.host = if (std.mem.eql(u8, argv[index], "localhost")) "127.0.0.1" else argv[index];
         } else if (std.mem.eql(u8, arg, "--port")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca dashboard: --port requires a number.\n");
+                try stderr.writeAll("ryk dashboard: --port requires a number.\n");
                 return error.Usage;
             }
             options.port = std.fmt.parseInt(u16, argv[index], 10) catch {
-                try stderr.writeAll("orca dashboard: --port must be between 1 and 65535.\n");
+                try stderr.writeAll("ryk dashboard: --port must be between 1 and 65535.\n");
                 return error.Usage;
             };
         } else if (std.mem.eql(u8, arg, "--once")) {
@@ -242,7 +242,7 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
         } else if (std.mem.eql(u8, arg, "--workspace")) {
             index += 1;
             if (index >= argv.len or argv[index].len == 0) {
-                try stderr.writeAll("orca dashboard: --workspace requires a path.\n");
+                try stderr.writeAll("ryk dashboard: --workspace requires a path.\n");
                 return error.Usage;
             }
             explicit_workspace = argv[index];
@@ -261,16 +261,13 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
         }
     }
     if (explicit_workspace != null and explicit_machine) {
-        try stderr.writeAll("orca dashboard: --workspace and --machine cannot be used together.\n");
+        try stderr.writeAll("ryk dashboard: --workspace and --machine cannot be used together.\n");
         return error.Usage;
     }
     // Prefer RYK_DASHBOARD_WORKSPACE, fall back to ORCA_DASHBOARD_WORKSPACE.
     const environment_workspace = blk: {
-        if (std.c.getenv("RYK_DASHBOARD_WORKSPACE")) |value| {
-            const path = std.mem.span(value);
-            if (path.len != 0) break :blk path;
-        }
-        if (std.c.getenv("ORCA_DASHBOARD_WORKSPACE")) |value| {
+        const env_util = @import("../env_util.zig");
+        if (env_util.getenvBrand("DASHBOARD_WORKSPACE")) |value| {
             const path = std.mem.span(value);
             if (path.len != 0) break :blk path;
         }
@@ -282,11 +279,11 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
 
 fn serve(io: std.Io, options: DashboardOptions, stdout: anytype, stderr: anytype) !u8 {
     const address = std.Io.net.IpAddress.parse(options.host, options.port) catch |err| {
-        try stderr.print("orca dashboard: invalid bind address: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk dashboard: invalid bind address: {s}\n", .{@errorName(err)});
         return exit_codes.usage;
     };
     var server = address.listen(io, .{ .reuse_address = true }) catch |err| {
-        try stderr.print("orca dashboard: failed to listen on {s}:{d}: {s}\n", .{ options.host, options.port, @errorName(err) });
+        try stderr.print("ryk dashboard: failed to listen on {s}:{d}: {s}\n", .{ options.host, options.port, @errorName(err) });
         return exit_codes.general;
     };
     defer server.deinit(io);
@@ -316,12 +313,12 @@ fn serve(io: std.Io, options: DashboardOptions, stdout: anytype, stderr: anytype
 
     while (true) {
         var stream = server.accept(io) catch |err| {
-            try stderr.print("orca dashboard: accept failed: {s}\n", .{@errorName(err)});
+            try stderr.print("ryk dashboard: accept failed: {s}\n", .{@errorName(err)});
             continue;
         };
         defer stream.close(io);
         handleConnection(io, allocator, stream, csrf_token, context) catch |err| {
-            try stderr.print("orca dashboard: request failed: {s}\n", .{@errorName(err)});
+            try stderr.print("ryk dashboard: request failed: {s}\n", .{@errorName(err)});
             if (isFatalRequestError(err)) return err;
         };
         if (options.once) break;
@@ -885,22 +882,22 @@ fn runDaemonProxyAction(
     stderr: anytype,
 ) !u8 {
     var parsed = daemon.executeCliAt(allocator, argv, workspace_root) catch |err| {
-        try stderr.print("orca dashboard: daemon proxy failed ({s})\n", .{@errorName(err)});
+        try stderr.print("ryk dashboard: daemon proxy failed ({s})\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer parsed.deinit();
 
     if (daemon.responseStatus(parsed.value.result) == .error_status) {
         if (daemon.responseErrorMessage(parsed.value.result)) |message| {
-            try stderr.print("orca daemon: {s}\n", .{message});
+            try stderr.print("ryk daemon: {s}\n", .{message});
         } else {
-            try stderr.writeAll("orca daemon: protocol error\n");
+            try stderr.writeAll("ryk daemon: protocol error\n");
         }
         return exit_codes.general;
     }
 
     const execution = daemon.parseCliExecution(parsed.value.result) catch {
-        try stderr.writeAll("orca dashboard: malformed daemon CLI response\n");
+        try stderr.writeAll("ryk dashboard: malformed daemon CLI response\n");
         return exit_codes.general;
     };
     try stdout.writeAll(execution.stdout);

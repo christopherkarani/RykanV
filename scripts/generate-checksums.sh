@@ -12,8 +12,10 @@ OUTPUT="${ARTIFACT_DIR}/checksums.txt"
 tmp="${OUTPUT}.tmp"
 : > "$tmp"
 
-for file in "$ARTIFACT_DIR"/orca-v*; do
-  [ -f "$file" ] || continue
+# Phase 5a: primary ryk-v* plus legacy orca-v* (dual-publish). Also Windows .zip.
+hash_artifact() {
+  file="$1"
+  [ -f "$file" ] || return 0
   name="$(basename "$file")"
   case "$name" in
     *.tar.gz|*.zip)
@@ -29,6 +31,12 @@ for file in "$ARTIFACT_DIR"/orca-v*; do
       printf '%s  %s\n' "$hash" "$name" >> "$tmp"
       ;;
   esac
+}
+
+# Use nullglob-friendly loop: expand both brand prefixes; skip missing globs.
+for pattern in "$ARTIFACT_DIR"/ryk-v* "$ARTIFACT_DIR"/orca-v*; do
+  # When a glob matches nothing, the literal pattern remains; skip non-files.
+  hash_artifact "$pattern"
 done
 
 [ -s "$tmp" ] || {
@@ -36,6 +44,11 @@ done
   rm -f "$tmp"
   exit 1
 }
+
+# Stable order for reproducible checksums.txt
+if command -v sort >/dev/null 2>&1; then
+  sort -k2 "$tmp" -o "$tmp"
+fi
 
 mv "$tmp" "$OUTPUT"
 printf 'Wrote %s\n' "$OUTPUT"

@@ -27,7 +27,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     if (std.mem.eql(u8, argv[0], "list")) return list(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, argv[0], "trust")) return trust(argv[1..], stdout, stderr);
     if (std.mem.eql(u8, argv[0], "manifest")) return manifestCommand(io, argv[1..], stdout, stderr);
-    try suggestions.writeUnknownSubcommand(stderr, "orca mcp", argv[0], &.{ "inspect", "proxy", "list", "trust", "manifest" }, "mcp");
+    try suggestions.writeUnknownSubcommand(stderr, "ryk mcp", argv[0], &.{ "inspect", "proxy", "list", "trust", "manifest" }, "mcp");
     return exit_codes.usage;
 }
 
@@ -35,18 +35,18 @@ fn writeGroupedHelp(io: std.Io, stdout: anytype) !void {
     try tui.theme.paintBold(io, stdout, .brand, "Common commands");
     try stdout.writeByte('\n');
     try tui.render.definitionList(io, stdout, &.{
-        .{ .term = "orca mcp list", .description = "Show configured MCP servers" },
-        .{ .term = "orca mcp inspect", .description = "Inspect tools exposed by a server" },
+        .{ .term = "ryk mcp list", .description = "Show configured MCP servers" },
+        .{ .term = "ryk mcp inspect", .description = "Inspect tools exposed by a server" },
     });
     try stdout.writeByte('\n');
     try tui.theme.paintBold(io, stdout, .brand, "Advanced and protocol");
     try stdout.writeByte('\n');
     try tui.render.definitionList(io, stdout, &.{
-        .{ .term = "orca mcp proxy", .description = "Run the policy-enforcing stdio proxy" },
-        .{ .term = "orca mcp manifest", .description = "Check or generate a server manifest" },
-        .{ .term = "orca mcp trust", .description = "Print a reviewed policy snippet" },
+        .{ .term = "ryk mcp proxy", .description = "Run the policy-enforcing stdio proxy" },
+        .{ .term = "ryk mcp manifest", .description = "Check or generate a server manifest" },
+        .{ .term = "ryk mcp trust", .description = "Print a reviewed policy snippet" },
     });
-    try stdout.writeAll("\nRun `orca help mcp` for complete options.\n");
+    try stdout.writeAll("\nRun `ryk help mcp` for complete options.\n");
 }
 
 const Options = struct {
@@ -77,7 +77,7 @@ fn parseOptions(allocator: std.mem.Allocator, argv: []const []const u8, stderr: 
             index += 1;
             if (index >= argv.len) return error.Usage;
             options.server_name = argv[index];
-            try stderr.print("orca mcp: --server presets are not implemented in Phase 11; use --command.\n", .{});
+            try stderr.print("ryk mcp: --server presets are not implemented in Phase 11; use --command.\n", .{});
             return error.Unsupported;
         } else if (std.mem.eql(u8, arg, "--name")) {
             index += 1;
@@ -99,7 +99,7 @@ fn parseOptions(allocator: std.mem.Allocator, argv: []const []const u8, stderr: 
             for (argv[index + 1 ..]) |command_arg| try command_parts.append(allocator, command_arg);
             break;
         } else {
-            try suggestions.writeUnknownOption(stderr, "orca mcp", arg, &.{ "--command", "--server", "--name", "--policy", "--manifest", "--mode" }, "mcp");
+            try suggestions.writeUnknownOption(stderr, "ryk mcp", arg, &.{ "--command", "--server", "--name", "--policy", "--manifest", "--mode" }, "mcp");
             return error.Usage;
         }
     }
@@ -125,13 +125,13 @@ fn inspect(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytyp
     defer if (loaded_policy) |*loaded| loaded.deinit();
     if (options.policy_path) |path| {
         loaded_policy = policy.load.loadFile(io, allocator, path) catch |err| {
-            try stderr.print("orca mcp inspect: invalid policy: {s}\n", .{@errorName(err)});
+            try stderr.print("ryk mcp inspect: invalid policy: {s}\n", .{@errorName(err)});
             return exit_codes.general;
         };
     }
     const policy_ref: ?*const policy.schema.Policy = if (loaded_policy) |*loaded| loaded else null;
     var server = orca_mcp.transport.ProcessServer.spawn(io, allocator, options.command_argv) catch |err| {
-        try stderr.print("orca mcp inspect: failed to start server: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk mcp inspect: failed to start server: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer server.deinit(io);
@@ -141,26 +141,26 @@ fn inspect(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytyp
     const initialized = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\",\"params\":{}}";
     const list_tools = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}";
     const init_response = orca_mcp.transport.ProcessServer.request(&server, allocator, initialize) catch |err| {
-        try stderr.print("orca mcp inspect: initialize failed: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk mcp inspect: initialize failed: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     allocator.free(init_response);
     orca_mcp.transport.ProcessServer.notify(&server, initialized) catch |err| {
-        try stderr.print("orca mcp inspect: initialized notification failed: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk mcp inspect: initialized notification failed: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     const tools_response = orca_mcp.transport.ProcessServer.request(&server, allocator, list_tools) catch |err| {
-        try stderr.print("orca mcp inspect: tools/list failed: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk mcp inspect: tools/list failed: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer allocator.free(tools_response);
     var parsed = orca_mcp.jsonrpc.parseLine(allocator, tools_response) catch |err| {
-        try stderr.print("orca mcp inspect: invalid tools/list response: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk mcp inspect: invalid tools/list response: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer parsed.deinit();
     var inventory = orca_mcp.tools.inspectToolsListResponse(allocator, options.server_name, parsed.value()) catch |err| {
-        try stderr.print("orca mcp inspect: could not inspect tools: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk mcp inspect: could not inspect tools: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer inventory.deinit(allocator);
@@ -168,7 +168,7 @@ fn inspect(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytyp
     const workspace = supervisor.resolveWorkspaceRoot(io, allocator, null, ".") catch try allocator.dupe(u8, ".");
     defer allocator.free(workspace);
     var effect_packs = policy.effects.loadPacks(io, allocator, workspace, null) catch |err| {
-        try stderr.print("orca mcp inspect: invalid effect pack: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk mcp inspect: invalid effect pack: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer effect_packs.deinit();
@@ -246,7 +246,7 @@ fn proxy(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
     const workspace = try supervisor.resolveWorkspaceRoot(io, allocator, null, ".");
     defer allocator.free(workspace);
     var loaded = core_api.discoverPolicy(io, allocator, options.policy_path, workspace) catch |err| {
-        try stderr.print("orca mcp proxy: invalid policy: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk mcp proxy: invalid policy: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer loaded.deinit();
@@ -257,15 +257,15 @@ fn proxy(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
     defer if (bound_launch) |*binding| binding.deinit(allocator);
     if (options.manifest_path) |manifest_path| {
         loaded_manifest = orca_mcp.manifests.loadFile(io, allocator, manifest_path) catch |err| {
-            try stderr.print("orca mcp proxy: invalid manifest: {s}\n", .{@errorName(err)});
+            try stderr.print("ryk mcp proxy: invalid manifest: {s}\n", .{@errorName(err)});
             return exit_codes.usage;
         };
         if (!std.mem.eql(u8, loaded_manifest.?.server.name, options.server_name)) {
-            try stderr.print("orca mcp proxy: manifest server '{s}' does not match --name '{s}'.\n", .{ loaded_manifest.?.server.name, options.server_name });
+            try stderr.print("ryk mcp proxy: manifest server '{s}' does not match --name '{s}'.\n", .{ loaded_manifest.?.server.name, options.server_name });
             return exit_codes.usage;
         }
         bound_launch = bindManifestLaunch(io, allocator, loaded_manifest.?, options.command_argv) catch |err| {
-            try stderr.print("orca mcp proxy: manifest does not match launched server: {s}\n", .{@errorName(err)});
+            try stderr.print("ryk mcp proxy: manifest does not match launched server: {s}\n", .{@errorName(err)});
             return exit_codes.usage;
         };
     }
@@ -274,14 +274,14 @@ fn proxy(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
 
     const session = try makeSession(io, options.command_argv, workspace, mode);
     var session_writer = core_api.createAuditWriter(io, allocator, session) catch |err| {
-        try stderr.print("orca mcp proxy: audit unavailable: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk mcp proxy: audit unavailable: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer session_writer.deinit();
     try session_writer.writeLastPointer();
 
     var server = orca_mcp.transport.ProcessServer.spawnWithEnvMap(io, allocator, spawn_argv, spawn_env) catch |err| {
-        try stderr.print("orca mcp proxy: failed to start server: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk mcp proxy: failed to start server: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer server.deinit(io);
@@ -309,7 +309,7 @@ fn proxy(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
         workspace,
         loaded.innerPtr().effects.isActive(),
     ) catch |err| {
-        try stderr.print("orca mcp proxy: invalid effect pack: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk mcp proxy: invalid effect pack: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer effect_packs.deinit();
@@ -341,7 +341,7 @@ fn proxy(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
             .policy = loaded.path,
             .product_label = brand.product_display,
         });
-        try stderr.print("orca mcp proxy: protocol failed: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk mcp proxy: protocol failed: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     if (approval_writer_storage) |*writer| writer.interface.flush() catch {};
@@ -368,11 +368,11 @@ fn initializeRequestAlloc(allocator: std.mem.Allocator) ![]u8 {
 
 fn list(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     if (argv.len > 0 and (std.mem.eql(u8, argv[0], "--help") or std.mem.eql(u8, argv[0], "-h"))) {
-        try stdout.writeAll("Usage: orca mcp list\n");
+        try stdout.writeAll("Usage: ryk mcp list\n");
         return exit_codes.success;
     }
     if (argv.len != 0) {
-        try stderr.writeAll("orca mcp list: unexpected arguments.\n");
+        try stderr.writeAll("ryk mcp list: unexpected arguments.\n");
         return exit_codes.usage;
     }
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
@@ -427,7 +427,7 @@ fn list(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) 
             stdout,
             .info,
             "No MCP servers configured",
-            "Create one with: orca mcp manifest generate --server <name>",
+            "Create one with: ryk mcp manifest generate --server <name>",
         );
         return exit_codes.success;
     }
@@ -452,17 +452,17 @@ fn list(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) 
 
 fn trust(argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     if (argv.len > 0 and (std.mem.eql(u8, argv[0], "--help") or std.mem.eql(u8, argv[0], "-h"))) {
-        try stdout.writeAll("Usage: orca mcp trust <server> --tool <tool>\n");
+        try stdout.writeAll("Usage: ryk mcp trust <server> --tool <tool>\n");
         return exit_codes.success;
     }
     if (argv.len != 3 or !std.mem.eql(u8, argv[1], "--tool")) {
-        try stderr.writeAll("orca mcp trust: expected <server> --tool <tool>.\n");
+        try stderr.writeAll("ryk mcp trust: expected <server> --tool <tool>.\n");
         return exit_codes.usage;
     }
     const server = argv[0];
     const tool = argv[2];
     if (!safeSelectorPart(server) or !safeSelectorPart(tool)) {
-        try stderr.writeAll("orca mcp trust: server and tool must be simple selector names.\n");
+        try stderr.writeAll("ryk mcp trust: server and tool must be simple selector names.\n");
         return exit_codes.usage;
     }
     try stdout.print(
@@ -481,22 +481,22 @@ fn manifestCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr
     if (argv.len == 0 or std.mem.eql(u8, argv[0], "--help") or std.mem.eql(u8, argv[0], "-h")) {
         try stdout.writeAll(
             \\Usage:
-            \\  orca mcp manifest check <manifest.yaml>
-            \\  orca mcp manifest generate --command <server-command> [-- <args...>]
-            \\  orca mcp manifest generate --server <name>
+            \\  ryk mcp manifest check <manifest.yaml>
+            \\  ryk mcp manifest generate --command <server-command> [-- <args...>]
+            \\  ryk mcp manifest generate --server <name>
             \\
         );
         return if (argv.len == 0) exit_codes.usage else exit_codes.success;
     }
     if (std.mem.eql(u8, argv[0], "check")) return manifestCheck(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, argv[0], "generate")) return manifestGenerate(argv[1..], stdout, stderr);
-    try suggestions.writeUnknownSubcommand(stderr, "orca mcp manifest", argv[0], &.{ "check", "generate" }, "mcp");
+    try suggestions.writeUnknownSubcommand(stderr, "ryk mcp manifest", argv[0], &.{ "check", "generate" }, "mcp");
     return exit_codes.usage;
 }
 
 fn manifestCheck(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     if (argv.len != 1) {
-        try stderr.writeAll("orca mcp manifest check: expected <manifest.yaml>.\n");
+        try stderr.writeAll("ryk mcp manifest check: expected <manifest.yaml>.\n");
         return exit_codes.usage;
     }
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
@@ -534,12 +534,12 @@ fn manifestGenerate(argv: []const []const u8, stdout: anytype, stderr: anytype) 
             args_start = index + 1;
             break;
         } else {
-            try suggestions.writeUnknownOption(stderr, "orca mcp manifest generate", argv[index], &.{ "--command", "--server", "--" }, "mcp");
+            try suggestions.writeUnknownOption(stderr, "ryk mcp manifest generate", argv[index], &.{ "--command", "--server", "--" }, "mcp");
             return exit_codes.usage;
         }
     }
     const name = server_name orelse command_name orelse {
-        try stderr.writeAll("orca mcp manifest generate: expected --command or --server.\n");
+        try stderr.writeAll("ryk mcp manifest generate: expected --command or --server.\n");
         return exit_codes.usage;
     };
     const command_text = command_name orelse name;
@@ -661,9 +661,9 @@ fn safeEnvName(value: []const u8) bool {
 
 fn usageCode(err: anyerror, stderr: anytype) !u8 {
     switch (err) {
-        error.MissingCommand => try stderr.writeAll("orca mcp: expected --command <server>.\n"),
+        error.MissingCommand => try stderr.writeAll("ryk mcp: expected --command <server>.\n"),
         error.Unsupported => {},
-        else => try stderr.writeAll("orca mcp: invalid arguments.\n"),
+        else => try stderr.writeAll("ryk mcp: invalid arguments.\n"),
     }
     return if (err == error.Unsupported) exit_codes.unsupported else exit_codes.usage;
 }
@@ -673,7 +673,7 @@ fn makeSession(io: std.Io, command_argv: []const []const u8, workspace: []const 
     return .{
         .id = try core.session.generateSessionId(now),
         .started_at = now,
-        .command = "orca mcp proxy",
+        .command = "ryk mcp proxy",
         .args = command_argv,
         .workspace_root = workspace,
         .mode = mode.toCoreMode(),
@@ -697,7 +697,7 @@ test "mcp command help and invalid subcommands are stable" {
     try std.testing.expectEqual(exit_codes.usage, bad_code);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "unknown subcommand") != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "Did you mean 'inspect'?") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca help mcp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help mcp") != null);
 }
 
 test "bare mcp renders grouped help with list as the friendly entry" {
@@ -710,7 +710,7 @@ test "bare mcp renders grouped help with list as the friendly entry" {
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Common commands") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Advanced and protocol") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "orca mcp list") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "ryk mcp list") != null);
 }
 
 test "mcp list empty state is friendly plain output" {
@@ -729,7 +729,7 @@ test "mcp list empty state is friendly plain output" {
     try std.testing.expectEqual(exit_codes.success, code);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "No MCP servers configured") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "orca mcp manifest generate") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "ryk mcp manifest generate") != null);
     try std.testing.expect(std.mem.indexOfScalar(u8, stdout_writer.buffered(), 0x1b) == null);
 }
 
@@ -793,7 +793,7 @@ test "mcp proxy reports invalid policy as CLI error" {
     const code = try command(std.testing.io, &.{ "proxy", "--policy", policy_path, "--command", "python3", "--", "fixtures/mcp/fake_server.py" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.general, code);
     try std.testing.expectEqualStrings("", stdout_writer.buffered());
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "orca mcp proxy: invalid policy") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk mcp proxy: invalid policy") != null);
 }
 
 test "mcp inspect policy option reports Core policy decisions" {

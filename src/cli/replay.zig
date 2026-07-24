@@ -309,7 +309,7 @@ fn freeTimelineLines(allocator: std.mem.Allocator, lines: [][]const u8) void {
 /// Friendly empty-state copy for bare `orca replay` / `--list` when nothing is recorded.
 /// Points operators at Safe Launch (`start` + agent), never a raw FileNotFound dump.
 const empty_sessions_hint =
-    \\No sessions yet. Run `orca start` then `orca <agent>` (for example `orca claude`) to create a protected session.
+    \\No sessions yet. Run `ryk start` then `ryk <agent>` (for example `ryk claude`) to create a protected session.
     \\
 ;
 
@@ -387,7 +387,7 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
             options.tui_view = true;
             options.fallback_to_list = false;
         } else {
-            try suggestions.writeUnknownOption(stderr, "orca replay", arg, &.{ "--list", "--session", "--json", "--verify", "--only", "--tui", "--help", "-h" }, "replay");
+            try suggestions.writeUnknownOption(stderr, "ryk replay", arg, &.{ "--list", "--session", "--json", "--verify", "--only", "--tui", "--help", "-h" }, "replay");
             return error.Usage;
         }
     }
@@ -473,8 +473,8 @@ test "replay with no args and no sessions shows friendly empty state" {
     const output = stdout_writer.buffered();
     // Friendly empty state — not a raw FileNotFound dump; points at Safe Launch.
     try std.testing.expect(std.mem.indexOf(u8, output, "No sessions") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "orca start") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "orca <agent>") != null or std.mem.indexOf(u8, output, "agent") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk start") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk <agent>") != null or std.mem.indexOf(u8, output, "agent") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "FileNotFound") == null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }

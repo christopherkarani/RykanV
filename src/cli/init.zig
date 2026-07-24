@@ -89,10 +89,10 @@ pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: an
             "Your policy is ready.\n" ++
             "\n" ++
             "Next steps:\n" ++
-            "  orca policy check .orca/policy.yaml\n" ++
+            "  ryk policy check .orca/policy.yaml\n" ++
             "  orca status\n" ++
             "  orca doctor\n" ++
-            "  orca run -- <command>\n" ++
+            "  ryk run -- <command>\n" ++
             "\n");
     }
     return exit_codes.success;

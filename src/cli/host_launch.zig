@@ -1,6 +1,6 @@
 const std = @import("std");
 
-/// Exact host names that rewrite to `orca run -- <host> …`.
+/// Exact host names that rewrite to `ryk run -- <host> …`.
 /// Canonical allowlist for dispatch, help, and completions.
 /// Separate from managed_hosts (plugins) so `pi` can launch without plugin install.
 pub const host_launch_aliases = [_][]const u8{

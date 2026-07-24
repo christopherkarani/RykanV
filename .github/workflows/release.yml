@@ -43,12 +43,29 @@ jobs:
             exit 0
           fi
           if gh release view "v${VER}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            if gh release view "v${VER}" --repo "$GITHUB_REPOSITORY" --json assets \
-              --jq '.assets[].name' 2>/dev/null | grep -qx 'checksums.txt'; then
-              echo "Release v${VER} already has checksums.txt; skipping CI release job (Mac cut-release primary)."
+            # Require a minimum inventory before skipping: checksums + primary ryk archive + SBOM.
+            # checksums.txt alone is too weak (partial/hostile upload could green-path skip).
+            assets="$(gh release view "v${VER}" --repo "$GITHUB_REPOSITORY" --json assets \
+              --jq '.assets[].name' 2>/dev/null || true)"
+            has_checksums=0
+            has_primary=0
+            has_sbom=0
+            while IFS= read -r name; do
+              [ -n "$name" ] || continue
+              case "$name" in
+                checksums.txt) has_checksums=1 ;;
+                sbom.json) has_sbom=1 ;;
+                ryk-v*.tar.gz|ryk-v*.zip) has_primary=1 ;;
+              esac
+            done <<EOF
+${assets}
+EOF
+            if [ "$has_checksums" = 1 ] && [ "$has_primary" = 1 ] && [ "$has_sbom" = 1 ]; then
+              echo "Release v${VER} has checksums.txt + primary ryk-v* + sbom.json; skipping CI release job (Mac cut-release primary)."
               echo "SKIP_RELEASE=1" >> "$GITHUB_ENV"
               exit 0
             fi
+            echo "Release v${VER} incomplete (checksums=${has_checksums} primary_ryk=${has_primary} sbom=${has_sbom}); running CI release."
           fi
           echo "SKIP_RELEASE=0" >> "$GITHUB_ENV"
 

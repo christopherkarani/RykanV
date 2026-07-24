@@ -49,20 +49,42 @@ ARCH="$(detect_arch)"
 [[ "${OS}" != "unsupported" ]] || fail "unsupported host OS for smoke test"
 [[ "${ARCH}" != "unsupported" ]] || fail "unsupported host architecture for smoke test"
 
-ARTIFACT="${DIST_DIR}/orca-v${VERSION}-${OS}-${ARCH}.tar.gz"
-[[ -f "${ARTIFACT}" ]] || fail "missing host artifact: ${ARTIFACT}"
+# Phase 5a: primary archive is ryk-v*; dual-publish may also emit orca-v* (same root layout).
+ARTIFACT=""
+STAGE_NAME=""
+for prefix in ryk orca; do
+  candidate="${DIST_DIR}/${prefix}-v${VERSION}-${OS}-${ARCH}.tar.gz"
+  if [[ -f "${candidate}" ]]; then
+    ARTIFACT="${candidate}"
+    STAGE_NAME="${prefix}-v${VERSION}-${OS}-${ARCH}"
+    break
+  fi
+done
+[[ -n "${ARTIFACT}" ]] || fail "missing host artifact: ${DIST_DIR}/ryk-v${VERSION}-${OS}-${ARCH}.tar.gz (or orca-v* dual-publish)"
 
-TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/orca-install-layout.XXXXXX")"
+TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ryk-install-layout.XXXXXX")"
 cleanup() {
   rm -rf "${TMP_ROOT}"
 }
 trap cleanup EXIT INT TERM
 
 tar -xzf "${ARTIFACT}" -C "${TMP_ROOT}"
-STAGE_ROOT="${TMP_ROOT}/orca-v${VERSION}-${OS}-${ARCH}"
+STAGE_ROOT="${TMP_ROOT}/${STAGE_NAME}"
+# Archive root is always ryk-v… even when dual-published as orca-v* filename
+# (byte-identical copy of the ryk archive). Prefer that layout first.
+if [[ ! -d "${STAGE_ROOT}" ]]; then
+  if [[ -d "${TMP_ROOT}/ryk-v${VERSION}-${OS}-${ARCH}" ]]; then
+    STAGE_ROOT="${TMP_ROOT}/ryk-v${VERSION}-${OS}-${ARCH}"
+  else
+    fail "staged archive root not found under ${TMP_ROOT}"
+  fi
+fi
+
+RYK_BIN="${STAGE_ROOT}/bin/ryk"
 ORCA_BIN="${STAGE_ROOT}/bin/orca"
 # Product packaging is CLI-only; Zig shell_engine evaluates shell in-process.
-[[ -x "${ORCA_BIN}" ]] || fail "staged orca binary is missing or not executable"
+[[ -x "${RYK_BIN}" ]] || fail "staged ryk binary is missing or not executable"
+[[ -x "${ORCA_BIN}" ]] || fail "staged orca compat alias is missing or not executable"
 if [[ -e "${STAGE_ROOT}/bin/orca-daemon" ]]; then
   fail "staged release unexpectedly contains orca-daemon (daemon removed from product packaging)"
 fi
@@ -72,18 +94,24 @@ mkdir -p "${TMP_HOME}/workspace"
 
 export HOME="${TMP_HOME}"
 export PATH="${STAGE_ROOT}/bin:${PATH}"
+# Dual-read: prefer RYK_RESOURCE_ROOT when set.
+export RYK_RESOURCE_ROOT="${STAGE_ROOT}"
 export ORCA_RESOURCE_ROOT="${STAGE_ROOT}"
 
-version_output="$("${ORCA_BIN}" version)"
+version_output="$("${RYK_BIN}" version)"
 assert_contains "${version_output}" "Version"
 assert_contains "${version_output}" "${VERSION}"
 
 # Doctor should run without a companion daemon binary in the archive.
-doctor_output="$("${ORCA_BIN}" doctor --verbose)"
-assert_contains "${doctor_output}" "Orca Doctor"
+doctor_output="$("${RYK_BIN}" doctor --verbose)"
+assert_contains "${doctor_output}" "ryk Doctor"
 assert_contains "${doctor_output}" "Version: ${VERSION}"
 
-"${ORCA_BIN}" packs --help >/dev/null
+# Legacy alias must also run.
+alias_version="$("${ORCA_BIN}" version)"
+assert_contains "${alias_version}" "${VERSION}"
+
+"${RYK_BIN}" packs --help >/dev/null
 
 dangerous_fixture="${REPO_ROOT}/tests/plugin-fixtures/claude/pre_tool_use_command_dangerous.json"
 safe_fixture="${REPO_ROOT}/tests/plugin-fixtures/claude/pre_tool_use_command_safe.json"
@@ -91,10 +119,10 @@ safe_fixture="${REPO_ROOT}/tests/plugin-fixtures/claude/pre_tool_use_command_saf
 [[ -f "${safe_fixture}" ]] || fail "missing safe hook fixture"
 
 # Shell PreToolUse is owned by in-process Zig shell_engine (not a daemon IPC path).
-dangerous_output="$("${ORCA_BIN}" hook claude PreToolUse <"${dangerous_fixture}")"
+dangerous_output="$("${RYK_BIN}" hook claude PreToolUse <"${dangerous_fixture}")"
 assert_json_field "${dangerous_output}" "decision" "block"
 
-safe_output="$("${ORCA_BIN}" hook claude PreToolUse <"${safe_fixture}")"
+safe_output="$("${RYK_BIN}" hook claude PreToolUse <"${safe_fixture}")"
 assert_json_field "${safe_output}" "decision" "allow"
 # Daemon-unavailable fail-closed narrative is obsolete for shell hooks.
 if [[ "${safe_output}" == *"daemon unavailable"* ]]; then

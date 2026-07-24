@@ -82,16 +82,17 @@ fn envFlagTruthy(name: [*:0]const u8) bool {
 
 /// Resolve mode for bare agent-hook (no loaded policy YAML).
 ///
-/// Floor is **strict**. `ORCA_MODE` may only *raise* strictness (strict →
+/// Floor is **strict**. `RYK_MODE`/`ORCA_MODE` may only *raise* strictness (strict →
 /// redteam/ci). Soft modes from env (`observe`/`ask`/`trusted`) are ignored
-/// unless the operator explicitly sets `ORCA_ALLOW_MODE_SOFTEN=1`, so a
+/// unless the operator explicitly sets `RYK_ALLOW_MODE_SOFTEN`/`ORCA_ALLOW_MODE_SOFTEN=1`, so a
 /// hostile process env cannot silently downgrade bare Cursor/agent hooks.
-/// Prefer `orca run` (session `shim_mode`) for intentional soft modes.
+/// Prefer `ryk run` (session `shim_mode`) for intentional soft modes.
 pub fn resolveModeFromEnv() policy.schema.Mode {
+    const env_util = @import("../env_util.zig");
     const floor: policy.schema.Mode = .strict;
-    const allow_soften = envFlagTruthy("ORCA_ALLOW_MODE_SOFTEN");
+    const allow_soften = env_util.getenvBrandFlagTruthy("ALLOW_MODE_SOFTEN");
 
-    if (std.c.getenv("ORCA_MODE")) |raw_c| {
+    if (env_util.getenvBrand("MODE")) |raw_c| {
         const raw = std.mem.span(raw_c);
         if (policy.schema.Mode.parse(raw)) |env_mode| {
             if (isSoftMode(env_mode)) {
@@ -494,10 +495,10 @@ test "evaluatePayload deny emits hookSpecificOutput and cursor deny JSON" {
     const agent_output = agent_stdout.buffered();
     try std.testing.expect(std.mem.indexOf(u8, agent_output, "\"permissionDecision\":\"deny\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, agent_output, "\"hookEventName\":\"PreToolUse\"") != null);
-    // Hard fence owns reason text ("blocked by Orca policy"); pack rule_id is
+    // Hard fence owns reason text ("blocked by ryk policy"); pack rule_id is
     // forensic metadata on the decision, not always echoed into the host reason.
     // Remediation tip still attaches when the daemon provided suggestions.
-    try std.testing.expect(std.mem.indexOf(u8, agent_output, "blocked by Orca policy") != null);
+    try std.testing.expect(std.mem.indexOf(u8, agent_output, "blocked by ryk policy") != null);
     try std.testing.expect(std.mem.indexOf(u8, agent_output, "Tip:") != null);
 
     var cursor_buf: [2048]u8 = undefined;
@@ -506,7 +507,7 @@ test "evaluatePayload deny emits hookSpecificOutput and cursor deny JSON" {
     _ = try evaluatePayload(allocator, cursor_payload, &cursor_stdout, shell_eval.mockDaemonDenyEvaluator);
     const cursor_output = cursor_stdout.buffered();
     try std.testing.expect(std.mem.indexOf(u8, cursor_output, "\"permission\":\"deny\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, cursor_output, "blocked by Orca policy") != null);
+    try std.testing.expect(std.mem.indexOf(u8, cursor_output, "blocked by ryk policy") != null);
 }
 
 test "evaluatePayload fails closed on daemon evaluate failures" {

@@ -71,7 +71,7 @@ pub fn runWithOptions(io: std.Io, allocator: std.mem.Allocator, workspace_root: 
         try result.add("policy", .pass, ".orca/policy.yaml exists and validates");
         maybe_policy = loaded;
     } else |_| {
-        try result.add("policy", .fail, "Missing .orca/policy.yaml. Run: orca init --preset team-ci");
+        try result.add("policy", .fail, "Missing .orca/policy.yaml. Run: ryk init --preset team-ci");
         return result;
     }
 
@@ -188,7 +188,7 @@ fn checkDangerousDefaults(result: *Result, policy: policy_mod.schema.Policy) !vo
 }
 
 pub fn writeMarkdown(writer: anytype, result: Result) !void {
-    try writer.writeAll("# Orca CI Check\n\n");
+    try writer.writeAll("# ryk CI Check\n\n");
     for (result.checks.items) |check| {
         try writer.print("- {s}: **{s}** - {s}\n", .{ check.name, statusText(check.status), check.message });
     }
@@ -227,7 +227,7 @@ test "ci check fails clearly when policy is missing" {
     var result = try run(std.testing.io, std.testing.allocator, root);
     defer result.deinit();
     try std.testing.expect(!result.ok());
-    try std.testing.expect(std.mem.indexOf(u8, result.checks.items[0].message, "orca init --preset team-ci") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.checks.items[0].message, "ryk init --preset team-ci") != null);
 }
 
 test "ci check resolves focused redteam fixtures from resource root" {

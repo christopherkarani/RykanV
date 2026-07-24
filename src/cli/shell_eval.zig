@@ -44,7 +44,9 @@ pub const ShellEvalBackend = enum { zig, rust };
 /// Resolve shell evaluator backend. Default is Zig. `.rust` is detected only so
 /// callers can hard-error — it must never select `daemon.evaluate`.
 pub fn resolveShellEvalBackend() ShellEvalBackend {
-    const value_z = std.c.getenv("ORCA_SHELL_EVAL") orelse return .zig;
+    const env_util = @import("../env_util.zig");
+    // Prefer RYK_SHELL_EVAL then ORCA_SHELL_EVAL (Phase 5a dual-read).
+    const value_z = env_util.getenvBrand("SHELL_EVAL") orelse return .zig;
     const value = std.mem.span(value_z);
     if (std.ascii.eqlIgnoreCase(value, "rust")) return .rust;
     return .zig;
@@ -271,7 +273,7 @@ pub fn modeSoftenedReason(mode: policy.schema.Mode, severity: RiskLevel, plugin:
             else => "allowed with warning; would deny in strict",
         },
         .ask => "requires approval in ask mode; would deny in strict",
-        .block => "blocked by Orca policy",
+        .block => "blocked by ryk policy",
     };
 }
 
@@ -470,7 +472,7 @@ pub fn decideAfterHardFence(
     if (severity == .critical) {
         return .{
             .decision = .block,
-            .reason = "blocked by Orca policy",
+            .reason = "blocked by ryk policy",
         };
     }
 
@@ -552,7 +554,7 @@ pub fn decideShellWithPolicy(
     if (severity == .critical) {
         return .{
             .decision = .block,
-            .reason = "blocked by Orca policy",
+            .reason = "blocked by ryk policy",
         };
     }
 
@@ -908,10 +910,10 @@ pub fn buildDaemonDenyReason(
     errdefer if (rule) |rule_name| allocator.free(rule_name);
 
     const reason = if (rule) |rule_name|
-        try std.fmt.allocPrint(allocator, "blocked by Orca rule: {s}", .{rule_name})
+        try std.fmt.allocPrint(allocator, "blocked by ryk rule: {s}", .{rule_name})
     else blk: {
         // Never echo raw daemon reason strings; they may include matched command fragments.
-        break :blk try allocator.dupe(u8, "command denied by Orca policy");
+        break :blk try allocator.dupe(u8, "command denied by ryk policy");
     };
 
     return .{ .reason = reason, .rule = rule };
@@ -960,7 +962,7 @@ pub fn decisionFromDaemonResultWithPolicy(
                 );
                 if (decided.decision == .block) {
                     // Hard refuse — FM never runs.
-                    const reason_src = decided.reason orelse "blocked by Orca policy";
+                    const reason_src = decided.reason orelse "blocked by ryk policy";
                     const owned = try allocator.dupe(u8, reason_src);
                     errdefer allocator.free(owned);
                     break :blk OwnedRunDecision{
@@ -1538,7 +1540,7 @@ test "shell_eval denies dangerous command via mock daemon" {
     defer decision.deinit(allocator);
     try std.testing.expectEqual(core.decision.DecisionResult.deny, decision.decision.result);
     // WP4 hard fence wins reason text; pack rule + remediation still attach.
-    try std.testing.expectEqualStrings("blocked by Orca policy", decision.decision.reason);
+    try std.testing.expectEqualStrings("blocked by ryk policy", decision.decision.reason);
     try std.testing.expect(decision.owned_rule_id != null);
     try std.testing.expectEqualStrings("core.filesystem:destructive_rm", decision.owned_rule_id.?);
     try std.testing.expect(decision.owned_remediation != null);
@@ -2920,7 +2922,7 @@ test "Fm soft seatbelt prior block never invokes client" {
 
     var out = try applyFmSoftSeatbelt(allocator, .{
         .decision = .block,
-        .reason = "blocked by Orca policy",
+        .reason = "blocked by ryk policy",
     }, .{
         .command = "rm -rf /",
         .session_id = "sess-fm-block",
@@ -2930,7 +2932,7 @@ test "Fm soft seatbelt prior block never invokes client" {
 
     try std.testing.expectEqual(PluginDecision.block, out.decision);
     try std.testing.expectEqual(@as(u32, 0), state.call_count);
-    try std.testing.expectEqualStrings("blocked by Orca policy", out.reason.?);
+    try std.testing.expectEqualStrings("blocked by ryk policy", out.reason.?);
 }
 
 test "Fm soft seatbelt ask_sticky_candidate forces ask and stashes sticky hints" {
@@ -3064,7 +3066,7 @@ test "Fm decisionFromDaemonResultWithPolicy ci mode re-hardens FM ask to deny" {
 }
 
 test "Fm decisionFromDaemonResultWithPolicy transfers ask_sticky_candidate sticky hints" {
-    // Product path: FM hints must reach OwnedRunDecision so orca run can record them.
+    // Product path: FM hints must reach OwnedRunDecision so ryk run can record them.
     const allocator = std.testing.allocator;
     var state = FmFakeState{
         .verdict = .ask_sticky_candidate,

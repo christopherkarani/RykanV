@@ -54,7 +54,7 @@ fn renderFrameWithLineEnding(
 
     // Header: brand + title.
     try stdout.writeAll("  ");
-    try theme.paintBold(io, stdout, .brand, "🛡  Orca");
+    try theme.paintBold(io, stdout, .brand, "🛡  ryk");
     try stdout.writeAll(" · ");
     try theme.paintBold(io, stdout, .text_bright, title);
     try stdout.writeAll(line_ending);
@@ -314,7 +314,7 @@ test "renderFrame: empty snapshot shows no-rows footer" {
     var w: std.Io.Writer = .fixed(&buf);
     const n = try renderFrame(std.testing.io, &w, "history", &.{}, 0, 10);
     const out = w.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "🛡  Orca") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "🛡  ryk") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "history") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "no rows") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "q quit") != null);

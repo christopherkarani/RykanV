@@ -41,7 +41,7 @@ pub const FilteredEnv = struct {
 pub fn writeSecretlessReadinessNote(stderr: anytype, secretless_replacements: usize) !void {
     if (secretless_replacements == 0) return;
     try stderr.print(
-        "orca run: --secretless rewrote {d} secret-like env var(s) to non-resolving orca-secret://local-dummy/... references. Agents that need raw model API keys from the environment (e.g. OPENAI_API_KEY, ANTHROPIC_API_KEY) will not authenticate. Omit --secretless for day-1 agent launches; see docs/credentials.md (Secretless Mode).\n",
+        "ryk run: --secretless rewrote {d} secret-like env var(s) to non-resolving orca-secret://local-dummy/... references. Agents that need raw model API keys from the environment (e.g. OPENAI_API_KEY, ANTHROPIC_API_KEY) will not authenticate. Omit --secretless for day-1 agent launches; see docs/credentials.md (Secretless Mode).\n",
         .{secretless_replacements},
     );
 }

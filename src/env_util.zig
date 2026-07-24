@@ -20,10 +20,34 @@ pub fn getOwnedFirst(map: *const std.process.Environ.Map, allocator: std.mem.All
 pub fn getOwnedBrand(map: *const std.process.Environ.Map, allocator: std.mem.Allocator, suffix: []const u8) !?[]u8 {
     var ryk_buf: [128]u8 = undefined;
     var orca_buf: [128]u8 = undefined;
-    if (suffix.len + 4 > ryk_buf.len) return error.NameTooLong;
+    // Gate on the longer prefix (`ORCA_` = 5) so ORCA_* never fails with NoSpaceLeft
+    // while RYK_* would have returned NameTooLong.
+    if (suffix.len + 5 > ryk_buf.len) return error.NameTooLong;
     const ryk_key = try std.fmt.bufPrint(&ryk_buf, "RYK_{s}", .{suffix});
     const orca_key = try std.fmt.bufPrint(&orca_buf, "ORCA_{s}", .{suffix});
     return getOwnedFirst(map, allocator, &.{ ryk_key, orca_key });
+}
+
+/// Process-environ brand dual-read: prefer `RYK_<suffix>` then `ORCA_<suffix>`.
+/// Returns the raw C string pointer (not owned). Null if neither is set.
+pub fn getenvBrand(suffix: []const u8) ?[*:0]const u8 {
+    var ryk_buf: [128]u8 = undefined;
+    var orca_buf: [128]u8 = undefined;
+    if (suffix.len + 5 >= orca_buf.len) return null;
+    const ryk_key = std.fmt.bufPrintZ(&ryk_buf, "RYK_{s}", .{suffix}) catch return null;
+    if (std.c.getenv(ryk_key.ptr)) |v| return v;
+    const orca_key = std.fmt.bufPrintZ(&orca_buf, "ORCA_{s}", .{suffix}) catch return null;
+    return std.c.getenv(orca_key.ptr);
+}
+
+/// True when RYK_<suffix> or ORCA_<suffix> is a truthy flag (`1`/`true`/`yes`/`on`).
+pub fn getenvBrandFlagTruthy(suffix: []const u8) bool {
+    const raw_c = getenvBrand(suffix) orelse return false;
+    const raw = std.mem.span(raw_c);
+    return std.mem.eql(u8, raw, "1") or
+        std.ascii.eqlIgnoreCase(raw, "true") or
+        std.ascii.eqlIgnoreCase(raw, "yes") or
+        std.ascii.eqlIgnoreCase(raw, "on");
 }
 
 test "getOwnedFirst prefers first key" {
@@ -64,6 +88,14 @@ test "getOwnedBrand prefers RYK_ then ORCA_" {
     const prefer_new = try getOwnedBrand(&map, std.testing.allocator, "RESOURCE_ROOT");
     defer if (prefer_new) |v| std.testing.allocator.free(v);
     try std.testing.expectEqualStrings("/share/ryk", prefer_new.?);
+}
+
+test "getOwnedBrand NameTooLong gates on longer ORCA_ prefix" {
+    // Buffer is 128; ORCA_ + suffix must fit. Length 124 fails for both prefixes.
+    const too_long = "X" ** 124;
+    var map = std.process.Environ.Map.init(std.testing.allocator);
+    defer map.deinit();
+    try std.testing.expectError(error.NameTooLong, getOwnedBrand(&map, std.testing.allocator, too_long));
 }
 
 /// Read the process environment block (POSIX libc `environ`).

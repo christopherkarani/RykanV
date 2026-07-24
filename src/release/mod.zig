@@ -92,13 +92,14 @@ test "phase 19 release files include integrity checks without obvious credential
     }
 }
 
-test "phase 19 Dockerfile references installed Orca binary" {
+test "phase 19 Dockerfile references installed ryk binary" {
     const text = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "packaging/docker/Dockerfile", std.testing.allocator, .limited(64 * 1024));
     defer std.testing.allocator.free(text);
-    try std.testing.expectEqual(@as(usize, 1), countOccurrences(text, "COPY orca /opt/orca"));
-    try std.testing.expect(std.mem.indexOf(u8, text, "/opt/orca/bin/orca") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "/opt/orca/bin/orca-daemon") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "ORCA_RESOURCE_ROOT=\"/opt/orca\"") != null);
+    try std.testing.expectEqual(@as(usize, 1), countOccurrences(text, "COPY ryk /opt/ryk"));
+    try std.testing.expect(std.mem.indexOf(u8, text, "/opt/ryk/bin/ryk") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "ORCA_RESOURCE_ROOT=\"/opt/ryk\"") != null);
+    // Product packaging is CLI-only; daemon binary must not be required.
+    try std.testing.expect(std.mem.indexOf(u8, text, "orca-daemon") != null);
 }
 
 fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
@@ -114,7 +115,7 @@ fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
 test "GitHub composite action does not shell-interpolate command input before Orca" {
     const text = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, ".github/actions/orca-run/action.yml", std.testing.allocator, .limited(64 * 1024));
     defer std.testing.allocator.free(text);
-    try std.testing.expect(std.mem.indexOf(u8, text, "orca run --mode ci -- ${{ inputs.command }}") == null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "ryk run --mode ci -- ${{ inputs.command }}") == null);
     try std.testing.expect(std.mem.indexOf(u8, text, "ORCA_ACTION_COMMAND: ${{ inputs.command }}") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "orca run --mode ci -- bash -c \"$ORCA_ACTION_COMMAND\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "ryk run --mode ci -- bash -c \"$ORCA_ACTION_COMMAND\"") != null);
 }
