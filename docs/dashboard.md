@@ -49,7 +49,7 @@ Machine-wide mode reads Orca's local workspace registry and global decision feed
 
 Decision writers continue to store the existing per-workspace feed and also append a redacted record to `$HOME/.orca/dashboard/events.jsonl`. `$HOME/.orca/dashboard/workspaces.json` indexes recently active workspaces for session aggregation. Feed writes are best-effort and do not change hook, run, or evaluate exit behavior.
 
-Machine-wide mode exposes only global actions: `orca doctor` and `orca license status`. Policy, replay, report, CI, demo, credential, proxy, and integration actions stay hidden and are rejected server-side until the dashboard is started with an explicit workspace. This prevents ambiguous uses of `last` from `~`.
+Machine-wide mode exposes only global actions: `orca doctor` and `orca license status`. Policy, replay, report, CI, credential, proxy, and integration actions stay hidden and are rejected server-side until the dashboard is started with an explicit workspace. This prevents ambiguous uses of `last` from `~`.
 
 ## Workspace View
 
@@ -76,7 +76,7 @@ orca plugin doctor hermes
 orca replay --session last --only denied --verify
 orca report --session last --format markdown
 orca ci check --format markdown
-orca demo blocked-action
+ryk explain "rm -rf /"
 orca license status
 ```
 

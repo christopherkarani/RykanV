@@ -456,13 +456,16 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
         // Codex 0.125.0+ ignores stdout JSON on deny; exit 2 + stderr is the enforced block path.
         // Sentinel-first so agents scraping stderr can distinguish a guard block from a
         // program error: provenance (guard) + consequence (no side effects) + recourse.
-        // Humans never reach this branch — non-Codex hosts render the JSON `message` themselves.
+        // Keep agent-visible Codex stderr thin (no full explain tree / regex dump).
         // Dynamic policy output crosses an agent-visible boundary here; redact it before
         // presentation so native Zig routes cannot disclose matched patterns or targets.
         try writeCodexGuardBlock(allocator, stderr, result.message, result.reason);
     } else {
         try writeHookResponse(stdout, result);
-        if (result.rule) |rule| {
+        // Human-facing hosts: rich explain on stderr; agent protocol stays on stdout JSON.
+        if (result.decision == .block) {
+            try writeHumanShellExplain(io, allocator, stderr, result);
+        } else if (result.rule) |rule| {
             try stderr.print("[hook] matched rule: {s}\n", .{rule});
         }
     }
@@ -505,6 +508,32 @@ fn writeCodexGuardBlock(allocator: std.mem.Allocator, stderr: anytype, message: 
             try stderr.writeAll("\n");
         }
     }
+}
+
+/// Compact human deny block for non-Codex hosts (agent JSON remains on stdout).
+fn writeHumanShellExplain(io: std.Io, allocator: std.mem.Allocator, stderr: anytype, result: HookResponse) !void {
+    _ = io;
+    try stderr.writeAll("\n");
+    try stderr.writeAll("RYK BLOCKED\n");
+    if (result.rule) |rule| {
+        const safe = try core_api.redactAlloc(allocator, rule);
+        defer allocator.free(safe);
+        try stderr.print("  Rule: {s}\n", .{safe});
+    }
+    if (result.reason.len > 0) {
+        const safe = try core_api.redactAlloc(allocator, result.reason);
+        defer allocator.free(safe);
+        try stderr.print("  Reason: {s}\n", .{safe});
+    }
+    if (result.suggestions.len > 0) {
+        try stderr.writeAll("  Suggestions:\n");
+        for (result.suggestions) |tip| {
+            const safe = try core_api.redactAlloc(allocator, tip);
+            defer allocator.free(safe);
+            try stderr.print("    • {s}\n", .{safe});
+        }
+    }
+    try stderr.writeAll("  Next: ryk explain \"<command>\" for the full decision tree\n");
 }
 
 fn isCodexDenyOutput(host: Host, decision: PluginDecision) bool {

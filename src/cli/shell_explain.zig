@@ -4,16 +4,14 @@ const shell_engine = @import("../shell_engine/mod.zig");
 const shell_eval = @import("shell_eval.zig");
 const pack_config = @import("pack_config.zig");
 const core = @import("orca_core").core;
+const help = @import("help.zig");
+const explain_render = @import("explain_render.zig");
+const exit_codes = @import("exit_codes.zig");
 
 pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     if (argv.len == 0 or std.mem.eql(u8, argv[0], "--help") or std.mem.eql(u8, argv[0], "-h")) {
-        try stderr.writeAll(
-            \\Usage: ryk explain [--format json] <command>
-            \\
-            \\Explain the Zig shell-engine decision for a command.
-            \\
-        );
-        return 0;
+        _ = try help.writeCommand(io, stdout, "explain");
+        return if (argv.len == 0) exit_codes.usage else exit_codes.success;
     }
 
     if (shell_eval.resolveShellEvalBackend() == .rust) {
@@ -23,17 +21,45 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
 
     var format_json = false;
     var cmd_start: usize = 0;
-    if (std.mem.eql(u8, argv[0], "--format")) {
-        if (argv.len < 3) {
-            try stderr.writeAll("ryk explain: --format requires a value and a command\n");
-            return 64;
+    var i: usize = 0;
+    while (i < argv.len) : (i += 1) {
+        const arg = argv[i];
+        if (std.mem.eql(u8, arg, "--")) {
+            cmd_start = i + 1;
+            break;
         }
-        if (!std.mem.eql(u8, argv[1], "json")) {
-            try stderr.writeAll("ryk explain: only --format json is supported\n");
-            return 64;
+        if (std.mem.eql(u8, arg, "--format")) {
+            if (i + 1 >= argv.len) {
+                try stderr.writeAll("ryk explain: --format requires a value and a command\n");
+                return exit_codes.usage;
+            }
+            if (!std.mem.eql(u8, argv[i + 1], "json")) {
+                try stderr.writeAll("ryk explain: only --format json is supported\n");
+                return exit_codes.usage;
+            }
+            format_json = true;
+            i += 1;
+            cmd_start = i + 1;
+            continue;
         }
-        format_json = true;
-        cmd_start = 2;
+        if (std.mem.startsWith(u8, arg, "-")) {
+            try stderr.print("ryk explain: unknown option '{s}'.\nRun 'ryk help explain' for usage.\n", .{arg});
+            return exit_codes.usage;
+        }
+        cmd_start = i;
+        break;
+    }
+
+    if (cmd_start >= argv.len) {
+        try stderr.writeAll(
+            \\ryk explain: expected a command to explain.
+            \\Examples:
+            \\  ryk explain "rm -rf /"
+            \\  ryk explain -- "git reset --hard"
+            \\  ryk explain --format json "rm -rf /tmp/x"
+            \\
+        );
+        return exit_codes.usage;
     }
 
     const command_text = try joinArgs(std.heap.smp_allocator, argv[cmd_start..]);
@@ -53,55 +79,32 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     };
     defer packs.deinit(std.heap.smp_allocator);
 
+    // Opt-in TraceCollector only on explain path (hooks leave null).
+    var collector = shell_engine.TraceCollector.init(std.heap.smp_allocator);
+    defer collector.deinit();
+
     var eval = try shell_engine.evaluateCommand(std.heap.smp_allocator, command_text, .{
         .default_packs_only = true,
         .extra_enabled = packs.enabled,
         .disabled = packs.disabled,
+        .trace = &collector,
     });
     defer eval.deinit(std.heap.smp_allocator);
 
     if (format_json) {
-        const payload = struct {
-            schema_version: i64 = 1,
-            command: []const u8,
-            decision: []const u8,
-            rule_id: ?[]const u8 = null,
-            pack_id: ?[]const u8 = null,
-            pattern_name: ?[]const u8 = null,
-            severity: []const u8,
-            reason: []const u8,
-            explanation: ?[]const u8 = null,
-            source: []const u8 = "zig.shell_engine",
-        }{
-            .command = command_text,
-            .decision = eval.decision.toString(),
-            .rule_id = eval.rule_id,
-            .pack_id = eval.pack_id,
-            .pattern_name = eval.pattern_name,
-            .severity = eval.severity.toString(),
-            .reason = eval.reason,
-            .explanation = eval.explanation,
-        };
-        const json = try std.json.Stringify.valueAlloc(std.heap.smp_allocator, payload, .{});
-        defer std.heap.smp_allocator.free(json);
-        try stdout.writeAll(json);
-        try stdout.writeAll("\n");
+        try explain_render.writeJson(std.heap.smp_allocator, stdout, command_text, eval);
     } else {
-        try stdout.print("decision: {s}\n", .{eval.decision.toString()});
-        if (eval.rule_id) |rid| try stdout.print("rule: {s}\n", .{rid});
-        try stdout.print("severity: {s}\n", .{eval.severity.toString()});
-        try stdout.print("reason: {s}\n", .{eval.reason});
-        if (eval.explanation) |ex| try stdout.print("explanation: {s}\n", .{ex});
+        try explain_render.writePretty(io, stdout, command_text, eval);
     }
-    return 0;
+    return exit_codes.success;
 }
 
 fn joinArgs(allocator: std.mem.Allocator, args: []const []const u8) ![]u8 {
     if (args.len == 0) return allocator.dupe(u8, "");
     var list: std.ArrayList(u8) = .empty;
     errdefer list.deinit(allocator);
-    for (args, 0..) |arg, i| {
-        if (i > 0) try list.append(allocator, ' ');
+    for (args, 0..) |arg, idx| {
+        if (idx > 0) try list.append(allocator, ' ');
         try list.appendSlice(allocator, arg);
     }
     return try list.toOwnedSlice(allocator);

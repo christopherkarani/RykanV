@@ -260,17 +260,21 @@ pub const commands =
         },
         .{
             .name = "explain",
-            .summary = "Explain why a shell command is blocked or allowed (Zig shell_engine)",
-            .usage = "ryk explain <command> [options]",
-            .category = .core_workflow,
+            .summary = "Explain why a shell command is blocked or allowed",
+            .usage = "ryk explain [--format json] [--] <command>",
+            .category = .getting_started,
             .public = true,
             .examples = &.{
+                "ryk explain \"rm -rf /\"",
                 "ryk explain \"git reset --hard\"",
-                "ryk explain \"rm -rf /tmp/x\" --format json",
+                "ryk explain --format json \"rm -rf /tmp/x\"",
             },
             .details = &.{
-                "Traces pack_id / pattern_name for shell commands via the in-process Zig shell_engine.",
-                "This is different from 'ryk policy explain', which explains Zig .orca/policy.yaml rules for files/network/commands.",
+                "Runs the in-process Zig shell_engine and prints a decision tree: decision, match",
+                "(rule/pack/pattern/regex/span), pipeline steps, and safer-workflow suggestions.",
+                "Nothing is executed — this is a dry-run of the same authority hooks use.",
+                "Use --format json for machine-readable output (schema_version 2 includes span and tips).",
+                "Different from 'ryk policy explain', which explains .orca/policy.yaml file/network/tool rules.",
             },
         },
         .{
@@ -493,10 +497,6 @@ pub const commands =
         } },
         .{ .name = "ci", .summary = "Run local CI readiness checks", .usage = "ryk ci check [--format markdown|json] [--github-summary <path>]", .category = .advanced, .details = &.{
             "Validates .orca/policy.yaml, rejects dangerous obvious defaults, runs a focused CI-safe redteam fixture, and emits GitHub Actions-friendly output.",
-        } },
-        .{ .name = "demo", .summary = "Create safe local demo evidence", .usage = "ryk demo blocked-action", .category = .getting_started, .details = &.{
-            "Creates a harmless local session showing a destructive command denied by ryk.",
-            "The demo writes replay/report artifacts but does not execute the destructive command.",
         } },
         .{ .name = "shutdown", .summary = "Stop the background ryk daemon", .usage = "ryk shutdown [--daemon]", .category = .advanced, .examples = &.{
             "ryk shutdown",

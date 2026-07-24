@@ -7,5 +7,6 @@ test {
     _ = shell_engine;
     _ = shell_engine.allowlist;
     _ = shell_engine.registry;
+    _ = shell_engine.trace;
     _ = @import("shell_engine/corpus_test.zig");
 }

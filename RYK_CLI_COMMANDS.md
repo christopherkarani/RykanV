@@ -63,7 +63,7 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 | `decide` / `hook` / `evaluate` | Integration APIs | `src/cli/*.zig` |
 | `dashboard` | Local Orca dashboard | `src/cli/dashboard.zig` |
 | `ci` | Local CI readiness checks | `src/cli/ci.zig` |
-| `demo` | Safe local demo evidence | `src/cli/demo.zig` |
+| `explain` | Explain shell allow/deny (Zig shell_engine) | `src/cli/shell_explain.zig` |
 | `uninstall` | Uninstall Orca from this machine | `src/cli/uninstall.zig` |
 | `env` | Print install environment for shell activation | `src/cli/mod.zig` |
 | `--print-install-env` | Hidden flag (same as `env`) | `src/cli/mod.zig` |
@@ -448,13 +448,15 @@ Run local CI readiness checks — validates policy, rejects dangerous defaults, 
 
 ---
 
-### `ryk demo`
+### `ryk explain`
 
-Create safe local demo evidence — generates a harmless session showing a destructive command being denied.
+Explain why a shell command would be allowed or denied (pretty decision tree). Does not execute the command.
 
-**Usage:** `ryk demo blocked-action`
+**Usage:** `ryk explain [--format json] [--] <command>`
 
-No optional flags.
+**Examples:**
+- `ryk explain "rm -rf /"`
+- `ryk explain --format json "git reset --hard"`
 
 ---
 

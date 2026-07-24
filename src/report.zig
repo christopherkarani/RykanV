@@ -206,7 +206,7 @@ test "report renders denied action and redaction summary" {
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    const session_id = try @import("demo.zig").createBlockedActionSession(std.testing.io, std.testing.allocator, root);
+    const session_id = try @import("blocked_action_fixture.zig").createBlockedActionSession(std.testing.io, std.testing.allocator, root);
     defer std.testing.allocator.free(session_id);
     var replay = try core_api.loadReplay(std.testing.io, std.testing.allocator, root, .{ .session = "last", .only_denied = true, .verify = true });
     defer replay.deinit();

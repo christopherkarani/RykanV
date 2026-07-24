@@ -291,22 +291,22 @@ Power users: `orca help --all` lists the full surface (`run`, `doctor`, `policy`
 
 ---
 
-## Demo
+## Try explain
 
-Run a safe local demo:
-
-```bash
-orca demo blocked-action
-```
-
-Then inspect what happened:
+See why a shell command would be blocked (no files are harmed):
 
 ```bash
-orca replay
-orca replay --only denied --verify
+ryk explain "rm -rf /"
 ```
 
-No AI agent required. No files are harmed.
+Then inspect audit history:
+
+```bash
+ryk replay
+ryk replay --only denied --verify
+```
+
+No AI agent required.
 
 ---
 

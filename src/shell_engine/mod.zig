@@ -16,9 +16,14 @@ pub const registry = @import("registry.zig");
 pub const segments = @import("segments.zig");
 pub const normalize = @import("normalize.zig");
 pub const sanitize = @import("sanitize.zig");
+pub const suggestions = @import("suggestions.zig");
+pub const trace = @import("trace.zig");
 
 pub const Decision = types.Decision;
 pub const Severity = types.Severity;
+pub const TraceCollector = trace.TraceCollector;
+pub const TraceStep = trace.TraceStep;
+pub const TraceDetails = trace.TraceDetails;
 
 pub const Evaluation = struct {
     decision: Decision,
@@ -28,15 +33,43 @@ pub const Evaluation = struct {
     severity: Severity = .high,
     reason: []const u8,
     explanation: ?[]const u8 = null,
+    regex_source: ?[]const u8 = null,
+    match_start: ?usize = null,
+    match_end: ?usize = null,
+    matched_text: ?[]const u8 = null,
+    /// Candidate string the span applies to when it differs from the input command.
+    matched_candidate: ?[]const u8 = null,
+    /// Static tip lines (not freed).
+    tips: []const []const u8 = &.{},
+    /// Pipeline steps: each is `name (duration)` with nested `detail` child.
+    /// Owned when `trace_owned` (explain path with collector).
+    trace: []const TraceStep = &.{},
+    latency_ms: u64 = 0,
     owned: bool = false,
+    /// When true, `trace` slice and each owned `detail` were allocated.
+    trace_owned: bool = false,
 
     pub fn deinit(self: *Evaluation, allocator: std.mem.Allocator) void {
+        // Trace ownership is independent of metadata ownership so hooks can
+        // attach an empty trace without free paths, and explain can free steps
+        // even if other fields are static.
+        if (self.trace_owned) {
+            for (self.trace) |step| {
+                if (step.detail) |d| allocator.free(d);
+            }
+            if (self.trace.len > 0) allocator.free(self.trace);
+            self.trace = &.{};
+            self.trace_owned = false;
+        }
         if (!self.owned) return;
         if (self.rule_id) |s| allocator.free(s);
         if (self.pack_id) |s| allocator.free(s);
         if (self.pattern_name) |s| allocator.free(s);
         allocator.free(self.reason);
         if (self.explanation) |s| allocator.free(s);
+        if (self.regex_source) |s| allocator.free(s);
+        if (self.matched_text) |s| allocator.free(s);
+        if (self.matched_candidate) |s| allocator.free(s);
         self.* = undefined;
     }
 };
@@ -52,24 +85,38 @@ pub const EvaluateOptions = struct {
     extra_enabled: []const []const u8 = &.{},
     /// Pack IDs from cwd-scoped config (`[packs] disabled = [...]`).
     disabled: []const []const u8 = &.{},
+    /// Opt-in explain instrumentation. Null on hooks/run (zero cost).
+    trace: ?*TraceCollector = null,
 };
 
 /// Evaluate a shell command line.
 /// Empty command is a no-op allow (matches oracle). Registry init failure → deny.
+/// When `options.trace` is non-null, records real timed pipeline steps for explain.
 pub fn evaluateCommand(allocator: std.mem.Allocator, command: []const u8, options: EvaluateOptions) !Evaluation {
+    const started_ms = monotonicMs();
+    if (options.trace) |t| t.beginStep();
+
     const trimmed = std.mem.trim(u8, command, " \t\r\n");
     if (trimmed.len == 0) {
-        return allowStatic("Empty command is a no-op.");
+        try endOuterStep(options.trace, .{ .message = "empty command no-op" });
+        return try finalizeEval(allocator, options.trace, allowStatic("Empty command is a no-op."), elapsedMs(started_ms));
     }
 
     if (options.allowlists) |lists| {
         if (lists.allows(trimmed)) {
-            return allowStatic("Command allowed by allowlist.");
+            try endOuterStep(options.trace, .{ .allowlist = .{ .matched = true } });
+            return try finalizeEval(allocator, options.trace, allowStatic("Command allowed by allowlist."), elapsedMs(started_ms));
         }
     }
 
     registry.ensureInit() catch {
-        return denyStatic("zig.shell:init", "zig.shell", "init-failure", .critical, "Shell pack registry failed to initialize (fail-closed).");
+        try endOuterStep(options.trace, .{ .message = "registry init failure (fail-closed)" });
+        return try finalizeEval(
+            allocator,
+            options.trace,
+            denyStatic("zig.shell:init", "zig.shell", "init-failure", .critical, "Shell pack registry failed to initialize (fail-closed)."),
+            elapsedMs(started_ms),
+        );
     };
 
     const match_opts = registry.MatchOptions{
@@ -131,9 +178,22 @@ pub fn evaluateCommand(allocator: std.mem.Allocator, command: []const u8, option
         }
     }
 
+    // DCG collapses to one outer timed step; we record real pack outcome only.
+
     for (candidates.items) |cand| {
         if (try evalOne(allocator, cand, match_opts, .{})) |hit| {
-            return try denyFromHit(allocator, hit);
+            try endOuterStep(options.trace, .{
+                .pack_evaluation = .{
+                    .matched_pack = hit.pack_id,
+                    .matched_pattern = hit.pattern_name,
+                },
+            });
+            return try finalizeEval(
+                allocator,
+                options.trace,
+                try denyFromHit(allocator, hit, cand, elapsedMs(started_ms)),
+                elapsedMs(started_ms),
+            );
         }
     }
 
@@ -145,15 +205,82 @@ pub fn evaluateCommand(allocator: std.mem.Allocator, command: []const u8, option
     try appendPipelinePrefixesToExecutor(trimmed, allocator, &pipe_payloads);
     for (pipe_payloads.items) |cand| {
         if (try evalOne(allocator, cand, match_opts, .{ .skip_data_sanitize = true })) |hit| {
-            return try denyFromHit(allocator, hit);
+            try endOuterStep(options.trace, .{
+                .pack_evaluation = .{
+                    .matched_pack = hit.pack_id,
+                    .matched_pattern = hit.pattern_name,
+                },
+            });
+            return try finalizeEval(
+                allocator,
+                options.trace,
+                try denyFromHit(allocator, hit, cand, elapsedMs(started_ms)),
+                elapsedMs(started_ms),
+            );
         }
     }
 
     _ = options.cwd;
-    return allowStatic("No destructive pack matched.");
+    try endOuterStep(options.trace, .{
+        .pack_evaluation = .{
+            .matched_pack = null,
+            .matched_pattern = null,
+            .packs_scanned = 0,
+        },
+    });
+    var allow = allowStatic("No destructive pack matched.");
+    allow.latency_ms = elapsedMs(started_ms);
+    allow.tips = &.{};
+    return try finalizeEval(allocator, options.trace, allow, elapsedMs(started_ms));
 }
 
-fn denyFromHit(allocator: std.mem.Allocator, hit: registry.Hit) !Evaluation {
+fn endOuterStep(collector: ?*TraceCollector, details: TraceDetails) !void {
+    if (collector) |t| try t.endStep("full_evaluation", details);
+}
+
+/// Attach collector steps to Evaluation when tracing; leave empty on null (hooks).
+fn finalizeEval(
+    allocator: std.mem.Allocator,
+    collector: ?*TraceCollector,
+    eval_in: Evaluation,
+    latency_ms: u64,
+) !Evaluation {
+    var eval = eval_in;
+    errdefer eval.deinit(allocator);
+    eval.latency_ms = latency_ms;
+    if (collector) |t| {
+        // Steps already recorded via endOuterStep; take ownership into Evaluation.
+        if (t.steps.items.len > 0) {
+            const steps = try t.takeSteps();
+            eval.trace = steps;
+            eval.trace_owned = true;
+        }
+    }
+    // Null collector → empty trace (zero cost; no fake peer steps).
+    return eval;
+}
+
+fn monotonicMs() i64 {
+    var ts: std.c.timespec = undefined;
+    if (std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts) != 0) return 0;
+    return @as(i64, @intCast(ts.sec)) * std.time.ms_per_s +
+        @divTrunc(@as(i64, @intCast(ts.nsec)), std.time.ns_per_ms);
+}
+
+fn elapsedMs(started_ms: i64) u64 {
+    const now = monotonicMs();
+    if (now <= started_ms) return 0;
+    return @intCast(now - started_ms);
+}
+
+fn denyFromHit(
+    allocator: std.mem.Allocator,
+    hit: registry.Hit,
+    candidate: []const u8,
+    latency_ms: u64,
+) !Evaluation {
+    // Match metadata only — pipeline steps come from TraceCollector (or empty).
+    // Never invent peer steps named `matched`.
     const rule_id = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ hit.pack_id, hit.pattern_name });
     errdefer allocator.free(rule_id);
     const pack_copy = try allocator.dupe(u8, hit.pack_id);
@@ -162,6 +289,36 @@ fn denyFromHit(allocator: std.mem.Allocator, hit: registry.Hit) !Evaluation {
     errdefer allocator.free(pattern_copy);
     const reason_copy = try allocator.dupe(u8, hit.reason);
     errdefer allocator.free(reason_copy);
+
+    const explanation = try std.fmt.allocPrint(
+        allocator,
+        "Matched destructive pattern {s}:{s}.",
+        .{ hit.pack_id, hit.pattern_name },
+    );
+    errdefer allocator.free(explanation);
+
+    var regex_copy: ?[]const u8 = null;
+    errdefer if (regex_copy) |s| allocator.free(s);
+    if (hit.regex_source) |rx| regex_copy = try allocator.dupe(u8, rx);
+
+    var matched_text: ?[]const u8 = null;
+    errdefer if (matched_text) |s| allocator.free(s);
+    var match_start = hit.match_start;
+    var match_end = hit.match_end;
+    if (match_start) |s| {
+        if (match_end) |e| {
+            if (e >= s and e <= candidate.len) {
+                matched_text = try allocator.dupe(u8, candidate[s..e]);
+            } else {
+                match_start = null;
+                match_end = null;
+            }
+        }
+    }
+
+    const cand_copy = try allocator.dupe(u8, candidate);
+    errdefer allocator.free(cand_copy);
+
     return .{
         .decision = .deny,
         .rule_id = rule_id,
@@ -169,8 +326,17 @@ fn denyFromHit(allocator: std.mem.Allocator, hit: registry.Hit) !Evaluation {
         .pattern_name = pattern_copy,
         .severity = hit.severity,
         .reason = reason_copy,
-        .explanation = null,
+        .explanation = explanation,
+        .regex_source = regex_copy,
+        .match_start = match_start,
+        .match_end = match_end,
+        .matched_text = matched_text,
+        .matched_candidate = cand_copy,
+        .tips = suggestions.forPattern(hit.pack_id, hit.pattern_name),
+        .trace = &.{},
+        .latency_ms = latency_ms,
         .owned = true,
+        .trace_owned = false,
     };
 }
 
@@ -891,6 +1057,51 @@ test "evaluateCommand denies rm -rf root" {
     try std.testing.expect(std.mem.indexOf(u8, eval.rule_id.?, "rm-rf") != null);
 }
 
+test "evaluateCommand deny carries explain metadata span regex tips and trace" {
+    var eval = try evaluateCommand(std.testing.allocator, "rm -rf /", .{});
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .deny);
+    try std.testing.expect(eval.regex_source != null);
+    try std.testing.expect(eval.regex_source.?.len > 0);
+    try std.testing.expect(eval.match_start != null);
+    try std.testing.expect(eval.match_end != null);
+    try std.testing.expect(eval.matched_text != null);
+    try std.testing.expect(eval.matched_text.?.len > 0);
+    try std.testing.expect(eval.explanation != null);
+    try std.testing.expect(eval.tips.len > 0);
+    // Without collector, trace stays empty (hooks zero-cost path).
+    try std.testing.expectEqual(@as(usize, 0), eval.trace.len);
+    try std.testing.expect(eval.matched_candidate != null);
+}
+
+test "evaluateCommand with TraceCollector records nested full_evaluation step not peer matched" {
+    var collector = TraceCollector.init(std.testing.allocator);
+    defer collector.deinit();
+    var eval = try evaluateCommand(std.testing.allocator, "rm -rf /", .{ .trace = &collector });
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .deny);
+    try std.testing.expectEqual(@as(usize, 1), eval.trace.len);
+    try std.testing.expectEqualStrings("full_evaluation", eval.trace[0].name);
+    try std.testing.expect(eval.trace[0].detail != null);
+    try std.testing.expect(std.mem.indexOf(u8, eval.trace[0].detail.?, "core.filesystem") != null);
+    // No fake peer step named "matched"
+    for (eval.trace) |step| {
+        try std.testing.expect(!std.mem.eql(u8, step.name, "matched"));
+    }
+}
+
+test "evaluateCommand with TraceCollector allow path has details child" {
+    var collector = TraceCollector.init(std.testing.allocator);
+    defer collector.deinit();
+    var eval = try evaluateCommand(std.testing.allocator, "git status", .{ .trace = &collector });
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .allow);
+    try std.testing.expectEqual(@as(usize, 1), eval.trace.len);
+    try std.testing.expectEqualStrings("full_evaluation", eval.trace[0].name);
+    try std.testing.expect(eval.trace[0].detail != null);
+    try std.testing.expect(std.mem.indexOf(u8, eval.trace[0].detail.?, "no destructive pack matched") != null);
+}
+
 test "evaluateCommand allows git status" {
     var eval = try evaluateCommand(std.testing.allocator, "git status", .{});
     defer eval.deinit(std.testing.allocator);
@@ -1196,4 +1407,5 @@ test {
     _ = sanitize;
     _ = @import("corpus_test.zig");
     _ = @import("regex_pcre.zig");
+    _ = @import("suggestions.zig");
 }

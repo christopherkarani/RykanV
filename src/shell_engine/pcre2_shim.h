@@ -12,3 +12,14 @@ void orca_regex_free(orca_regex *re);
  *  <0  = infrastructure / match error (caller must fail closed)
  */
 int orca_regex_is_match(orca_regex *re, const char *text, size_t len);
+
+/* Same contract as orca_regex_is_match. On match (return 1), writes the full-match
+ * byte span [start, end) into *out_start / *out_end when non-NULL.
+ * On no-match or error, out offsets are left unchanged.
+ */
+int orca_regex_match_span(
+    orca_regex *re,
+    const char *text,
+    size_t len,
+    size_t *out_start,
+    size_t *out_end);

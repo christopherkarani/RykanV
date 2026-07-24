@@ -38,7 +38,6 @@ pub const dashboard_command = @import("dashboard.zig");
 pub const report = @import("report.zig");
 pub const license_command = @import("license.zig");
 pub const ci = @import("ci.zig");
-pub const demo = @import("demo.zig");
 pub const disable = @import("disable.zig");
 pub const uninstall = @import("uninstall.zig");
 pub const interactive = @import("interactive.zig");
@@ -94,6 +93,7 @@ test {
     _ = hook;
     _ = shell_test;
     _ = shell_explain;
+    _ = @import("explain_render.zig");
     _ = rust_legacy_stub;
     _ = rust_visibility;
     _ = evaluate;
@@ -135,7 +135,9 @@ const self_banner_commands = [_][]const u8{ "version", "--version", "help", "run
 const always_machine_commands = [_][]const u8{
     "evaluate", "hook", "shim", "completions", "env", "dashboard", "--print-install-env",
     // Zig-native shell tools (formerly daemon-proxied): keep machine/banner-free.
-    "test", "explain",
+    // `explain` is human pretty by default (DCG-class colors); machine only via
+    // `--format json` (isMachineArgv). Own header is `RYK EXPLAIN` (no brand banner).
+    "test",
 };
 
 fn isAlwaysMachineCommand(command: []const u8) bool {
@@ -197,6 +199,8 @@ fn shouldShowBanner(command: []const u8, argv: []const []const u8) bool {
     for (self_banner_commands) |s| {
         if (std.mem.eql(u8, command, s)) return false;
     }
+    // `ryk explain` owns its DCG-style header; never double-print brand banner.
+    if (std.mem.eql(u8, command, "explain")) return false;
     if (host_launch.isHostLaunchAlias(command)) return false;
     // `decide` is a frozen machine API by default. Only its explicit human
     // output mode participates in shared presentation, even though JSON/stdin
@@ -468,7 +472,6 @@ fn runWithCwdUsing(
     if (std.mem.eql(u8, command, "report")) return report.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "license")) return license_command.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "ci")) return ci.command(io, argv[1..], stdout, stderr);
-    if (std.mem.eql(u8, command, "demo")) return demo.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "stop")) return disable.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "disable")) return disable.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "uninstall")) return uninstall.command(io, argv[1..], stdout, stderr);
@@ -480,14 +483,42 @@ fn runWithCwdUsing(
     }
 
     // Warm "did you mean?" suggestions for unknown commands (foundation UX).
-    try stderr.writeAll("orca: unknown command '");
+    try stderr.writeAll("ryk: unknown command '");
     try tui.terminal_text.write(stderr, command, .single_line);
-    if (suggestCommand(command)) |suggestion| {
-        try stderr.print("'. Did you mean '{s}'?\nRun 'ryk help' for usage.\n", .{suggestion});
+    try stderr.writeAll("'.");
+    if (looksLikeShellCommand(command, argv[1..])) {
+        try stderr.writeAll("\nThat looks like a shell command. Try:\n");
+        try stderr.writeAll("  ryk explain \"");
+        try tui.terminal_text.write(stderr, command, .single_line);
+        for (argv[1..]) |arg| {
+            try stderr.writeAll(" ");
+            try tui.terminal_text.write(stderr, arg, .single_line);
+        }
+        try stderr.writeAll("\"\n");
+    } else if (std.mem.eql(u8, command, "demo")) {
+        try stderr.writeAll("\n'demo' was removed. Use:\n  ryk explain \"rm -rf /\"\n");
+    } else if (suggestCommand(command)) |suggestion| {
+        try stderr.print(" Did you mean '{s}'?\n", .{suggestion});
     } else {
-        try stderr.writeAll("'.\nRun 'ryk help' for usage.\n");
+        try stderr.writeAll("\n");
     }
+    try stderr.writeAll("Run 'ryk help' for usage.\n");
     return exit_codes.usage;
+}
+
+/// True when the unknown top-level token (+ trailing argv) looks like a shell line,
+/// not a misspelled ryk subcommand.
+fn looksLikeShellCommand(command: []const u8, rest: []const []const u8) bool {
+    if (std.mem.indexOfScalar(u8, command, ' ') != null) return true;
+    if (std.mem.indexOfScalar(u8, command, '/') != null) return true;
+    if (rest.len > 0) {
+        // `ryk rm -rf /` style
+        const shellish = [_][]const u8{ "rm", "git", "dd", "mkfs", "sudo", "docker", "kubectl", "curl", "chmod", "chown" };
+        for (shellish) |s| {
+            if (std.mem.eql(u8, command, s)) return true;
+        }
+    }
+    return false;
 }
 
 fn proxyVersionCommand(comptime execute_cli: anytype, io: std.Io, stdout: anytype, stderr: anytype) !u8 {

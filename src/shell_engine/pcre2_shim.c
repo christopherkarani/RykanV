@@ -34,7 +34,12 @@ void orca_regex_free(orca_regex *re) {
     free(re);
 }
 
-int orca_regex_is_match(orca_regex *re, const char *text, size_t len) {
+int orca_regex_match_span(
+    orca_regex *re,
+    const char *text,
+    size_t len,
+    size_t *out_start,
+    size_t *out_end) {
     if (!re || !re->code) return -1;
     /* Empty subject is valid (no-match or match of empty patterns); never read past len. */
     if (!text && len != 0) return -1;
@@ -44,10 +49,23 @@ int orca_regex_is_match(orca_regex *re, const char *text, size_t len) {
 
     const PCRE2_SPTR subject = text ? (PCRE2_SPTR)text : (PCRE2_SPTR)"";
     int rc = pcre2_match(re->code, subject, (PCRE2_SIZE)len, 0, 0, md, NULL);
+    if (rc >= 0) {
+        if (out_start || out_end) {
+            PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(md);
+            if (ovector) {
+                if (out_start) *out_start = (size_t)ovector[0];
+                if (out_end) *out_end = (size_t)ovector[1];
+            }
+        }
+        pcre2_match_data_free(md);
+        return 1;
+    }
     pcre2_match_data_free(md);
-
-    if (rc >= 0) return 1;
     if (rc == PCRE2_ERROR_NOMATCH) return 0;
     /* Preserve negative PCRE2 error codes for diagnostics; all mean fail-closed. */
     return rc < 0 ? rc : -3;
+}
+
+int orca_regex_is_match(orca_regex *re, const char *text, size_t len) {
+    return orca_regex_match_span(re, text, len, NULL, NULL);
 }

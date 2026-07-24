@@ -24,10 +24,26 @@ pub const Regex = struct {
     /// Returns true on match, false on no-match.
     /// Infrastructure / PCRE match errors return `error.MatchInfrastructure` (fail closed).
     pub fn isMatch(self: *const Regex, text: []const u8) !bool {
+        return (try self.findMatch(text)) != null;
+    }
+
+    pub const MatchSpan = struct {
+        start: usize,
+        end: usize,
+    };
+
+    /// On match, returns the full-match byte span `[start, end)` in `text`.
+    /// Infrastructure / PCRE match errors return `error.MatchInfrastructure` (fail closed).
+    pub fn findMatch(self: *const Regex, text: []const u8) !?MatchSpan {
         const text_ptr: [*]const u8 = if (text.len == 0) "".ptr else text.ptr;
-        const rc = c.orca_regex_is_match(self.ptr, text_ptr, text.len);
-        if (rc > 0) return true;
-        if (rc == 0) return false;
+        var start: usize = 0;
+        var end: usize = 0;
+        const rc = c.orca_regex_match_span(self.ptr, text_ptr, text.len, &start, &end);
+        if (rc > 0) {
+            if (end < start or end > text.len) return error.MatchInfrastructure;
+            return .{ .start = start, .end = end };
+        }
+        if (rc == 0) return null;
         return error.MatchInfrastructure;
     }
 };
@@ -39,4 +55,13 @@ test "pcre2 matches git reset" {
     try std.testing.expect(try re.isMatch("/usr/bin/git reset --hard"));
     try std.testing.expect(try re.isMatch("sudo git reset --hard"));
     try std.testing.expect(!(try re.isMatch("echo hello")));
+}
+
+test "pcre2 findMatch returns span for rm -rf flags" {
+    var re = try Regex.compile("rm\\s+-[a-zA-Z]*[rR][a-zA-Z]*f[a-zA-Z]*");
+    defer re.deinit();
+    const span = (try re.findMatch("rm -rf /tmp")).?;
+    try std.testing.expectEqual(@as(usize, 0), span.start);
+    try std.testing.expect(span.end >= 5);
+    try std.testing.expectEqualStrings("rm -rf", "rm -rf /tmp"[span.start..span.end][0..6]);
 }

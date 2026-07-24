@@ -9,7 +9,7 @@ test "cli package exposes existing command surface without becoming edge" {
     try std.testing.expect(orca_cli.cli.help.findCommand("report") != null);
     try std.testing.expect(orca_cli.cli.help.findCommand("license") != null);
     try std.testing.expect(orca_cli.cli.help.findCommand("ci") != null);
-    try std.testing.expect(orca_cli.cli.help.findCommand("demo") != null);
+    try std.testing.expect(orca_cli.cli.help.findCommand("explain") != null);
     try std.testing.expect(orca_cli.cli.help.findCommand("edge") == null);
 }
 

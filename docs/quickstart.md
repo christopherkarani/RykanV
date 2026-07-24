@@ -98,13 +98,12 @@ Bare `orca replay` loads the **last** session and highlights denied actions. Use
 
 Removes host plugin registrations; binary and policy stay. Restart later with `orca start`.
 
-## 7. Optional: Demo, Dashboard, CI, Red-team
+## 7. Optional: Explain, Dashboard, CI, Red-team
 
-Safe local blocked-action demo (no real damage):
+Explain a destructive command without executing it (same shell engine hooks use):
 
 ```sh
-./zig-out/bin/ryk demo blocked-action
-./zig-out/bin/ryk replay
+./zig-out/bin/ryk explain "rm -rf /"
 ```
 
 Local dashboard:

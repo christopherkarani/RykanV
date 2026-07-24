@@ -10,12 +10,18 @@ pub const Hit = struct {
     pattern_name: []const u8,
     severity: Severity,
     reason: []const u8,
+    /// Borrowed pack regex source (arena-owned); null for synthetic hits.
+    regex_source: ?[]const u8 = null,
+    /// Full-match byte span on the candidate string that matched, when known.
+    match_start: ?usize = null,
+    match_end: ?usize = null,
 };
 
 const CompiledPattern = struct {
     name: []const u8,
     reason: []const u8,
     severity: Severity,
+    regex_source: []const u8,
     regex: regex_pcre.Regex,
 };
 
@@ -301,8 +307,8 @@ pub fn matchCommandDetailedOpts(cmd: []const u8, opts: MatchOptions) MatchResult
         if (pack_safe) continue;
 
         for (pack.destructive) |pat| {
-            const matched = pat.regex.isMatch(cmd) catch return matchInfraDeny();
-            if (matched) {
+            const span = pat.regex.findMatch(cmd) catch return matchInfraDeny();
+            if (span) |m| {
                 return .{ .deny = .{
                     .pack_id = pack.id,
                     .pattern_name = pat.name,
@@ -311,6 +317,9 @@ pub fn matchCommandDetailedOpts(cmd: []const u8, opts: MatchOptions) MatchResult
                         pat.reason
                     else
                         "Destructive command blocked by ryk pack.",
+                    .regex_source = pat.regex_source,
+                    .match_start = m.start,
+                    .match_end = m.end,
                 } };
             }
         }
@@ -353,6 +362,7 @@ fn compileOnePattern(a: std.mem.Allocator, pat: std.json.Value) !CompiledPattern
         .name = try a.dupe(u8, name),
         .reason = try a.dupe(u8, reason),
         .severity = severity,
+        .regex_source = try a.dupe(u8, regex_s),
         .regex = cre,
     };
 }
