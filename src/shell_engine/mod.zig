@@ -12,6 +12,10 @@ const std = @import("std");
 
 pub const types = @import("types.zig");
 pub const allowlist = @import("allowlist.zig");
+/// Permanent pack-exception store (distinct from policy Layered / Entry.prefix).
+pub const allowlist_store = @import("allowlist_store.zig");
+/// Allow-once pending + active JSONL stores (exact command + scope).
+pub const allow_once = @import("allow_once.zig");
 pub const registry = @import("registry.zig");
 pub const segments = @import("segments.zig");
 pub const normalize = @import("normalize.zig");
@@ -48,6 +52,13 @@ pub const Evaluation = struct {
     owned: bool = false,
     /// When true, `trace` slice and each owned `detail` were allocated.
     trace_owned: bool = false,
+    /// Exception attribution (static strings; not freed).
+    /// "allow_once" | "allowlist" when an exception path allowed the command.
+    exception_source: ?[]const u8 = null,
+    /// Permanent only: "user" | "project".
+    exception_layer: ?[]const u8 = null,
+    /// Permanent only: "command" | "rule".
+    exception_kind: ?[]const u8 = null,
 
     pub fn deinit(self: *Evaluation, allocator: std.mem.Allocator) void {
         // Trace ownership is independent of metadata ownership so hooks can
@@ -76,7 +87,22 @@ pub const Evaluation = struct {
 
 pub const EvaluateOptions = struct {
     cwd: ?[]const u8 = null,
+    /// Legacy policy-style Layered short-circuit (engine unit tests / non-product).
+    /// Product permanent pack exceptions use `permanent_allowlist` — not this field.
     allowlists: ?allowlist.Layered = null,
+    /// Permanent pack-exception store (kind=command pre-pack FULL ALLOW; kind=rule E8 skip).
+    /// Distinct from `allowlists` / policy Layered. Product loaders set this; not Layered.
+    permanent_allowlist: ?allowlist_store.Store = null,
+    /// Absolute path to allow_once.jsonl. Null disables allow-once matching.
+    allow_once_path: ?[]const u8 = null,
+    /// Runtime Io required with `allow_once_path` for store match/consume.
+    io: ?std.Io = null,
+    /// When true (default), consume single-use allow-once on hit (hook/run/shim/test).
+    /// When false (explain), match + attribute only and leave the store intact.
+    consume_allow_once: bool = true,
+    /// Wall-clock ISO-8601 for permanent expiry + allow-once match. Required to apply
+    /// exception paths that honor TTL; null skips permanent/allow-once allows (fail closed).
+    now_iso: ?[]const u8 = null,
     /// When true (default), only core.* + system.disk (Rust Config::default),
     /// plus any IDs in `extra_enabled`. When false, evaluate the full registry
     /// (still honoring `disabled`).
@@ -92,6 +118,11 @@ pub const EvaluateOptions = struct {
 /// Evaluate a shell command line.
 /// Empty command is a no-op allow (matches oracle). Registry init failure → deny.
 /// When `options.trace` is non-null, records real timed pipeline steps for explain.
+///
+/// Order (plan §4.1): allow-once exact → permanent kind=command FULL ALLOW →
+/// packs with permanent kind=rule as skip-this-rule only (E8).
+/// Legacy `options.allowlists` Layered remains a separate pre-pack short-circuit
+/// for engine unit tests — not the product permanent API.
 pub fn evaluateCommand(allocator: std.mem.Allocator, command: []const u8, options: EvaluateOptions) !Evaluation {
     const started_ms = monotonicMs();
     if (options.trace) |t| t.beginStep();
@@ -102,6 +133,17 @@ pub fn evaluateCommand(allocator: std.mem.Allocator, command: []const u8, option
         return try finalizeEval(allocator, options.trace, allowStatic("Empty command is a no-op."), elapsedMs(started_ms));
     }
 
+    // ── 1. Allow-once (exact command + scope) before permanent / packs ──────
+    if (try tryAllowOnce(allocator, trimmed, options, started_ms)) |eval| {
+        return eval;
+    }
+
+    // ── 2. Permanent allowlist kind=command → FULL ALLOW pre-pack ───────────
+    if (try tryPermanentCommand(allocator, trimmed, options, started_ms)) |eval| {
+        return eval;
+    }
+
+    // Legacy Layered short-circuit (policy-style; not permanent pack exceptions).
     if (options.allowlists) |lists| {
         if (lists.allows(trimmed)) {
             try endOuterStep(options.trace, .{ .allowlist = .{ .matched = true } });
@@ -119,10 +161,22 @@ pub fn evaluateCommand(allocator: std.mem.Allocator, command: []const u8, option
         );
     };
 
+    // ── 3. Pack evaluation with kind=rule permanent ids as skip-this-rule ───
+    var skip_ids: std.ArrayList([]const u8) = .empty;
+    defer skip_ids.deinit(allocator);
+    try collectPermanentRuleSkipIds(options, &skip_ids, allocator);
+
     const match_opts = registry.MatchOptions{
         .default_packs_only = options.default_packs_only,
         .extra_enabled = options.extra_enabled,
         .disabled = options.disabled,
+        .skipped_rule_ids = skip_ids.items,
+    };
+    const match_opts_no_skip = registry.MatchOptions{
+        .default_packs_only = options.default_packs_only,
+        .extra_enabled = options.extra_enabled,
+        .disabled = options.disabled,
+        .skipped_rule_ids = &.{},
     };
 
     var candidates: std.ArrayList([]const u8) = .empty;
@@ -220,7 +274,16 @@ pub fn evaluateCommand(allocator: std.mem.Allocator, command: []const u8, option
         }
     }
 
-    _ = options.cwd;
+    // Pack path allowed under skip list. If a non-skipped match would have denied
+    // with a permanent kind=rule entry, attribute allowlist rule-skip (E8).
+    if (skip_ids.items.len > 0) {
+        if (try firstDenyHit(allocator, candidates.items, pipe_payloads.items, match_opts_no_skip)) |hit| {
+            if (try tryPermanentRuleAttribution(allocator, hit, options, started_ms)) |eval| {
+                return eval;
+            }
+        }
+    }
+
     try endOuterStep(options.trace, .{
         .pack_evaluation = .{
             .matched_pack = null,
@@ -232,6 +295,195 @@ pub fn evaluateCommand(allocator: std.mem.Allocator, command: []const u8, option
     allow.latency_ms = elapsedMs(started_ms);
     allow.tips = &.{};
     return try finalizeEval(allocator, options.trace, allow, elapsedMs(started_ms));
+}
+
+fn permanentLayerName(layer: allowlist_store.Layer) []const u8 {
+    return switch (layer) {
+        .user => "user",
+        .project => "project",
+    };
+}
+
+fn collectPermanentRuleSkipIds(
+    options: EvaluateOptions,
+    out: *std.ArrayList([]const u8),
+    allocator: std.mem.Allocator,
+) !void {
+    const store = options.permanent_allowlist orelse return;
+    const now = options.now_iso orelse return;
+    for (store.entries) |e| {
+        if (e.kind != .rule) continue;
+        if (allowlist_store.isExpired(e, now)) continue;
+        const id = e.id orelse continue;
+        try out.append(allocator, id);
+    }
+}
+
+/// Plan §4.1 step 1: exact allow-once hit before permanent/packs.
+fn tryAllowOnce(
+    allocator: std.mem.Allocator,
+    trimmed: []const u8,
+    options: EvaluateOptions,
+    started_ms: i64,
+) !?Evaluation {
+    const path = options.allow_once_path orelse return null;
+    const io = options.io orelse return null;
+    const now = options.now_iso orelse return null;
+    const cwd = options.cwd orelse "";
+
+    const matched = allow_once.matchAllowOnce(
+        io,
+        allocator,
+        path,
+        trimmed,
+        cwd,
+        now,
+        options.consume_allow_once,
+    ) catch {
+        // Store IO / parse failure → fail closed (do not unlock).
+        try endOuterStep(options.trace, .{ .message = "allow_once store failure (fail-closed)" });
+        return try finalizeEval(
+            allocator,
+            options.trace,
+            denyStatic(
+                "zig.shell:allow-once",
+                "zig.shell",
+                "allow-once-store-error",
+                .critical,
+                "Allow-once store failed (fail-closed).",
+            ),
+            elapsedMs(started_ms),
+        );
+    };
+    const entry = matched orelse return null;
+    defer allow_once.freeAllowOnceEntry(allocator, entry);
+
+    const detail = try std.fmt.allocPrint(
+        allocator,
+        "allow_once matched source=allow_once reason={s}",
+        .{entry.reason},
+    );
+    defer allocator.free(detail);
+    try endOuterStep(options.trace, .{ .message = detail });
+
+    return try finalizeEval(
+        allocator,
+        options.trace,
+        try allowExceptionOwned(
+            allocator,
+            entry.reason,
+            "allow_once",
+            null,
+            null,
+        ),
+        elapsedMs(started_ms),
+    );
+}
+
+/// Plan §4.1 step 2: permanent kind=command exact → FULL ALLOW pre-pack.
+fn tryPermanentCommand(
+    allocator: std.mem.Allocator,
+    trimmed: []const u8,
+    options: EvaluateOptions,
+    started_ms: i64,
+) !?Evaluation {
+    const store = options.permanent_allowlist orelse return null;
+    const now = options.now_iso orelse return null;
+    const entry = store.matchCommand(trimmed, now) orelse return null;
+
+    const layer = permanentLayerName(entry.layer);
+    const detail = try std.fmt.allocPrint(
+        allocator,
+        "allowlist source=allowlist layer={s} kind=command reason={s}",
+        .{ layer, entry.reason },
+    );
+    defer allocator.free(detail);
+    try endOuterStep(options.trace, .{ .message = detail });
+
+    return try finalizeEval(
+        allocator,
+        options.trace,
+        try allowExceptionOwned(
+            allocator,
+            entry.reason,
+            "allowlist",
+            layer,
+            "command",
+        ),
+        elapsedMs(started_ms),
+    );
+}
+
+/// After pack path allows under skip list: if a non-skipped match would deny on a
+/// permanently allowlisted rule_id, attribute rule-skip allow (E8).
+fn tryPermanentRuleAttribution(
+    allocator: std.mem.Allocator,
+    hit: registry.Hit,
+    options: EvaluateOptions,
+    started_ms: i64,
+) !?Evaluation {
+    const store = options.permanent_allowlist orelse return null;
+    const now = options.now_iso orelse return null;
+
+    var rule_buf: [256]u8 = undefined;
+    const rule_id = std.fmt.bufPrint(&rule_buf, "{s}:{s}", .{ hit.pack_id, hit.pattern_name }) catch return null;
+    const entry = store.matchRule(rule_id, now) orelse return null;
+
+    const layer = permanentLayerName(entry.layer);
+    const detail = try std.fmt.allocPrint(
+        allocator,
+        "allowlist source=allowlist layer={s} kind=rule reason={s}",
+        .{ layer, entry.reason },
+    );
+    defer allocator.free(detail);
+    try endOuterStep(options.trace, .{ .message = detail });
+
+    return try finalizeEval(
+        allocator,
+        options.trace,
+        try allowExceptionOwned(
+            allocator,
+            entry.reason,
+            "allowlist",
+            layer,
+            "rule",
+        ),
+        elapsedMs(started_ms),
+    );
+}
+
+fn firstDenyHit(
+    allocator: std.mem.Allocator,
+    candidates: []const []const u8,
+    pipe_payloads: []const []const u8,
+    match_opts: registry.MatchOptions,
+) !?registry.Hit {
+    for (candidates) |cand| {
+        if (try evalOne(allocator, cand, match_opts, .{})) |hit| return hit;
+    }
+    for (pipe_payloads) |cand| {
+        if (try evalOne(allocator, cand, match_opts, .{ .skip_data_sanitize = true })) |hit| return hit;
+    }
+    return null;
+}
+
+fn allowExceptionOwned(
+    allocator: std.mem.Allocator,
+    reason_text: []const u8,
+    source: []const u8,
+    layer: ?[]const u8,
+    kind: ?[]const u8,
+) !Evaluation {
+    const reason = try allocator.dupe(u8, reason_text);
+    return .{
+        .decision = .allow,
+        .severity = .low,
+        .reason = reason,
+        .owned = true,
+        .exception_source = source,
+        .exception_layer = layer,
+        .exception_kind = kind,
+    };
 }
 
 fn endOuterStep(collector: ?*TraceCollector, details: TraceDetails) !void {
@@ -1399,6 +1651,757 @@ test "phase1 hard-fence catastrophe table Mode A" {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// s-engine — plan §4.1 evaluate order (RED until implementer wires pipeline)
+//
+// Contract pinned for implementer (mod.zig + registry.zig exclusive):
+//
+// EvaluateOptions (distinct permanent API — NOT `allowlists` / Layered):
+//   .permanent_allowlist: ?allowlist_store.Store = null
+//   .allow_once_path: ?[]const u8 = null
+//   .io: ?std.Io = null                    // required with allow_once_path
+//   .consume_allow_once: bool = true       // false for explain (match only)
+//   .now_iso: ?[]const u8 = null          // expiry clock for permanent + allow-once
+//   .cwd already used for allow-once scope
+//
+// Evaluation attribution on exception allow:
+//   .exception_source: ?[]const u8 = null // "allow_once" | "allowlist"
+//   .exception_layer: ?[]const u8 = null  // "user" | "project" (permanent)
+//   .exception_kind: ?[]const u8 = null   // "command" | "rule" (permanent)
+//   .reason includes entry reason text
+//
+// Order: 1 allow-once exact → 2 permanent kind=command FULL ALLOW →
+//        3 packs with permanent kind=rule as skip-this-rule only (E8)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Re-exports live at module top (`pub const allowlist_store` / `allow_once`).
+// Test helpers alias allow-once for historical `allow_once_mod` call sites.
+const allow_once_mod = allow_once;
+
+const s_engine_now = "2026-07-25T15:00:00Z";
+const s_engine_future = "9999-01-01T00:00:00Z";
+
+fn sEnginePermanentStore(entries: []const allowlist_store.PermanentEntry) allowlist_store.Store {
+    // Cast away const for Store.entries slice type; tests use static literals only.
+    return .{
+        .entries = @constCast(entries),
+        .owned = false,
+    };
+}
+
+fn sEngineTmpRoot() !struct { dir: std.testing.TmpDir, path: []u8 } {
+    var tmp = std.testing.tmpDir(.{});
+    errdefer tmp.cleanup();
+    const path_z = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(path_z);
+    const path = try std.testing.allocator.dupe(u8, path_z);
+    return .{ .dir = tmp, .path = path };
+}
+
+fn sEngineJoin(tmp_path: []const u8, rel: []const u8) ![]u8 {
+    return try std.fs.path.join(std.testing.allocator, &.{ tmp_path, rel });
+}
+
+fn sEngineSeedAllowOnce(
+    pending_path: []const u8,
+    allow_once_path: []const u8,
+    command: []const u8,
+    cwd: []const u8,
+    reason: []const u8,
+) !void {
+    var issued = try allow_once_mod.issuePending(
+        std.testing.io,
+        std.testing.allocator,
+        pending_path,
+        command,
+        cwd,
+        reason,
+        s_engine_now,
+        true,
+    );
+    defer issued.deinit(std.testing.allocator);
+    const entry = try allow_once_mod.redeem(
+        std.testing.io,
+        std.testing.allocator,
+        pending_path,
+        allow_once_path,
+        issued.record.short_code,
+        s_engine_now,
+        .cwd,
+        cwd,
+    );
+    allow_once_mod.freeAllowOnceEntry(std.testing.allocator, entry);
+}
+
+// ── Acceptance 1: kind=command FULL ALLOW pre-pack; kind=rule E8 skip ───────
+
+test "s-engine: kind=command permanent FULL ALLOW pre-pack exact command" {
+    const reason = "recovering local branch after failed rebase work";
+    const store = sEnginePermanentStore(&.{
+        .{
+            .kind = .command,
+            .command = "git reset --hard HEAD",
+            .reason = reason,
+            .created_at = "2026-07-25T12:00:00Z",
+            .layer = .project,
+        },
+    });
+
+    // Baseline without permanent → deny.
+    {
+        var deny = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{});
+        defer deny.deinit(std.testing.allocator);
+        try std.testing.expect(deny.decision == .deny);
+        try std.testing.expect(deny.exception_source == null);
+    }
+
+    var eval = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now,
+    });
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .allow);
+    try std.testing.expectEqualStrings("allowlist", eval.exception_source.?);
+    try std.testing.expectEqualStrings("project", eval.exception_layer.?);
+    try std.testing.expectEqualStrings("command", eval.exception_kind.?);
+    try std.testing.expect(std.mem.indexOf(u8, eval.reason, reason) != null);
+
+    // Near-miss / non-exact command still denies (exact-only; no prefix).
+    var miss = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD~1", .{
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now,
+    });
+    defer miss.deinit(std.testing.allocator);
+    try std.testing.expect(miss.decision == .deny);
+    try std.testing.expect(miss.exception_source == null);
+}
+
+test "s-engine: kind=command permanent does not FULL ALLOW different compound string" {
+    // Exact-command short-circuit applies only to the full command string.
+    const store = sEnginePermanentStore(&.{
+        .{
+            .kind = .command,
+            .command = "git reset --hard HEAD",
+            .reason = "exact reset only for this recovery path",
+            .created_at = "2026-07-25T12:00:00Z",
+            .layer = .user,
+        },
+    });
+    var eval = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD; rm -rf /", .{
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now,
+    });
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .deny);
+    try std.testing.expect(eval.exception_source == null);
+}
+
+test "s-engine: kind=rule skips only that rule_id and allows matching command" {
+    const reason = "temporary exception for hard reset on feature branch";
+    const store = sEnginePermanentStore(&.{
+        .{
+            .kind = .rule,
+            .id = "core.git:reset-hard",
+            .reason = reason,
+            .created_at = "2026-07-25T12:00:00Z",
+            .layer = .user,
+        },
+    });
+
+    var eval = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now,
+    });
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .allow);
+    try std.testing.expectEqualStrings("allowlist", eval.exception_source.?);
+    try std.testing.expectEqualStrings("user", eval.exception_layer.?);
+    try std.testing.expectEqualStrings("rule", eval.exception_kind.?);
+    try std.testing.expect(std.mem.indexOf(u8, eval.reason, reason) != null);
+}
+
+test "s-engine: E8 compound still denies when only core.git:reset-hard is allowlisted" {
+    const store = sEnginePermanentStore(&.{
+        .{
+            .kind = .rule,
+            .id = "core.git:reset-hard",
+            .reason = "reset exception must not unlock filesystem wipe",
+            .created_at = "2026-07-25T12:00:00Z",
+            .layer = .project,
+        },
+    });
+
+    // Multi-pack compound: skip git rule only; filesystem still denies.
+    var compound = try evaluateCommand(std.testing.allocator, "git reset --hard; rm -rf /", .{
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now,
+    });
+    defer compound.deinit(std.testing.allocator);
+    try std.testing.expect(compound.decision == .deny);
+    try std.testing.expect(compound.exception_source == null);
+    try std.testing.expect(compound.pack_id != null);
+    try std.testing.expectEqualStrings("core.filesystem", compound.pack_id.?);
+    try std.testing.expect(compound.rule_id != null);
+    try std.testing.expect(std.mem.indexOf(u8, compound.rule_id.?, "rm-rf") != null);
+
+    // Other pack alone still denies under the same rule-id allowlist.
+    var other = try evaluateCommand(std.testing.allocator, "rm -rf /", .{
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now,
+    });
+    defer other.deinit(std.testing.allocator);
+    try std.testing.expect(other.decision == .deny);
+    try std.testing.expect(other.exception_source == null);
+}
+
+test "s-engine: kind=rule is not pre-pack FULL ALLOW for unrelated destructive patterns" {
+    // Allowlisting reset-hard must not suppress push --force (same pack, different rule).
+    const store = sEnginePermanentStore(&.{
+        .{
+            .kind = .rule,
+            .id = "core.git:reset-hard",
+            .reason = "only reset-hard skip, not all git destructives",
+            .created_at = "2026-07-25T12:00:00Z",
+            .layer = .user,
+        },
+    });
+    var eval = try evaluateCommand(std.testing.allocator, "git push --force origin main", .{
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now,
+    });
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .deny);
+    try std.testing.expect(eval.rule_id != null);
+    try std.testing.expectEqualStrings("core.git:push-force-long", eval.rule_id.?);
+}
+
+// ── Acceptance 2: allow-once before permanent/packs; consume flag ───────────
+
+test "s-engine: allow-once exact hit allows before packs and consumes when true" {
+    var tmp = try sEngineTmpRoot();
+    defer {
+        std.testing.allocator.free(tmp.path);
+        tmp.dir.cleanup();
+    }
+    const pending_path = try sEngineJoin(tmp.path, allow_once_mod.pending_file_name);
+    defer std.testing.allocator.free(pending_path);
+    const once_path = try sEngineJoin(tmp.path, allow_once_mod.allow_once_file_name);
+    defer std.testing.allocator.free(once_path);
+
+    const cmd = "git reset --hard HEAD";
+    const cwd = "/work/project";
+    const once_reason = "one-time unlock after human review of deny panel";
+    try sEngineSeedAllowOnce(pending_path, once_path, cmd, cwd, once_reason);
+
+    // First evaluate with consume=true → allow + consume.
+    var first = try evaluateCommand(std.testing.allocator, cmd, .{
+        .cwd = cwd,
+        .allow_once_path = once_path,
+        .io = std.testing.io,
+        .consume_allow_once = true,
+        .now_iso = s_engine_now,
+    });
+    defer first.deinit(std.testing.allocator);
+    try std.testing.expect(first.decision == .allow);
+    try std.testing.expectEqualStrings("allow_once", first.exception_source.?);
+    try std.testing.expect(std.mem.indexOf(u8, first.reason, once_reason) != null);
+
+    // Second evaluate → packs deny (single-use burned).
+    var second = try evaluateCommand(std.testing.allocator, cmd, .{
+        .cwd = cwd,
+        .allow_once_path = once_path,
+        .io = std.testing.io,
+        .consume_allow_once = true,
+        .now_iso = s_engine_now,
+    });
+    defer second.deinit(std.testing.allocator);
+    try std.testing.expect(second.decision == .deny);
+    try std.testing.expect(second.exception_source == null);
+}
+
+test "s-engine: consume_allow_once false matches without consuming (explain)" {
+    var tmp = try sEngineTmpRoot();
+    defer {
+        std.testing.allocator.free(tmp.path);
+        tmp.dir.cleanup();
+    }
+    const pending_path = try sEngineJoin(tmp.path, allow_once_mod.pending_file_name);
+    defer std.testing.allocator.free(pending_path);
+    const once_path = try sEngineJoin(tmp.path, allow_once_mod.allow_once_file_name);
+    defer std.testing.allocator.free(once_path);
+
+    const cmd = "git reset --hard HEAD";
+    const cwd = "/work/project";
+    const once_reason = "explain dry-run must not burn single-use exception";
+    try sEngineSeedAllowOnce(pending_path, once_path, cmd, cwd, once_reason);
+
+    // Explain path: match + attribute, leave store intact.
+    var explain = try evaluateCommand(std.testing.allocator, cmd, .{
+        .cwd = cwd,
+        .allow_once_path = once_path,
+        .io = std.testing.io,
+        .consume_allow_once = false,
+        .now_iso = s_engine_now,
+    });
+    defer explain.deinit(std.testing.allocator);
+    try std.testing.expect(explain.decision == .allow);
+    try std.testing.expectEqualStrings("allow_once", explain.exception_source.?);
+    try std.testing.expect(std.mem.indexOf(u8, explain.reason, once_reason) != null);
+
+    // Still available for a real consume.
+    var live = try evaluateCommand(std.testing.allocator, cmd, .{
+        .cwd = cwd,
+        .allow_once_path = once_path,
+        .io = std.testing.io,
+        .consume_allow_once = true,
+        .now_iso = s_engine_now,
+    });
+    defer live.deinit(std.testing.allocator);
+    try std.testing.expect(live.decision == .allow);
+    try std.testing.expectEqualStrings("allow_once", live.exception_source.?);
+
+    // Burned after real consume.
+    var burned = try evaluateCommand(std.testing.allocator, cmd, .{
+        .cwd = cwd,
+        .allow_once_path = once_path,
+        .io = std.testing.io,
+        .consume_allow_once = true,
+        .now_iso = s_engine_now,
+    });
+    defer burned.deinit(std.testing.allocator);
+    try std.testing.expect(burned.decision == .deny);
+}
+
+test "s-engine: allow-once exact hit is checked before permanent kind=rule" {
+    var tmp = try sEngineTmpRoot();
+    defer {
+        std.testing.allocator.free(tmp.path);
+        tmp.dir.cleanup();
+    }
+    const pending_path = try sEngineJoin(tmp.path, allow_once_mod.pending_file_name);
+    defer std.testing.allocator.free(pending_path);
+    const once_path = try sEngineJoin(tmp.path, allow_once_mod.allow_once_file_name);
+    defer std.testing.allocator.free(once_path);
+
+    const cmd = "git reset --hard HEAD";
+    const cwd = "/work/project";
+    const once_reason = "allow-once reason wins when both would allow";
+    const permanent_reason = "permanent rule reason must not be the attribution source";
+    try sEngineSeedAllowOnce(pending_path, once_path, cmd, cwd, once_reason);
+
+    const store = sEnginePermanentStore(&.{
+        .{
+            .kind = .rule,
+            .id = "core.git:reset-hard",
+            .reason = permanent_reason,
+            .created_at = "2026-07-25T12:00:00Z",
+            .layer = .project,
+        },
+    });
+
+    var eval = try evaluateCommand(std.testing.allocator, cmd, .{
+        .cwd = cwd,
+        .allow_once_path = once_path,
+        .io = std.testing.io,
+        .consume_allow_once = false,
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now,
+    });
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .allow);
+    // Order proof: allow-once is source when both could allow (rule-skip path).
+    try std.testing.expectEqualStrings("allow_once", eval.exception_source.?);
+    try std.testing.expect(std.mem.indexOf(u8, eval.reason, once_reason) != null);
+    try std.testing.expect(std.mem.indexOf(u8, eval.reason, permanent_reason) == null);
+}
+
+test "s-engine: allow-once exact hit is checked before permanent kind=command FULL ALLOW" {
+    // Twin order proof for the pre-pack FULL ALLOW branch: if permanent kind=command
+    // ran first, exception_source would be "allowlist" with permanent reason.
+    var tmp = try sEngineTmpRoot();
+    defer {
+        std.testing.allocator.free(tmp.path);
+        tmp.dir.cleanup();
+    }
+    const pending_path = try sEngineJoin(tmp.path, allow_once_mod.pending_file_name);
+    defer std.testing.allocator.free(pending_path);
+    const once_path = try sEngineJoin(tmp.path, allow_once_mod.allow_once_file_name);
+    defer std.testing.allocator.free(once_path);
+
+    const cmd = "git reset --hard HEAD";
+    const cwd = "/work/project";
+    const once_reason = "allow-once wins over permanent command short-circuit";
+    const permanent_reason = "permanent command FULL ALLOW must not win the race";
+    try sEngineSeedAllowOnce(pending_path, once_path, cmd, cwd, once_reason);
+
+    const store = sEnginePermanentStore(&.{
+        .{
+            .kind = .command,
+            .command = cmd,
+            .reason = permanent_reason,
+            .created_at = "2026-07-25T12:00:00Z",
+            .layer = .project,
+        },
+    });
+
+    var eval = try evaluateCommand(std.testing.allocator, cmd, .{
+        .cwd = cwd,
+        .allow_once_path = once_path,
+        .io = std.testing.io,
+        .consume_allow_once = false,
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now,
+    });
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .allow);
+    try std.testing.expectEqualStrings("allow_once", eval.exception_source.?);
+    try std.testing.expect(std.mem.indexOf(u8, eval.reason, once_reason) != null);
+    try std.testing.expect(std.mem.indexOf(u8, eval.reason, permanent_reason) == null);
+    // Permanent command path must not partially attribute either.
+    try std.testing.expect(eval.exception_kind == null or !std.mem.eql(u8, eval.exception_kind.?, "command"));
+}
+
+test "s-engine: allow-once wrong cwd does not match" {
+    var tmp = try sEngineTmpRoot();
+    defer {
+        std.testing.allocator.free(tmp.path);
+        tmp.dir.cleanup();
+    }
+    const pending_path = try sEngineJoin(tmp.path, allow_once_mod.pending_file_name);
+    defer std.testing.allocator.free(pending_path);
+    const once_path = try sEngineJoin(tmp.path, allow_once_mod.allow_once_file_name);
+    defer std.testing.allocator.free(once_path);
+
+    const cmd = "git reset --hard HEAD";
+    try sEngineSeedAllowOnce(pending_path, once_path, cmd, "/allowed/cwd", "scoped exception");
+
+    var eval = try evaluateCommand(std.testing.allocator, cmd, .{
+        .cwd = "/other/cwd",
+        .allow_once_path = once_path,
+        .io = std.testing.io,
+        .consume_allow_once = false,
+        .now_iso = s_engine_now,
+    });
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .deny);
+    try std.testing.expect(eval.exception_source == null);
+}
+
+// ── Acceptance 3: distinct permanent API; trace attribution ─────────────────
+
+test "s-engine: permanent exceptions not wired via EvaluateOptions.allowlists" {
+    // Permanent uses dedicated field; Layered allowlists remains a separate legacy short-circuit.
+    const permanent_reason = "distinct permanent API reason text for attribution";
+    const store = sEnginePermanentStore(&.{
+        .{
+            .kind = .command,
+            .command = "git reset --hard HEAD",
+            .reason = permanent_reason,
+            .created_at = "2026-07-25T12:00:00Z",
+            .layer = .project,
+        },
+    });
+
+    // Product permanent path: permanent_allowlist field only (no Layered).
+    var via_permanent = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+        .permanent_allowlist = store,
+        .allowlists = null,
+        .now_iso = s_engine_now,
+    });
+    defer via_permanent.deinit(std.testing.allocator);
+    try std.testing.expect(via_permanent.decision == .allow);
+    try std.testing.expectEqualStrings("allowlist", via_permanent.exception_source.?);
+    try std.testing.expectEqualStrings("command", via_permanent.exception_kind.?);
+
+    // Legacy Layered still works for engine unit tests (policy-style exact), but is
+    // NOT the permanent store API — attribution must not claim permanent allowlist.
+    const layered: allowlist.Layered = .{
+        .entries = &.{
+            .{ .pattern = "git reset --hard HEAD", .prefix = false },
+        },
+    };
+    var via_layered = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+        .allowlists = layered,
+        .permanent_allowlist = null,
+        .now_iso = s_engine_now,
+    });
+    defer via_layered.deinit(std.testing.allocator);
+    try std.testing.expect(via_layered.decision == .allow);
+    // Legacy Layered short-circuit must not claim permanent exception attribution.
+    try std.testing.expect(via_layered.exception_source == null);
+    try std.testing.expect(via_layered.exception_layer == null);
+    try std.testing.expect(via_layered.exception_kind == null);
+
+    // Prefix Layered still works; permanent command is exact-only (covered elsewhere).
+    const layered_prefix: allowlist.Layered = .{
+        .entries = &.{
+            .{ .pattern = "npm run ", .prefix = true },
+        },
+    };
+    var prefix_hit = try evaluateCommand(std.testing.allocator, "npm run test", .{
+        .allowlists = layered_prefix,
+    });
+    defer prefix_hit.deinit(std.testing.allocator);
+    try std.testing.expect(prefix_hit.decision == .allow);
+}
+
+test "s-engine: EvaluateOptions defaults leave permanent and allow-once disabled" {
+    // Default options must not invent permanent/allow-once allows; packs still deny.
+    const opts = EvaluateOptions{};
+    try std.testing.expect(opts.consume_allow_once == true);
+    try std.testing.expect(opts.permanent_allowlist == null);
+    try std.testing.expect(opts.allow_once_path == null);
+    try std.testing.expect(opts.io == null);
+    try std.testing.expect(opts.now_iso == null);
+
+    var eval = try evaluateCommand(std.testing.allocator, "git reset --hard", opts);
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .deny);
+    try std.testing.expect(eval.exception_source == null);
+}
+
+test "s-engine: trace attributes source layer kind reason on permanent allow" {
+    const reason = "trace must record permanent allowlist source layer kind reason";
+    const store = sEnginePermanentStore(&.{
+        .{
+            .kind = .command,
+            .command = "git reset --hard HEAD",
+            .reason = reason,
+            .created_at = "2026-07-25T12:00:00Z",
+            .layer = .project,
+        },
+    });
+
+    var collector = TraceCollector.init(std.testing.allocator);
+    defer collector.deinit();
+    var eval = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now,
+        .trace = &collector,
+    });
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .allow);
+    try std.testing.expectEqualStrings("allowlist", eval.exception_source.?);
+    try std.testing.expectEqualStrings("project", eval.exception_layer.?);
+    try std.testing.expectEqualStrings("command", eval.exception_kind.?);
+    try std.testing.expect(std.mem.indexOf(u8, eval.reason, reason) != null);
+
+    // Trace step detail must embed source / layer / kind / exact entry reason text.
+    // Do not accept a hollow keyword "reason" without the entry's reason string.
+    try std.testing.expect(eval.trace.len >= 1);
+    var found_attr = false;
+    for (eval.trace) |step| {
+        const d = step.detail orelse continue;
+        const has_source = std.mem.indexOf(u8, d, "allowlist") != null;
+        const has_layer = std.mem.indexOf(u8, d, "project") != null;
+        const has_kind = std.mem.indexOf(u8, d, "command") != null;
+        const has_reason = std.mem.indexOf(u8, d, reason) != null;
+        if (has_source and has_layer and has_kind and has_reason) {
+            found_attr = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_attr);
+}
+
+test "s-engine: trace attributes allow_once source and reason" {
+    var tmp = try sEngineTmpRoot();
+    defer {
+        std.testing.allocator.free(tmp.path);
+        tmp.dir.cleanup();
+    }
+    const pending_path = try sEngineJoin(tmp.path, allow_once_mod.pending_file_name);
+    defer std.testing.allocator.free(pending_path);
+    const once_path = try sEngineJoin(tmp.path, allow_once_mod.allow_once_file_name);
+    defer std.testing.allocator.free(once_path);
+
+    const cmd = "git reset --hard HEAD";
+    const cwd = "/work/project";
+    const once_reason = "allow-once trace attribution reason text";
+    try sEngineSeedAllowOnce(pending_path, once_path, cmd, cwd, once_reason);
+
+    var collector = TraceCollector.init(std.testing.allocator);
+    defer collector.deinit();
+    var eval = try evaluateCommand(std.testing.allocator, cmd, .{
+        .cwd = cwd,
+        .allow_once_path = once_path,
+        .io = std.testing.io,
+        .consume_allow_once = false,
+        .now_iso = s_engine_now,
+        .trace = &collector,
+    });
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .allow);
+    try std.testing.expectEqualStrings("allow_once", eval.exception_source.?);
+    try std.testing.expect(std.mem.indexOf(u8, eval.reason, once_reason) != null);
+
+    try std.testing.expect(eval.trace.len >= 1);
+    var found = false;
+    for (eval.trace) |step| {
+        const d = step.detail orelse continue;
+        // Exact entry reason required — hollow "reason" keyword alone is not enough.
+        if (std.mem.indexOf(u8, d, "allow_once") != null and
+            std.mem.indexOf(u8, d, once_reason) != null)
+        {
+            found = true;
+            break;
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "s-engine: permanent kind=command does not match prefix-looking longer command" {
+    // Permanent path is exact-only (no Entry.prefix). Use a canonical stored command
+    // (no outer whitespace) so evaluate's trim + store match stay greenable.
+    // Trailing-space stored values are store-level (s2-store) only — evaluate always
+    // trims input, so a positive arm on "npm run " cannot hit after trim.
+    const exact_cmd = "npm run build";
+    const reason = "exact npm run build exception only";
+    const store = sEnginePermanentStore(&.{
+        .{
+            .kind = .command,
+            .command = exact_cmd,
+            .reason = reason,
+            .created_at = "2026-07-25T12:00:00Z",
+            .layer = .user,
+        },
+    });
+
+    // Longer / sibling command must not receive permanent attribution (anti-prefix).
+    var longer = try evaluateCommand(std.testing.allocator, "npm run build --production", .{
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now,
+    });
+    defer longer.deinit(std.testing.allocator);
+    try std.testing.expect(longer.exception_source == null or
+        !std.mem.eql(u8, longer.exception_source.?, "allowlist"));
+
+    // Canonical exact command FULL ALLOWs with permanent attribution.
+    var exact = try evaluateCommand(std.testing.allocator, exact_cmd, .{
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now,
+    });
+    defer exact.deinit(std.testing.allocator);
+    try std.testing.expect(exact.decision == .allow);
+    try std.testing.expectEqualStrings("allowlist", exact.exception_source.?);
+    try std.testing.expectEqualStrings("command", exact.exception_kind.?);
+    try std.testing.expect(std.mem.indexOf(u8, exact.reason, reason) != null);
+}
+
+test "s-engine: expired permanent kind=command is ignored (no FULL ALLOW)" {
+    const store = sEnginePermanentStore(&.{
+        .{
+            .kind = .command,
+            .command = "git reset --hard HEAD",
+            .reason = "expired permanent must not allow",
+            .created_at = "2026-07-20T12:00:00Z",
+            .expires_at = "2026-07-24T00:00:00Z",
+            .layer = .user,
+        },
+    });
+    var eval = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now, // after expires_at
+    });
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .deny);
+    try std.testing.expect(eval.exception_source == null);
+}
+
+test "s-engine: expired permanent kind=rule is ignored (not added to skip list)" {
+    // Expired rule must not enter skipped_rule_ids; pack deny still fires.
+    const store = sEnginePermanentStore(&.{
+        .{
+            .kind = .rule,
+            .id = "core.git:reset-hard",
+            .reason = "expired rule skip must not unlock reset-hard",
+            .created_at = "2026-07-20T12:00:00Z",
+            .expires_at = "2026-07-24T00:00:00Z",
+            .layer = .project,
+        },
+    });
+    var eval = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now, // after expires_at
+    });
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .deny);
+    try std.testing.expect(eval.exception_source == null);
+
+    // Same entry not yet expired → still allows via rule skip.
+    var live = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+        .permanent_allowlist = store,
+        .now_iso = "2026-07-23T00:00:00Z", // before expires_at
+    });
+    defer live.deinit(std.testing.allocator);
+    try std.testing.expect(live.decision == .allow);
+    try std.testing.expectEqualStrings("allowlist", live.exception_source.?);
+    try std.testing.expectEqualStrings("rule", live.exception_kind.?);
+}
+
+test "s-engine: unexpired permanent with far-future expiry still allows" {
+    // Uses s_engine_future as expires_at so the non-expired path is pinned.
+    const store = sEnginePermanentStore(&.{
+        .{
+            .kind = .command,
+            .command = "git reset --hard HEAD",
+            .reason = "far-future expiry must still FULL ALLOW",
+            .created_at = "2026-07-25T12:00:00Z",
+            .expires_at = s_engine_future,
+            .layer = .project,
+        },
+    });
+    var eval = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now,
+    });
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .allow);
+    try std.testing.expectEqualStrings("allowlist", eval.exception_source.?);
+    try std.testing.expectEqualStrings("command", eval.exception_kind.?);
+}
+
+test "s-engine: multiple permanent kind=rule ids all skip (not first-only)" {
+    // Evaluate must collect every non-expired kind=rule into skipped_rule_ids.
+    // Skipping only the first store entry would leave reset-hard denying.
+    const store = sEnginePermanentStore(&.{
+        .{
+            .kind = .rule,
+            .id = "core.filesystem:rm-rf-root-home",
+            .reason = "first rule skip filesystem wipe pattern",
+            .created_at = "2026-07-25T12:00:00Z",
+            .layer = .user,
+        },
+        .{
+            .kind = .rule,
+            .id = "core.git:reset-hard",
+            .reason = "second rule skip must also apply at evaluate",
+            .created_at = "2026-07-25T12:00:00Z",
+            .layer = .user,
+        },
+    });
+
+    // Needs the second skip (reset-hard) — proves multi-id skip list build.
+    var reset = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now,
+    });
+    defer reset.deinit(std.testing.allocator);
+    try std.testing.expect(reset.decision == .allow);
+    try std.testing.expectEqualStrings("allowlist", reset.exception_source.?);
+    try std.testing.expectEqualStrings("rule", reset.exception_kind.?);
+
+    // Unrelated pack still denies under multi-rule permanent store (E8).
+    var disk = try evaluateCommand(std.testing.allocator, "mkfs.ext4 /dev/sda1", .{
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now,
+    });
+    defer disk.deinit(std.testing.allocator);
+    try std.testing.expect(disk.decision == .deny);
+    try std.testing.expect(disk.exception_source == null);
+    try std.testing.expectEqualStrings("system.disk", disk.pack_id.?);
+}
+
 test {
     _ = allowlist;
     _ = registry;
@@ -1408,4 +2411,7 @@ test {
     _ = @import("corpus_test.zig");
     _ = @import("regex_pcre.zig");
     _ = @import("suggestions.zig");
+    // Pull store unit tests into shell-engine monopath (s-engine ownership).
+    _ = @import("allowlist_store.zig");
+    _ = @import("allow_once.zig");
 }

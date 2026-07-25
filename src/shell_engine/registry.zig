@@ -240,6 +240,10 @@ pub const MatchOptions = struct {
     extra_enabled: []const []const u8 = &.{},
     /// Pack IDs to force-disable (takes precedence over default/extra).
     disabled: []const []const u8 = &.{},
+    /// Permanent allowlist kind=rule ids (`{pack_id}:{pattern_name}`). Destructive
+    /// hits whose full rule id is listed are skipped and matching continues (E8:
+    /// skip-this-rule only — never a pre-pack full allow for other packs/patterns).
+    skipped_rule_ids: []const []const u8 = &.{},
 };
 
 /// Fail-closed hit when PCRE match infrastructure fails (OOM, null code, other errors).
@@ -286,6 +290,17 @@ fn packIsActive(pack: CompiledPack, opts: MatchOptions) bool {
     return packIdListed(pack.id, opts.extra_enabled);
 }
 
+/// True when `{pack_id}:{pattern_name}` is present in `skipped_rule_ids` (exact).
+fn ruleIdIsSkipped(pack_id: []const u8, pattern_name: []const u8, skipped: []const []const u8) bool {
+    for (skipped) |rule_id| {
+        const colon = std.mem.indexOfScalar(u8, rule_id, ':') orelse continue;
+        const pack = rule_id[0..colon];
+        const pattern = rule_id[colon + 1 ..];
+        if (std.mem.eql(u8, pack, pack_id) and std.mem.eql(u8, pattern, pattern_name)) return true;
+    }
+    return false;
+}
+
 pub fn matchCommandDetailedOpts(cmd: []const u8, opts: MatchOptions) MatchResult {
     if (g_packs.len == 0) return .allow_miss;
 
@@ -309,6 +324,8 @@ pub fn matchCommandDetailedOpts(cmd: []const u8, opts: MatchOptions) MatchResult
         for (pack.destructive) |pat| {
             const span = pat.regex.findMatch(cmd) catch return matchInfraDeny();
             if (span) |m| {
+                // E8: permanent kind=rule skips this rule only; keep scanning.
+                if (ruleIdIsSkipped(pack.id, pat.name, opts.skipped_rule_ids)) continue;
                 return .{ .deny = .{
                     .pack_id = pack.id,
                     .pattern_name = pat.name,
@@ -518,3 +535,85 @@ test "match infrastructure error hit is deny not allow_miss" {
     try std.testing.expectEqualStrings("pcre-match-error", r.deny.pattern_name);
     try std.testing.expect(r.deny.severity == .critical);
 }
+
+// ── s-engine: MatchOptions.skipped_rule_ids (E8 skip-this-rule only) ─────────
+//
+// Contract: MatchOptions gains `skipped_rule_ids: []const []const u8 = &.{}`.
+// Destructive hits whose `{pack_id}:{pattern_name}` is listed are skipped and
+// matching continues (other packs/patterns still deny). Not a full allow.
+
+test "s-engine: MatchOptions skipped_rule_ids skips only core.git:reset-hard" {
+    try ensureInit();
+
+    // Baseline: reset --hard denies.
+    const baseline = matchCommandDetailedOpts("git reset --hard HEAD", .{});
+    try std.testing.expect(baseline == .deny);
+    try std.testing.expectEqualStrings("core.git", baseline.deny.pack_id);
+    try std.testing.expectEqualStrings("reset-hard", baseline.deny.pattern_name);
+
+    // With skip list for that rule only → no deny from that rule (allow_safe or allow_miss).
+    const skipped = matchCommandDetailedOpts("git reset --hard HEAD", .{
+        .skipped_rule_ids = &.{"core.git:reset-hard"},
+    });
+    try std.testing.expect(skipped != .deny);
+
+    // Sibling destructive in same pack still denies when not skipped.
+    const force = matchCommandDetailedOpts("git push --force origin main", .{
+        .skipped_rule_ids = &.{"core.git:reset-hard"},
+    });
+    try std.testing.expect(force == .deny);
+    try std.testing.expectEqualStrings("core.git", force.deny.pack_id);
+    try std.testing.expectEqualStrings("push-force-long", force.deny.pattern_name);
+}
+
+test "s-engine: MatchOptions skipped_rule_ids does not suppress other packs (E8)" {
+    try ensureInit();
+
+    // Compound / other-pack: skip git reset-hard, filesystem wipe still denies.
+    const compound = matchCommandDetailedOpts("git reset --hard; rm -rf /", .{
+        .skipped_rule_ids = &.{"core.git:reset-hard"},
+    });
+    try std.testing.expect(compound == .deny);
+    try std.testing.expectEqualStrings("core.filesystem", compound.deny.pack_id);
+
+    const wipe = matchCommandDetailedOpts("rm -rf /", .{
+        .skipped_rule_ids = &.{"core.git:reset-hard"},
+    });
+    try std.testing.expect(wipe == .deny);
+    try std.testing.expectEqualStrings("core.filesystem", wipe.deny.pack_id);
+}
+
+test "s-engine: MatchOptions skipped_rule_ids empty defaults to no skip" {
+    try ensureInit();
+    const opts = MatchOptions{};
+    try std.testing.expectEqual(@as(usize, 0), opts.skipped_rule_ids.len);
+
+    const r = matchCommandDetailedOpts("git reset --hard", opts);
+    try std.testing.expect(r == .deny);
+    try std.testing.expectEqualStrings("reset-hard", r.deny.pattern_name);
+}
+
+test "s-engine: MatchOptions can skip multiple rule ids" {
+    try ensureInit();
+
+    // Skip both reset-hard and a filesystem pattern → wipe still may match other patterns.
+    // Skip only reset-hard + one filesystem root pattern: multi-skip on single command.
+    const both = matchCommandDetailedOpts("git reset --hard HEAD", .{
+        .skipped_rule_ids = &.{
+            "core.git:reset-hard",
+            "core.filesystem:rm-rf-root-home",
+        },
+    });
+    try std.testing.expect(both != .deny);
+
+    // Unrelated pack still denies under multi-skip list.
+    const disk = matchCommandDetailedOpts("mkfs.ext4 /dev/sda1", .{
+        .skipped_rule_ids = &.{
+            "core.git:reset-hard",
+            "core.filesystem:rm-rf-root-home",
+        },
+    });
+    try std.testing.expect(disk == .deny);
+    try std.testing.expectEqualStrings("system.disk", disk.deny.pack_id);
+}
+
