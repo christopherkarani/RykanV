@@ -350,15 +350,16 @@ pub const commands =
             .summary = "Allow a blocked command once via short code",
             .usage = "ryk allow-once <code|list|clear|revoke> [options]",
             .category = .core_workflow,
-            // Slice 1 honesty: unfinished P0 — hidden until allow-once CLI lands.
-            .hidden = true,
+            // s-once-cli: live Zig pending/allow-once JSONL store (no daemon).
+            .hidden = false,
             .examples = &.{
                 "ryk allow-once list",
-                "ryk allow-once ABC123",
+                "ryk allow-once 510755",
+                "ryk allow-once clear",
             },
             .details = &.{
-                "Proxies to the Rust daemon pending-exception / allow-once store.",
-                "Use 'ryk allow-once --help' for apply and management subcommands.",
+                "Redeems a pending short code from a deny panel into a single-use grant.",
+                "Subcommands: list, clear, revoke. Use 'ryk allow-once --help' for options.",
             },
         },
         .{

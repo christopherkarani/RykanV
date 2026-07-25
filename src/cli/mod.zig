@@ -50,6 +50,7 @@ pub const shutdown = @import("shutdown.zig");
 pub const shell_eval = @import("shell_eval.zig");
 pub const shell_test = @import("shell_test.zig");
 pub const shell_explain = @import("shell_explain.zig");
+pub const allow_once = @import("allow_once.zig");
 pub const rust_legacy_stub = @import("rust_legacy_stub.zig");
 pub const rust_visibility = @import("rust_visibility.zig");
 pub const feed_writer = @import("feed_writer.zig");
@@ -411,6 +412,11 @@ fn runWithCwdUsing(
 
     // Slice 1 honesty: unfinished / hide-list verbs fail short (usage), not a daemon essay.
     // Later slices unhide + re-register green paths (packs, allowlist, allow-once, …).
+    // s-once-cli: live allow-once redeem/list/clear/revoke (Zig store; no daemon).
+    if (std.mem.eql(u8, command, "allow-once")) {
+        return allow_once.command(io, argv[1..], stdout, stderr);
+    }
+
     if (std.mem.eql(u8, command, "packs")) {
         return rust_legacy_stub.unavailable("packs", stderr);
     }
@@ -419,7 +425,8 @@ fn runWithCwdUsing(
         return rust_legacy_stub.unavailable("history", stderr);
     }
 
-    // Local mutators (allow/unallow/allow-once/config/rebase-recover + allowlist writers).
+    // Local mutators (allow/unallow/config/rebase-recover + allowlist writers).
+    // allow-once is live above; remaining unfinished P0 stay short-unavailable.
     if (isDaemonLocalMutatingInvocation(command, argv[1..])) {
         return rust_legacy_stub.unavailable(command, stderr);
     }
