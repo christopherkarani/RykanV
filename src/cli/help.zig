@@ -218,6 +218,8 @@ pub const commands =
             .summary = "Scan files for destructive commands",
             .usage = "ryk scan [--staged|--paths <path>...] [options]",
             .category = .core_workflow,
+            // Slice 1 honesty: unavailable daemon port — not product surface.
+            .hidden = true,
             .examples = &.{
                 "ryk scan --staged",
                 "ryk scan --paths scripts/deploy.sh --format json",
@@ -232,6 +234,8 @@ pub const commands =
             .summary = "Review protected command history",
             .usage = "ryk history [stats|check|analyze|interactive|export|prune|backup] [options] [--days N] [--strict] [--live] [--json|--robot|--format <value>]",
             .category = .diagnostics,
+            // Slice 1 honesty: unavailable daemon port — not product surface (use `replay`).
+            .hidden = true,
             .examples = &.{
                 "ryk history stats --days 7",
                 "ryk history check --strict",
@@ -249,6 +253,8 @@ pub const commands =
             .summary = "Run the Rust pre-commit safety scan",
             .usage = "ryk precommit [options]",
             .category = .core_workflow,
+            // Slice 1 honesty: unavailable daemon port — not product surface.
+            .hidden = true,
             .examples = &.{
                 "ryk precommit",
                 "ryk precommit --format json",
@@ -282,6 +288,8 @@ pub const commands =
             .summary = "Classify a shell command's risk without blocking",
             .usage = "ryk classify <command> [options]",
             .category = .diagnostics,
+            // Slice 1 honesty: unavailable daemon port — not product surface.
+            .hidden = true,
             .examples = &.{
                 "ryk classify \"git status\"",
                 "ryk classify \"rm -rf /\" --format json",
@@ -296,6 +304,8 @@ pub const commands =
             .summary = "Manage allowlist entries for pack rules",
             .usage = "ryk allowlist <add|list|remove|validate|prune|...> [options]",
             .category = .core_workflow,
+            // Slice 1 honesty: unfinished P0 — hidden until allowlist CLI lands.
+            .hidden = true,
             .examples = &.{
                 "ryk allowlist list",
                 "ryk allowlist add core.git:reset-hard -r \"intentional reset\"",
@@ -312,6 +322,8 @@ pub const commands =
             .summary = "Add a rule to the allowlist (shortcut)",
             .usage = "ryk allow <rule-id> -r <reason> [options]",
             .category = .core_workflow,
+            // Slice 1 honesty: unfinished P0 — hidden until allowlist CLI lands.
+            .hidden = true,
             .examples = &.{
                 "ryk allow core.git:reset-hard -r \"recovering local branch\"",
             },
@@ -324,6 +336,8 @@ pub const commands =
             .summary = "Remove a rule from the allowlist (shortcut)",
             .usage = "ryk unallow <rule-id> [options]",
             .category = .core_workflow,
+            // Slice 1 honesty: unfinished P0 — hidden until allowlist CLI lands.
+            .hidden = true,
             .examples = &.{
                 "ryk unallow core.git:reset-hard",
             },
@@ -336,6 +350,8 @@ pub const commands =
             .summary = "Allow a blocked command once via short code",
             .usage = "ryk allow-once <code|list|clear|revoke> [options]",
             .category = .core_workflow,
+            // Slice 1 honesty: unfinished P0 — hidden until allow-once CLI lands.
+            .hidden = true,
             .examples = &.{
                 "ryk allow-once list",
                 "ryk allow-once ABC123",
@@ -350,6 +366,8 @@ pub const commands =
             .summary = "Suggest allowlist entries from protected history",
             .usage = "ryk suggest-allowlist [options]",
             .category = .diagnostics,
+            // Slice 1 honesty: unavailable daemon port — not product surface.
+            .hidden = true,
             .examples = &.{
                 "ryk suggest-allowlist",
                 "ryk suggest-allowlist --confidence high",
@@ -370,6 +388,8 @@ pub const commands =
             .summary = "Dry-run policy / packs against a command file or history dump",
             .usage = "ryk simulate [--file <path>] [options]",
             .category = .diagnostics,
+            // Slice 1 honesty: unavailable daemon port — not product surface.
+            .hidden = true,
             .examples = &.{
                 "ryk simulate --file commands.txt",
                 "ryk simulate -f denials.jsonl --format pretty",
@@ -387,6 +407,8 @@ pub const commands =
             .summary = "Issue a short-lived permit for git rebase recovery",
             .usage = "ryk rebase-recover [--ttl <seconds>]",
             .category = .core_workflow,
+            // Slice 1 honesty: unavailable daemon port — not product surface.
+            .hidden = true,
             .examples = &.{
                 "ryk rebase-recover",
                 "ryk rebase-recover --ttl 120",
@@ -401,6 +423,8 @@ pub const commands =
             .summary = "Show ryk daemon configuration",
             .usage = "ryk config",
             .category = .diagnostics,
+            // Slice 1 honesty: unavailable daemon port — not product surface.
+            .hidden = true,
             .examples = &.{
                 "ryk config",
             },
@@ -419,6 +443,8 @@ pub const commands =
             \\  orca packs disable <id> [id…]
             ,
             .category = .diagnostics,
+            // Slice 1 honesty: unfinished P0 — hidden until packs CLI lands on oracle registry.
+            .hidden = true,
             .examples = &.{
                 "ryk packs",
                 "ryk packs --enabled",
@@ -772,8 +798,10 @@ pub fn writeWithMode(io: std.Io, writer: anytype, mode: WriteMode) !void {
     }
     try writer.writeAll("\n");
     if (mode == .all) {
+        // Slice 1 honesty: do not teach unfinished allow-once / allowlist verbs.
+        // Shell deny remediation is live via `ryk explain` (+ policy explain for file rules).
         try writer.writeAll("  ");
-        try tui.theme.paint(io, writer, .muted, "Shell deny remediation: ryk explain / allow-once / allowlist (daemon). Policy files: ryk policy explain.");
+        try tui.theme.paint(io, writer, .muted, "Shell deny remediation: ryk explain \"…\". Policy files: ryk policy explain.");
         try writer.writeAll("\n\n");
     }
 
@@ -1071,13 +1099,19 @@ test "help --all lists full advanced command surface" {
     try std.testing.expect(helpListsPeerCommand(all, "run"));
     try std.testing.expect(helpListsPeerCommand(all, "doctor"));
     try std.testing.expect(helpListsPeerCommand(all, "policy"));
-    try std.testing.expect(helpListsPeerCommand(all, "history"));
     try std.testing.expect(helpListsPeerCommand(all, "init"));
     try std.testing.expect(helpListsPeerCommand(all, "mcp"));
     try std.testing.expect(helpListsPeerCommand(all, "env"));
+    // Live Zig daemon-stop remains on the advanced surface (Slice 1 honesty).
+    try std.testing.expect(helpListsPeerCommand(all, "shutdown"));
     // Hard-removed peers: not listed as live usage on help --all
     try std.testing.expect(!helpListsPeerCommand(all, "quickstart"));
     try std.testing.expect(!helpListsPeerCommand(all, "setup"));
+    // Unavailable ports / unfinished P0 verbs are not product surface.
+    try std.testing.expect(!helpListsPeerCommand(all, "history"));
+    try std.testing.expect(!helpListsPeerCommand(all, "scan"));
+    try std.testing.expect(!helpListsPeerCommand(all, "packs"));
+    try std.testing.expect(!helpListsPeerCommand(all, "allowlist"));
 }
 
 test "help setup and quickstart print removal notice pointing at start" {
@@ -1095,4 +1129,134 @@ test "help setup and quickstart print removal notice pointing at start" {
     try std.testing.expect(std.mem.indexOf(u8, qs_out, "removed") != null);
     try std.testing.expect(std.mem.indexOf(u8, qs_out, "ryk start") != null);
     try std.testing.expect(std.mem.indexOf(u8, qs_out, "ryk quickstart --") == null);
+}
+
+// ---------------------------------------------------------------------------
+// Slice 1 (P0 honesty) — public help set tells the truth about live verbs.
+// Hide-list = unavailable daemon ports; unfinished P0 = packs/allowlist/allow/unallow/allow-once
+// until those slices land. `shutdown` stays live Zig dispatch and must remain listed.
+// ---------------------------------------------------------------------------
+
+/// Unavailable daemon-stub ports (plan hide-list). Not product surface.
+const p0_honesty_hide_list = [_][]const u8{
+    "scan",
+    "precommit",
+    "simulate",
+    "classify",
+    "suggest-allowlist",
+    "history",
+    "rebase-recover",
+    "config",
+};
+
+/// P0 verbs hidden until their implementing slice is green.
+const p0_honesty_unfinished = [_][]const u8{
+    "packs",
+    "allowlist",
+    "allow",
+    "unallow",
+    "allow-once",
+};
+
+test "P0 honesty: hide-list and unfinished verbs are marked hidden; shutdown is not" {
+    for (p0_honesty_hide_list) |name| {
+        const info = findCommand(name) orelse {
+            std.debug.print("missing help entry for hide-list command: {s}\n", .{name});
+            try std.testing.expect(false);
+            return;
+        };
+        try std.testing.expect(info.hidden);
+    }
+    for (p0_honesty_unfinished) |name| {
+        const info = findCommand(name) orelse {
+            std.debug.print("missing help entry for unfinished P0 command: {s}\n", .{name});
+            try std.testing.expect(false);
+            return;
+        };
+        try std.testing.expect(info.hidden);
+    }
+
+    const shutdown_info = findCommand("shutdown") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!shutdown_info.hidden);
+}
+
+/// True when root help text teaches unfinished/hide-list verbs outside peer rows
+/// (e.g. Common-tasks remediation). Peer-column omit alone is not enough: production
+/// `writeWithMode(.all)` historically hardcoded `allow-once` / `allowlist (daemon)`.
+/// Do **not** ban bare substring `allowlist` — live copy may say `--network allowlist`.
+fn helpAdvertisesUnavailableVerb(text: []const u8, name: []const u8) bool {
+    // Exact unfinished verb that must never appear once hidden.
+    if (std.mem.eql(u8, name, "allow-once")) {
+        return std.mem.indexOf(u8, text, "allow-once") != null;
+    }
+    if (std.mem.eql(u8, name, "allowlist")) {
+        // Command teaching / remediation only — not `--network allowlist`.
+        if (std.mem.indexOf(u8, text, "ryk allowlist") != null) return true;
+        if (std.mem.indexOf(u8, text, "allowlist (daemon)") != null) return true;
+        return false;
+    }
+    if (std.mem.eql(u8, name, "allow")) {
+        // Token boundary: "ryk allow" must not match "ryk allowlist" / "ryk allow-once".
+        var search: usize = 0;
+        while (std.mem.indexOfPos(u8, text, search, "ryk allow")) |idx| {
+            const after = idx + "ryk allow".len;
+            if (after >= text.len or (!std.ascii.isAlphanumeric(text[after]) and text[after] != '-' and text[after] != '_')) {
+                return true;
+            }
+            search = idx + 1;
+        }
+        return false;
+    }
+    // Other hide-list / unfinished: "ryk <verb>" teaching form.
+    var needle_buf: [80]u8 = undefined;
+    const ryk_cmd = std.fmt.bufPrint(&needle_buf, "ryk {s}", .{name}) catch return true;
+    return std.mem.indexOf(u8, text, ryk_cmd) != null;
+}
+
+test "P0 honesty: default help and help --all omit hide-list and unfinished P0; still list shutdown" {
+    var buf: [32768]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try write(std.testing.io, &writer);
+    const top = writer.buffered();
+
+    for (p0_honesty_hide_list) |name| {
+        try std.testing.expect(!helpListsPeerCommand(top, name));
+        try std.testing.expect(!helpAdvertisesUnavailableVerb(top, name));
+    }
+    for (p0_honesty_unfinished) |name| {
+        try std.testing.expect(!helpListsPeerCommand(top, name));
+        try std.testing.expect(!helpAdvertisesUnavailableVerb(top, name));
+    }
+    // Default Safe Launch help never listed shutdown as a peer; --all must.
+    try std.testing.expect(!helpListsPeerCommand(top, "shutdown"));
+    try std.testing.expect(std.mem.indexOf(u8, top, "allow-once") == null);
+
+    writer = .fixed(&buf);
+    try writeAll(std.testing.io, &writer);
+    const all = writer.buffered();
+
+    for (p0_honesty_hide_list) |name| {
+        try std.testing.expect(!helpListsPeerCommand(all, name));
+        try std.testing.expect(!helpAdvertisesUnavailableVerb(all, name));
+    }
+    for (p0_honesty_unfinished) |name| {
+        try std.testing.expect(!helpListsPeerCommand(all, name));
+        try std.testing.expect(!helpAdvertisesUnavailableVerb(all, name));
+    }
+    try std.testing.expect(helpListsPeerCommand(all, "shutdown"));
+
+    // Explicit full-text: remediation / teaching copy must not name unfinished P0 verbs.
+    // (Peer omit alone greens while footer still says "allow-once / allowlist (daemon)".)
+    try std.testing.expect(std.mem.indexOf(u8, all, "allow-once") == null);
+    try std.testing.expect(std.mem.indexOf(u8, all, "allowlist (daemon)") == null);
+    try std.testing.expect(std.mem.indexOf(u8, all, "ryk allowlist") == null);
+    try std.testing.expect(std.mem.indexOf(u8, all, "ryk packs") == null);
+    try std.testing.expect(std.mem.indexOf(u8, all, "ryk unallow") == null);
+    // "ryk allow " teaches the allow shortcut; does not match allowlist / allow-once.
+    try std.testing.expect(std.mem.indexOf(u8, all, "ryk allow ") == null);
+
+    // Live product verbs remain discoverable on the full surface.
+    try std.testing.expect(helpListsPeerCommand(all, "test"));
+    try std.testing.expect(helpListsPeerCommand(all, "explain"));
+    try std.testing.expect(helpListsPeerCommand(all, "start"));
 }

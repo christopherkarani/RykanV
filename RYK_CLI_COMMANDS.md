@@ -38,7 +38,7 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 | `claude` / `codex` / `pi` / `opencode` / `openclaw` / `hermes` | Launch host under ryk (alias → run engine) | `src/cli/host_launch.zig` |
 | `status` | Traffic light: Protected \| Limited \| Off + caveat | `src/cli/status.zig` |
 | `replay` | Replay last session (denials dominant) | `src/cli/replay.zig` |
-| `explain` | Why a shell command is blocked or allowed | (Rust packs / CLI) |
+| `explain` | Why a shell command is blocked or allowed (Zig shell_engine) | `src/cli/shell_explain.zig` |
 | `help` | Show help (`help --all` = full surface) | `src/cli/help.zig` |
 
 ### Advanced / integration (via `ryk help --all`)
@@ -52,7 +52,7 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 | `credentials` | Check Secretless credential brokers | `src/cli/credentials.zig` |
 | `report` | Export a local safety report | `src/cli/report.zig` |
 | `license` | Manage local offline licenses | `src/cli/license.zig` |
-| `history` | Advanced history/stats (review verb is `replay`) | `src/cli/history.zig` |
+| `test` | Test a shell command with Zig shell_engine packs | `src/cli/shell_test.zig` |
 | `diff` / `apply` / `discard` | Staged writes | `src/cli/*.zig` |
 | `mcp` | MCP proxy and inspection | `src/cli/mcp.zig` |
 | `redteam` | Run red-team fixtures | `src/cli/redteam.zig` |
@@ -63,7 +63,7 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 | `decide` / `hook` / `evaluate` | Integration APIs | `src/cli/*.zig` |
 | `dashboard` | Local Orca dashboard | `src/cli/dashboard.zig` |
 | `ci` | Local CI readiness checks | `src/cli/ci.zig` |
-| `explain` | Explain shell allow/deny (Zig shell_engine) | `src/cli/shell_explain.zig` |
+| `shutdown` | Stop the background ryk daemon (live Zig) | `src/cli/shutdown.zig` |
 | `uninstall` | Uninstall Orca from this machine | `src/cli/uninstall.zig` |
 | `env` | Print install environment for shell activation | `src/cli/mod.zig` |
 | `--print-install-env` | Hidden flag (same as `env`) | `src/cli/mod.zig` |
@@ -74,6 +74,15 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 |---------|--------|
 | `quickstart` | Hard-removed from dispatcher — use `ryk start` |
 | `setup` | Hard-removed from dispatcher — use `ryk start` (library retained internally) |
+
+### Not available (hidden; typing yields short notice)
+
+Unavailable former daemon ports and unfinished P0 verbs are **not** listed by `ryk help` / `ryk help --all` or shell completions. Typing them prints a short “not available” message and exits with usage (2). **`shutdown` remains live** and is listed under Advanced.
+
+| Command | Status |
+|---------|--------|
+| `scan`, `precommit`, `simulate`, `classify`, `suggest-allowlist`, `history`, `rebase-recover`, `config` | Hide-list (unavailable daemon ports) |
+| `packs`, `allowlist`, `allow`, `unallow`, `allow-once` | Unfinished P0 — re-show when their slices land |
 
 ### Exit Codes (`src/cli/exit_codes.zig`)
 

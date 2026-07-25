@@ -409,6 +409,8 @@ fn runWithCwdUsing(
         return exit_codes.success;
     }
 
+    // Slice 1 honesty: unfinished / hide-list verbs fail short (usage), not a daemon essay.
+    // Later slices unhide + re-register green paths (packs, allowlist, allow-once, …).
     if (std.mem.eql(u8, command, "packs")) {
         return rust_legacy_stub.unavailable("packs", stderr);
     }
@@ -417,12 +419,11 @@ fn runWithCwdUsing(
         return rust_legacy_stub.unavailable("history", stderr);
     }
 
-    // R03: mutating policy commands previously spawned orca-daemon locally.
-    // Pure Zig conversion: stub until Zig allowlist writers land.
+    // Local mutators (allow/unallow/allow-once/config/rebase-recover + allowlist writers).
     if (isDaemonLocalMutatingInvocation(command, argv[1..])) {
         return rust_legacy_stub.unavailable(command, stderr);
     }
-    // Former ExecuteCli proxies (scan/simulate/…) — not yet ported.
+    // Former ExecuteCli proxies (scan/simulate/classify/…) — unavailable product verbs.
     if (isDaemonProxyCommand(command)) {
         return rust_legacy_stub.unavailable(command, stderr);
     }
@@ -1165,7 +1166,8 @@ test "human parser families suggest valid flags and exact help remediation" {
         .{ .argv = &.{ "plugin", "instal" }, .suggestion = "install", .help_command = "plugin" },
         .{ .argv = &.{ "start", "--preest" }, .suggestion = "--preset", .help_command = "start" },
         .{ .argv = &.{ "run", "--workspce" }, .suggestion = "--workspace", .help_command = "run" },
-        .{ .argv = &.{ "packs", "--filtre" }, .suggestion = "--filter", .help_command = "packs" },
+        // packs is P0-hidden until Slice 4; do not exercise flag suggestions for unavailable verbs.
+        .{ .argv = &.{ "status", "--chek" }, .suggestion = "--check", .help_command = "status" },
     };
 
     for (cases) |case| {
@@ -1426,9 +1428,9 @@ test "public dispatch preserves MCP protocol bytes; Zig-native test/explain no l
     const cases = [_]Case{
         // Zig shell_engine: allow git status → exit 0, JSON/text decision output.
         .{ .argv = &.{ "test", "git status" }, .expected_substr = "allow", .code = 0 },
-        // Former daemon surfaces stub until ported.
-        .{ .argv = &.{ "packs", "--robot" }, .expected_substr = "not yet ported", .code = 1 },
-        .{ .argv = &.{ "history", "export" }, .expected_substr = "not yet ported", .code = 1 },
+        // Slice 1 honesty: hidden dead / unfinished verbs fail short (usage), not daemon essay.
+        .{ .argv = &.{ "packs", "--robot" }, .expected_substr = "not available", .code = exit_codes.usage },
+        .{ .argv = &.{ "history", "export" }, .expected_substr = "not available", .code = exit_codes.usage },
         .{ .argv = &.{ "mcp", "proxy", "--command", "server" }, .expected_substr = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"tools\":[]}}", .code = 10 },
     };
     var env_map = try std.process.Environ.createMap(std.process.Environ.empty, std.testing.allocator);
@@ -1444,6 +1446,114 @@ test "public dispatch preserves MCP protocol bytes; Zig-native test/explain no l
         defer std.testing.allocator.free(combined);
         try std.testing.expect(std.mem.indexOf(u8, combined, case.expected_substr) != null);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Slice 1 (P0 honesty) — hidden dead verbs fail clearly; shutdown stays live.
+// ---------------------------------------------------------------------------
+
+/// Shared short-unavailable contract for hide-list + unfinished P0 verbs.
+/// Plan shape (flexible): `command '…' is not available` + `Run 'ryk help'…`, usage exit,
+/// no multi-line Rust-daemon essay. `require_empty_stdout` is true for raw-passthrough
+/// routes (daemon proxy / local-mutator); false for bare human-ish stubs like `packs`
+/// where brand banner may still hit stdout before the unavailable handler.
+fn expectShortUnavailable(
+    command: []const u8,
+    code: u8,
+    stdout: []const u8,
+    stderr: []const u8,
+    require_empty_stdout: bool,
+) !void {
+    try std.testing.expectEqual(exit_codes.usage, code);
+    if (require_empty_stdout) {
+        try std.testing.expectEqualStrings("", stdout);
+    } else {
+        // Banner may appear; long daemon essay must not land on stdout either.
+        try std.testing.expect(std.mem.indexOf(u8, stdout, "not yet ported") == null);
+        try std.testing.expect(std.mem.indexOf(u8, stdout, "Rust daemon") == null);
+        try std.testing.expect(std.mem.indexOf(u8, stdout, "threat-model") == null);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, stderr, command) != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr, "not available") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr, "is not available") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr, "ryk help") != null);
+    // No long daemon / ported essay (rust_legacy_stub shape).
+    try std.testing.expect(std.mem.indexOf(u8, stderr, "not yet ported") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr, "Rust daemon") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr, "threat-model") == null);
+    // Keep the message short (plan: ~two lines; one short notice + usage hint).
+    try std.testing.expect(stderr.len < 200);
+}
+
+test "P0 honesty: hide-list command yields short not-available and usage exit" {
+    // Representative hide-list port via isDaemonProxyCommand (`scan`).
+    var stdout_buf: [512]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try testRun(&.{"scan"}, &stdout_writer, &stderr_writer);
+    // Proxy path is raw-passthrough → no brand banner → empty stdout.
+    try expectShortUnavailable("scan", code, stdout_writer.buffered(), stderr_writer.buffered(), true);
+}
+
+test "P0 honesty: unfinished P0 verb packs is not available with usage exit" {
+    // Early packs branch (distinct from proxy / local-mutator). Bare packs is not
+    // raw-passthrough, so brand banner may hit stdout — assert stderr honesty only.
+    var stdout_buf: [2048]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try testRun(&.{"packs"}, &stdout_writer, &stderr_writer);
+    try expectShortUnavailable("packs", code, stdout_writer.buffered(), stderr_writer.buffered(), false);
+}
+
+test "P0 honesty: unfinished local-mutator allow-once is short not-available" {
+    // isDaemonLocalMutatingTopLevel branch — must not remain on long essay after
+    // special-casing only scan/packs/history.
+    var stdout_buf: [512]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try testRun(&.{"allow-once"}, &stdout_writer, &stderr_writer);
+    // Local mutators are raw-passthrough → empty stdout expected.
+    try expectShortUnavailable("allow-once", code, stdout_writer.buffered(), stderr_writer.buffered(), true);
+}
+
+test "P0 honesty: unfinished local-mutator allow is short not-available" {
+    // Second local-mutator sample (allow shortcut) shares the same contract.
+    var stdout_buf: [512]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try testRun(&.{"allow"}, &stdout_writer, &stderr_writer);
+    try expectShortUnavailable("allow", code, stdout_writer.buffered(), stderr_writer.buffered(), true);
+}
+
+test "P0 honesty: shutdown still dispatches live Zig path (not not-available)" {
+    // Live path: invalid flag is handled by shutdown.command suggestions, not honesty stub.
+    var stdout_buf: [512]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try testRun(&.{ "shutdown", "--daemn" }, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.usage, code);
+    const err = stderr_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, err, "not available") == null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "Did you mean '--daemon'?") != null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "ryk help shutdown") != null);
+
+    // Per-command help still works for live shutdown.
+    stdout_writer = .fixed(&stdout_buf);
+    stderr_writer = .fixed(&stderr_buf);
+    const help_code = try testRun(&.{ "shutdown", "--help" }, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, help_code);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "ryk shutdown") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "not available") == null);
 }
 
 test "diff and CI generated formats suppress presentation" {
