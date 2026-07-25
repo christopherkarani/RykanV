@@ -23,6 +23,7 @@ cd "$REPO_ROOT"
 LIVE=0
 PLAN_ONLY=0
 SKIP_GATE=0
+SKIP_NPM=0
 BUMP=""
 VERSION_ARG=""
 RESUME_FROM=""
@@ -83,6 +84,7 @@ Options:
   --plan-only         Stop after version + notes; print plan (no gate/build)
   --resume-from PHASE Skip phases before PHASE (requires --version matching state)
   --skip-gate         Skip verify-pre-merge.sh (not recommended)
+  --skip-npm          Skip publish-npm (GitHub + Homebrew still run with --live)
   -h, --help          Show this help
 
 Default without --live is dry-run: runs through verify, never publishes.
@@ -116,6 +118,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-gate)
       SKIP_GATE=1
+      shift
+      ;;
+    --skip-npm)
+      SKIP_NPM=1
       shift
       ;;
     -h | --help)
@@ -240,6 +246,51 @@ validate_semver() {
 }
 
 # ---------------------------------------------------------------------------
+# npm auth (interactive login when needed)
+# ---------------------------------------------------------------------------
+# npm login blocks until the user finishes the flow (often: Press ENTER → browser
+# OAuth → token written to ~/.npmrc). Requires a real TTY for the Enter prompt.
+ensure_npm_auth() {
+  local who
+  if [[ "$SKIP_NPM" -eq 1 ]]; then
+    log "skipping npm auth (--skip-npm)"
+    return 0
+  fi
+
+  if who="$(npm whoami 2>/dev/null)" && [[ -n "$who" ]]; then
+    log "npm authenticated as ${who}"
+    return 0
+  fi
+
+  if [[ "$LIVE" -ne 1 ]]; then
+    warn "npm not authenticated (required only for --live publish)"
+    return 0
+  fi
+
+  if [[ ! -t 0 ]] || [[ ! -t 1 ]]; then
+    fail "npm is not authenticated and this is not an interactive terminal.
+  Run cut-release from Terminal (not a headless Shortcut shell), or run:
+    npm login
+  then re-run with --live. npm login needs a TTY for \"Press ENTER to open the browser\".
+  Or pass --skip-npm and publish packages later."
+  fi
+
+  log "npm not authenticated — running npm login"
+  log "When prompted, press ENTER to open the browser, complete login, then return here."
+  # Prefer web/browser flow when the installed npm supports it; fall back to default login.
+  if npm login --help 2>&1 | grep -q -- '--auth-type'; then
+    npm login --auth-type=web || npm login
+  else
+    npm login
+  fi
+
+  if ! who="$(npm whoami 2>/dev/null)" || [[ -z "$who" ]]; then
+    fail "npm login finished but npm whoami still failed — publish would fail closed"
+  fi
+  log "npm authenticated as ${who}"
+}
+
+# ---------------------------------------------------------------------------
 # preflight
 # ---------------------------------------------------------------------------
 phase_preflight() {
@@ -262,13 +313,7 @@ phase_preflight() {
     fi
   fi
 
-  if [[ "$LIVE" -eq 1 ]]; then
-    if ! npm whoami >/dev/null 2>&1; then
-      fail "npm is not authenticated (npm login / npm whoami)"
-    fi
-  elif ! npm whoami >/dev/null 2>&1; then
-    warn "npm not authenticated (required only for --live publish)"
-  fi
+  ensure_npm_auth
 
   if [[ "$LIVE" -eq 1 ]]; then
     if [[ ! -d "$HOMEBREW_TAP_DIR/.git" ]]; then
@@ -699,7 +744,15 @@ phase_publish_git() {
 # ---------------------------------------------------------------------------
 phase_publish_npm() {
   [[ "$LIVE" -eq 1 ]] || fail "internal: publish-npm requires --live"
+  if [[ "$SKIP_NPM" -eq 1 ]]; then
+    log "publish-npm: skipped (--skip-npm). Publish later with:
+  ./scripts/cut-release.sh --live --version ${VERSION} --resume-from publish-npm
+  # or manually from dist/package-manifests/npm + plugin package roots"
+    return 0
+  fi
   log "publish-npm…"
+  # Re-check after long gate/build; prompt login again if token missing/expired.
+  ensure_npm_auth
 
   local npm_dir="${DIST_DIR}/package-manifests/npm"
   [[ -f "${npm_dir}/package.json" ]] || fail "missing ${npm_dir}/package.json"
@@ -776,7 +829,12 @@ phase_done() {
   printf '\n=== cut-release complete ===\n'
   printf 'Version:  v%s\n' "$VERSION"
   printf 'Release:  %s\n' "$url"
-  printf 'npm:      @orca-sec/ryk@%s (+ plugins)\n' "$VERSION"
+  if [[ "$SKIP_NPM" -eq 1 ]]; then
+    printf 'npm:      SKIPPED — publish @orca-sec/ryk@%s (+ plugins) yourself\n' "$VERSION"
+    printf '          cd dist/package-manifests/npm && npm publish --access public\n'
+  else
+    printf 'npm:      @orca-sec/ryk@%s (+ plugins)\n' "$VERSION"
+  fi
   printf 'brew:     tap %s (ryk %s)\n' "$HOMEBREW_TAP_DIR" "$VERSION"
   printf 'Log:      %s\n' "${LOG_FILE:-n/a}"
   printf '============================\n'

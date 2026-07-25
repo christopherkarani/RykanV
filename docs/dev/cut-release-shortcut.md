@@ -11,7 +11,7 @@ GitHub Actions `release.yml` remains a **manual backup** (`workflow_dispatch`). 
 | Zig pin | `./scripts/zig version` matches `.zigversion` |
 | Docker Desktop | `docker info` |
 | GitHub CLI | `gh auth status` (repo write + release) |
-| npm | `npm whoami` (publish to `@orca-sec/*` and unscoped plugins) |
+| npm | Interactive: if not logged in, `--live` runs `npm login` (Press ENTER → browser). Needs a **TTY** — use Terminal for first login / live cuts. |
 | Homebrew tap clone | `~/code/homebrew-orca` **or** `RYK_HOMEBREW_TAP_DIR` |
 | Clean `main` | equal to `origin/main`, no dirty files |
 
@@ -33,6 +33,9 @@ git clone https://github.com/christopherkarani/homebrew-orca.git ~/code/homebrew
 ./scripts/cut-release.sh --bump patch --live
 ./scripts/cut-release.sh --version 1.3.0 --live
 
+# Live cut but leave npm for a later manual step
+./scripts/cut-release.sh --version 1.2.9 --live --skip-npm
+
 # Resume after a mid-flight failure (no automatic rollback)
 ./scripts/cut-release.sh --live --version 1.2.9 --resume-from publish-npm
 ```
@@ -46,7 +49,7 @@ git clone https://github.com/christopherkarani/homebrew-orca.git ~/code/homebrew
 | `gate` | `./scripts/verify-pre-merge.sh` |
 | `build` | Dashboard UI, Linux via Docker, `build-release.sh`, plugin packs |
 | `publish-git` | Push branch; `gh release create` **with assets** (tag + checksums) |
-| `publish-npm` | Rendered `@orca-sec/ryk`, then opencode/openclaw plugins, then `orca-pi` |
+| `publish-npm` | Rendered `@orca-sec/ryk`, then opencode/openclaw plugins, then `orca-pi` (skipped with `--skip-npm`) |
 | `publish-homebrew` | Update tap `Formula/ryk.rb` (+ `orca.rb`), push |
 
 Logs: `dist/cut-release-vX.Y.Z.log`  
@@ -117,7 +120,8 @@ PY
 - Set **Shell** to `/bin/bash` or `/bin/zsh`.
 - Grant Shortcuts **Developer Tools** / full disk if `git`/`docker` fail when run from the app.
 - Pin `RYK_REPO` and `RYK_HOMEBREW_TAP_DIR` in the shell preamble if paths differ.
-- Never embed npm or GitHub tokens in the Shortcut; use `gh auth` + `npm login` on the Mac user.
+- Never embed npm or GitHub tokens in the Shortcut. Prefer running `--live` from **Terminal** so `npm login` can prompt (Press ENTER → browser). Headless Shortcut shells usually have no TTY and cannot complete that prompt.
+- Once `~/.npmrc` has a token, later runs skip login (`npm whoami` succeeds).
 
 ## First live cut checklist
 
