@@ -16,7 +16,7 @@ pub const presentation = @import("presentation/mod.zig");
 pub const report = @import("report.zig");
 pub const license = @import("license.zig");
 pub const ci_check = @import("ci_check.zig");
-pub const demo = @import("demo.zig");
+pub const blocked_action_fixture = @import("blocked_action_fixture.zig");
 pub const resource_root = @import("resource_root.zig");
 pub const env_util = @import("env_util.zig");
 pub const tui = @import("tui/mod.zig");
@@ -37,7 +37,7 @@ test {
     _ = report;
     _ = license;
     _ = ci_check;
-    _ = demo;
+    _ = blocked_action_fixture;
     _ = resource_root;
     _ = env_util;
     _ = tui;

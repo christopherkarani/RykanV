@@ -38,7 +38,6 @@ pub const dashboard_command = @import("dashboard.zig");
 pub const report = @import("report.zig");
 pub const license_command = @import("license.zig");
 pub const ci = @import("ci.zig");
-pub const demo = @import("demo.zig");
 pub const disable = @import("disable.zig");
 pub const uninstall = @import("uninstall.zig");
 pub const interactive = @import("interactive.zig");
@@ -51,6 +50,8 @@ pub const shutdown = @import("shutdown.zig");
 pub const shell_eval = @import("shell_eval.zig");
 pub const shell_test = @import("shell_test.zig");
 pub const shell_explain = @import("shell_explain.zig");
+pub const allow_once = @import("allow_once.zig");
+pub const allowlist_cmd = @import("allowlist_cmd.zig");
 pub const rust_legacy_stub = @import("rust_legacy_stub.zig");
 pub const rust_visibility = @import("rust_visibility.zig");
 pub const feed_writer = @import("feed_writer.zig");
@@ -94,6 +95,9 @@ test {
     _ = hook;
     _ = shell_test;
     _ = shell_explain;
+    _ = allow_once;
+    _ = allowlist_cmd;
+    _ = @import("explain_render.zig");
     _ = rust_legacy_stub;
     _ = rust_visibility;
     _ = evaluate;
@@ -135,7 +139,9 @@ const self_banner_commands = [_][]const u8{ "version", "--version", "help", "run
 const always_machine_commands = [_][]const u8{
     "evaluate", "hook", "shim", "completions", "env", "dashboard", "--print-install-env",
     // Zig-native shell tools (formerly daemon-proxied): keep machine/banner-free.
-    "test", "explain",
+    // `explain` is human pretty by default (DCG-class colors); machine only via
+    // `--format json` (isMachineArgv). Own header is `RYK EXPLAIN` (no brand banner).
+    "test",
 };
 
 fn isAlwaysMachineCommand(command: []const u8) bool {
@@ -197,6 +203,8 @@ fn shouldShowBanner(command: []const u8, argv: []const []const u8) bool {
     for (self_banner_commands) |s| {
         if (std.mem.eql(u8, command, s)) return false;
     }
+    // `ryk explain` owns its DCG-style header; never double-print brand banner.
+    if (std.mem.eql(u8, command, "explain")) return false;
     if (host_launch.isHostLaunchAlias(command)) return false;
     // `decide` is a frozen machine API by default. Only its explicit human
     // output mode participates in shared presentation, even though JSON/stdin
@@ -405,20 +413,39 @@ fn runWithCwdUsing(
         return exit_codes.success;
     }
 
-    if (std.mem.eql(u8, command, "packs")) {
-        return rust_legacy_stub.unavailable("packs", stderr);
+    // Slice 1 honesty: unfinished / hide-list verbs fail short (usage), not a daemon essay.
+    // Live P0: allow-once, packs, permanent allowlist writers (Zig store; no daemon).
+    // s-once-cli: live allow-once redeem/list/clear/revoke.
+    if (std.mem.eql(u8, command, "allow-once")) {
+        return allow_once.command(io, argv[1..], stdout, stderr);
     }
 
+    // Slice 4 / s-packs: live packs CLI (oracle registry + pack_config; no daemon).
+    if (std.mem.eql(u8, command, "packs")) {
+        return packs.command(io, argv[1..], stdout, stderr);
+    }
+
+    // Slice 2 / s-allowlist-cli: permanent pack-exception allowlist (TOML store; no daemon).
+    if (std.mem.eql(u8, command, "allowlist")) {
+        return allowlist_cmd.command(io, argv[1..], stdout, stderr);
+    }
+    if (std.mem.eql(u8, command, "allow")) {
+        return allowlist_cmd.commandAllow(io, argv[1..], stdout, stderr);
+    }
+    if (std.mem.eql(u8, command, "unallow")) {
+        return allowlist_cmd.commandUnallow(io, argv[1..], stdout, stderr);
+    }
+
+    // Slice 1 honesty: hide-list verbs fail short (usage), not a daemon essay.
     if (std.mem.eql(u8, command, "history")) {
         return rust_legacy_stub.unavailable("history", stderr);
     }
 
-    // R03: mutating policy commands previously spawned orca-daemon locally.
-    // Pure Zig conversion: stub until Zig allowlist writers land.
+    // Remaining hide-list local mutators (config/rebase-recover).
     if (isDaemonLocalMutatingInvocation(command, argv[1..])) {
         return rust_legacy_stub.unavailable(command, stderr);
     }
-    // Former ExecuteCli proxies (scan/simulate/…) — not yet ported.
+    // Former ExecuteCli proxies (scan/simulate/classify/…) — unavailable product verbs.
     if (isDaemonProxyCommand(command)) {
         return rust_legacy_stub.unavailable(command, stderr);
     }
@@ -468,7 +495,6 @@ fn runWithCwdUsing(
     if (std.mem.eql(u8, command, "report")) return report.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "license")) return license_command.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "ci")) return ci.command(io, argv[1..], stdout, stderr);
-    if (std.mem.eql(u8, command, "demo")) return demo.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "stop")) return disable.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "disable")) return disable.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "uninstall")) return uninstall.command(io, argv[1..], stdout, stderr);
@@ -480,14 +506,42 @@ fn runWithCwdUsing(
     }
 
     // Warm "did you mean?" suggestions for unknown commands (foundation UX).
-    try stderr.writeAll("orca: unknown command '");
+    try stderr.writeAll("ryk: unknown command '");
     try tui.terminal_text.write(stderr, command, .single_line);
-    if (suggestCommand(command)) |suggestion| {
-        try stderr.print("'. Did you mean '{s}'?\nRun 'ryk help' for usage.\n", .{suggestion});
+    try stderr.writeAll("'.");
+    if (looksLikeShellCommand(command, argv[1..])) {
+        try stderr.writeAll("\nThat looks like a shell command. Try:\n");
+        try stderr.writeAll("  ryk explain \"");
+        try tui.terminal_text.write(stderr, command, .single_line);
+        for (argv[1..]) |arg| {
+            try stderr.writeAll(" ");
+            try tui.terminal_text.write(stderr, arg, .single_line);
+        }
+        try stderr.writeAll("\"\n");
+    } else if (std.mem.eql(u8, command, "demo")) {
+        try stderr.writeAll("\n'demo' was removed. Use:\n  ryk explain \"rm -rf /\"\n");
+    } else if (suggestCommand(command)) |suggestion| {
+        try stderr.print(" Did you mean '{s}'?\n", .{suggestion});
     } else {
-        try stderr.writeAll("'.\nRun 'ryk help' for usage.\n");
+        try stderr.writeAll("\n");
     }
+    try stderr.writeAll("Run 'ryk help' for usage.\n");
     return exit_codes.usage;
+}
+
+/// True when the unknown top-level token (+ trailing argv) looks like a shell line,
+/// not a misspelled ryk subcommand.
+fn looksLikeShellCommand(command: []const u8, rest: []const []const u8) bool {
+    if (std.mem.indexOfScalar(u8, command, ' ') != null) return true;
+    if (std.mem.indexOfScalar(u8, command, '/') != null) return true;
+    if (rest.len > 0) {
+        // `ryk rm -rf /` style
+        const shellish = [_][]const u8{ "rm", "git", "dd", "mkfs", "sudo", "docker", "kubectl", "curl", "chmod", "chown" };
+        for (shellish) |s| {
+            if (std.mem.eql(u8, command, s)) return true;
+        }
+    }
+    return false;
 }
 
 fn proxyVersionCommand(comptime execute_cli: anytype, io: std.Io, stdout: anytype, stderr: anytype) !u8 {
@@ -500,15 +554,17 @@ fn proxyVersionCommand(comptime execute_cli: anytype, io: std.Io, stdout: anytyp
 /// Top-level commands that previously proxied through the Rust daemon via ExecuteCli.
 /// `test` / `explain` are Zig-native; remaining entries stub until ported or dropped.
 fn isDaemonProxyCommand(command: []const u8) bool {
+    // allowlist is live Zig (s-allowlist-cli); no longer a daemon proxy surface.
     return std.mem.eql(u8, command, "scan") or
         std.mem.eql(u8, command, "precommit") or
-        std.mem.eql(u8, command, "allowlist") or
         std.mem.eql(u8, command, "classify") or
         std.mem.eql(u8, command, "suggest-allowlist") or
         std.mem.eql(u8, command, "simulate");
 }
 
 /// Commands that always mutate policy/config: never sent over ExecuteCli UDS.
+/// Live Zig mutators (allow/unallow/allow-once) remain classified here for machine-mode
+/// detection only; dispatch routes them to Zig CLI before honesty stubs.
 fn isDaemonLocalMutatingTopLevel(command: []const u8) bool {
     return std.mem.eql(u8, command, "allow") or
         std.mem.eql(u8, command, "unallow") or
@@ -521,16 +577,6 @@ fn isDaemonLocalMutatingTopLevel(command: []const u8) bool {
 fn isDaemonLocalMutatingInvocation(command: []const u8, command_args: []const []const u8) bool {
     // Top-level mutators always go local (including `--help`).
     if (isDaemonLocalMutatingTopLevel(command)) return true;
-    if (std.mem.eql(u8, command, "allowlist")) {
-        for (command_args) |arg| {
-            if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) return false;
-        }
-        if (command_args.len == 0) return false;
-        const sub = command_args[0];
-        if (std.mem.eql(u8, sub, "list") or std.mem.eql(u8, sub, "show") or
-            std.mem.eql(u8, sub, "ls")) return false;
-        return true;
-    }
     if (std.mem.eql(u8, command, "suggest-allowlist")) {
         for (command_args) |arg| {
             if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) return false;
@@ -969,7 +1015,7 @@ test "phase A proxy commands construct daemon argv and render success" {
 
     try std.testing.expect(!isDaemonProxyCommand("explain"));
     try std.testing.expect(!isDaemonProxyCommand("test"));
-    try std.testing.expect(isDaemonProxyCommand("allowlist"));
+    try std.testing.expect(!isDaemonProxyCommand("allowlist"));
     try std.testing.expect(!isDaemonProxyCommand("allow"));
     try std.testing.expect(!isDaemonProxyCommand("unallow"));
     try std.testing.expect(!isDaemonProxyCommand("allow-once"));
@@ -980,8 +1026,6 @@ test "phase A proxy commands construct daemon argv and render success" {
     try std.testing.expect(isDaemonProxyCommand("simulate"));
     try std.testing.expect(isDaemonLocalMutatingTopLevel("allow"));
     try std.testing.expect(isDaemonLocalMutatingTopLevel("allow-once"));
-    try std.testing.expect(isDaemonLocalMutatingInvocation("allowlist", &.{"add"}));
-    try std.testing.expect(!isDaemonLocalMutatingInvocation("allowlist", &.{"list"}));
     try std.testing.expect(isDaemonLocalMutatingInvocation("suggest-allowlist", &.{ "--apply", "1" }));
     try std.testing.expect(isDaemonLocalMutatingInvocation("suggest-allowlist", &.{ "--undo", "60" }));
     try std.testing.expect(!isDaemonLocalMutatingInvocation("suggest-allowlist", &.{"--non-interactive"}));
@@ -989,12 +1033,6 @@ test "phase A proxy commands construct daemon argv and render success" {
     try std.testing.expect(!isDaemonProxyCommand("init"));
 
     // Direct proxyDaemonCommand helper still works for remaining stubbed ExecuteCli surfaces.
-    const allowlist_code = try proxyDaemonCommand(fakeAllowlistProxySuccess, "allowlist", &.{"list"}, std.testing.io, &stdout_writer, &stderr_writer);
-    try std.testing.expectEqual(exit_codes.success, allowlist_code);
-    try std.testing.expectEqualStrings("allowlist ok\n", stdout_writer.buffered());
-
-    stdout_writer = .fixed(&stdout_buf);
-    stderr_writer = .fixed(&stderr_buf);
     const classify_code = try proxyDaemonCommand(fakeClassifyProxySuccess, "classify", &.{"rm -rf /tmp/x"}, std.testing.io, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, classify_code);
     try std.testing.expectEqualStrings("classify ok\n", stdout_writer.buffered());
@@ -1134,7 +1172,8 @@ test "human parser families suggest valid flags and exact help remediation" {
         .{ .argv = &.{ "plugin", "instal" }, .suggestion = "install", .help_command = "plugin" },
         .{ .argv = &.{ "start", "--preest" }, .suggestion = "--preset", .help_command = "start" },
         .{ .argv = &.{ "run", "--workspce" }, .suggestion = "--workspace", .help_command = "run" },
-        .{ .argv = &.{ "packs", "--filtre" }, .suggestion = "--filter", .help_command = "packs" },
+        // packs is P0-hidden until Slice 4; do not exercise flag suggestions for unavailable verbs.
+        .{ .argv = &.{ "status", "--chek" }, .suggestion = "--check", .help_command = "status" },
     };
 
     for (cases) |case| {
@@ -1395,16 +1434,18 @@ test "public dispatch preserves MCP protocol bytes; Zig-native test/explain no l
     const cases = [_]Case{
         // Zig shell_engine: allow git status → exit 0, JSON/text decision output.
         .{ .argv = &.{ "test", "git status" }, .expected_substr = "allow", .code = 0 },
-        // Former daemon surfaces stub until ported.
-        .{ .argv = &.{ "packs", "--robot" }, .expected_substr = "not yet ported", .code = 1 },
-        .{ .argv = &.{ "history", "export" }, .expected_substr = "not yet ported", .code = 1 },
+        // s-packs: live oracle registry JSON (no daemon; --robot → machine schema).
+        .{ .argv = &.{ "packs", "--robot" }, .expected_substr = "schema_version", .code = 0 },
+        // Slice 1 honesty: hide-list verbs fail short (usage), not daemon essay.
+        .{ .argv = &.{ "history", "export" }, .expected_substr = "not available", .code = exit_codes.usage },
         .{ .argv = &.{ "mcp", "proxy", "--command", "server" }, .expected_substr = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"tools\":[]}}", .code = 10 },
     };
     var env_map = try std.process.Environ.createMap(std.process.Environ.empty, std.testing.allocator);
     defer env_map.deinit();
     for (cases) |case| {
-        var stdout_buf: [1024]u8 = undefined;
-        var stderr_buf: [1024]u8 = undefined;
+        // packs --robot emits full registry JSON (well over 1KiB).
+        var stdout_buf: [256 * 1024]u8 = undefined;
+        var stderr_buf: [4096]u8 = undefined;
         var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
         var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
         const code = try runWithCwdUsing(fakeRawDaemon, fakeRawPacks, fakeRawHistory, fakeRawMcp, std.testing.io, &env_map, std.Io.Dir.cwd(), case.argv, &stdout_writer, &stderr_writer);
@@ -1413,6 +1454,120 @@ test "public dispatch preserves MCP protocol bytes; Zig-native test/explain no l
         defer std.testing.allocator.free(combined);
         try std.testing.expect(std.mem.indexOf(u8, combined, case.expected_substr) != null);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Slice 1 (P0 honesty) — hidden dead verbs fail clearly; shutdown stays live.
+// ---------------------------------------------------------------------------
+
+/// Shared short-unavailable contract for hide-list + unfinished P0 verbs.
+/// Plan shape (flexible): `command '…' is not available` + `Run 'ryk help'…`, usage exit,
+/// no multi-line Rust-daemon essay. `require_empty_stdout` is true for raw-passthrough
+/// routes (daemon proxy / local-mutator); false for bare human-ish stubs like `packs`
+/// where brand banner may still hit stdout before the unavailable handler.
+fn expectShortUnavailable(
+    command: []const u8,
+    code: u8,
+    stdout: []const u8,
+    stderr: []const u8,
+    require_empty_stdout: bool,
+) !void {
+    try std.testing.expectEqual(exit_codes.usage, code);
+    if (require_empty_stdout) {
+        try std.testing.expectEqualStrings("", stdout);
+    } else {
+        // Banner may appear; long daemon essay must not land on stdout either.
+        try std.testing.expect(std.mem.indexOf(u8, stdout, "not yet ported") == null);
+        try std.testing.expect(std.mem.indexOf(u8, stdout, "Rust daemon") == null);
+        try std.testing.expect(std.mem.indexOf(u8, stdout, "threat-model") == null);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, stderr, command) != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr, "not available") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr, "is not available") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr, "ryk help") != null);
+    // No long daemon / ported essay (rust_legacy_stub shape).
+    try std.testing.expect(std.mem.indexOf(u8, stderr, "not yet ported") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr, "Rust daemon") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr, "threat-model") == null);
+    // Keep the message short (plan: ~two lines; one short notice + usage hint).
+    try std.testing.expect(stderr.len < 200);
+}
+
+test "P0 honesty: hide-list command yields short not-available and usage exit" {
+    // Representative hide-list port via isDaemonProxyCommand (`scan`).
+    var stdout_buf: [512]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try testRun(&.{"scan"}, &stdout_writer, &stderr_writer);
+    // Proxy path is raw-passthrough → no brand banner → empty stdout.
+    try expectShortUnavailable("scan", code, stdout_writer.buffered(), stderr_writer.buffered(), true);
+}
+
+test "P0 honesty: live packs dispatches (not short not-available)" {
+    // s-packs: bare packs lists registry — must not hit honesty stub.
+    var stdout_buf: [65536]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try testRun(&.{"packs"}, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "not available") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "core.git") != null or
+        std.mem.indexOf(u8, stdout_writer.buffered(), "Safety packs") != null or
+        std.mem.indexOf(u8, stdout_writer.buffered(), "packs") != null);
+}
+
+test "P0 honesty: live allow-once dispatches usage (not short not-available)" {
+    // s-once-cli: bare allow-once is live CLI usage, not honesty stub / local-mutator essay.
+    var stdout_buf: [2048]u8 = undefined;
+    var stderr_buf: [2048]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try testRun(&.{"allow-once"}, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.usage, code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "not available") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "Usage: ryk allow-once") != null);
+}
+
+test "P0 honesty: live allow dispatches usage (not short not-available)" {
+    // s-allowlist-cli: bare allow is live CLI usage, not honesty stub.
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try testRun(&.{"allow"}, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.usage, code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "not available") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk allow") != null or
+        std.mem.indexOf(u8, stderr_writer.buffered(), "allowlist") != null);
+}
+
+test "P0 honesty: shutdown still dispatches live Zig path (not not-available)" {
+    // Live path: invalid flag is handled by shutdown.command suggestions, not honesty stub.
+    var stdout_buf: [512]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try testRun(&.{ "shutdown", "--daemn" }, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.usage, code);
+    const err = stderr_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, err, "not available") == null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "Did you mean '--daemon'?") != null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "ryk help shutdown") != null);
+
+    // Per-command help still works for live shutdown.
+    stdout_writer = .fixed(&stdout_buf);
+    stderr_writer = .fixed(&stderr_buf);
+    const help_code = try testRun(&.{ "shutdown", "--help" }, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, help_code);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "ryk shutdown") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "not available") == null);
 }
 
 test "diff and CI generated formats suppress presentation" {
@@ -1637,7 +1792,8 @@ test "top-level report exports preserve exact generated bytes" {
 }
 
 test "banner suppressed on machine proxy path (packs --format json)" {
-    var stdout_buf: [1024]u8 = undefined;
+    // Live packs --json dumps the full oracle catalog (>>1KiB).
+    var stdout_buf: [256 * 1024]u8 = undefined;
     var stderr_buf: [512]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);

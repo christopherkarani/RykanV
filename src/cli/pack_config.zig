@@ -52,11 +52,41 @@ fn freeOwnedSlice(allocator: std.mem.Allocator, items: []const []const u8) void 
     allocator.free(items);
 }
 
-/// Baseline packs the daemon always treats as on (unless system.disk explicitly disabled).
+/// Baseline packs that ship on by default (`core`, `core.*`, `system.disk`).
+/// Zig `packIsActive` honors `disabled` for these — but only **user** config may
+/// opt them out. Project `.orca.toml` baseline disables are ignored at load
+/// (untrusted agent-writable project files must not drop core safety packs).
 pub fn isBaselinePackId(id: []const u8) bool {
     if (std.mem.eql(u8, id, "core") or std.mem.eql(u8, id, "system.disk")) return true;
     if (std.mem.startsWith(u8, id, "core.")) return true;
     return false;
+}
+
+/// True when `ORCA_OPERATOR=1` (or `true`/`yes`) is set — CLI break-glass for
+/// baseline pack disable and other operator-only mutations.
+pub fn isOperatorBreakGlass() bool {
+    return envFlagTruthy("ORCA_OPERATOR") or envFlagTruthy("RYK_OPERATOR");
+}
+
+fn envFlagTruthy(name: [*:0]const u8) bool {
+    const raw = std.c.getenv(name) orelse return false;
+    const value = std.mem.span(raw);
+    return std.mem.eql(u8, value, "1") or
+        std.mem.eql(u8, value, "true") or
+        std.mem.eql(u8, value, "yes") or
+        std.mem.eql(u8, value, "TRUE") or
+        std.mem.eql(u8, value, "YES");
+}
+
+/// Project pack config markers: same as workspace product markers (`.git` or policy).
+fn workspaceHasProjectPackMarker(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8) bool {
+    const git_path = std.fs.path.join(allocator, &.{ workspace_root, ".git" }) catch return false;
+    defer allocator.free(git_path);
+    if (plugin.fileExistsAbsolute(io, git_path) or plugin.dirExists(git_path)) return true;
+
+    const policy_path = std.fs.path.join(allocator, &.{ workspace_root, ".orca", "policy.yaml" }) catch return false;
+    defer allocator.free(policy_path);
+    return plugin.fileExistsAbsolute(io, policy_path);
 }
 
 /// Cwd-scoped pack enable/disable lists for the production Zig shell evaluator.
@@ -74,7 +104,13 @@ pub const LoadedPackIds = struct {
 };
 
 /// Load `[packs] enabled` / `disabled` for the workspace (project `.orca.toml` when
-/// git-backed, otherwise user config). Missing config → empty lists (baseline only).
+/// the workspace has `.git` or `.orca/policy.yaml`, otherwise user config).
+///
+/// **Baseline safety:** project-scoped `disabled` entries for `core` / `core.*` /
+/// `system.disk` are stripped (untrusted project files cannot drop baseline packs).
+/// User config may still opt out baseline packs; those are merged in when the
+/// active scope is project.
+/// Missing config → empty lists (baseline only).
 pub fn loadPackIdsForWorkspace(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -88,6 +124,13 @@ pub fn loadPackIdsForWorkspace(
 
     var lists = try loadPackIdLists(io, allocator, resolved.path);
     errdefer lists.deinit(allocator);
+
+    if (resolved.scope == .project) {
+        // Project file must never turn off baseline packs (M-8).
+        try stripBaselineIdsFromList(allocator, &lists.disabled);
+        // Operator baseline opt-outs live in user config; merge them in.
+        try mergeUserBaselineDisabled(io, allocator, &lists.disabled);
+    }
 
     const enabled = try lists.enabled.toOwnedSlice(allocator);
     lists.enabled = .empty;
@@ -107,19 +150,49 @@ pub fn loadPackIdsForWorkspace(
 }
 
 /// Resolve where pack enablement should be written.
-/// Prefers project `.orca.toml` when `.git` is present under workspace_root.
+/// Prefers project `.orca.toml` when workspace has `.git` or `.orca/policy.yaml`.
 pub fn resolvePackConfigPath(
     io: std.Io,
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
 ) !ResolvedPackConfig {
-    const git_path = try std.fs.path.join(allocator, &.{ workspace_root, ".git" });
-    defer allocator.free(git_path);
-    if (plugin.fileExistsAbsolute(io, git_path) or plugin.dirExists(git_path)) {
+    if (workspaceHasProjectPackMarker(io, allocator, workspace_root)) {
         const path = try std.fs.path.join(allocator, &.{ workspace_root, ".orca.toml" });
         return .{ .path = path, .scope = .project };
     }
     return try resolveUserPackConfigPath(allocator);
+}
+
+/// Merge baseline-only entries from user pack config into `disabled` (owned ids).
+fn mergeUserBaselineDisabled(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    disabled: *std.ArrayListUnmanaged([]const u8),
+) !void {
+    const user = resolveUserPackConfigPath(allocator) catch return;
+    defer allocator.free(user.path);
+
+    var user_lists = try loadPackIdLists(io, allocator, user.path);
+    defer user_lists.deinit(allocator);
+
+    for (user_lists.disabled.items) |id| {
+        if (!isBaselinePackId(id)) continue;
+        if (listContains(disabled.items, id)) continue;
+        try disabled.append(allocator, try allocator.dupe(u8, id));
+    }
+}
+
+/// Free and remove baseline pack ids from an owned id list.
+fn stripBaselineIdsFromList(allocator: std.mem.Allocator, list: *std.ArrayListUnmanaged([]const u8)) !void {
+    var i: usize = 0;
+    while (i < list.items.len) {
+        if (isBaselinePackId(list.items[i])) {
+            allocator.free(list.items[i]);
+            _ = list.orderedRemove(i);
+            continue;
+        }
+        i += 1;
+    }
 }
 
 fn resolveUserPackConfigPath(allocator: std.mem.Allocator) !ResolvedPackConfig {
@@ -215,7 +288,8 @@ pub fn mergeEnabledPacksIntoConfig(
 }
 
 /// Additive enable of opt-in pack IDs into project/user pack config.
-/// Baseline IDs are noted as always-on (and removed from disabled if present).
+/// Baseline IDs are noted as always-on and cleared from disabled (including user
+/// baseline opt-outs, which is where effective baseline disables live).
 pub fn enablePacks(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -234,19 +308,39 @@ pub fn enablePacks(
     errdefer freeList(allocator, &added);
     var baseline_notes: std.ArrayListUnmanaged([]const u8) = .empty;
     errdefer freeList(allocator, &baseline_notes);
-    var changed = false;
+
+    // Baseline opt-outs are stored in user config; clear them there when re-enabling.
+    var resolved_changed = false;
+    var user_changed = false;
+    var user_path: ?[]u8 = null;
+    defer if (user_path) |p| allocator.free(p);
+    var user_lists: ?PackIdLists = null;
+    defer if (user_lists) |*ul| ul.deinit(allocator);
 
     for (ids) |pack_id| {
         if (!looksLikePackId(pack_id)) return error.InvalidArguments;
 
         if (removeIdFromList(allocator, &lists.disabled, pack_id)) {
-            changed = true;
+            resolved_changed = true;
         }
 
         if (isBaselinePackId(pack_id)) {
+            // Also clear user-config baseline opt-out (effective disable home).
+            if (resolved.scope == .project) {
+                if (user_lists == null) {
+                    const user = try resolveUserPackConfigPath(allocator);
+                    user_path = user.path;
+                    user_lists = try loadPackIdLists(io, allocator, user.path);
+                }
+                if (user_lists) |*ul| {
+                    if (removeIdFromList(allocator, &ul.disabled, pack_id)) {
+                        user_changed = true;
+                    }
+                }
+            }
             const note = try std.fmt.allocPrint(
                 allocator,
-                "{s} is always on (baseline); no need to list it in enabled",
+                "{s} is baseline (on by default); cleared any user opt-out — no need to list it in enabled",
                 .{pack_id},
             );
             try baseline_notes.append(allocator, note);
@@ -256,16 +350,21 @@ pub fn enablePacks(
         if (listContains(lists.enabled.items, pack_id)) continue;
         try lists.enabled.append(allocator, try allocator.dupe(u8, pack_id));
         try added.append(allocator, try allocator.dupe(u8, pack_id));
-        changed = true;
+        resolved_changed = true;
     }
 
-    if (changed) {
+    if (resolved_changed) {
         try writePacksArrays(io, allocator, resolved.path, lists.existing_raw, lists.enabled.items, lists.disabled.items);
+    }
+    if (user_changed) {
+        if (user_lists) |*ul| {
+            try writePacksArrays(io, allocator, user_path.?, ul.existing_raw, ul.enabled.items, ul.disabled.items);
+        }
     }
 
     return try finishMutationResult(allocator, resolved, .{
         .kind = .enable,
-        .changed = changed,
+        .changed = resolved_changed or user_changed,
         .added = &added,
         .removed = null,
         .disabled_added = null,
@@ -273,7 +372,11 @@ pub fn enablePacks(
     });
 }
 
-/// Disable pack IDs: opt-in removed from enabled; baseline added to disabled.
+/// Disable pack IDs: opt-in removed from enabled on the workspace config;
+/// baseline packs are opted out via **user** config only (never project `.orca.toml`).
+///
+/// Zig `packIsActive` fully honors `disabled` for baseline packs once loaded from
+/// user config. Project-scoped baseline disables are ignored at load (M-8).
 pub fn disablePacks(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -296,23 +399,61 @@ pub fn disablePacks(
     errdefer freeList(allocator, &baseline_notes);
     var changed = false;
 
+    // Baseline opt-outs always target user config (effective + not agent-writable project).
+    var resolved_changed = false;
+    var user_path: ?[]u8 = null;
+    defer if (user_path) |p| allocator.free(p);
+    var user_lists: ?PackIdLists = null;
+    defer if (user_lists) |*ul| ul.deinit(allocator);
+    var user_changed = false;
+
     for (ids) |pack_id| {
         if (!looksLikePackId(pack_id)) return error.InvalidArguments;
 
         if (isBaselinePackId(pack_id)) {
-            if (removeIdFromList(allocator, &lists.enabled, pack_id)) {
-                try removed.append(allocator, try allocator.dupe(u8, pack_id));
-                changed = true;
-            }
-            if (!listContains(lists.disabled.items, pack_id)) {
-                try lists.disabled.append(allocator, try allocator.dupe(u8, pack_id));
-                try disabled_added.append(allocator, try allocator.dupe(u8, pack_id));
-                changed = true;
-            }
-            if (std.mem.eql(u8, pack_id, "core") or std.mem.startsWith(u8, pack_id, "core.")) {
+            // Never add baseline to project disabled list (M-8 / M-2).
+            if (resolved.scope == .project) {
+                if (removeIdFromList(allocator, &lists.enabled, pack_id)) {
+                    try removed.append(allocator, try allocator.dupe(u8, pack_id));
+                    resolved_changed = true;
+                }
+                // Strip any pre-existing project baseline disabled entry while we're here.
+                if (removeIdFromList(allocator, &lists.disabled, pack_id)) {
+                    resolved_changed = true;
+                }
+
+                if (user_lists == null) {
+                    const user = try resolveUserPackConfigPath(allocator);
+                    user_path = user.path;
+                    user_lists = try loadPackIdLists(io, allocator, user.path);
+                }
+                if (user_lists) |*ul| {
+                    if (!listContains(ul.disabled.items, pack_id)) {
+                        try ul.disabled.append(allocator, try allocator.dupe(u8, pack_id));
+                        try disabled_added.append(allocator, try allocator.dupe(u8, pack_id));
+                        user_changed = true;
+                    }
+                }
                 const note = try std.fmt.allocPrint(
                     allocator,
-                    "{s}: listed in disabled; daemon may still expand core category as always-on",
+                    "{s}: baseline opt-out written to user config (Zig packIsActive honors disabled; project .orca.toml baseline disabled entries are ignored at load)",
+                    .{pack_id},
+                );
+                try baseline_notes.append(allocator, note);
+            } else {
+                // Already on user scope — write baseline disable there.
+                if (removeIdFromList(allocator, &lists.enabled, pack_id)) {
+                    try removed.append(allocator, try allocator.dupe(u8, pack_id));
+                    resolved_changed = true;
+                }
+                if (!listContains(lists.disabled.items, pack_id)) {
+                    try lists.disabled.append(allocator, try allocator.dupe(u8, pack_id));
+                    try disabled_added.append(allocator, try allocator.dupe(u8, pack_id));
+                    resolved_changed = true;
+                }
+                const note = try std.fmt.allocPrint(
+                    allocator,
+                    "{s}: baseline opted out via user disabled — Zig packIsActive honors this (not always-on)",
                     .{pack_id},
                 );
                 try baseline_notes.append(allocator, note);
@@ -322,13 +463,20 @@ pub fn disablePacks(
 
         if (removeIdFromList(allocator, &lists.enabled, pack_id)) {
             try removed.append(allocator, try allocator.dupe(u8, pack_id));
-            changed = true;
+            resolved_changed = true;
         }
     }
 
-    if (changed) {
+    if (resolved_changed) {
         try writePacksArrays(io, allocator, resolved.path, lists.existing_raw, lists.enabled.items, lists.disabled.items);
     }
+    if (user_changed) {
+        if (user_lists) |*ul| {
+            try writePacksArrays(io, allocator, user_path.?, ul.existing_raw, ul.enabled.items, ul.disabled.items);
+        }
+    }
+
+    changed = resolved_changed or user_changed;
 
     return try finishMutationResult(allocator, resolved, .{
         .kind = .disable,
@@ -835,6 +983,46 @@ fn collectQuotedIdsForKeyOwned(
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+/// Isolate XDG_CONFIG_HOME so host user pack config does not leak into load tests.
+fn testIsolateXdg() !struct {
+    tmp: std.testing.TmpDir,
+    root: []u8,
+    prev: ?[:0]u8,
+
+    fn deinit(self: *@This()) void {
+        if (self.prev) |value| {
+            _ = setenv("XDG_CONFIG_HOME", value.ptr, 1);
+            std.testing.allocator.free(value);
+        } else {
+            _ = unsetenv("XDG_CONFIG_HOME");
+        }
+        std.testing.allocator.free(self.root);
+        self.tmp.cleanup();
+    }
+} {
+    var tmp = std.testing.tmpDir(.{});
+    errdefer tmp.cleanup();
+    const root_z = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root_z);
+    const root = try std.testing.allocator.dupe(u8, root_z);
+    errdefer std.testing.allocator.free(root);
+
+    const prev: ?[:0]u8 = if (std.c.getenv("XDG_CONFIG_HOME")) |v|
+        try std.testing.allocator.dupeZ(u8, std.mem.sliceTo(v, 0))
+    else
+        null;
+    errdefer if (prev) |p| std.testing.allocator.free(p);
+
+    const root_z0 = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z0);
+    try std.testing.expectEqual(@as(c_int, 0), setenv("XDG_CONFIG_HOME", root_z0.ptr, 1));
+
+    return .{ .tmp = tmp, .root = root, .prev = prev };
+}
+
 test "isBaselinePackId covers core and system.disk only" {
     try std.testing.expect(isBaselinePackId("core"));
     try std.testing.expect(isBaselinePackId("core.git"));
@@ -852,7 +1040,7 @@ test "loadPackIdsForWorkspace reads project .orca.toml packs" {
     const body =
         \\[packs]
         \\enabled = ["containers.docker", "package_managers"]
-        \\disabled = ["system.disk"]
+        \\disabled = ["system.disk", "strict_git"]
         \\
     ;
     const file = try tmp.dir.createFile(std.testing.io, ".orca.toml", .{});
@@ -861,6 +1049,10 @@ test "loadPackIdsForWorkspace reads project .orca.toml packs" {
 
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
+
+    // Isolate user config so host user baseline opt-outs do not leak into the assertion.
+    var xdg = try testIsolateXdg();
+    defer xdg.deinit();
 
     var loaded = try loadPackIdsForWorkspace(std.testing.io, std.testing.allocator, root);
     defer loaded.deinit(std.testing.allocator);
@@ -874,8 +1066,79 @@ test "loadPackIdsForWorkspace reads project .orca.toml packs" {
     }
     try std.testing.expect(saw_docker);
     try std.testing.expect(saw_pkg);
-    try std.testing.expect(loaded.disabled.len == 1);
-    try std.testing.expectEqualStrings("system.disk", loaded.disabled[0]);
+    // M-8: project-sourced baseline disables (system.disk) are stripped at load.
+    // Non-baseline disabled entries remain.
+    var saw_strict = false;
+    var saw_disk = false;
+    for (loaded.disabled) |id| {
+        if (std.mem.eql(u8, id, "strict_git")) saw_strict = true;
+        if (std.mem.eql(u8, id, "system.disk")) saw_disk = true;
+    }
+    try std.testing.expect(saw_strict);
+    try std.testing.expect(!saw_disk);
+}
+
+test "loadPackIdsForWorkspace strips project baseline disabled and merges user baseline" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, ".git");
+    {
+        const f = try tmp.dir.createFile(std.testing.io, ".orca.toml", .{});
+        defer f.close(std.testing.io);
+        try f.writeStreamingAll(std.testing.io,
+            \\[packs]
+            \\enabled = ["containers.docker"]
+            \\disabled = ["core.git", "system.disk"]
+            \\
+        );
+    }
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var xdg = try testIsolateXdg();
+    defer xdg.deinit();
+
+    // User config opts out system.disk only — that must survive merge.
+    {
+        const user = try resolveUserPackConfigPath(std.testing.allocator);
+        defer std.testing.allocator.free(user.path);
+        try writeConfigFile(std.testing.io, std.testing.allocator, user.path,
+            \\[packs]
+            \\enabled = []
+            \\disabled = ["system.disk"]
+            \\
+        );
+    }
+
+    var loaded = try loadPackIdsForWorkspace(std.testing.io, std.testing.allocator, root);
+    defer loaded.deinit(std.testing.allocator);
+
+    var saw_disk = false;
+    var saw_core_git = false;
+    for (loaded.disabled) |id| {
+        if (std.mem.eql(u8, id, "system.disk")) saw_disk = true;
+        if (std.mem.eql(u8, id, "core.git")) saw_core_git = true;
+    }
+    try std.testing.expect(saw_disk); // user baseline opt-out honored
+    try std.testing.expect(!saw_core_git); // project baseline strip
+}
+
+test "resolvePackConfigPath treats .orca/policy.yaml as project marker" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    {
+        const f = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        defer f.close(std.testing.io);
+        try f.writeStreamingAll(std.testing.io, "version: 1\n");
+    }
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    const resolved = try resolvePackConfigPath(std.testing.io, std.testing.allocator, root);
+    defer std.testing.allocator.free(resolved.path);
+    try std.testing.expect(resolved.scope == .project);
+    try std.testing.expect(std.mem.endsWith(u8, resolved.path, ".orca.toml"));
 }
 
 test "packsArraySlice does not treat disabled as enabled" {
@@ -1001,16 +1264,29 @@ test "enablePacks baseline notes and re-enables from disabled" {
     defer std.testing.allocator.free(root);
     try tmp.dir.createDirPath(std.testing.io, ".git");
 
-    const seed =
-        \\[packs]
-        \\enabled = []
-        \\disabled = ["system.disk"]
-        \\
-    ;
+    var xdg = try testIsolateXdg();
+    defer xdg.deinit();
+
+    // Stale project baseline disable (ignored at load) + effective user opt-out.
     {
         const f = try tmp.dir.createFile(std.testing.io, ".orca.toml", .{});
         defer f.close(std.testing.io);
-        try f.writeStreamingAll(std.testing.io, seed);
+        try f.writeStreamingAll(std.testing.io,
+            \\[packs]
+            \\enabled = []
+            \\disabled = ["system.disk"]
+            \\
+        );
+    }
+    {
+        const user = try resolveUserPackConfigPath(std.testing.allocator);
+        defer std.testing.allocator.free(user.path);
+        try writeConfigFile(std.testing.io, std.testing.allocator, user.path,
+            \\[packs]
+            \\enabled = []
+            \\disabled = ["system.disk"]
+            \\
+        );
     }
 
     var result = try enablePacks(std.testing.io, std.testing.allocator, root, &.{ "core.git", "system.disk" });
@@ -1022,9 +1298,18 @@ test "enablePacks baseline notes and re-enables from disabled" {
     defer std.testing.allocator.free(config);
     const disabled = packsArraySlice(config, "disabled") orelse "";
     try std.testing.expect(std.mem.indexOf(u8, disabled, "system.disk") == null);
+
+    const user = try resolveUserPackConfigPath(std.testing.allocator);
+    defer std.testing.allocator.free(user.path);
+    const user_raw = readFileIfExists(std.testing.io, std.testing.allocator, user.path) catch null;
+    defer if (user_raw) |r| std.testing.allocator.free(r);
+    if (user_raw) |raw| {
+        const ud = packsArraySlice(raw, "disabled") orelse "";
+        try std.testing.expect(std.mem.indexOf(u8, ud, "system.disk") == null);
+    }
 }
 
-test "disablePacks removes opt-in and opts out baseline" {
+test "disablePacks removes opt-in and opts out baseline via user config" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const root_z = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
@@ -1032,6 +1317,9 @@ test "disablePacks removes opt-in and opts out baseline" {
     const root = try std.testing.allocator.dupe(u8, root_z);
     defer std.testing.allocator.free(root);
     try tmp.dir.createDirPath(std.testing.io, ".git");
+
+    var xdg = try testIsolateXdg();
+    defer xdg.deinit();
 
     const seed =
         \\[agents]
@@ -1055,6 +1343,9 @@ test "disablePacks removes opt-in and opts out baseline" {
     try std.testing.expectEqualStrings("containers.docker", result.removed[0]);
     try std.testing.expectEqual(@as(usize, 1), result.disabled_added.len);
     try std.testing.expectEqualStrings("system.disk", result.disabled_added[0]);
+    try std.testing.expect(std.mem.indexOf(u8, result.message, "daemon may still") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.message, "user config") != null or
+        std.mem.indexOf(u8, result.message, "packIsActive") != null);
 
     const config = try tmp.dir.readFileAlloc(std.testing.io, ".orca.toml", std.testing.allocator, .limited(8192));
     defer std.testing.allocator.free(config);
@@ -1062,8 +1353,18 @@ test "disablePacks removes opt-in and opts out baseline" {
     try std.testing.expect(std.mem.indexOf(u8, config, "package_managers") != null);
     const enabled = packsArraySlice(config, "enabled") orelse "";
     try std.testing.expect(std.mem.indexOf(u8, enabled, "containers.docker") == null);
-    const disabled = packsArraySlice(config, "disabled") orelse "";
-    try std.testing.expect(std.mem.indexOf(u8, disabled, "system.disk") != null);
+    // Project file must NOT list baseline in disabled (M-8).
+    const project_disabled = packsArraySlice(config, "disabled") orelse "[]";
+    try std.testing.expect(std.mem.indexOf(u8, project_disabled, "system.disk") == null);
+
+    // Effective load merges user baseline opt-out.
+    var loaded = try loadPackIdsForWorkspace(std.testing.io, std.testing.allocator, root);
+    defer loaded.deinit(std.testing.allocator);
+    var saw_disk = false;
+    for (loaded.disabled) |id| {
+        if (std.mem.eql(u8, id, "system.disk")) saw_disk = true;
+    }
+    try std.testing.expect(saw_disk);
 
     var again = try disablePacks(std.testing.io, std.testing.allocator, root, &.{"containers.docker"});
     defer again.deinit(std.testing.allocator);
@@ -1085,4 +1386,105 @@ test "enablePacks rejects invalid pack id characters" {
         root,
         &.{"bad;id"},
     ));
+}
+
+// ── s-packs locked contract tests (Slice 4) ─────────────────────────────────
+// Disable/enable semantics stay on shipped pack_config — no invented core hard-fail.
+
+test "s-packs: disablePacks allows core.git without hard-fail and lists in disabled" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root_z = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root_z);
+    const root = try std.testing.allocator.dupe(u8, root_z);
+    defer std.testing.allocator.free(root);
+    try tmp.dir.createDirPath(std.testing.io, ".git");
+
+    var xdg = try testIsolateXdg();
+    defer xdg.deinit();
+
+    const seed =
+        \\[packs]
+        \\enabled = ["containers.docker"]
+        \\disabled = []
+        \\
+    ;
+    {
+        const f = try tmp.dir.createFile(std.testing.io, ".orca.toml", .{});
+        defer f.close(std.testing.io);
+        try f.writeStreamingAll(std.testing.io, seed);
+    }
+
+    // Baseline may be opted out (user config); no hard-fail "cannot disable core.*".
+    // Project file never records baseline in disabled (M-8).
+    var result = try disablePacks(std.testing.io, std.testing.allocator, root, &.{"core.git"});
+    defer result.deinit(std.testing.allocator);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqual(@as(usize, 1), result.disabled_added.len);
+    try std.testing.expectEqualStrings("core.git", result.disabled_added[0]);
+    try std.testing.expect(std.mem.indexOf(u8, result.message, "cannot disable") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.message, "daemon may still") == null);
+
+    const config = try tmp.dir.readFileAlloc(std.testing.io, ".orca.toml", std.testing.allocator, .limited(8192));
+    defer std.testing.allocator.free(config);
+    const project_disabled = packsArraySlice(config, "disabled") orelse "[]";
+    try std.testing.expect(std.mem.indexOf(u8, project_disabled, "core.git") == null);
+
+    var loaded = try loadPackIdsForWorkspace(std.testing.io, std.testing.allocator, root);
+    defer loaded.deinit(std.testing.allocator);
+    var found = false;
+    for (loaded.disabled) |id| {
+        if (std.mem.eql(u8, id, "core.git")) found = true;
+    }
+    try std.testing.expect(found); // effective via user-config merge
+}
+
+test "s-packs: enablePacks writes opt-in pack into project enabled list" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root_z = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root_z);
+    const root = try std.testing.allocator.dupe(u8, root_z);
+    defer std.testing.allocator.free(root);
+    try tmp.dir.createDirPath(std.testing.io, ".git");
+
+    var result = try enablePacks(std.testing.io, std.testing.allocator, root, &.{"containers.docker"});
+    defer result.deinit(std.testing.allocator);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqual(@as(usize, 1), result.added.len);
+    try std.testing.expectEqualStrings("containers.docker", result.added[0]);
+    try std.testing.expect(result.scope == .project);
+    try std.testing.expect(result.config_path != null);
+
+    const config = try tmp.dir.readFileAlloc(std.testing.io, ".orca.toml", std.testing.allocator, .limited(8192));
+    defer std.testing.allocator.free(config);
+    const enabled = packsArraySlice(config, "enabled") orelse "";
+    try std.testing.expect(std.mem.indexOf(u8, enabled, "containers.docker") != null);
+}
+
+test "s-packs: disablePacks removes opt-in from enabled without inventing core hard-fail path" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root_z = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root_z);
+    const root = try std.testing.allocator.dupe(u8, root_z);
+    defer std.testing.allocator.free(root);
+    try tmp.dir.createDirPath(std.testing.io, ".git");
+
+    {
+        var en = try enablePacks(std.testing.io, std.testing.allocator, root, &.{"containers.docker"});
+        defer en.deinit(std.testing.allocator);
+        try std.testing.expect(en.changed);
+    }
+
+    var result = try disablePacks(std.testing.io, std.testing.allocator, root, &.{"containers.docker"});
+    defer result.deinit(std.testing.allocator);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqual(@as(usize, 1), result.removed.len);
+    try std.testing.expectEqualStrings("containers.docker", result.removed[0]);
+
+    const config = try tmp.dir.readFileAlloc(std.testing.io, ".orca.toml", std.testing.allocator, .limited(8192));
+    defer std.testing.allocator.free(config);
+    const enabled = packsArraySlice(config, "enabled") orelse "";
+    try std.testing.expect(std.mem.indexOf(u8, enabled, "containers.docker") == null);
 }

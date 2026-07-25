@@ -1,3 +1,5 @@
+//! Test-only fixture: seeds a verifiable blocked-action audit session.
+//! Not a product command surface (`ryk demo` was removed; use `ryk explain`).
 const std = @import("std");
 
 const brand = @import("cli/brand.zig");
@@ -10,10 +12,10 @@ pub fn createBlockedActionSession(io: std.Io, allocator: std.mem.Allocator, work
         .id = try core.session.generateSessionId(now),
         .started_at = now,
         .ended_at = now,
-        .command = "orca",
-        .args = &.{ "demo", "blocked-action" },
+        .command = "ryk",
+        .args = &.{ "explain", "rm -rf ./fixture-target" },
         .workspace_root = workspace_root,
-        .session_name = "blocked-action-demo",
+        .session_name = "blocked-action-fixture",
         .mode = .strict,
         .platform = core.platform.detectOs(),
     };
@@ -24,15 +26,15 @@ pub fn createBlockedActionSession(io: std.Io, allocator: std.mem.Allocator, work
         .event_id = try core.event.generateEventId(now),
         .timestamp = now,
         .event_type = .command_denied,
-        .actor = .{ .kind = .orca, .display = "orca" },
-        .target = .{ .kind = .command, .value = "rm -rf ./demo-fixture" },
+        .actor = .{ .kind = .orca, .display = "ryk" },
+        .target = .{ .kind = .command, .value = "rm -rf ./fixture-target" },
         .decision = core_api.makeDecision(.{
             .result = .deny,
-            .reason = "demo policy denied a destructive filesystem command before execution",
+            .reason = "fixture policy denied a destructive filesystem command before execution",
             .rule_id = "commands.deny",
             .risk_score = 95,
         }),
-        .redactions = .{ .count = 1, .labels = &.{"demo-secret-value"} },
+        .redactions = .{ .count = 1, .labels = &.{"fixture-secret-value"} },
     });
     try core_api.appendAuditEvent(&writer, event);
     try writer.writeLastPointer();
@@ -49,7 +51,7 @@ pub fn createBlockedActionSession(io: std.Io, allocator: std.mem.Allocator, work
     return try allocator.dupe(u8, writer.session_id.slice());
 }
 
-test "demo blocked action creates verifiable replay session" {
+test "blocked action fixture creates verifiable replay session" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);

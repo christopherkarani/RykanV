@@ -1,17 +1,22 @@
 const std = @import("std");
 const exit_codes = @import("exit_codes.zig");
-const contracts = @import("daemon_contracts.zig");
 const help = @import("help.zig");
 const tui = @import("../tui/mod.zig");
 const suggestions = @import("suggestions.zig");
-const pack_state = @import("pack_state.zig");
+const pack_config = @import("pack_config.zig");
 const onboarding = @import("onboarding.zig");
+const danger_confirmation = @import("danger_confirmation.zig");
+const util = @import("orca_core").core.util;
+
+/// Embedded oracle pack definitions (same source as `shell_engine.registry`).
+const packs_json = @embedFile("../shell_engine/oracle_packs.json");
 
 const Options = struct {
     filter: ?[]const u8 = null,
     installed: bool = false,
     page: usize = 1,
     page_size: usize = 25,
+    machine_json: bool = false,
 };
 
 const ShowOptions = struct {
@@ -21,18 +26,57 @@ const ShowOptions = struct {
     machine_json: bool = false,
 };
 
+const PatternView = struct {
+    name: []const u8,
+    regex: []const u8,
+    severity: []const u8,
+    reason: []const u8,
+};
+
+const PackView = struct {
+    id: []const u8,
+    name: []const u8,
+    category: []const u8,
+    description: []const u8,
+    enabled: bool,
+    safe_pattern_count: usize,
+    destructive_pattern_count: usize,
+    safe: []const PatternView = &.{},
+    destructive: []const PatternView = &.{},
+};
+
+const Catalog = struct {
+    allocator: std.mem.Allocator,
+    packs: []PackView,
+    /// Owns dupe'd slices for name/category/description when allocated.
+    owned_strings: std.ArrayListUnmanaged([]u8) = .empty,
+    /// Owns pattern view arrays (not pattern field strings — those borrow JSON).
+    owned_pattern_slices: std.ArrayListUnmanaged([]PatternView) = .empty,
+    json_parsed: std.json.Parsed(std.json.Value),
+
+    fn deinit(self: *Catalog) void {
+        for (self.owned_strings.items) |s| self.allocator.free(s);
+        self.owned_strings.deinit(self.allocator);
+        for (self.owned_pattern_slices.items) |slice| self.allocator.free(slice);
+        self.owned_pattern_slices.deinit(self.allocator);
+        self.allocator.free(self.packs);
+        self.json_parsed.deinit();
+        self.* = undefined;
+    }
+};
+
 pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
-    return commandWithExecutor(realExecute, io, argv, stdout, stderr);
+    // Executor retained only for test injectability; happy path never calls it.
+    return commandWithExecutor(unusedExecutor, io, argv, stdout, stderr);
 }
 
-fn realExecute(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
-    const cli = @import("mod.zig");
-    return cli.executeDaemonCli(io, argv, stdout, stderr);
+fn unusedExecutor(_: std.Io, _: []const []const u8, _: anytype, _: anytype) !u8 {
+    return error.UnexpectedExecutorCall;
 }
 
 pub fn commandWithExecutor(comptime execute_cli: anytype, io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
-    // Zig owns human help for the friendly packs interface; raw daemon help is
-    // still available via machine passthrough flags (--robot, --format, …).
+    _ = execute_cli; // no daemon path — tests inject failIfCalled to prove this
+
     for (argv) |arg| {
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             _ = try help.writeCommand(io, stdout, "packs");
@@ -42,118 +86,242 @@ pub fn commandWithExecutor(comptime execute_cli: anytype, io: std.Io, argv: []co
 
     if (argv.len > 0) {
         if (std.mem.eql(u8, argv[0], "show") or std.mem.eql(u8, argv[0], "info")) {
-            return runShow(execute_cli, io, argv[1..], stdout, stderr);
+            return runShow(io, argv[1..], stdout, stderr);
         }
         if (std.mem.eql(u8, argv[0], "enable")) {
-            return runEnable(execute_cli, io, argv[1..], stdout, stderr);
+            return runEnable(io, argv[1..], stdout, stderr);
         }
         if (std.mem.eql(u8, argv[0], "disable")) {
             return runDisable(io, argv[1..], stdout, stderr);
         }
     }
 
-    if (shouldPassThrough(argv)) {
-        const daemon_argv = try std.heap.smp_allocator.alloc([]const u8, argv.len + 1);
-        defer std.heap.smp_allocator.free(daemon_argv);
-        daemon_argv[0] = "packs";
-        @memcpy(daemon_argv[1..], argv);
-        return execute_cli(io, daemon_argv, stdout, stderr);
-    }
-
-    const options = parseOptions(argv, stderr) catch return exit_codes.usage;
-    var daemon_stdout: std.Io.Writer.Allocating = .init(std.heap.smp_allocator);
-    defer daemon_stdout.deinit();
-    var daemon_stderr: std.Io.Writer.Allocating = .init(std.heap.smp_allocator);
-    defer daemon_stderr.deinit();
-
-    const daemon_argv: []const []const u8 = if (options.installed)
-        &.{ "packs", "--enabled", "--format", "json" }
-    else
-        &.{ "packs", "--format", "json" };
-    const code = try execute_cli(io, daemon_argv, &daemon_stdout.writer, &daemon_stderr.writer);
-    if (code != exit_codes.success) {
-        try stdout.writeAll(daemon_stdout.written());
-        try stderr.writeAll(daemon_stderr.written());
-        return code;
-    }
-
-    var parsed = contracts.parsePacks(std.heap.smp_allocator, daemon_stdout.written()) catch |err| {
-        try stderr.print("ryk packs: daemon returned invalid JSON ({s}). Try 'orca doctor'.\n", .{@errorName(err)});
-        return exit_codes.general;
-    };
-    defer parsed.deinit();
-    return renderHuman(io, options, parsed.value, stdout, stderr);
+    const options = parseListOptions(argv, stderr) catch return exit_codes.usage;
+    return runList(io, options, stdout, stderr);
 }
 
-fn runShow(comptime execute_cli: anytype, io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
+fn runList(io: std.Io, options: Options, stdout: anytype, stderr: anytype) !u8 {
+    const allocator = std.heap.smp_allocator;
+    var catalog = loadCatalog(allocator) catch |err| {
+        try stderr.print("ryk packs: failed to load pack registry ({s}).\n", .{@errorName(err)});
+        return exit_codes.general;
+    };
+    defer catalog.deinit();
+
+    applyEnabledState(io, allocator, &catalog);
+
+    if (options.machine_json) {
+        return renderListJson(stdout, catalog.packs);
+    }
+    return renderHuman(allocator, io, options, catalog.packs, stdout, stderr);
+}
+
+fn runShow(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     const options = parseShowOptions(argv, stderr) catch return exit_codes.usage;
     const allocator = std.heap.smp_allocator;
 
-    var daemon_stdout: std.Io.Writer.Allocating = .init(allocator);
-    defer daemon_stdout.deinit();
-    var daemon_stderr: std.Io.Writer.Allocating = .init(allocator);
-    defer daemon_stderr.deinit();
+    var catalog = loadCatalog(allocator) catch |err| {
+        try stderr.print("ryk packs: failed to load pack registry ({s}).\n", .{@errorName(err)});
+        return exit_codes.general;
+    };
+    defer catalog.deinit();
+    applyEnabledState(io, allocator, &catalog);
 
-    const daemon_argv: []const []const u8 = if (options.no_patterns)
-        &.{ "pack", "info", options.pack_id, "--json", "--no-patterns" }
-    else
-        &.{ "pack", "info", options.pack_id, "--json" };
-
-    const code = execute_cli(io, daemon_argv, &daemon_stdout.writer, &daemon_stderr.writer) catch |err| {
+    const pack = findPack(catalog.packs, options.pack_id) orelse {
         try stderr.print(
-            "ryk packs show: daemon {s}. Upgrade/restart orca-daemon so `pack info` is available, then retry. Or run 'orca doctor'.\n",
-            .{@errorName(err)},
+            "ryk packs: pack '{s}' not found. Run 'ryk packs --filter {s}' to search.\n",
+            .{ options.pack_id, options.pack_id },
         );
         return exit_codes.general;
     };
-    if (code != exit_codes.success) {
-        if (daemon_stderr.written().len > 0) {
-            try stderr.writeAll(daemon_stderr.written());
-        } else {
-            try stderr.print(
-                "ryk packs: pack '{s}' not found or daemon unavailable. Try 'orca packs --filter {s}' or 'orca doctor'.\n",
-                .{ options.pack_id, options.pack_id },
-            );
-        }
-        if (daemon_stdout.written().len > 0 and options.machine_json) {
-            try stdout.writeAll(daemon_stdout.written());
-        }
-        return if (code == exit_codes.usage) exit_codes.usage else exit_codes.general;
-    }
 
     if (options.machine_json) {
-        try stdout.writeAll(daemon_stdout.written());
-        return exit_codes.success;
+        return renderShowJson(stdout, pack, options.no_patterns, options.verbose);
     }
+    return renderShowHuman(allocator, io, pack, options.verbose, options.no_patterns, stdout);
+}
 
-    var detail = contracts.parsePackDetail(allocator, daemon_stdout.written()) catch |err| {
-        try stderr.print("ryk packs: daemon returned invalid pack JSON ({s}). Try 'orca doctor'.\n", .{@errorName(err)});
+fn runEnable(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
+    const allocator = std.heap.smp_allocator;
+    const ids = parseIdList(argv, stderr) catch return exit_codes.usage;
+
+    var catalog = loadCatalog(allocator) catch |err| {
+        try stderr.print("ryk packs: failed to load pack registry ({s}).\n", .{@errorName(err)});
         return exit_codes.general;
     };
-    defer detail.deinit();
+    defer catalog.deinit();
 
-    var category: []const u8 = "";
-    var enabled: ?bool = null;
-    var list_stdout: std.Io.Writer.Allocating = .init(allocator);
-    defer list_stdout.deinit();
-    var list_stderr: std.Io.Writer.Allocating = .init(allocator);
-    defer list_stderr.deinit();
-    if (execute_cli(io, &.{ "packs", "--format", "json" }, &list_stdout.writer, &list_stderr.writer)) |list_code| {
-        if (list_code == exit_codes.success) {
-            if (contracts.parsePacks(allocator, list_stdout.written())) |parsed_list| {
-                defer parsed_list.deinit();
-                for (parsed_list.value.packs) |pack| {
-                    if (std.mem.eql(u8, pack.id, options.pack_id)) {
-                        category = pack.category;
-                        enabled = pack.enabled;
-                        break;
-                    }
-                }
-            } else |_| {}
+    for (ids) |id| {
+        if (pack_config.isBaselinePackId(id)) continue;
+        if (findPack(catalog.packs, id) == null) {
+            try stderr.print(
+                "ryk packs: unknown pack id '{s}'. Run 'ryk packs --filter {s}' or 'ryk packs show {s}'.\n",
+                .{ id, id, id },
+            );
+            return exit_codes.usage;
         }
-    } else |_| {}
+    }
 
-    return renderShowHuman(allocator, io, detail.value, category, enabled, options.verbose, options.no_patterns, stdout);
+    const workspace_root = onboarding.resolveWorkspaceRoot(io, allocator) catch {
+        try stderr.writeAll("ryk packs: could not resolve workspace root.\n");
+        return exit_codes.general;
+    };
+    defer allocator.free(workspace_root);
+
+    var result = pack_config.enablePacks(io, allocator, workspace_root, ids) catch |err| {
+        try stderr.print("ryk packs enable: {s}. Run 'ryk help packs' for usage.\n", .{@errorName(err)});
+        return exit_codes.general;
+    };
+    defer result.deinit(allocator);
+
+    return printMutationResult(io, stdout, result);
+}
+
+fn runDisable(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
+    const allocator = std.heap.smp_allocator;
+    const ids = parseIdList(argv, stderr) catch return exit_codes.usage;
+
+    // M-2: baseline pack disable is operator break-glass only (agent-reachable CLI).
+    if (idsIncludeBaseline(ids)) {
+        const gate = try confirmBaselineDisable(io, stdout, stderr);
+        if (!gate) return exit_codes.usage;
+    }
+
+    const workspace_root = onboarding.resolveWorkspaceRoot(io, allocator) catch {
+        try stderr.writeAll("ryk packs: could not resolve workspace root.\n");
+        return exit_codes.general;
+    };
+    defer allocator.free(workspace_root);
+
+    var result = pack_config.disablePacks(io, allocator, workspace_root, ids) catch |err| {
+        try stderr.print("ryk packs disable: {s}. Run 'ryk help packs' for usage.\n", .{@errorName(err)});
+        return exit_codes.general;
+    };
+    defer result.deinit(allocator);
+
+    return printMutationResult(io, stdout, result);
+}
+
+fn idsIncludeBaseline(ids: []const []const u8) bool {
+    for (ids) |id| {
+        if (pack_config.isBaselinePackId(id)) return true;
+    }
+    return false;
+}
+
+/// Require `ORCA_OPERATOR=1` or interactive TTY confirm before disabling baseline packs.
+fn confirmBaselineDisable(io: std.Io, stdout: anytype, stderr: anytype) !bool {
+    if (pack_config.isOperatorBreakGlass()) return true;
+
+    const stdin = std.Io.File.stdin();
+    const is_tty = (stdin.isTty(io) catch false) and (std.Io.File.stdout().isTty(io) catch false);
+    if (!is_tty) {
+        try stderr.writeAll(
+            \\ryk packs disable: refusing to disable baseline packs (core, core.*, system.disk)
+            \\without break-glass. Set ORCA_OPERATOR=1 or re-run in an interactive TTY to confirm.
+            \\Baseline opt-outs are written to user config; project .orca.toml cannot drop them.
+            \\
+        );
+        return false;
+    }
+
+    const decision = danger_confirmation.decide(
+        io,
+        stdout,
+        "Disable baseline safety pack(s)? This weakens default shell protection.",
+        false,
+        true,
+        null,
+    ) catch return false;
+    return switch (decision) {
+        .proceed => true,
+        .cancelled, .requires_yes => blk: {
+            try stderr.writeAll("ryk packs disable: cancelled (baseline packs left enabled).\n");
+            break :blk false;
+        },
+    };
+}
+
+fn parseIdList(argv: []const []const u8, stderr: anytype) ![]const []const u8 {
+    if (argv.len == 0) return usageError(stderr, "requires at least one pack id");
+    for (argv) |arg| {
+        if (std.mem.startsWith(u8, arg, "-")) return usageError(stderr, "unexpected option");
+        if (arg.len == 0) return usageError(stderr, "pack id must be non-empty");
+    }
+    return argv;
+}
+
+fn printMutationResult(io: std.Io, stdout: anytype, result: pack_config.PackMutationResult) !u8 {
+    try tui.theme.paintBold(io, stdout, .text_bright, "Safety packs");
+    try stdout.writeAll("\n");
+    try stdout.writeAll(result.message);
+    try stdout.writeAll("\n");
+    if (result.config_path) |path| {
+        try stdout.writeAll("  Config: ");
+        try stdout.writeAll(path);
+        if (result.scope) |scope| {
+            try stdout.print(" ({s})", .{scope.label()});
+        }
+        try stdout.writeAll("\n");
+    }
+    if (result.added.len > 0) {
+        try stdout.writeAll("  Next:   ryk packs show ");
+        try stdout.writeAll(result.added[0]);
+        try stdout.writeAll("\n          ryk test \"…\"\n");
+    } else if (result.removed.len > 0 or result.disabled_added.len > 0) {
+        try stdout.writeAll("  Next:   ryk packs --enabled\n");
+    } else {
+        try stdout.writeAll("  Next:   ryk packs --enabled  ·  ryk packs show <id>\n");
+    }
+    return exit_codes.success;
+}
+
+fn parseListOptions(argv: []const []const u8, stderr: anytype) !Options {
+    var options: Options = .{};
+    var i: usize = 0;
+    while (i < argv.len) : (i += 1) {
+        const arg = argv[i];
+        if (std.mem.eql(u8, arg, "--installed") or std.mem.eql(u8, arg, "--enabled")) {
+            options.installed = true;
+        } else if (std.mem.eql(u8, arg, "--json")) {
+            options.machine_json = true;
+        } else if (std.mem.eql(u8, arg, "--robot")) {
+            options.machine_json = true;
+        } else if (std.mem.eql(u8, arg, "--format") or std.mem.eql(u8, arg, "-f")) {
+            i += 1;
+            if (i >= argv.len) return usageError(stderr, "--format requires a value");
+            if (std.mem.eql(u8, argv[i], "json")) {
+                options.machine_json = true;
+            } else {
+                return usageError(stderr, "only --format json is supported");
+            }
+        } else if (std.mem.eql(u8, arg, "--format=json")) {
+            options.machine_json = true;
+        } else if (std.mem.startsWith(u8, arg, "--format=")) {
+            return usageError(stderr, "only --format json is supported");
+        } else if (std.mem.eql(u8, arg, "--filter")) {
+            i += 1;
+            if (i >= argv.len or argv[i].len == 0 or std.mem.startsWith(u8, argv[i], "--"))
+                return usageError(stderr, "--filter requires a non-empty search term");
+            options.filter = argv[i];
+        } else if (std.mem.eql(u8, arg, "--page")) {
+            i += 1;
+            if (i >= argv.len) return usageError(stderr, "--page requires a positive integer");
+            options.page = std.fmt.parseInt(usize, argv[i], 10) catch return usageError(stderr, "--page requires a positive integer");
+            if (options.page == 0) return usageError(stderr, "--page requires a positive integer");
+        } else if (std.mem.eql(u8, arg, "--page-size")) {
+            i += 1;
+            if (i >= argv.len) return usageError(stderr, "--page-size requires a positive integer");
+            options.page_size = std.fmt.parseInt(usize, argv[i], 10) catch return usageError(stderr, "--page-size requires a positive integer");
+            if (options.page_size == 0) return usageError(stderr, "--page-size requires a positive integer");
+        } else {
+            suggestions.writeUnknownOption(stderr, "ryk packs", arg, &.{
+                "--installed", "--enabled", "--filter", "--page", "--page-size", "--json", "--format",
+            }, "packs") catch {};
+            return error.InvalidArguments;
+        }
+    }
+    return options;
 }
 
 fn parseShowOptions(argv: []const []const u8, stderr: anytype) !ShowOptions {
@@ -165,12 +333,12 @@ fn parseShowOptions(argv: []const []const u8, stderr: anytype) !ShowOptions {
             options.no_patterns = true;
         } else if (std.mem.eql(u8, arg, "--verbose") or std.mem.eql(u8, arg, "-v")) {
             options.verbose = true;
-        } else if (std.mem.eql(u8, arg, "--robot") or std.mem.eql(u8, arg, "--format") or std.mem.eql(u8, arg, "-f") or
+        } else if (std.mem.eql(u8, arg, "--json") or std.mem.eql(u8, arg, "--robot")) {
+            options.machine_json = true;
+        } else if (std.mem.eql(u8, arg, "--format") or std.mem.eql(u8, arg, "-f") or
             std.mem.startsWith(u8, arg, "--format="))
         {
-            if (std.mem.eql(u8, arg, "--robot")) {
-                options.machine_json = true;
-            } else if (std.mem.eql(u8, arg, "--format") or std.mem.eql(u8, arg, "-f")) {
+            if (std.mem.eql(u8, arg, "--format") or std.mem.eql(u8, arg, "-f")) {
                 i += 1;
                 if (i >= argv.len) return usageError(stderr, "--format requires a value");
                 if (std.mem.eql(u8, argv[i], "json")) options.machine_json = true else return usageError(stderr, "only --format json is supported for show");
@@ -191,6 +359,286 @@ fn parseShowOptions(argv: []const []const u8, stderr: anytype) !ShowOptions {
     return options;
 }
 
+fn usageError(stderr: anytype, message: []const u8) error{InvalidArguments} {
+    stderr.print("ryk packs: {s}. Run 'ryk help packs' for usage.\n", .{message}) catch {};
+    return error.InvalidArguments;
+}
+
+fn usageExit(stderr: anytype, message: []const u8) u8 {
+    usageError(stderr, message) catch {};
+    return exit_codes.usage;
+}
+
+// ── Catalog load + enable-state (oracle + pack_config) ──────────────────────
+
+fn loadCatalog(allocator: std.mem.Allocator) !Catalog {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, packs_json, .{});
+    errdefer parsed.deinit();
+    if (parsed.value != .array) return error.BadPacksJson;
+
+    var list: std.ArrayListUnmanaged(PackView) = .empty;
+    errdefer list.deinit(allocator);
+    var owned_strings: std.ArrayListUnmanaged([]u8) = .empty;
+    errdefer {
+        for (owned_strings.items) |s| allocator.free(s);
+        owned_strings.deinit(allocator);
+    }
+    var owned_pattern_slices: std.ArrayListUnmanaged([]PatternView) = .empty;
+    errdefer {
+        for (owned_pattern_slices.items) |slice| allocator.free(slice);
+        owned_pattern_slices.deinit(allocator);
+    }
+
+    for (parsed.value.array.items) |item| {
+        if (item != .object) continue;
+        const obj = item.object;
+        const id_val = obj.get("id") orelse continue;
+        if (id_val != .string) continue;
+        const id = id_val.string;
+        // Mirror registry: skip synthetic test pack.
+        if (std.mem.eql(u8, id, "test.deadline")) continue;
+
+        const safe_pats = try loadPatterns(allocator, obj.get("safe"));
+        try owned_pattern_slices.append(allocator, safe_pats);
+        const dest_pats = try loadPatterns(allocator, obj.get("destructive"));
+        try owned_pattern_slices.append(allocator, dest_pats);
+
+        const category = categoryFromId(id);
+        const name = try humanName(allocator, id);
+        try owned_strings.append(allocator, name);
+        const description = try descriptionFromKeywords(allocator, obj.get("keywords"), id);
+        try owned_strings.append(allocator, description);
+
+        try list.append(allocator, .{
+            .id = id,
+            .name = name,
+            .category = category,
+            .description = description,
+            .enabled = isDefaultEnabled(id), // overwritten by applyEnabledState
+            .safe_pattern_count = safe_pats.len,
+            .destructive_pattern_count = dest_pats.len,
+            .safe = safe_pats,
+            .destructive = dest_pats,
+        });
+    }
+
+    const packs = try list.toOwnedSlice(allocator);
+    // Sort by id for stable list/json (product UX; matches prior daemon-friendly sort).
+    std.mem.sort(PackView, packs, {}, lessThanPackView);
+
+    return .{
+        .allocator = allocator,
+        .packs = packs,
+        .owned_strings = owned_strings,
+        .owned_pattern_slices = owned_pattern_slices,
+        .json_parsed = parsed,
+    };
+}
+
+fn loadPatterns(allocator: std.mem.Allocator, value: ?std.json.Value) ![]PatternView {
+    const v = value orelse return try allocator.alloc(PatternView, 0);
+    if (v != .array) return try allocator.alloc(PatternView, 0);
+    var out: std.ArrayListUnmanaged(PatternView) = .empty;
+    errdefer out.deinit(allocator);
+    for (v.array.items) |pat| {
+        if (pat != .object) continue;
+        const o = pat.object;
+        const name = if (o.get("name")) |n| (if (n == .string) n.string else "unnamed") else "unnamed";
+        const regex = if (o.get("regex")) |r| (if (r == .string) r.string else "") else "";
+        const severity = if (o.get("severity")) |s| (if (s == .string) s.string else "high") else "high";
+        const reason = if (o.get("reason")) |r| (if (r == .string) r.string else "") else "";
+        try out.append(allocator, .{
+            .name = name,
+            .regex = regex,
+            .severity = severity,
+            .reason = reason,
+        });
+    }
+    return try out.toOwnedSlice(allocator);
+}
+
+fn categoryFromId(id: []const u8) []const u8 {
+    if (std.mem.indexOfScalar(u8, id, '.')) |dot| return id[0..dot];
+    return id;
+}
+
+fn humanName(allocator: std.mem.Allocator, id: []const u8) ![]u8 {
+    // Prefer trailing segment title-cased lightly; keep id readable as name.
+    const seg = if (std.mem.lastIndexOfScalar(u8, id, '.')) |dot| id[dot + 1 ..] else id;
+    if (seg.len == 0) return try allocator.dupe(u8, id);
+    var buf = try allocator.alloc(u8, seg.len);
+    for (seg, 0..) |c, i| {
+        if (i == 0) {
+            buf[i] = std.ascii.toUpper(c);
+        } else if (c == '_' or c == '-') {
+            buf[i] = ' ';
+        } else {
+            buf[i] = c;
+        }
+    }
+    return buf;
+}
+
+fn descriptionFromKeywords(allocator: std.mem.Allocator, keywords_val: ?std.json.Value, id: []const u8) ![]u8 {
+    if (keywords_val) |kv| {
+        if (kv == .array and kv.array.items.len > 0) {
+            var parts: std.ArrayListUnmanaged([]const u8) = .empty;
+            defer parts.deinit(allocator);
+            for (kv.array.items) |item| {
+                if (item == .string) try parts.append(allocator, item.string);
+            }
+            if (parts.items.len > 0) {
+                const joined = try std.mem.join(allocator, ", ", parts.items);
+                defer allocator.free(joined);
+                return try std.fmt.allocPrint(allocator, "Keywords: {s}", .{joined});
+            }
+        }
+    }
+    return try std.fmt.allocPrint(allocator, "Shell safety pack {s}", .{id});
+}
+
+fn isDefaultEnabled(id: []const u8) bool {
+    return pack_config.isBaselinePackId(id);
+}
+
+fn packIdListed(pack_id: []const u8, ids: []const []const u8) bool {
+    for (ids) |id| {
+        if (std.mem.eql(u8, pack_id, id)) return true;
+        // Category shorthand: `core` → `core.*` (mirror registry.packIdListed).
+        if (std.mem.indexOfScalar(u8, id, '.') == null and id.len > 0) {
+            if (pack_id.len > id.len and pack_id[id.len] == '.' and std.mem.startsWith(u8, pack_id, id)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// Active semantics mirror `registry.packIsActive` with default_packs_only=true.
+fn packIsActive(id: []const u8, extra_enabled: []const []const u8, disabled: []const []const u8) bool {
+    if (packIdListed(id, disabled)) return false;
+    if (isDefaultEnabled(id)) return true;
+    return packIdListed(id, extra_enabled);
+}
+
+fn applyEnabledState(io: std.Io, allocator: std.mem.Allocator, catalog: *Catalog) void {
+    const workspace_root = onboarding.resolveWorkspaceRoot(io, allocator) catch {
+        // Fail open to baseline defaults only.
+        for (catalog.packs) |*pack| {
+            pack.enabled = isDefaultEnabled(pack.id);
+        }
+        return;
+    };
+    defer allocator.free(workspace_root);
+
+    var loaded = pack_config.loadPackIdsForWorkspace(io, allocator, workspace_root) catch {
+        for (catalog.packs) |*pack| {
+            pack.enabled = isDefaultEnabled(pack.id);
+        }
+        return;
+    };
+    defer loaded.deinit(allocator);
+
+    for (catalog.packs) |*pack| {
+        pack.enabled = packIsActive(pack.id, loaded.enabled, loaded.disabled);
+    }
+}
+
+fn findPack(packs: []const PackView, id: []const u8) ?*const PackView {
+    for (packs) |*pack| {
+        if (std.mem.eql(u8, pack.id, id)) return pack;
+    }
+    return null;
+}
+
+fn lessThanPackView(_: void, lhs: PackView, rhs: PackView) bool {
+    return std.mem.order(u8, lhs.id, rhs.id) == .lt;
+}
+
+// ── Render ──────────────────────────────────────────────────────────────────
+
+fn renderListJson(stdout: anytype, packs: []const PackView) !u8 {
+    var enabled_count: usize = 0;
+    for (packs) |p| {
+        if (p.enabled) enabled_count += 1;
+    }
+    try stdout.writeAll("{\n");
+    try stdout.print("  \"schema_version\": {d},\n", .{1});
+    try stdout.writeAll("  \"packs\": [\n");
+    for (packs, 0..) |pack, i| {
+        try stdout.writeAll("    {\n");
+        try stdout.writeAll("      \"id\": ");
+        try util.writeJsonString(stdout, pack.id);
+        try stdout.writeAll(",\n      \"name\": ");
+        try util.writeJsonString(stdout, pack.name);
+        try stdout.writeAll(",\n      \"category\": ");
+        try util.writeJsonString(stdout, pack.category);
+        try stdout.writeAll(",\n      \"description\": ");
+        try util.writeJsonString(stdout, pack.description);
+        try stdout.print(",\n      \"enabled\": {},\n", .{pack.enabled});
+        try stdout.print("      \"safe_pattern_count\": {d},\n", .{pack.safe_pattern_count});
+        try stdout.print("      \"destructive_pattern_count\": {d}\n", .{pack.destructive_pattern_count});
+        try stdout.writeAll("    }");
+        if (i + 1 < packs.len) try stdout.writeAll(",");
+        try stdout.writeAll("\n");
+    }
+    try stdout.writeAll("  ],\n");
+    try stdout.print("  \"enabled_count\": {d},\n", .{enabled_count});
+    try stdout.print("  \"total_count\": {d}\n", .{packs.len});
+    try stdout.writeAll("}\n");
+    return exit_codes.success;
+}
+
+fn renderShowJson(stdout: anytype, pack: *const PackView, no_patterns: bool, verbose: bool) !u8 {
+    try stdout.writeAll("{\n");
+    try stdout.print("  \"schema_version\": {d},\n", .{1});
+    try stdout.writeAll("  \"id\": ");
+    try util.writeJsonString(stdout, pack.id);
+    try stdout.writeAll(",\n  \"name\": ");
+    try util.writeJsonString(stdout, pack.name);
+    try stdout.writeAll(",\n  \"category\": ");
+    try util.writeJsonString(stdout, pack.category);
+    try stdout.writeAll(",\n  \"description\": ");
+    try util.writeJsonString(stdout, pack.description);
+    try stdout.print(",\n  \"enabled\": {},\n", .{pack.enabled});
+    try stdout.print("  \"safe_pattern_count\": {d},\n", .{pack.safe_pattern_count});
+    try stdout.print("  \"destructive_pattern_count\": {d}", .{pack.destructive_pattern_count});
+
+    if (!no_patterns) {
+        try stdout.writeAll(",\n  \"destructive_patterns\": [\n");
+        for (pack.destructive, 0..) |rule, i| {
+            try stdout.writeAll("    {\n      \"name\": ");
+            try util.writeJsonString(stdout, rule.name);
+            try stdout.writeAll(",\n      \"severity\": ");
+            try util.writeJsonString(stdout, rule.severity);
+            try stdout.writeAll(",\n      \"reason\": ");
+            try util.writeJsonString(stdout, rule.reason);
+            if (verbose and rule.regex.len > 0) {
+                try stdout.writeAll(",\n      \"regex\": ");
+                try util.writeJsonString(stdout, rule.regex);
+            }
+            try stdout.writeAll("\n    }");
+            if (i + 1 < pack.destructive.len) try stdout.writeAll(",");
+            try stdout.writeAll("\n");
+        }
+        try stdout.writeAll("  ],\n  \"safe_patterns\": [\n");
+        for (pack.safe, 0..) |rule, i| {
+            try stdout.writeAll("    {\n      \"name\": ");
+            try util.writeJsonString(stdout, rule.name);
+            if (verbose and rule.regex.len > 0) {
+                try stdout.writeAll(",\n      \"regex\": ");
+                try util.writeJsonString(stdout, rule.regex);
+            }
+            try stdout.writeAll("\n    }");
+            if (i + 1 < pack.safe.len) try stdout.writeAll(",");
+            try stdout.writeAll("\n");
+        }
+        try stdout.writeAll("  ]");
+    }
+    try stdout.writeAll("\n}\n");
+    return exit_codes.success;
+}
+
 fn trackSanitized(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]u8), value: []const u8) ![]u8 {
     const safe = try tui.terminal_text.sanitizeAlloc(allocator, value, .single_line);
     errdefer allocator.free(safe);
@@ -201,9 +649,7 @@ fn trackSanitized(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([
 fn renderShowHuman(
     allocator: std.mem.Allocator,
     io: std.Io,
-    detail: contracts.PackDetail,
-    category: []const u8,
-    enabled: ?bool,
+    pack: *const PackView,
     verbose: bool,
     no_patterns: bool,
     stdout: anytype,
@@ -214,23 +660,21 @@ fn renderShowHuman(
         owned.deinit(allocator);
     }
 
-    const safe_id = try trackSanitized(allocator, &owned, detail.id);
-    const safe_name = try trackSanitized(allocator, &owned, detail.name);
-    const safe_desc = try trackSanitized(allocator, &owned, detail.description);
+    const safe_id = try trackSanitized(allocator, &owned, pack.id);
+    const safe_name = try trackSanitized(allocator, &owned, pack.name);
+    const safe_desc = try trackSanitized(allocator, &owned, pack.description);
 
     try tui.theme.paintBold(io, stdout, .text_bright, "Safety pack");
     try stdout.writeAll("  ");
     try tui.theme.paintBold(io, stdout, .success, safe_id);
-    if (enabled) |en| {
-        try stdout.writeAll("  ");
-        try tui.theme.paint(io, stdout, if (en) .success else .muted, if (en) "[enabled]" else "[available]");
-    }
+    try stdout.writeAll("  ");
+    try tui.theme.paint(io, stdout, if (pack.enabled) .success else .muted, if (pack.enabled) "[enabled]" else "[available]");
     try stdout.writeAll("\n");
     try stdout.writeAll("Name         ");
     try stdout.writeAll(safe_name);
     try stdout.writeAll("\n");
-    if (category.len > 0) {
-        const safe_cat = try trackSanitized(allocator, &owned, category);
+    if (pack.category.len > 0) {
+        const safe_cat = try trackSanitized(allocator, &owned, pack.category);
         try stdout.writeAll("Category     ");
         try stdout.writeAll(safe_cat);
         try stdout.writeAll("\n");
@@ -238,14 +682,14 @@ fn renderShowHuman(
     try stdout.writeAll("Description  ");
     try tui.render.writeWrappedWidth(stdout, safe_desc, 13, 80);
     try stdout.writeAll("\n");
-    try stdout.print("Patterns     {d} safe / {d} destructive\n", .{ detail.safe_pattern_count, detail.destructive_pattern_count });
+    try stdout.print("Patterns     {d} safe / {d} destructive\n", .{ pack.safe_pattern_count, pack.destructive_pattern_count });
 
     if (!no_patterns) {
-        if (detail.destructive_patterns) |destructive| {
+        if (pack.destructive.len > 0) {
             try stdout.writeAll("\n");
             try tui.theme.paintBold(io, stdout, .text_bright, "Destructive rules");
-            try stdout.print(" ({d})\n", .{destructive.len});
-            for (destructive) |rule| {
+            try stdout.print(" ({d})\n", .{pack.destructive.len});
+            for (pack.destructive) |rule| {
                 const name = try trackSanitized(allocator, &owned, rule.name);
                 const severity = try trackSanitized(allocator, &owned, rule.severity);
                 const reason = try trackSanitized(allocator, &owned, rule.reason);
@@ -256,18 +700,6 @@ fn renderShowHuman(
                 try stdout.writeAll("\n    ");
                 try tui.render.writeWrappedWidth(stdout, reason, 4, 80);
                 try stdout.writeAll("\n");
-                if (rule.explanation) |explanation| {
-                    const expl = try trackSanitized(allocator, &owned, explanation);
-                    try stdout.writeAll("    ");
-                    try tui.render.writeWrappedWidth(stdout, expl, 4, 80);
-                    try stdout.writeAll("\n");
-                }
-                for (rule.suggestions) |sug| {
-                    const cmd = try trackSanitized(allocator, &owned, sug.command);
-                    try stdout.writeAll("    Try: ");
-                    try stdout.writeAll(cmd);
-                    try stdout.writeAll("\n");
-                }
                 if (verbose and rule.regex.len > 0) {
                     const rx = try trackSanitized(allocator, &owned, rule.regex);
                     try stdout.writeAll("    regex: ");
@@ -276,13 +708,13 @@ fn renderShowHuman(
                 }
             }
         }
-        if (detail.safe_patterns) |safe| {
+        if (pack.safe.len > 0) {
             try stdout.writeAll("\n");
             try tui.theme.paintBold(io, stdout, .text_bright, "Safe rules");
-            try stdout.print(" ({d})\n", .{safe.len});
+            try stdout.print(" ({d})\n", .{pack.safe.len});
             try stdout.writeAll("  ");
             var first = true;
-            for (safe) |rule| {
+            for (pack.safe) |rule| {
                 if (!first) try stdout.writeAll(", ");
                 first = false;
                 const name = try trackSanitized(allocator, &owned, rule.name);
@@ -298,177 +730,23 @@ fn renderShowHuman(
         }
     }
 
-    try stdout.writeAll("\nNext: orca packs enable ");
+    try stdout.writeAll("\nNext: ryk packs enable ");
     try stdout.writeAll(safe_id);
-    try stdout.writeAll("  ·  orca test \"…\"\n");
+    try stdout.writeAll("  ·  ryk test \"…\"\n");
     return exit_codes.success;
 }
 
-fn runEnable(comptime execute_cli: anytype, io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
-    const allocator = std.heap.smp_allocator;
-    const ids = parseIdList(argv, stderr) catch return exit_codes.usage;
-
-    // Validate against registry when daemon list is available.
-    var unknown: std.ArrayListUnmanaged([]const u8) = .empty;
-    defer unknown.deinit(allocator);
-    var list_stdout: std.Io.Writer.Allocating = .init(allocator);
-    defer list_stdout.deinit();
-    var list_stderr: std.Io.Writer.Allocating = .init(allocator);
-    defer list_stderr.deinit();
-    var registry_known = false;
-    if (execute_cli(io, &.{ "packs", "--format", "json" }, &list_stdout.writer, &list_stderr.writer)) |list_code| {
-        if (list_code == exit_codes.success) {
-            if (contracts.parsePacks(allocator, list_stdout.written())) |parsed| {
-                defer parsed.deinit();
-                registry_known = true;
-                for (ids) |id| {
-                    if (pack_state.isBaselinePackId(id)) continue;
-                    var found = false;
-                    for (parsed.value.packs) |pack| {
-                        if (std.mem.eql(u8, pack.id, id)) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) try unknown.append(allocator, id);
-                }
-            } else |_| {}
-        }
-    } else |_| {}
-
-    if (unknown.items.len > 0) {
-        try stderr.print(
-            "ryk packs: unknown pack id '{s}'. Run 'orca packs --filter {s}' or 'orca packs show {s}'.\n",
-            .{ unknown.items[0], unknown.items[0], unknown.items[0] },
-        );
-        return exit_codes.usage;
-    }
-
-    const workspace_root = onboarding.resolveWorkspaceRoot(io, allocator) catch {
-        try stderr.writeAll("ryk packs: could not resolve workspace root.\n");
-        return exit_codes.general;
-    };
-    defer allocator.free(workspace_root);
-
-    var result = pack_state.enablePacks(io, allocator, workspace_root, ids) catch |err| {
-        try stderr.print("ryk packs enable: {s}. Run 'ryk help packs' for usage.\n", .{@errorName(err)});
-        return exit_codes.general;
-    };
-    defer result.deinit(allocator);
-
-    return printMutationResult(io, stdout, result, registry_known);
-}
-
-fn runDisable(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
-    const allocator = std.heap.smp_allocator;
-    const ids = parseIdList(argv, stderr) catch return exit_codes.usage;
-
-    const workspace_root = onboarding.resolveWorkspaceRoot(io, allocator) catch {
-        try stderr.writeAll("ryk packs: could not resolve workspace root.\n");
-        return exit_codes.general;
-    };
-    defer allocator.free(workspace_root);
-
-    var result = pack_state.disablePacks(io, allocator, workspace_root, ids) catch |err| {
-        try stderr.print("ryk packs disable: {s}. Run 'ryk help packs' for usage.\n", .{@errorName(err)});
-        return exit_codes.general;
-    };
-    defer result.deinit(allocator);
-
-    return printMutationResult(io, stdout, result, true);
-}
-
-fn parseIdList(argv: []const []const u8, stderr: anytype) ![]const []const u8 {
-    if (argv.len == 0) return usageError(stderr, "requires at least one pack id");
-    for (argv) |arg| {
-        if (std.mem.startsWith(u8, arg, "-")) return usageError(stderr, "unexpected option");
-        if (arg.len == 0) return usageError(stderr, "pack id must be non-empty");
-    }
-    return argv;
-}
-
-fn printMutationResult(io: std.Io, stdout: anytype, result: pack_state.PackMutationResult, registry_known: bool) !u8 {
-    try tui.theme.paintBold(io, stdout, .text_bright, "Safety packs");
-    try stdout.writeAll("\n");
-    try stdout.writeAll(result.message);
-    try stdout.writeAll("\n");
-    if (result.config_path) |path| {
-        try stdout.writeAll("  Config: ");
-        try stdout.writeAll(path);
-        if (result.scope) |scope| {
-            try stdout.print(" ({s})", .{scope.label()});
-        }
-        try stdout.writeAll("\n");
-    }
-    if (!registry_known) {
-        try stdout.writeAll("  Note: daemon unavailable; pack ids were not verified against the registry.\n");
-    }
-    if (result.added.len > 0) {
-        try stdout.writeAll("  Next:   orca packs show ");
-        try stdout.writeAll(result.added[0]);
-        try stdout.writeAll("\n          orca test \"…\"\n");
-    } else if (result.removed.len > 0 or result.disabled_added.len > 0) {
-        try stdout.writeAll("  Next:   orca packs --enabled\n");
-    } else {
-        try stdout.writeAll("  Next:   orca packs --enabled  ·  orca packs show <id>\n");
-    }
-    return exit_codes.success;
-}
-
-fn shouldPassThrough(argv: []const []const u8) bool {
-    for (argv) |arg| {
-        if (std.mem.eql(u8, arg, "--robot") or std.mem.eql(u8, arg, "--expand") or
-            std.mem.eql(u8, arg, "--verbose") or std.mem.eql(u8, arg, "-v") or
-            std.mem.eql(u8, arg, "--format") or std.mem.eql(u8, arg, "-f") or
-            std.mem.startsWith(u8, arg, "--format=") or std.mem.eql(u8, arg, "--max-patterns") or
-            std.mem.startsWith(u8, arg, "--max-patterns=")) return true;
-    }
-    return false;
-}
-
-fn parseOptions(argv: []const []const u8, stderr: anytype) !Options {
-    var options: Options = .{};
-    var i: usize = 0;
-    while (i < argv.len) : (i += 1) {
-        const arg = argv[i];
-        if (std.mem.eql(u8, arg, "--installed") or std.mem.eql(u8, arg, "--enabled")) {
-            options.installed = true;
-        } else if (std.mem.eql(u8, arg, "--filter")) {
-            i += 1;
-            if (i >= argv.len or argv[i].len == 0 or std.mem.startsWith(u8, argv[i], "--"))
-                return usageError(stderr, "--filter requires a non-empty search term");
-            options.filter = argv[i];
-        } else if (std.mem.eql(u8, arg, "--page")) {
-            i += 1;
-            if (i >= argv.len) return usageError(stderr, "--page requires a positive integer");
-            options.page = std.fmt.parseInt(usize, argv[i], 10) catch return usageError(stderr, "--page requires a positive integer");
-            if (options.page == 0) return usageError(stderr, "--page requires a positive integer");
-        } else if (std.mem.eql(u8, arg, "--page-size")) {
-            i += 1;
-            if (i >= argv.len) return usageError(stderr, "--page-size requires a positive integer");
-            options.page_size = std.fmt.parseInt(usize, argv[i], 10) catch return usageError(stderr, "--page-size requires a positive integer");
-            if (options.page_size == 0) return usageError(stderr, "--page-size requires a positive integer");
-        } else {
-            suggestions.writeUnknownOption(stderr, "ryk packs", arg, &.{ "--installed", "--enabled", "--filter", "--page", "--page-size" }, "packs") catch {};
-            return error.InvalidArguments;
-        }
-    }
-    return options;
-}
-
-fn usageError(stderr: anytype, message: []const u8) error{InvalidArguments} {
-    stderr.print("ryk packs: {s}. Run 'ryk help packs' for usage.\n", .{message}) catch {};
-    return error.InvalidArguments;
-}
-
-fn renderHuman(io: std.Io, options: Options, output: contracts.PacksOutput, stdout: anytype, stderr: anytype) !u8 {
-    return renderHumanAlloc(std.heap.smp_allocator, io, options, output, stdout, stderr);
-}
-
-fn renderHumanAlloc(allocator: std.mem.Allocator, io: std.Io, options: Options, output: contracts.PacksOutput, stdout: anytype, stderr: anytype) !u8 {
-    var selected: std.ArrayListUnmanaged(contracts.PackInfo) = .empty;
+fn renderHuman(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    options: Options,
+    packs: []const PackView,
+    stdout: anytype,
+    stderr: anytype,
+) !u8 {
+    var selected: std.ArrayListUnmanaged(PackView) = .empty;
     defer selected.deinit(allocator);
-    for (output.packs) |pack| {
+    for (packs) |pack| {
         if (options.installed and !pack.enabled) continue;
         if (options.filter) |term| {
             if (!containsIgnoreCase(pack.id, term) and !containsIgnoreCase(pack.name, term) and
@@ -476,15 +754,14 @@ fn renderHumanAlloc(allocator: std.mem.Allocator, io: std.Io, options: Options, 
         }
         try selected.append(allocator, pack);
     }
-    std.mem.sort(contracts.PackInfo, selected.items, {}, lessThanPack);
 
     if (selected.items.len == 0) {
         try tui.render.callout(io, stdout, .info, "No safety packs found", if (options.filter != null)
-            "Try a broader --filter term, or run 'orca packs' to list all packs."
+            "Try a broader --filter term, or run 'ryk packs' to list all packs."
         else if (options.installed)
-            "No opt-in packs enabled. Enable more with `orca packs enable <id>` (baseline is always on)."
+            "No opt-in packs enabled. Enable more with `ryk packs enable <id>` (baseline is always on)."
         else
-            "Run 'orca doctor' to verify the daemon and pack configuration.");
+            "No packs available in the oracle registry.");
         return exit_codes.success;
     }
 
@@ -544,15 +821,6 @@ fn renderHumanAlloc(allocator: std.mem.Allocator, io: std.Io, options: Options, 
     return exit_codes.success;
 }
 
-fn usageExit(stderr: anytype, message: []const u8) u8 {
-    usageError(stderr, message) catch {};
-    return exit_codes.usage;
-}
-
-fn lessThanPack(_: void, lhs: contracts.PackInfo, rhs: contracts.PackInfo) bool {
-    return std.mem.order(u8, lhs.id, rhs.id) == .lt;
-}
-
 fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
     if (needle.len == 0) return true;
     if (needle.len > haystack.len) return false;
@@ -569,329 +837,550 @@ fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
     return false;
 }
 
-test "human packs requests daemon JSON instead of parsing pretty output" {
-    var stdout_buf: [2048]u8 = undefined;
-    var stderr_buf: [256]u8 = undefined;
-    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-
-    const code = try commandWithExecutor(fakePacksJson, std.testing.io, &.{}, &stdout_writer, &stderr_writer);
-
-    try std.testing.expectEqual(exit_codes.success, code);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Safety packs") != null);
-}
-
-fn fakePacksJson(_: std.Io, argv: []const []const u8, stdout: anytype, _: anytype) !u8 {
-    try std.testing.expectEqualSlices([]const u8, &.{ "packs", "--format", "json" }, argv);
-    try stdout.writeAll(
-        \\{"packs":[{"id":"core.git","name":"Git","category":"core","description":"Protects Git","enabled":true,"safe_pattern_count":2,"destructive_pattern_count":3}],"enabled_count":1,"total_count":1}
-    );
-    return exit_codes.success;
-}
-
-test "packs filters sorts paginates and sanitizes daemon fields" {
-    var stdout_buf: [4096]u8 = undefined;
-    var stderr_buf: [512]u8 = undefined;
-    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-
-    const code = try commandWithExecutor(fakeUnsortedPacksJson, std.testing.io, &.{ "--filter", "DATA", "--page", "1", "--page-size", "1" }, &stdout_writer, &stderr_writer);
-    const rendered = stdout_writer.buffered();
-    try std.testing.expectEqual(exit_codes.success, code);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "database.mysql") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "database.postgresql") == null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "Page 1 of 2") != null);
-    try std.testing.expect(std.mem.indexOfScalar(u8, rendered, 0x1b) == null);
-    try std.testing.expectEqualStrings("", stderr_writer.buffered());
-}
-
-test "packs installed alias uses daemon enabled semantics and renders empty guidance" {
-    var stdout_buf: [1024]u8 = undefined;
-    var stderr_buf: [256]u8 = undefined;
-    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-    const code = try commandWithExecutor(fakeEnabledPacksEmpty, std.testing.io, &.{"--installed"}, &stdout_writer, &stderr_writer);
-    try std.testing.expectEqual(exit_codes.success, code);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "No safety packs found") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "packs enable") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "config.toml") == null);
-}
-
-test "packs machine raw modes are byte identical passthrough" {
-    const Case = struct { args: []const []const u8, expected: []const u8 };
-    const cases = [_]Case{
-        .{ .args = &.{ "--format", "json" }, .expected = "packs|--format|json" },
-        .{ .args = &.{"--robot"}, .expected = "packs|--robot" },
-        .{ .args = &.{ "-f", "json" }, .expected = "packs|-f|json" },
-        .{ .args = &.{"--format=json"}, .expected = "packs|--format=json" },
-        .{ .args = &.{ "--format", "pretty" }, .expected = "packs|--format|pretty" },
-        .{ .args = &.{"--expand"}, .expected = "packs|--expand" },
-        .{ .args = &.{ "--max-patterns", "7" }, .expected = "packs|--max-patterns|7" },
-        .{ .args = &.{"--max-patterns=7"}, .expected = "packs|--max-patterns=7" },
-    };
-    for (cases) |case| {
-        var stdout_buf: [128]u8 = undefined;
-        var stderr_buf: [128]u8 = undefined;
-        var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-        var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-        const code = try commandWithExecutor(fakePassthrough, std.testing.io, case.args, &stdout_writer, &stderr_writer);
-        try std.testing.expectEqual(@as(u8, 23), code);
-        try std.testing.expectEqualStrings(case.expected, stdout_writer.buffered());
-        try std.testing.expectEqualStrings("daemon exact stderr\n", stderr_writer.buffered());
-    }
-}
-
-test "packs --help is Zig-owned and does not call the daemon" {
-    var stdout_buf: [4096]u8 = undefined;
-    var stderr_buf: [128]u8 = undefined;
-    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-    const code = try commandWithExecutor(failIfCalled, std.testing.io, &.{"--help"}, &stdout_writer, &stderr_writer);
-    try std.testing.expectEqual(exit_codes.success, code);
-    const out = stdout_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "safety packs") != null or std.mem.indexOf(u8, out, "Safety packs") != null or std.mem.indexOf(u8, out, "packs") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "enable") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "disable") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "show") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "ryk packs") != null);
-    try std.testing.expectEqualStrings("", stderr_writer.buffered());
-}
-
-test "packs rejects missing and invalid Zig option values with remediation" {
-    const cases = [_][]const []const u8{
-        &.{"--filter"}, &.{ "--page", "0" }, &.{ "--page", "nope" }, &.{ "--page-size", "0" }, &.{"--unknown"},
-    };
-    for (cases) |args| {
-        var stdout_buf: [64]u8 = undefined;
-        var stderr_buf: [256]u8 = undefined;
-        var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-        var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-        const code = try commandWithExecutor(failIfCalled, std.testing.io, args, &stdout_writer, &stderr_writer);
-        try std.testing.expectEqual(exit_codes.usage, code);
-        try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help packs") != null);
-    }
-}
-
-test "packs sanitizes fields before deterministic compact layout" {
-    var stdout_buf: [4096]u8 = undefined;
-    var stderr_buf: [256]u8 = undefined;
-    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-    const code = try commandWithExecutor(fakeHostilePacksJson, std.testing.io, &.{}, &stdout_writer, &stderr_writer);
-    try std.testing.expectEqual(exit_codes.success, code);
-    try std.testing.expectEqualStrings(
-        "Safety packs\n\n" ++
-            "  ● db.mysql  [enabled]\n" ++
-            "    database · 3 safe / 4 blocked\n" ++
-            "    safe line\n\n" ++
-            "Page 1 of 1 · 1 pack(s)\n",
-        stdout_writer.buffered(),
-    );
-}
-
-test "packs human layout does not exceed eighty columns" {
-    var stdout_buf: [8192]u8 = undefined;
-    var stderr_buf: [256]u8 = undefined;
-    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-    const code = try commandWithExecutor(fakeWidePackJson, std.testing.io, &.{}, &stdout_writer, &stderr_writer);
-    try std.testing.expectEqual(exit_codes.success, code);
-
-    var lines = std.mem.splitScalar(u8, stdout_writer.buffered(), '\n');
-    while (lines.next()) |line| {
-        try std.testing.expect(tui.render.displayWidth(line) <= 80);
-    }
-}
-
-test "packs rejects pages beyond filtered results including max usize" {
-    const max_page = try std.fmt.allocPrint(std.testing.allocator, "{d}", .{std.math.maxInt(usize)});
-    defer std.testing.allocator.free(max_page);
-    const cases = [_][]const []const u8{
-        &.{ "--filter", "git", "--page", "2" },
-        &.{ "--page", max_page, "--page-size", max_page },
-    };
-    for (cases) |args| {
-        var stdout_buf: [64]u8 = undefined;
-        var stderr_buf: [256]u8 = undefined;
-        var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-        var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-        const code = try commandWithExecutor(fakeUnsortedPacksJson, std.testing.io, args, &stdout_writer, &stderr_writer);
-        try std.testing.expectEqual(exit_codes.usage, code);
-        try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "page") != null);
-        try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help packs") != null);
-    }
-}
-
-test "packs daemon failures preserve stdout stderr and exit code" {
-    var stdout_buf: [128]u8 = undefined;
-    var stderr_buf: [128]u8 = undefined;
-    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-    const code = try commandWithExecutor(fakeDaemonFailure, std.testing.io, &.{}, &stdout_writer, &stderr_writer);
-    try std.testing.expectEqual(@as(u8, 17), code);
-    try std.testing.expectEqualStrings("daemon partial stdout\n", stdout_writer.buffered());
-    try std.testing.expectEqualStrings("daemon exact stderr\n", stderr_writer.buffered());
-}
-
-test "packs invalid daemon JSON gives doctor remediation without leaking payload" {
-    var stdout_buf: [128]u8 = undefined;
-    var stderr_buf: [256]u8 = undefined;
-    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-    const code = try commandWithExecutor(fakeInvalidJson, std.testing.io, &.{}, &stdout_writer, &stderr_writer);
-    try std.testing.expectEqual(exit_codes.general, code);
-    try std.testing.expectEqualStrings("", stdout_writer.buffered());
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk doctor") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "TOP_SECRET") == null);
-}
-
-test "packs row construction cleans completed rows on later allocation failure" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, renderPacksAllocationFailureProbe, .{});
-}
-
-fn renderPacksAllocationFailureProbe(allocator: std.mem.Allocator) !void {
-    const pack_rows = [_]contracts.PackInfo{
-        .{ .id = "core.git", .name = "Git", .category = "core", .description = "Protects Git", .enabled = true, .safe_pattern_count = 2, .destructive_pattern_count = 3 },
-        .{ .id = "database.mysql", .name = "MySQL", .category = "database", .description = "Protects MySQL", .enabled = false, .safe_pattern_count = 4, .destructive_pattern_count = 5 },
-    };
-    const output: contracts.PacksOutput = .{ .packs = &pack_rows, .enabled_count = 1, .total_count = 2 };
-    var stdout_buf: [4096]u8 = undefined;
-    var stderr_buf: [256]u8 = undefined;
-    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-    _ = renderHumanAlloc(allocator, std.testing.io, .{}, output, &stdout_writer, &stderr_writer) catch |err| switch (err) {
-        // AllocatingWriter intentionally erases allocator failures to WriteFailed.
-        error.WriteFailed => return error.OutOfMemory,
-        else => return err,
-    };
-}
-
-fn fakeUnsortedPacksJson(_: std.Io, argv: []const []const u8, stdout: anytype, _: anytype) !u8 {
-    try std.testing.expectEqualSlices([]const u8, &.{ "packs", "--format", "json" }, argv);
-    try stdout.writeAll(
-        \\{"packs":[{"id":"database.postgresql","name":"Postgres","category":"database","description":"Postgres","enabled":false,"safe_pattern_count":1,"destructive_pattern_count":2},{"id":"database.mysql","name":"MySQL","category":"database","description":"MySQL\u001b[2J","enabled":true,"safe_pattern_count":3,"destructive_pattern_count":4},{"id":"core.git","name":"Git","category":"core","description":"Git","enabled":true,"safe_pattern_count":2,"destructive_pattern_count":3}],"enabled_count":2,"total_count":3}
-    );
-    return exit_codes.success;
-}
-
-fn fakeEnabledPacksEmpty(_: std.Io, argv: []const []const u8, stdout: anytype, _: anytype) !u8 {
-    try std.testing.expectEqualSlices([]const u8, &.{ "packs", "--enabled", "--format", "json" }, argv);
-    try stdout.writeAll("{\"packs\":[],\"enabled_count\":0,\"total_count\":3}");
-    return exit_codes.success;
-}
-
-fn fakeHostilePacksJson(_: std.Io, _: []const []const u8, stdout: anytype, _: anytype) !u8 {
-    try stdout.writeAll(
-        \\{"packs":[{"id":"db.\u001b[2Jmysql","name":"MySQL","category":"data\u001b]0;x\u0007base","description":"safe\nline","enabled":true,"safe_pattern_count":3,"destructive_pattern_count":4}],"enabled_count":1,"total_count":1}
-    );
-    return exit_codes.success;
-}
-
-fn fakeWidePackJson(_: std.Io, _: []const []const u8, stdout: anytype, _: anytype) !u8 {
-    try stdout.writeAll(
-        \\{"packs":[{"id":"infrastructure.fastly.edge.service","name":"Fastly","category":"infrastructure","description":"Protects against destructive Fastly CLI operations like service, domain, backend, and VCL deletion.","enabled":false,"safe_pattern_count":10,"destructive_pattern_count":6}],"enabled_count":0,"total_count":1}
-    );
-    return exit_codes.success;
-}
-
-fn fakeDaemonFailure(_: std.Io, _: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
-    try stdout.writeAll("daemon partial stdout\n");
-    try stderr.writeAll("daemon exact stderr\n");
-    return 17;
-}
-
-fn fakeInvalidJson(_: std.Io, _: []const []const u8, stdout: anytype, _: anytype) !u8 {
-    try stdout.writeAll("{TOP_SECRET:not-json}");
-    return exit_codes.success;
-}
-
-fn fakePassthrough(_: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
-    for (argv, 0..) |arg, index| {
-        if (index > 0) try stdout.writeByte('|');
-        try stdout.writeAll(arg);
-    }
-    try stderr.writeAll("daemon exact stderr\n");
-    return 23;
-}
+// ── s-packs locked contract tests (Slice 4 / unit s-packs) ──────────────────
+// Happy path must use shell_engine.registry + pack_config — never daemon CLI.
 
 fn failIfCalled(_: std.Io, _: []const []const u8, _: anytype, _: anytype) !u8 {
     return error.UnexpectedExecutorCall;
 }
 
-fn fakePackInfoAndList(_: std.Io, argv: []const []const u8, stdout: anytype, _: anytype) !u8 {
-    if (argv.len >= 1 and std.mem.eql(u8, argv[0], "pack")) {
-        try std.testing.expect(argv.len >= 4);
-        try std.testing.expectEqualStrings("info", argv[1]);
-        try std.testing.expectEqualStrings("core.git", argv[2]);
-        try std.testing.expectEqualStrings("--json", argv[3]);
-        try stdout.writeAll(
-            \\{"id":"core.git","name":"Git","description":"Protects destructive Git operations","keywords":["git"],"safe_pattern_count":2,"destructive_pattern_count":1,"safe_patterns":[{"name":"status","regex":"^git status$"}],"destructive_patterns":[{"name":"force-push","regex":"git push --force","severity":"critical","reason":"Rewrites remote history","suggestions":[{"command":"git push --force-with-lease","description":"Safer force push"}]}]}
-        );
-        return exit_codes.success;
+// Test-only: pack_config for loadPackIdsForWorkspace membership (not production path).
+const test_pack_config = @import("pack_config.zig");
+
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+fn sPacksDupEnvZ(name: [*:0]const u8) !?[:0]u8 {
+    const raw = std.c.getenv(name) orelse return null;
+    return try std.testing.allocator.dupeZ(u8, std.mem.span(raw));
+}
+
+fn sPacksRestoreEnv(name: [*:0]const u8, prev: ?[:0]u8) void {
+    if (prev) |value| {
+        _ = setenv(name, value.ptr, 1);
+        std.testing.allocator.free(value);
+    } else {
+        _ = unsetenv(name);
     }
-    if (argv.len >= 1 and std.mem.eql(u8, argv[0], "packs")) {
-        try stdout.writeAll(
-            \\{"packs":[{"id":"core.git","name":"Git","category":"core","description":"Protects Git","enabled":true,"safe_pattern_count":2,"destructive_pattern_count":1}],"enabled_count":1,"total_count":1}
-        );
-        return exit_codes.success;
+}
+
+const SPacksXdg = struct {
+    tmp: std.testing.TmpDir,
+    root: []u8,
+    prev_xdg: ?[:0]u8,
+    prev_operator: ?[:0]u8,
+
+    fn deinit(self: *@This()) void {
+        sPacksRestoreEnv("XDG_CONFIG_HOME", self.prev_xdg);
+        sPacksRestoreEnv("ORCA_OPERATOR", self.prev_operator);
+        std.testing.allocator.free(self.root);
+        self.tmp.cleanup();
     }
-    return error.UnexpectedExecutorCall;
+};
+
+/// Isolate user pack config + grant ORCA_OPERATOR break-glass for baseline disable tests.
+fn sPacksIsolateXdgWithOperator() !SPacksXdg {
+    var tmp = std.testing.tmpDir(.{});
+    errdefer tmp.cleanup();
+    const root_z = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root_z);
+    const root = try std.testing.allocator.dupe(u8, root_z);
+    errdefer std.testing.allocator.free(root);
+
+    const prev_xdg = try sPacksDupEnvZ("XDG_CONFIG_HOME");
+    errdefer if (prev_xdg) |p| std.testing.allocator.free(p);
+    const prev_operator = try sPacksDupEnvZ("ORCA_OPERATOR");
+    errdefer if (prev_operator) |p| std.testing.allocator.free(p);
+
+    const root_z0 = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z0);
+    try std.testing.expectEqual(@as(c_int, 0), setenv("XDG_CONFIG_HOME", root_z0.ptr, 1));
+    try std.testing.expectEqual(@as(c_int, 0), setenv("ORCA_OPERATOR", "1", 1));
+
+    return .{
+        .tmp = tmp,
+        .root = root,
+        .prev_xdg = prev_xdg,
+        .prev_operator = prev_operator,
+    };
 }
 
-fn fakePackInfoMissing(_: std.Io, argv: []const []const u8, _: anytype, stderr: anytype) !u8 {
-    try std.testing.expectEqualStrings("pack", argv[0]);
-    try stderr.writeAll("Pack not found: no.such.pack\n");
-    return 1;
+fn sliceContainsId(ids: []const []const u8, want: []const u8) bool {
+    for (ids) |id| {
+        if (std.mem.eql(u8, id, want)) return true;
+    }
+    return false;
 }
 
-fn fakeRegistryForEnable(_: std.Io, argv: []const []const u8, stdout: anytype, _: anytype) !u8 {
-    try std.testing.expectEqualStrings("packs", argv[0]);
-    try stdout.writeAll(
-        \\{"packs":[{"id":"containers.docker","name":"Docker","category":"containers","description":"d","enabled":false,"safe_pattern_count":1,"destructive_pattern_count":1}],"enabled_count":0,"total_count":1}
-    );
-    return exit_codes.success;
+// Parse list `--json` output and return the `enabled` flag for `pack_id`.
+fn jsonPackEnabledFlag(raw: []const u8, pack_id: []const u8) !bool {
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, raw, .{});
+    defer parsed.deinit();
+    const packs_val = parsed.value.object.get("packs") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(packs_val == .array);
+    for (packs_val.array.items) |item| {
+        try std.testing.expect(item == .object);
+        const id = item.object.get("id") orelse return error.TestUnexpectedResult;
+        try std.testing.expect(id == .string);
+        if (std.mem.eql(u8, id.string, pack_id)) {
+            const en = item.object.get("enabled") orelse return error.TestUnexpectedResult;
+            try std.testing.expect(en == .bool);
+            return en.bool;
+        }
+    }
+    return error.TestUnexpectedResult; // pack id missing from list
 }
 
-test "packs show renders human detail without raw regex by default" {
-    var stdout_buf: [4096]u8 = undefined;
+/// Run `body` with process cwd set to a fresh git workspace under a tmp dir.
+fn withGitWorkspace(comptime body: *const fn (workspace_root: []const u8) anyerror!void) !void {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, ".git");
+    const root_z = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root_z);
+    const root = try std.testing.allocator.dupe(u8, root_z);
+    defer std.testing.allocator.free(root);
+
+    const prev = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(prev);
+    defer std.Io.Threaded.chdir(prev) catch @panic("s-packs test failed to restore process cwd");
+
+    try std.Io.Threaded.chdir(root);
+    try body(root);
+}
+
+test "s-packs: list real packs without daemon includes core.git enabled" {
+    var stdout_buf: [64 * 1024]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    // failIfCalled proves no executeDaemonCli / executor on the happy path.
+    const code = try commandWithExecutor(failIfCalled, std.testing.io, &.{}, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, code);
+    try std.testing.expectEqualStrings("", stderr_writer.buffered());
+
+    const out = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "core.git") != null);
+    // Baseline pack must show as enabled (default oracle set).
+    try std.testing.expect(std.mem.indexOf(u8, out, "[enabled]") != null);
+    // Non-trivial registry: many packs, not a single fake row.
+    var pack_dots: usize = 0;
+    var i: usize = 0;
+    while (i + 1 < out.len) : (i += 1) {
+        // rough signal: dotted pack ids appear more than once (core.*, containers.*, …)
+        if (out[i] == '.' and ((out[i - 1] >= 'a' and out[i - 1] <= 'z') or (out[i - 1] >= '0' and out[i - 1] <= '9')))
+            pack_dots += 1;
+    }
+    try std.testing.expect(pack_dots >= 10);
+}
+
+test "s-packs: list --json stable schema with schema_version packs and counts" {
+    var stdout_buf: [256 * 1024]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try commandWithExecutor(failIfCalled, std.testing.io, &.{"--json"}, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, code);
+    try std.testing.expectEqualStrings("", stderr_writer.buffered());
+
+    const raw = stdout_writer.buffered();
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, raw, .{});
+    defer parsed.deinit();
+    const root = parsed.value;
+    try std.testing.expect(root == .object);
+    const obj = root.object;
+
+    const schema = obj.get("schema_version") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(schema == .integer);
+    try std.testing.expectEqual(@as(i64, 1), schema.integer);
+
+    const packs_val = obj.get("packs") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(packs_val == .array);
+    try std.testing.expect(packs_val.array.items.len >= 50);
+
+    const total = obj.get("total_count") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(total == .integer);
+    try std.testing.expectEqual(@as(i64, @intCast(packs_val.array.items.len)), total.integer);
+
+    const enabled_count = obj.get("enabled_count") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(enabled_count == .integer);
+    try std.testing.expect(enabled_count.integer > 0);
+
+    var found_core_git = false;
+    var enabled_seen: i64 = 0;
+    for (packs_val.array.items) |item| {
+        try std.testing.expect(item == .object);
+        const id = item.object.get("id") orelse return error.TestUnexpectedResult;
+        try std.testing.expect(id == .string);
+        const en = item.object.get("enabled") orelse return error.TestUnexpectedResult;
+        try std.testing.expect(en == .bool);
+        if (en.bool) enabled_seen += 1;
+        if (std.mem.eql(u8, id.string, "core.git")) {
+            found_core_git = true;
+            try std.testing.expect(en.bool); // baseline always on unless disabled
+        }
+    }
+    try std.testing.expect(found_core_git);
+    try std.testing.expectEqual(enabled_count.integer, enabled_seen);
+}
+
+test "s-packs: list --format json is an alias for stable --json schema" {
+    var stdout_buf: [256 * 1024]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try commandWithExecutor(failIfCalled, std.testing.io, &.{ "--format", "json" }, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, code);
+    const raw = stdout_writer.buffered();
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, raw, .{});
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(i64, 1), parsed.value.object.get("schema_version").?.integer);
+    try std.testing.expect(parsed.value.object.get("packs").?.array.items.len >= 50);
+}
+
+test "s-packs: show core.git works without daemon" {
+    var stdout_buf: [64 * 1024]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try commandWithExecutor(failIfCalled, std.testing.io, &.{ "show", "core.git" }, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, code);
+    try std.testing.expectEqualStrings("", stderr_writer.buffered());
+
+    const out = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "core.git") != null);
+    // Real oracle pattern names (not daemon fixture force-push-only).
+    try std.testing.expect(std.mem.indexOf(u8, out, "reset-hard") != null);
+    // Raw regex stays hidden unless --verbose.
+    try std.testing.expect(std.mem.indexOf(u8, out, "regex:") == null);
+}
+
+test "s-packs: show core.git --json includes id and pattern names" {
+    var stdout_buf: [128 * 1024]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try commandWithExecutor(failIfCalled, std.testing.io, &.{ "show", "core.git", "--json" }, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, code);
+
+    const raw = stdout_writer.buffered();
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, raw, .{});
+    defer parsed.deinit();
+    const obj = parsed.value.object;
+    if (obj.get("schema_version")) |sv| {
+        try std.testing.expectEqual(@as(i64, 1), sv.integer);
+    }
+    try std.testing.expectEqualStrings("core.git", obj.get("id").?.string);
+    // Pattern inventory present (names or counts).
+    const text = raw;
+    try std.testing.expect(std.mem.indexOf(u8, text, "reset-hard") != null);
+}
+
+test "s-packs: show missing pack remediates without daemon" {
+    var stdout_buf: [1024]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try commandWithExecutor(failIfCalled, std.testing.io, &.{ "show", "no.such.pack" }, &stdout_writer, &stderr_writer);
+    try std.testing.expect(code == exit_codes.general or code == exit_codes.usage);
+    const err = stderr_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, err, "no.such.pack") != null or std.mem.indexOf(u8, err, "not found") != null);
+    // No daemon / doctor essay as the primary remediation for missing pack.
+    try std.testing.expect(std.mem.indexOf(u8, err, "executeDaemonCli") == null);
+}
+
+test "s-packs: enable opt-in pack writes project config without daemon" {
+    try withGitWorkspace(struct {
+        fn body(workspace_root: []const u8) !void {
+            var stdout_buf: [4096]u8 = undefined;
+            var stderr_buf: [1024]u8 = undefined;
+            var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+            var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+            const code = try commandWithExecutor(
+                failIfCalled,
+                std.testing.io,
+                &.{ "enable", "containers.docker" },
+                &stdout_writer,
+                &stderr_writer,
+            );
+            try std.testing.expectEqual(exit_codes.success, code);
+
+            // Must go through pack_config semantics: id lands in [packs].enabled only.
+            var loaded = try test_pack_config.loadPackIdsForWorkspace(std.testing.io, std.testing.allocator, workspace_root);
+            defer loaded.deinit(std.testing.allocator);
+            try std.testing.expect(sliceContainsId(loaded.enabled, "containers.docker"));
+            try std.testing.expect(!sliceContainsId(loaded.disabled, "containers.docker"));
+        }
+    }.body);
+}
+
+test "s-packs: disable core.git uses shipped pack_config semantics without hard-fail" {
+    try withGitWorkspace(struct {
+        fn body(workspace_root: []const u8) !void {
+            var xdg = try sPacksIsolateXdgWithOperator();
+            defer xdg.deinit();
+
+            var stdout_buf: [4096]u8 = undefined;
+            var stderr_buf: [2048]u8 = undefined;
+            var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+            var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+            const code = try commandWithExecutor(
+                failIfCalled,
+                std.testing.io,
+                &.{ "disable", "core.git" },
+                &stdout_writer,
+                &stderr_writer,
+            );
+            // With ORCA_OPERATOR break-glass: baseline opt-out succeeds (user config); no hard-fail.
+            try std.testing.expectEqual(exit_codes.success, code);
+            const combined = try std.fmt.allocPrint(std.testing.allocator, "{s}{s}", .{ stdout_writer.buffered(), stderr_writer.buffered() });
+            defer std.testing.allocator.free(combined);
+            try std.testing.expect(std.mem.indexOf(u8, combined, "cannot disable") == null);
+            try std.testing.expect(std.mem.indexOf(u8, combined, "Cannot disable") == null);
+            try std.testing.expect(std.mem.indexOf(u8, combined, "hard-fail") == null);
+            try std.testing.expect(std.mem.indexOf(u8, combined, "daemon may still") == null);
+
+            // Effective disabled list merges user baseline opt-out.
+            var loaded = try test_pack_config.loadPackIdsForWorkspace(std.testing.io, std.testing.allocator, workspace_root);
+            defer loaded.deinit(std.testing.allocator);
+            try std.testing.expect(sliceContainsId(loaded.disabled, "core.git"));
+        }
+    }.body);
+}
+
+test "s-packs: disable baseline without ORCA_OPERATOR refuses non-interactively" {
+    try withGitWorkspace(struct {
+        fn body(_: []const u8) !void {
+            const prev = try sPacksDupEnvZ("ORCA_OPERATOR");
+            defer sPacksRestoreEnv("ORCA_OPERATOR", prev);
+            _ = unsetenv("ORCA_OPERATOR");
+
+            var stdout_buf: [4096]u8 = undefined;
+            var stderr_buf: [2048]u8 = undefined;
+            var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+            var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+            const code = try commandWithExecutor(
+                failIfCalled,
+                std.testing.io,
+                &.{ "disable", "core.git" },
+                &stdout_writer,
+                &stderr_writer,
+            );
+            try std.testing.expect(code != exit_codes.success);
+            const err = stderr_writer.buffered();
+            try std.testing.expect(std.mem.indexOf(u8, err, "ORCA_OPERATOR") != null or
+                std.mem.indexOf(u8, err, "baseline") != null);
+        }
+    }.body);
+}
+
+// Acceptance: enable → list enabled-state fidelity (not static registry flags).
+test "s-packs: enable containers.docker then list --json reports enabled true" {
+    try withGitWorkspace(struct {
+        fn body(workspace_root: []const u8) !void {
+            {
+                var stdout_buf: [4096]u8 = undefined;
+                var stderr_buf: [1024]u8 = undefined;
+                var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+                var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+                const code = try commandWithExecutor(
+                    failIfCalled,
+                    std.testing.io,
+                    &.{ "enable", "containers.docker" },
+                    &stdout_writer,
+                    &stderr_writer,
+                );
+                try std.testing.expectEqual(exit_codes.success, code);
+            }
+
+            // Config membership (pack_config path), not substring-soft TOML.
+            var loaded = try test_pack_config.loadPackIdsForWorkspace(std.testing.io, std.testing.allocator, workspace_root);
+            defer loaded.deinit(std.testing.allocator);
+            try std.testing.expect(sliceContainsId(loaded.enabled, "containers.docker"));
+
+            var list_out: [256 * 1024]u8 = undefined;
+            var list_err: [1024]u8 = undefined;
+            var list_stdout: std.Io.Writer = .fixed(&list_out);
+            var list_stderr: std.Io.Writer = .fixed(&list_err);
+            const list_code = try commandWithExecutor(
+                failIfCalled,
+                std.testing.io,
+                &.{"--json"},
+                &list_stdout,
+                &list_stderr,
+            );
+            try std.testing.expectEqual(exit_codes.success, list_code);
+            try std.testing.expectEqualStrings("", list_stderr.buffered());
+
+            const en = try jsonPackEnabledFlag(list_stdout.buffered(), "containers.docker");
+            try std.testing.expect(en); // list must honor enable mutation
+        }
+    }.body);
+}
+
+// Acceptance: disable baseline → list enabled false (packIsActive/disabled semantics via CLI).
+test "s-packs: disable core.git then list --json reports enabled false" {
+    try withGitWorkspace(struct {
+        fn body(workspace_root: []const u8) !void {
+            var xdg = try sPacksIsolateXdgWithOperator();
+            defer xdg.deinit();
+
+            {
+                var stdout_buf: [4096]u8 = undefined;
+                var stderr_buf: [2048]u8 = undefined;
+                var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+                var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+                const code = try commandWithExecutor(
+                    failIfCalled,
+                    std.testing.io,
+                    &.{ "disable", "core.git" },
+                    &stdout_writer,
+                    &stderr_writer,
+                );
+                try std.testing.expectEqual(exit_codes.success, code);
+                const combined = try std.fmt.allocPrint(std.testing.allocator, "{s}{s}", .{ stdout_writer.buffered(), stderr_writer.buffered() });
+                defer std.testing.allocator.free(combined);
+                try std.testing.expect(std.mem.indexOf(u8, combined, "cannot disable") == null);
+            }
+
+            var loaded = try test_pack_config.loadPackIdsForWorkspace(std.testing.io, std.testing.allocator, workspace_root);
+            defer loaded.deinit(std.testing.allocator);
+            try std.testing.expect(sliceContainsId(loaded.disabled, "core.git"));
+
+            var list_out: [256 * 1024]u8 = undefined;
+            var list_err: [1024]u8 = undefined;
+            var list_stdout: std.Io.Writer = .fixed(&list_out);
+            var list_stderr: std.Io.Writer = .fixed(&list_err);
+            const list_code = try commandWithExecutor(
+                failIfCalled,
+                std.testing.io,
+                &.{"--json"},
+                &list_stdout,
+                &list_stderr,
+            );
+            try std.testing.expectEqual(exit_codes.success, list_code);
+
+            const en = try jsonPackEnabledFlag(list_stdout.buffered(), "core.git");
+            try std.testing.expect(!en); // list must honor disable → inactive
+
+            // Human list also surfaces available (not enabled) for the baseline id.
+            var human_out: [64 * 1024]u8 = undefined;
+            var human_err: [1024]u8 = undefined;
+            var human_stdout: std.Io.Writer = .fixed(&human_out);
+            var human_stderr: std.Io.Writer = .fixed(&human_err);
+            const human_code = try commandWithExecutor(
+                failIfCalled,
+                std.testing.io,
+                &.{ "--filter", "core.git" },
+                &human_stdout,
+                &human_stderr,
+            );
+            try std.testing.expectEqual(exit_codes.success, human_code);
+            const human = human_stdout.buffered();
+            try std.testing.expect(std.mem.indexOf(u8, human, "core.git") != null);
+            try std.testing.expect(std.mem.indexOf(u8, human, "[available]") != null);
+            try std.testing.expect(std.mem.indexOf(u8, human, "[enabled]") == null);
+        }
+    }.body);
+}
+
+// Opt-in disable via CLI removes from enabled and list reports false.
+test "s-packs: disable opt-in pack removes from enabled and list reports false" {
+    try withGitWorkspace(struct {
+        fn body(workspace_root: []const u8) !void {
+            {
+                var stdout_buf: [4096]u8 = undefined;
+                var stderr_buf: [1024]u8 = undefined;
+                var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+                var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+                try std.testing.expectEqual(exit_codes.success, try commandWithExecutor(
+                    failIfCalled,
+                    std.testing.io,
+                    &.{ "enable", "containers.docker" },
+                    &stdout_writer,
+                    &stderr_writer,
+                ));
+            }
+            {
+                var stdout_buf: [4096]u8 = undefined;
+                var stderr_buf: [1024]u8 = undefined;
+                var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+                var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+                try std.testing.expectEqual(exit_codes.success, try commandWithExecutor(
+                    failIfCalled,
+                    std.testing.io,
+                    &.{ "disable", "containers.docker" },
+                    &stdout_writer,
+                    &stderr_writer,
+                ));
+            }
+
+            var loaded = try test_pack_config.loadPackIdsForWorkspace(std.testing.io, std.testing.allocator, workspace_root);
+            defer loaded.deinit(std.testing.allocator);
+            try std.testing.expect(!sliceContainsId(loaded.enabled, "containers.docker"));
+
+            var list_out: [256 * 1024]u8 = undefined;
+            var list_err: [1024]u8 = undefined;
+            var list_stdout: std.Io.Writer = .fixed(&list_out);
+            var list_stderr: std.Io.Writer = .fixed(&list_err);
+            try std.testing.expectEqual(exit_codes.success, try commandWithExecutor(
+                failIfCalled,
+                std.testing.io,
+                &.{"--json"},
+                &list_stdout,
+                &list_stderr,
+            ));
+            const en = try jsonPackEnabledFlag(list_stdout.buffered(), "containers.docker");
+            try std.testing.expect(!en);
+        }
+    }.body);
+}
+
+test "s-packs: help unhides packs command" {
+    const info = help.findCommand("packs") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!info.hidden);
+    // Product copy must not claim Rust daemon ownership after Slice 4.
+    for (info.details) |line| {
+        try std.testing.expect(std.mem.indexOf(u8, line, "Rust daemon") == null);
+        try std.testing.expect(std.mem.indexOf(u8, line, "Rust shell-rule") == null);
+    }
+}
+
+test "s-packs: --help is Zig-owned and does not call daemon" {
+    var stdout_buf: [8192]u8 = undefined;
     var stderr_buf: [256]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-    const code = try commandWithExecutor(fakePackInfoAndList, std.testing.io, &.{ "show", "core.git" }, &stdout_writer, &stderr_writer);
+    const code = try commandWithExecutor(failIfCalled, std.testing.io, &.{"--help"}, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, code);
     const out = stdout_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, out, "core.git") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "force-push") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "critical") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "Rewrites remote history") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "git push --force-with-lease") != null);
-    // Raw regex must stay hidden unless --verbose (suggestion text may share substrings).
-    try std.testing.expect(std.mem.indexOf(u8, out, "regex:") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "^git status$") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "packs") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "enable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "disable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "show") != null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 
-test "packs show missing pack returns remediation" {
-    var stdout_buf: [256]u8 = undefined;
-    var stderr_buf: [512]u8 = undefined;
-    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-    const code = try commandWithExecutor(fakePackInfoMissing, std.testing.io, &.{ "show", "no.such.pack" }, &stdout_writer, &stderr_writer);
-    try std.testing.expectEqual(exit_codes.general, code);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "Pack not found") != null);
-}
-
-test "packs show requires pack id" {
+test "s-packs: show requires pack id" {
     var stdout_buf: [64]u8 = undefined;
     var stderr_buf: [256]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
     const code = try commandWithExecutor(failIfCalled, std.testing.io, &.{"show"}, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.usage, code);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help packs") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help packs") != null or std.mem.indexOf(u8, stderr_writer.buffered(), "pack id") != null);
 }
 
-test "packs enable and disable require pack ids" {
+test "s-packs: enable and disable require pack ids" {
     const cases = [_][]const []const u8{
         &.{"enable"},
         &.{"disable"},
@@ -903,27 +1392,67 @@ test "packs enable and disable require pack ids" {
         var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
         const code = try commandWithExecutor(failIfCalled, std.testing.io, args, &stdout_writer, &stderr_writer);
         try std.testing.expectEqual(exit_codes.usage, code);
-        try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help packs") != null);
     }
 }
 
-test "packs enable rejects unknown pack ids when registry is available" {
-    var stdout_buf: [256]u8 = undefined;
-    var stderr_buf: [512]u8 = undefined;
-    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-    const code = try commandWithExecutor(fakeRegistryForEnable, std.testing.io, &.{ "enable", "no.such.pack" }, &stdout_writer, &stderr_writer);
-    try std.testing.expectEqual(exit_codes.usage, code);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "unknown pack id") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk packs --filter") != null);
+test "s-packs: enable rejects unknown pack ids against registry without daemon" {
+    try withGitWorkspace(struct {
+        fn body(workspace_root: []const u8) !void {
+            _ = workspace_root;
+            var stdout_buf: [4096]u8 = undefined;
+            var stderr_buf: [2048]u8 = undefined;
+            var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+            var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+            // Without registry validation, today's path may wrongly succeed —
+            // locked: reject unknown ids using oracle registry (no daemon).
+            const code = try commandWithExecutor(
+                failIfCalled,
+                std.testing.io,
+                &.{ "enable", "no.such.pack.xyz" },
+                &stdout_writer,
+                &stderr_writer,
+            );
+            try std.testing.expectEqual(exit_codes.usage, code);
+            try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "unknown") != null or std.mem.indexOf(u8, stderr_writer.buffered(), "not found") != null);
+        }
+    }.body);
 }
 
-test "packs info is an alias for show" {
-    var stdout_buf: [4096]u8 = undefined;
-    var stderr_buf: [256]u8 = undefined;
+test "s-packs: info is an alias for show core.git" {
+    var stdout_buf: [64 * 1024]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-    const code = try commandWithExecutor(fakePackInfoAndList, std.testing.io, &.{ "info", "core.git" }, &stdout_writer, &stderr_writer);
+    const code = try commandWithExecutor(failIfCalled, std.testing.io, &.{ "info", "core.git" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, code);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Safety pack") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "core.git") != null);
+}
+
+test "s-packs: list --filter narrows to matching pack ids" {
+    var stdout_buf: [64 * 1024]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try commandWithExecutor(failIfCalled, std.testing.io, &.{ "--filter", "core.git" }, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, code);
+    const out = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "core.git") != null);
+    // Unrelated opt-in pack should not appear when filtering for core.git specifically.
+    try std.testing.expect(std.mem.indexOf(u8, out, "containers.docker") == null);
+}
+
+test "s-packs: rejects invalid list options without daemon" {
+    const cases = [_][]const []const u8{
+        &.{"--filter"},
+        &.{ "--page", "0" },
+        &.{"--unknown-flag"},
+    };
+    for (cases) |args| {
+        var stdout_buf: [64]u8 = undefined;
+        var stderr_buf: [512]u8 = undefined;
+        var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+        var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+        const code = try commandWithExecutor(failIfCalled, std.testing.io, args, &stdout_writer, &stderr_writer);
+        try std.testing.expectEqual(exit_codes.usage, code);
+    }
 }

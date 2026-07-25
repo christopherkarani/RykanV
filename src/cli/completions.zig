@@ -309,12 +309,11 @@ test "completions hide internal commands and expose global no-rich flag" {
     }
 }
 
-test "completions include command-specific dashboard and packs flags" {
+test "completions include command-specific dashboard flags" {
+    // packs is P0-hidden until Slice 4 lands; only assert live command flags here.
     const shells = [_][]const u8{ "bash", "zsh", "fish", "powershell" };
     const required_flags = [_][]const u8{
-        "--machine",   "--workspace", "--host",   "--port", "--once",
-        "--installed", "--enabled",   "--filter", "--page", "--page-size",
-        "--no-patterns", "--verbose",
+        "--machine", "--workspace", "--host", "--port", "--once",
     };
     for (shells) |shell| {
         var stdout_buf: [32 * 1024]u8 = undefined;
@@ -343,12 +342,12 @@ test "completions scope flags to their owning command" {
     const cases = [_]struct {
         shell: []const u8,
         dashboard_scope: []const u8,
-        packs_scope: []const u8,
+        init_scope: []const u8,
     }{
-        .{ .shell = "bash", .dashboard_scope = "dashboard) has_command=true; flags=", .packs_scope = "packs) has_command=true; flags=" },
-        .{ .shell = "zsh", .dashboard_scope = "dashboard) has_command=true; flags+=(", .packs_scope = "packs) has_command=true; flags+=(" },
-        .{ .shell = "fish", .dashboard_scope = "__fish_seen_subcommand_from dashboard", .packs_scope = "__fish_seen_subcommand_from packs" },
-        .{ .shell = "powershell", .dashboard_scope = "'dashboard' { $hasCommand = $true; $flags +=", .packs_scope = "'packs' { $hasCommand = $true; $flags +=" },
+        .{ .shell = "bash", .dashboard_scope = "dashboard) has_command=true; flags=", .init_scope = "init) has_command=true; flags=" },
+        .{ .shell = "zsh", .dashboard_scope = "dashboard) has_command=true; flags+=(", .init_scope = "init) has_command=true; flags+=(" },
+        .{ .shell = "fish", .dashboard_scope = "__fish_seen_subcommand_from dashboard", .init_scope = "__fish_seen_subcommand_from init" },
+        .{ .shell = "powershell", .dashboard_scope = "'dashboard' { $hasCommand = $true; $flags +=", .init_scope = "'init' { $hasCommand = $true; $flags +=" },
     };
     for (cases) |case| {
         var stdout_buf: [32 * 1024]u8 = undefined;
@@ -361,7 +360,7 @@ test "completions scope flags to their owning command" {
 
         try std.testing.expectEqual(exit_codes.success, code);
         try std.testing.expect(std.mem.indexOf(u8, output, case.dashboard_scope) != null);
-        try std.testing.expect(std.mem.indexOf(u8, output, case.packs_scope) != null);
+        try std.testing.expect(std.mem.indexOf(u8, output, case.init_scope) != null);
         try std.testing.expectEqualStrings("", stderr_writer.buffered());
     }
 }
@@ -410,16 +409,17 @@ test "completions discover the first public command after global options" {
     }
 }
 
-test "completions expose canonical init history and onboarding flags" {
+test "completions expose canonical init and onboarding flags" {
+    // history is on the Slice 1 hide-list; do not require its completion surface.
     const cases = [_]struct {
         shell: []const u8,
         required: []const []const u8,
     }{
         // Public onboarding door is `start` (setup/quickstart are hidden / hard-removed).
-        .{ .shell = "bash", .required = &.{ "init) has_command=true; flags=\"${flags} --preset --mode --ci --force --quiet", "history) has_command=true; flags=\"${flags} --days --strict --live --json --robot --format", "start) has_command=true; flags=\"${flags} --auto --yes --no-interact --hosts --preset --skip-verify" } },
-        .{ .shell = "zsh", .required = &.{ "init) has_command=true; flags+=( '--preset' '--mode' '--ci' '--force' '--quiet'", "history) has_command=true; flags+=( '--days' '--strict' '--live' '--json' '--robot' '--format'", "start) has_command=true; flags+=( '--auto' '--yes' '--no-interact' '--hosts' '--preset' '--skip-verify'" } },
-        .{ .shell = "fish", .required = &.{ "__fish_seen_subcommand_from init' -l quiet", "__fish_seen_subcommand_from history' -l robot", "__fish_seen_subcommand_from history' -l format", "__fish_seen_subcommand_from start' -l no-interact" } },
-        .{ .shell = "powershell", .required = &.{ "'init' { $hasCommand = $true; $flags += @('--preset', '--mode', '--ci', '--force', '--quiet')", "'history' { $hasCommand = $true; $flags += @('--days', '--strict', '--live', '--json', '--robot', '--format')", "'start' { $hasCommand = $true; $flags += @('--auto', '--yes', '--no-interact', '--hosts', '--preset', '--skip-verify')" } },
+        .{ .shell = "bash", .required = &.{ "init) has_command=true; flags=\"${flags} --preset --mode --ci --force --quiet", "start) has_command=true; flags=\"${flags} --auto --yes --no-interact --hosts --preset --skip-verify" } },
+        .{ .shell = "zsh", .required = &.{ "init) has_command=true; flags+=( '--preset' '--mode' '--ci' '--force' '--quiet'", "start) has_command=true; flags+=( '--auto' '--yes' '--no-interact' '--hosts' '--preset' '--skip-verify'" } },
+        .{ .shell = "fish", .required = &.{ "__fish_seen_subcommand_from init' -l quiet", "__fish_seen_subcommand_from start' -l no-interact" } },
+        .{ .shell = "powershell", .required = &.{ "'init' { $hasCommand = $true; $flags += @('--preset', '--mode', '--ci', '--force', '--quiet')", "'start' { $hasCommand = $true; $flags += @('--auto', '--yes', '--no-interact', '--hosts', '--preset', '--skip-verify')" } },
     };
 
     for (cases) |case| {
@@ -433,6 +433,78 @@ test "completions expose canonical init history and onboarding flags" {
         for (case.required) |needle| {
             try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), needle) != null);
         }
+    }
+}
+
+/// True when shell completion script registers `name` as a top-level ryk subcommand.
+/// Token-equal within the top-level commands list only — free `indexOf("'allow'")`
+/// would false-hit `'allowlist'` on zsh/powershell.
+fn completionRegistersCommand(output: []const u8, shell: []const u8, name: []const u8) bool {
+    if (std.mem.eql(u8, shell, "bash")) {
+        // `commands="…"` is a space-separated word list of public verbs.
+        const marker = "commands=\"";
+        const start = std.mem.indexOf(u8, output, marker) orelse return false;
+        const after = output[start + marker.len ..];
+        const end = std.mem.indexOfScalar(u8, after, '"') orelse return false;
+        var it = std.mem.tokenizeAny(u8, after[0..end], " \n\t\r");
+        while (it.next()) |word| {
+            if (std.mem.eql(u8, word, name)) return true;
+        }
+        return false;
+    }
+    if (std.mem.eql(u8, shell, "fish")) {
+        // `complete … -a 'name'` — closing quote makes `'allow'` not a prefix of `'allowlist'`.
+        var needle_buf: [80]u8 = undefined;
+        const needle = std.fmt.bufPrint(&needle_buf, "-a '{s}'", .{name}) catch return false;
+        return std.mem.indexOf(u8, output, needle) != null;
+    }
+    // zsh: commands=( … 'name' … ) ; powershell: $commands = @( … 'name' … )
+    const start_marker: []const u8 = if (std.mem.eql(u8, shell, "zsh"))
+        "commands=("
+    else if (std.mem.eql(u8, shell, "powershell"))
+        "$commands = @("
+    else
+        return false;
+    const start = std.mem.indexOf(u8, output, start_marker) orelse return false;
+    const after = output[start + start_marker.len ..];
+    const end = std.mem.indexOfScalar(u8, after, ')') orelse return false;
+    const region = after[0..end];
+    var needle_buf: [72]u8 = undefined;
+    const needle = std.fmt.bufPrint(&needle_buf, "'{s}'", .{name}) catch return false;
+    var lines = std.mem.splitScalar(u8, region, '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (std.mem.eql(u8, trimmed, needle)) return true;
+    }
+    return false;
+}
+
+test "P0 honesty: completions omit hide-list ports but include live P0 + shutdown" {
+    const hidden = [_][]const u8{
+        "scan",    "precommit",      "simulate",   "classify", "suggest-allowlist",
+        "history", "rebase-recover", "config",
+    };
+    const live_p0 = [_][]const u8{
+        "packs", "allowlist", "allow", "unallow", "allow-once", "shutdown",
+    };
+    const shells = [_][]const u8{ "bash", "zsh", "fish", "powershell" };
+    for (shells) |shell| {
+        var stdout_buf: [32 * 1024]u8 = undefined;
+        var stderr_buf: [512]u8 = undefined;
+        var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+        var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+        const code = try command(std.testing.io, &.{shell}, &stdout_writer, &stderr_writer);
+        try std.testing.expectEqual(exit_codes.success, code);
+        const output = stdout_writer.buffered();
+
+        for (live_p0) |name| {
+            try std.testing.expect(completionRegistersCommand(output, shell, name));
+        }
+        for (hidden) |name| {
+            try std.testing.expect(!completionRegistersCommand(output, shell, name));
+        }
+        try std.testing.expectEqualStrings("", stderr_writer.buffered());
     }
 }
 

@@ -38,7 +38,7 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 | `claude` / `codex` / `pi` / `opencode` / `openclaw` / `hermes` | Launch host under ryk (alias → run engine) | `src/cli/host_launch.zig` |
 | `status` | Traffic light: Protected \| Limited \| Off + caveat | `src/cli/status.zig` |
 | `replay` | Replay last session (denials dominant) | `src/cli/replay.zig` |
-| `explain` | Why a shell command is blocked or allowed | (Rust packs / CLI) |
+| `explain` | Why a shell command is blocked or allowed (Zig shell_engine) | `src/cli/shell_explain.zig` |
 | `help` | Show help (`help --all` = full surface) | `src/cli/help.zig` |
 
 ### Advanced / integration (via `ryk help --all`)
@@ -52,7 +52,11 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 | `credentials` | Check Secretless credential brokers | `src/cli/credentials.zig` |
 | `report` | Export a local safety report | `src/cli/report.zig` |
 | `license` | Manage local offline licenses | `src/cli/license.zig` |
-| `history` | Advanced history/stats (review verb is `replay`) | `src/cli/history.zig` |
+| `test` | Test a shell command with Zig shell_engine packs | `src/cli/shell_test.zig` |
+| `packs` | Browse / enable / disable safety packs (oracle + pack_config) | `src/cli/packs.zig` |
+| `allowlist` | Permanent pack-exception allowlist (rule id / exact command) | `src/cli/allowlist_cmd.zig` |
+| `allow` / `unallow` | Shortcuts for allowlist add / remove | `src/cli/allowlist_cmd.zig` |
+| `allow-once` | Redeem / manage one-time shell exceptions | `src/cli/allow_once.zig` |
 | `diff` / `apply` / `discard` | Staged writes | `src/cli/*.zig` |
 | `mcp` | MCP proxy and inspection | `src/cli/mcp.zig` |
 | `redteam` | Run red-team fixtures | `src/cli/redteam.zig` |
@@ -63,7 +67,7 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 | `decide` / `hook` / `evaluate` | Integration APIs | `src/cli/*.zig` |
 | `dashboard` | Local Orca dashboard | `src/cli/dashboard.zig` |
 | `ci` | Local CI readiness checks | `src/cli/ci.zig` |
-| `demo` | Safe local demo evidence | `src/cli/demo.zig` |
+| `shutdown` | Stop the background ryk daemon (live Zig) | `src/cli/shutdown.zig` |
 | `uninstall` | Uninstall Orca from this machine | `src/cli/uninstall.zig` |
 | `env` | Print install environment for shell activation | `src/cli/mod.zig` |
 | `--print-install-env` | Hidden flag (same as `env`) | `src/cli/mod.zig` |
@@ -74,6 +78,14 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 |---------|--------|
 | `quickstart` | Hard-removed from dispatcher — use `ryk start` |
 | `setup` | Hard-removed from dispatcher — use `ryk start` (library retained internally) |
+
+### Not available (hidden; typing yields short notice)
+
+Unavailable former daemon ports are **not** listed by `ryk help` / `ryk help --all` or shell completions. Typing them prints a short “not available” message and exits with usage (2). **`shutdown` remains live** and is listed under Advanced. P0 shell-ops verbs (`packs`, `allowlist`, `allow`, `unallow`, `allow-once`) are live Zig surfaces.
+
+| Command | Status |
+|---------|--------|
+| `scan`, `precommit`, `simulate`, `classify`, `suggest-allowlist`, `history`, `rebase-recover`, `config` | Hide-list (unavailable daemon ports) |
 
 ### Exit Codes (`src/cli/exit_codes.zig`)
 
@@ -448,13 +460,15 @@ Run local CI readiness checks — validates policy, rejects dangerous defaults, 
 
 ---
 
-### `ryk demo`
+### `ryk explain`
 
-Create safe local demo evidence — generates a harmless session showing a destructive command being denied.
+Explain why a shell command would be allowed or denied (pretty decision tree). Does not execute the command.
 
-**Usage:** `ryk demo blocked-action`
+**Usage:** `ryk explain [--format json] [--] <command>`
 
-No optional flags.
+**Examples:**
+- `ryk explain "rm -rf /"`
+- `ryk explain --format json "git reset --hard"`
 
 ---
 

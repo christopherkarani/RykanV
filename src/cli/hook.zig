@@ -456,13 +456,16 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
         // Codex 0.125.0+ ignores stdout JSON on deny; exit 2 + stderr is the enforced block path.
         // Sentinel-first so agents scraping stderr can distinguish a guard block from a
         // program error: provenance (guard) + consequence (no side effects) + recourse.
-        // Humans never reach this branch — non-Codex hosts render the JSON `message` themselves.
+        // Keep agent-visible Codex stderr thin (no full explain tree / regex dump).
         // Dynamic policy output crosses an agent-visible boundary here; redact it before
         // presentation so native Zig routes cannot disclose matched patterns or targets.
         try writeCodexGuardBlock(allocator, stderr, result.message, result.reason);
     } else {
         try writeHookResponse(stdout, result);
-        if (result.rule) |rule| {
+        // Human-facing hosts: rich explain on stderr; agent protocol stays on stdout JSON.
+        if (result.decision == .block) {
+            try writeHumanShellExplain(io, allocator, stderr, result);
+        } else if (result.rule) |rule| {
             try stderr.print("[hook] matched rule: {s}\n", .{rule});
         }
     }
@@ -505,6 +508,40 @@ fn writeCodexGuardBlock(allocator: std.mem.Allocator, stderr: anytype, message: 
             try stderr.writeAll("\n");
         }
     }
+}
+
+/// Compact human deny block for non-Codex hosts (agent JSON remains on stdout).
+fn writeHumanShellExplain(io: std.Io, allocator: std.mem.Allocator, stderr: anytype, result: HookResponse) !void {
+    _ = io;
+    try stderr.writeAll("\n");
+    try stderr.writeAll("RYK BLOCKED\n");
+    if (result.rule) |rule| {
+        const safe = try core_api.redactAlloc(allocator, rule);
+        defer allocator.free(safe);
+        try stderr.print("  Rule: {s}\n", .{safe});
+    }
+    if (result.reason.len > 0) {
+        const safe = try core_api.redactAlloc(allocator, result.reason);
+        defer allocator.free(safe);
+        try stderr.print("  Reason: {s}\n", .{safe});
+    }
+    if (result.suggestions.len > 0) {
+        try stderr.writeAll("  Suggestions:\n");
+        for (result.suggestions) |tip| {
+            const safe = try core_api.redactAlloc(allocator, tip);
+            defer allocator.free(safe);
+            try stderr.print("    • {s}\n", .{safe});
+        }
+    }
+    if (result.remediation_commands.len > 0) {
+        try stderr.writeAll("  Recourse:\n");
+        for (result.remediation_commands) |cmd| {
+            const safe = try core_api.redactAlloc(allocator, cmd);
+            defer allocator.free(safe);
+            try stderr.print("    {s}\n", .{safe});
+        }
+    }
+    try stderr.writeAll("  Next: ryk explain \"<command>\" for the full decision tree\n");
 }
 
 fn isCodexDenyOutput(host: Host, decision: PluginDecision) bool {
@@ -826,6 +863,8 @@ fn evaluateHook(
                 .env;
 
             // Shell/command PermissionRequest uses the same daemon route as PreToolUse shell.
+            // Prefer host-provided cwd when present; null falls back to workspace_root at
+            // allow-once issue time so redeem grants match later absolute PreToolUse evaluate.
             if (explain_kind == .command) {
                 const shell_mode: policy.schema.Mode = if (ci_mode) .ci else policy_value.mode;
                 return try evaluateShellCommandRoute(
@@ -833,7 +872,7 @@ fn evaluateHook(
                     allocator,
                     workspace_root,
                     host_name,
-                    .{ .command = target, .cwd = null },
+                    .{ .command = target, .cwd = extractCwd(payload) },
                     shell_mode,
                     policy_value.commands.allow,
                     &redactions,
@@ -977,7 +1016,14 @@ fn evaluateShellCommandRoute(
     session_id: ?[]const u8,
 ) !HookResponse {
     const evaluator = evaluator_override orelse defaultShellCommandEvaluator;
-    const daemon_response = evaluator(allocator, shell_event) catch |err| {
+    // Bind session workspace so zigEvaluator loads packs/stores from hook root, not
+    // agent-controlled tool cwd walk-up (M-9). Preserve host cwd for allow-once scope.
+    const event_for_eval = ShellCommandEvent{
+        .command = shell_event.command,
+        .cwd = shell_event.cwd,
+        .workspace_root = workspace_root,
+    };
+    const daemon_response = evaluator(allocator, event_for_eval) catch |err| {
         if (!std.mem.eql(u8, host_name, "hermes")) recordShellHookUnavailable(io, allocator, workspace_root, host_name, err);
         return try makeFailClosedHookResponse(
             allocator,
@@ -1014,6 +1060,7 @@ fn evaluateShellCommandRoute(
         .{
             .host = host_name,
             .cwd = shell_event.cwd,
+            .workspace_root = workspace_root,
             .session_id = session_id orelse "orca-shell",
         },
     );
@@ -1207,6 +1254,9 @@ const HookShellFmOpts = struct {
     tool: []const u8 = "bash",
     host: ?[]const u8 = null,
     cwd: ?[]const u8 = null,
+    /// Hook workspace root (absolute preferred). Used when host cwd is null/empty
+    /// so allow-once pending scopes match later PreToolUse evaluate cwds.
+    workspace_root: ?[]const u8 = null,
     timeout_ms: u32 = fm_steward_client.default_timeout_ms,
 };
 
@@ -1326,7 +1376,15 @@ fn buildAgentVisibleDaemonDeny(
     } else null;
     errdefer if (safe_rule) |rule| allocator.free(rule);
 
-    const message = if (decision == .block) blk: {
+    // Issue allow-once pending short code on hard block (best-effort; store optional).
+    // Pass workspace_root so null/empty host cwd never seeds bare "." (inert grants).
+    var short_code_owned: ?[]const u8 = if (decision == .block and shell_command != null)
+        tryIssuePendingShortCode(allocator, shell_command.?, fm_opts.cwd, fm_opts.workspace_root, safe_reason)
+    else
+        null;
+    errdefer if (short_code_owned) |c| allocator.free(c);
+
+    var message = if (decision == .block) blk: {
         if (daemon.responseStringField(result, "explanation")) |explanation| {
             const safe = try core_api.redactAlloc(allocator, explanation);
             defer allocator.free(safe);
@@ -1336,15 +1394,34 @@ fn buildAgentVisibleDaemonDeny(
     } else try buildMessage(allocator, decision, "command");
     errdefer allocator.free(message);
 
+    // Pending is issued for the human/operator path, but the redeemable short code
+    // must never appear in agent-visible message or remediation_commands (M-1).
+    // Agents scrape deny panels; embedding digits would enable self-service bypass.
+    if (short_code_owned != null) {
+        const with_recourse = try std.fmt.allocPrint(
+            allocator,
+            "{s}\nRecourse: operator can run ryk allow-once <code> from local host UI",
+            .{message},
+        );
+        allocator.free(message);
+        message = with_recourse;
+    }
+
     const suggestions = try collectDaemonSuggestionTexts(allocator, result);
     errdefer {
         for (suggestions) |s| allocator.free(s);
         allocator.free(suggestions);
     }
+    // Always placeholder — never embed redeemable digits on the agent channel.
     const remediation_commands = try buildRemediationCommands(allocator, safe_rule);
     errdefer {
         for (remediation_commands) |c| allocator.free(c);
         allocator.free(remediation_commands);
+    }
+    // Code was only needed to know pending was issued; free (not agent-visible).
+    if (short_code_owned) |c| {
+        allocator.free(c);
+        short_code_owned = null;
     }
 
     return .{
@@ -1391,6 +1468,8 @@ fn collectDaemonSuggestionTexts(allocator: std.mem.Allocator, result: std.json.V
     return try list.toOwnedSlice(allocator);
 }
 
+/// Agent-facing remediation only — never embeds a redeemable short code (M-1).
+/// Pending is still issued server-side; operators redeem out-of-band via TTY/UI.
 fn buildRemediationCommands(allocator: std.mem.Allocator, rule_id: ?[]const u8) ![][]const u8 {
     var list: std.ArrayList([]const u8) = .empty;
     errdefer {
@@ -1405,6 +1484,118 @@ fn buildRemediationCommands(allocator: std.mem.Allocator, rule_id: ?[]const u8) 
         try list.append(allocator, try allocator.dupe(u8, "ryk allowlist list"));
     }
     return try list.toOwnedSlice(allocator);
+}
+
+/// Best-effort: resolve `$XDG_DATA_HOME/orca` (or `~/.local/share/orca`) for pending store.
+fn resolveOrcaDataDirForPending(allocator: std.mem.Allocator) !?[]u8 {
+    if (std.c.getenv("XDG_DATA_HOME")) |xdg_z| {
+        const xdg = std.mem.span(xdg_z);
+        if (xdg.len > 0) return try std.fs.path.join(allocator, &.{ xdg, "orca" });
+    }
+    if (std.c.getenv("HOME")) |home_z| {
+        const home = std.mem.span(home_z);
+        if (home.len > 0) return try std.fs.path.join(allocator, &.{ home, ".local", "share", "orca" });
+    }
+    return null;
+}
+
+/// `realPathFileAlloc` returns `[:0]u8`; free via the sentinel type then dupe to
+/// a plain owned `[]u8` so callers can `allocator.free` without size mismatch.
+fn realpathOwned(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ?[]u8 {
+    const rp_z = std.Io.Dir.cwd().realPathFileAlloc(io, path, allocator) catch return null;
+    defer allocator.free(rp_z);
+    return allocator.dupe(u8, rp_z) catch null;
+}
+
+/// Resolve a stable absolute (or best-effort absolute) path for pending.cwd.
+/// Never returns bare `"."` — that mints allow-once grants that cannot match
+/// later PreToolUse evaluates with absolute host cwds (false user recourse).
+///
+/// Priority:
+/// 1. Host-provided non-empty cwd (realpath when possible; keep absolute as-is on fail)
+/// 2. Hook workspace_root when non-empty and not `"."`
+/// 3. Realpath of process cwd
+/// Returns null only when every fallback fails (caller skips issue).
+fn resolvePendingIssueCwd(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    cwd: ?[]const u8,
+    workspace_root: ?[]const u8,
+) ?[]u8 {
+    const isUsable = struct {
+        fn check(p: []const u8) bool {
+            const t = std.mem.trim(u8, p, " \t\r\n");
+            return t.len > 0 and !std.mem.eql(u8, t, ".");
+        }
+    }.check;
+
+    if (cwd) |raw| {
+        const t = std.mem.trim(u8, raw, " \t\r\n");
+        if (isUsable(t)) {
+            if (realpathOwned(io, allocator, t)) |rp| return rp;
+            // Absolute host paths often match evaluate as-is even if realpath fails
+            // (ephemeral dirs / already-deleted). Relative bare names fall through.
+            if (std.fs.path.isAbsolute(t)) {
+                return allocator.dupe(u8, t) catch null;
+            }
+        }
+    }
+
+    if (workspace_root) |wr| {
+        const t = std.mem.trim(u8, wr, " \t\r\n");
+        if (isUsable(t)) {
+            if (realpathOwned(io, allocator, t)) |rp| return rp;
+            if (std.fs.path.isAbsolute(t)) {
+                return allocator.dupe(u8, t) catch null;
+            }
+        }
+    }
+
+    // Last resort: process cwd realpath — never bare ".".
+    return realpathOwned(io, allocator, ".");
+}
+
+/// On pack deny, issue a pending short code when the data dir is resolvable.
+/// Returns an owned short_code slice, or null when store is unavailable / issue fails.
+/// Failures are silent (deny still proceeds with placeholder remediation).
+fn tryIssuePendingShortCode(
+    allocator: std.mem.Allocator,
+    command_text: []const u8,
+    cwd: ?[]const u8,
+    workspace_root: ?[]const u8,
+    reason: []const u8,
+) ?[]const u8 {
+    const data_dir = resolveOrcaDataDirForPending(allocator) catch return null;
+    const data_dir_owned = data_dir orelse return null;
+    defer allocator.free(data_dir_owned);
+
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    const io = threaded.io();
+
+    std.Io.Dir.cwd().createDirPath(io, data_dir_owned) catch return null;
+
+    const pending_path = std.fs.path.join(allocator, &.{ data_dir_owned, shell_engine.allow_once.pending_file_name }) catch return null;
+    defer allocator.free(pending_path);
+
+    var now_buf: [32]u8 = undefined;
+    const now_iso = core.time.Timestamp.now(io).formatIso(&now_buf) catch return null;
+
+    const cwd_path = resolvePendingIssueCwd(io, allocator, cwd, workspace_root) orelse return null;
+    defer allocator.free(cwd_path);
+
+    var issued = shell_engine.allow_once.issuePending(
+        io,
+        allocator,
+        pending_path,
+        command_text,
+        cwd_path,
+        reason,
+        now_iso,
+        true,
+    ) catch return null;
+    defer issued.deinit(allocator);
+
+    return allocator.dupe(u8, issued.record.short_code) catch null;
 }
 
 fn hookResponseFromDaemonEvaluate(
@@ -3972,4 +4163,418 @@ test "hook PreToolUse denies notify with structural to+body under effects.deny" 
     var bare_result = try evaluateHookForTest(allocator, @ptrCast(@alignCast(&policy_obj)), .claude, .PreToolUse, std.json.Value{ .object = bare }, false);
     defer bare_result.deinit(allocator);
     try std.testing.expectEqual(PluginDecision.allow, bare_result.decision);
+}
+
+// ---------------------------------------------------------------------------
+// s-once-cli — pack deny issues pending short code (when store enabled)
+// M-1: pending is issued for the operator path, but redeemable digits must never
+// appear in agent-visible message / remediation / codex guard / human panel JSON.
+// ---------------------------------------------------------------------------
+
+test {
+    // Pull allow-once CLI module tests into the lib monopath without touching mod.zig
+    // (mod.zig is s1-honesty exclusive; implementer unhide/dispatch is compile-required).
+    _ = @import("allow_once.zig");
+}
+
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+fn sOnceCliHookDupEnvZ(name: [*:0]const u8) !?[:0]u8 {
+    if (std.c.getenv(name)) |value| {
+        return try std.testing.allocator.dupeZ(u8, std.mem.span(value));
+    }
+    return null;
+}
+
+fn sOnceCliHookRestoreEnv(name: [*:0]const u8, prev: ?[:0]u8) void {
+    if (prev) |value| {
+        _ = setenv(name, value.ptr, 1);
+        std.testing.allocator.free(value);
+    } else {
+        _ = unsetenv(name);
+    }
+}
+
+fn sOnceCliHookJoin(parts: []const []const u8) ![]u8 {
+    return try std.fs.path.join(std.testing.allocator, parts);
+}
+
+const SOnceCliHookEnv = struct {
+    data_tmp: std.testing.TmpDir,
+    data_root: []u8,
+    prev_data: ?[:0]u8,
+    prev_home: ?[:0]u8,
+
+    fn deinit(self: *@This()) void {
+        sOnceCliHookRestoreEnv("XDG_DATA_HOME", self.prev_data);
+        sOnceCliHookRestoreEnv("HOME", self.prev_home);
+        std.testing.allocator.free(self.data_root);
+        self.data_tmp.cleanup();
+    }
+};
+
+fn sOnceCliHookIsolateXdg() !SOnceCliHookEnv {
+    var data_tmp = std.testing.tmpDir(.{});
+    errdefer data_tmp.cleanup();
+
+    const data_z = try data_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(data_z);
+    const data_root = try std.testing.allocator.dupe(u8, data_z);
+    errdefer std.testing.allocator.free(data_root);
+
+    const prev_data = try sOnceCliHookDupEnvZ("XDG_DATA_HOME");
+    errdefer if (prev_data) |p| std.testing.allocator.free(p);
+    const prev_home = try sOnceCliHookDupEnvZ("HOME");
+    errdefer if (prev_home) |p| std.testing.allocator.free(p);
+
+    const data_z0 = try std.testing.allocator.dupeZ(u8, data_root);
+    defer std.testing.allocator.free(data_z0);
+    try std.testing.expectEqual(@as(c_int, 0), setenv("XDG_DATA_HOME", data_z0.ptr, 1));
+    try std.testing.expectEqual(@as(c_int, 0), setenv("HOME", data_z0.ptr, 1));
+
+    return .{
+        .data_tmp = data_tmp,
+        .data_root = data_root,
+        .prev_data = prev_data,
+        .prev_home = prev_home,
+    };
+}
+
+fn sOnceCliHookPendingPath(xdg_data: []const u8) ![]u8 {
+    return try sOnceCliHookJoin(&.{ xdg_data, "orca", shell_engine.allow_once.pending_file_name });
+}
+
+/// Extract first real 6-digit short code after `allow-once ` (not the placeholder `<code>`).
+/// Used to assert agent-visible channels do **not** embed redeemable digits (M-1).
+fn sOnceCliHookExtractShortCode(blob: []const u8) ?[]const u8 {
+    const marker = "allow-once ";
+    var search_from: usize = 0;
+    while (search_from < blob.len) {
+        const rel = std.mem.indexOf(u8, blob[search_from..], marker) orelse return null;
+        const start = search_from + rel + marker.len;
+        if (start + 6 > blob.len) return null;
+        // Placeholder residual must not green these tests.
+        if (blob[start] == '<') {
+            search_from = start + 1;
+            continue;
+        }
+        var ok = true;
+        for (blob[start .. start + 6]) |c| {
+            if (c < '0' or c > '9') {
+                ok = false;
+                break;
+            }
+        }
+        if (ok and (start + 6 == blob.len or blob[start + 6] < '0' or blob[start + 6] > '9')) {
+            return blob[start .. start + 6];
+        }
+        search_from = start + 1;
+    }
+    return null;
+}
+
+/// Load the pending short code for a command from the store (operator channel).
+fn sOnceCliHookPendingCodeForCommand(
+    allocator: std.mem.Allocator,
+    xdg_data: []const u8,
+    cmd_text: []const u8,
+    now_iso: []const u8,
+) ![]const u8 {
+    const pending_path = try sOnceCliHookPendingPath(xdg_data);
+    defer allocator.free(pending_path);
+    var loaded = try shell_engine.allow_once.loadPendingActive(
+        std.testing.io,
+        allocator,
+        pending_path,
+        now_iso,
+    );
+    defer loaded.deinit(allocator);
+    for (loaded.list.records) |rec| {
+        if (std.mem.eql(u8, rec.command_raw, cmd_text)) {
+            return try allocator.dupe(u8, rec.short_code);
+        }
+    }
+    return error.TestUnexpectedResult;
+}
+
+fn sOnceCliHookConcatRemediation(allocator: std.mem.Allocator, result: HookResponse) ![]u8 {
+    var list: std.ArrayList(u8) = .empty;
+    errdefer list.deinit(allocator);
+    try list.appendSlice(allocator, result.message);
+    try list.append(allocator, '\n');
+    try list.appendSlice(allocator, result.reason);
+    try list.append(allocator, '\n');
+    for (result.remediation_commands) |c| {
+        try list.appendSlice(allocator, c);
+        try list.append(allocator, '\n');
+    }
+    for (result.suggestions) |s| {
+        try list.appendSlice(allocator, s);
+        try list.append(allocator, '\n');
+    }
+    return try list.toOwnedSlice(allocator);
+}
+
+/// Real Zig shell_engine deny path (no mock daemon evaluator).
+fn sOnceCliHookRealZigDeny(
+    allocator: std.mem.Allocator,
+    command_text: []const u8,
+    cwd: []const u8,
+    workspace_root: []const u8,
+) !HookResponse {
+    var redactions: std.ArrayList(RedactionEntry) = .empty;
+    var limitations: std.ArrayList([]const u8) = .empty;
+    try shellRouteSetup(allocator, &redactions, &limitations);
+    return evaluateShellCommandRoute(
+        std.testing.io,
+        allocator,
+        workspace_root,
+        "claude",
+        .{ .command = command_text, .cwd = cwd },
+        .strict,
+        &.{},
+        &redactions,
+        &limitations,
+        null, // default → zigEvaluator
+        null,
+    );
+}
+
+test "s-once-cli: hook pack deny issues pending short code when store enabled" {
+    // Acceptance: pack deny → pending row issued; agent-visible channel has no digits.
+    var xdg = try sOnceCliHookIsolateXdg();
+    defer xdg.deinit();
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(std.testing.io, ".git");
+    const ws_z = try ws_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(ws_z);
+    const ws_root = try std.testing.allocator.dupe(u8, ws_z);
+    defer std.testing.allocator.free(ws_root);
+
+    const allocator = std.testing.allocator;
+    const cmd_text = "git reset --hard";
+
+    var result = try sOnceCliHookRealZigDeny(allocator, cmd_text, ws_root, ws_root);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(PluginDecision.block, result.decision);
+
+    const blob = try sOnceCliHookConcatRemediation(allocator, result);
+    defer allocator.free(blob);
+    // M-1: agent-visible message/remediation must not embed redeemable digits.
+    try std.testing.expect(sOnceCliHookExtractShortCode(blob) == null);
+    try std.testing.expect(std.mem.indexOf(u8, blob, "allow-once") != null);
+    try std.testing.expect(std.mem.indexOf(u8, blob, "operator") != null or
+        std.mem.indexOf(u8, blob, "<code>") != null);
+
+    // Pending store must still hold a real 6-digit code for this command (operator path).
+    const pending_path = try sOnceCliHookPendingPath(xdg.data_root);
+    defer allocator.free(pending_path);
+    var loaded = try shell_engine.allow_once.loadPendingActive(
+        std.testing.io,
+        allocator,
+        pending_path,
+        "2026-07-25T12:00:00Z",
+    );
+    defer loaded.deinit(allocator);
+    try std.testing.expect(loaded.list.records.len >= 1);
+    var found = false;
+    for (loaded.list.records) |rec| {
+        if (std.mem.eql(u8, rec.command_raw, cmd_text) and rec.short_code.len == 6) {
+            var digits_ok = true;
+            for (rec.short_code) |c| {
+                if (c < '0' or c > '9') {
+                    digits_ok = false;
+                    break;
+                }
+            }
+            if (digits_ok) {
+                // And that code must not leak into agent-visible blob.
+                try std.testing.expect(std.mem.indexOf(u8, blob, rec.short_code) == null);
+                found = true;
+                break;
+            }
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "s-once-cli: human deny panel redacts allow-once code (operator path only)" {
+    var xdg = try sOnceCliHookIsolateXdg();
+    defer xdg.deinit();
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(std.testing.io, ".git");
+    const ws_z = try ws_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(ws_z);
+    const ws_root = try std.testing.allocator.dupe(u8, ws_z);
+    defer std.testing.allocator.free(ws_root);
+
+    const allocator = std.testing.allocator;
+    const cmd_text = "git reset --hard";
+    var result = try sOnceCliHookRealZigDeny(allocator, cmd_text, ws_root, ws_root);
+    defer result.deinit(allocator);
+    try std.testing.expectEqual(PluginDecision.block, result.decision);
+
+    var stderr_alloc: std.Io.Writer.Allocating = .init(allocator);
+    defer stderr_alloc.deinit();
+    try writeHumanShellExplain(std.testing.io, allocator, &stderr_alloc.writer, result);
+    const human = stderr_alloc.written();
+    try std.testing.expect(std.mem.indexOf(u8, human, "RYK BLOCKED") != null or
+        std.mem.indexOf(u8, human, "BLOCKED") != null);
+    // Teaches allow-once recourse without embedding redeemable digits (M-1).
+    try std.testing.expect(std.mem.indexOf(u8, human, "allow-once") != null);
+    try std.testing.expect(sOnceCliHookExtractShortCode(human) == null);
+
+    const blob = try sOnceCliHookConcatRemediation(allocator, result);
+    defer allocator.free(blob);
+    try std.testing.expect(sOnceCliHookExtractShortCode(blob) == null);
+
+    // Pending still issued for operator redeem out-of-band.
+    const code = try sOnceCliHookPendingCodeForCommand(allocator, xdg.data_root, cmd_text, "2026-07-25T12:00:00Z");
+    defer allocator.free(code);
+    try std.testing.expectEqual(@as(usize, 6), code.len);
+    try std.testing.expect(std.mem.indexOf(u8, human, code) == null);
+    try std.testing.expect(std.mem.indexOf(u8, blob, code) == null);
+}
+
+test "s-once-cli: codex guard deny redacts short code when store enabled" {
+    // M-1: Codex agent-visible guard stderr must NOT carry redeemable digits.
+    // writeCodexGuardBlock is what Codex agents see (sentinel + message + reason).
+    var xdg = try sOnceCliHookIsolateXdg();
+    defer xdg.deinit();
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(std.testing.io, ".git");
+    const ws_z = try ws_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(ws_z);
+    const ws_root = try std.testing.allocator.dupe(u8, ws_z);
+    defer std.testing.allocator.free(ws_root);
+
+    const allocator = std.testing.allocator;
+    const cmd_text = "git reset --hard";
+    var result = try sOnceCliHookRealZigDeny(allocator, cmd_text, ws_root, ws_root);
+    defer result.deinit(allocator);
+    try std.testing.expectEqual(PluginDecision.block, result.decision);
+
+    var stderr_alloc: std.Io.Writer.Allocating = .init(allocator);
+    defer stderr_alloc.deinit();
+    try writeCodexGuardBlock(allocator, &stderr_alloc.writer, result.message, result.reason);
+    const written = stderr_alloc.written();
+    try std.testing.expect(containsGuardSentinel(written));
+    try std.testing.expect(std.mem.indexOf(u8, written, "allow-once") != null);
+    // Extractor skips placeholder `ryk allow-once <code>`; real digits must not appear.
+    try std.testing.expect(sOnceCliHookExtractShortCode(written) == null);
+
+    const blob = try sOnceCliHookConcatRemediation(allocator, result);
+    defer allocator.free(blob);
+    try std.testing.expect(sOnceCliHookExtractShortCode(blob) == null);
+
+    const code = try sOnceCliHookPendingCodeForCommand(allocator, xdg.data_root, cmd_text, "2026-07-25T12:00:00Z");
+    defer allocator.free(code);
+    try std.testing.expect(std.mem.indexOf(u8, written, code) == null);
+    try std.testing.expect(std.mem.indexOf(u8, blob, code) == null);
+}
+
+test "s-once-cli: hook deny without resolvable store still blocks without crash" {
+    // When XDG/home cannot resolve a data dir, deny must still work; no pending required.
+    // Pin both env vars empty-ish by pointing at a path we then do not require writes for —
+    // use isolate then unset XDG_DATA_HOME and HOME so path resolvers return null.
+    const prev_data = try sOnceCliHookDupEnvZ("XDG_DATA_HOME");
+    defer sOnceCliHookRestoreEnv("XDG_DATA_HOME", prev_data);
+    const prev_home = try sOnceCliHookDupEnvZ("HOME");
+    defer sOnceCliHookRestoreEnv("HOME", prev_home);
+    _ = unsetenv("XDG_DATA_HOME");
+    _ = unsetenv("HOME");
+
+    const allocator = std.testing.allocator;
+    var result = try sOnceCliHookRealZigDeny(allocator, "git reset --hard", "/tmp/orca-hook-nostore", "/tmp/orca-hook-nostore");
+    defer result.deinit(allocator);
+    try std.testing.expectEqual(PluginDecision.block, result.decision);
+    // Must not panic; placeholder `<code>` residual is acceptable when store is off.
+}
+
+test "s-once-cli: hook deny → pending code → redeem → evaluate allows once → second denies" {
+    // Full acceptance chain at the hook + CLI + engine seams.
+    // Code comes from pending store (operator channel), never agent-visible blob (M-1).
+    var xdg = try sOnceCliHookIsolateXdg();
+    defer xdg.deinit();
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(std.testing.io, ".git");
+    const ws_z = try ws_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(ws_z);
+    const ws_root = try std.testing.allocator.dupe(u8, ws_z);
+    defer std.testing.allocator.free(ws_root);
+
+    const allocator = std.testing.allocator;
+    const cmd_text = "git reset --hard";
+    const now = "2026-07-25T12:00:00Z";
+
+    var deny = try sOnceCliHookRealZigDeny(allocator, cmd_text, ws_root, ws_root);
+    defer deny.deinit(allocator);
+    try std.testing.expectEqual(PluginDecision.block, deny.decision);
+
+    const blob = try sOnceCliHookConcatRemediation(allocator, deny);
+    defer allocator.free(blob);
+    try std.testing.expect(sOnceCliHookExtractShortCode(blob) == null);
+
+    const code = try sOnceCliHookPendingCodeForCommand(allocator, xdg.data_root, cmd_text, now);
+    defer allocator.free(code);
+    try std.testing.expectEqual(@as(usize, 6), code.len);
+    try std.testing.expect(std.mem.indexOf(u8, blob, code) == null);
+
+    // Redeem via allow-once CLI (operator-bound env; same XDG data dir).
+    const allow_once_cli = @import("allow_once.zig");
+    const prev_op = try sOnceCliHookDupEnvZ("ORCA_OPERATOR");
+    defer sOnceCliHookRestoreEnv("ORCA_OPERATOR", prev_op);
+    try std.testing.expectEqual(@as(c_int, 0), setenv("ORCA_OPERATOR", "1", 1));
+
+    var stdout_alloc: std.Io.Writer.Allocating = .init(allocator);
+    defer stdout_alloc.deinit();
+    var stderr_alloc: std.Io.Writer.Allocating = .init(allocator);
+    defer stderr_alloc.deinit();
+    const redeem_code = try allow_once_cli.command(
+        std.testing.io,
+        &.{ code, "-y" },
+        &stdout_alloc.writer,
+        &stderr_alloc.writer,
+    );
+    try std.testing.expectEqual(exit_codes.success, redeem_code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_alloc.written(), "not implemented") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_alloc.written(), "not implemented") == null);
+
+    const once_path = try sOnceCliHookJoin(&.{ xdg.data_root, "orca", shell_engine.allow_once.allow_once_file_name });
+    defer allocator.free(once_path);
+
+    {
+        var first = try shell_engine.evaluateCommand(allocator, cmd_text, .{
+            .cwd = ws_root,
+            .allow_once_path = once_path,
+            .io = std.testing.io,
+            .now_iso = now,
+            .consume_allow_once = true,
+        });
+        defer first.deinit(allocator);
+        try std.testing.expect(first.decision == .allow);
+        try std.testing.expectEqualStrings("allow_once", first.exception_source.?);
+    }
+    {
+        var second = try shell_engine.evaluateCommand(allocator, cmd_text, .{
+            .cwd = ws_root,
+            .allow_once_path = once_path,
+            .io = std.testing.io,
+            .now_iso = now,
+            .consume_allow_once = true,
+        });
+        defer second.deinit(allocator);
+        try std.testing.expect(second.decision == .deny);
+        try std.testing.expect(second.exception_source == null);
+    }
 }

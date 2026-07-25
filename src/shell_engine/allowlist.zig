@@ -35,3 +35,36 @@ test "allowlist exact and prefix" {
     try std.testing.expect(layered.allows("npm run test"));
     try std.testing.expect(!layered.allows("git reset --hard"));
 }
+
+// s-engine: preserve policy permit Layered + Entry.prefix (permanent path is separate).
+// Permanent pack-exception store lives in allowlist_store.zig and must not replace this API.
+test "s-engine: policy Layered Entry.prefix preserved for permit path" {
+    // Exact entry: full command only.
+    const exact: Layered = .{
+        .entries = &.{
+            .{ .pattern = "git reset --hard HEAD", .prefix = false },
+        },
+    };
+    try std.testing.expect(exact.allows("git reset --hard HEAD"));
+    try std.testing.expect(exact.allows("  git reset --hard HEAD  "));
+    try std.testing.expect(!exact.allows("git reset --hard HEAD~1"));
+    try std.testing.expect(!exact.allows("git reset --hard HEAD; rm -rf /"));
+
+    // Prefix entry (trailing-glob style used by policy commands.allow): startsWith.
+    const prefix: Layered = .{
+        .entries = &.{
+            .{ .pattern = "npm run ", .prefix = true },
+        },
+    };
+    try std.testing.expect(prefix.allows("npm run test"));
+    try std.testing.expect(prefix.allows("npm run build"));
+    try std.testing.expect(!prefix.allows("npm run")); // no trailing space match on shorter
+    try std.testing.expect(!prefix.allows("npm install"));
+
+    // Entry.prefix field remains part of the public policy matcher surface.
+    const e = Entry{ .pattern = "cargo ", .prefix = true };
+    try std.testing.expect(e.prefix);
+    const layered: Layered = .{ .entries = &.{e} };
+    try std.testing.expect(layered.allows("cargo test"));
+    try std.testing.expect(!layered.allows("cargo"));
+}

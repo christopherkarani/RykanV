@@ -218,6 +218,8 @@ pub const commands =
             .summary = "Scan files for destructive commands",
             .usage = "ryk scan [--staged|--paths <path>...] [options]",
             .category = .core_workflow,
+            // Unavailable daemon-backed ports stay hidden (not product surface).
+            .hidden = true,
             .examples = &.{
                 "ryk scan --staged",
                 "ryk scan --paths scripts/deploy.sh --format json",
@@ -232,6 +234,7 @@ pub const commands =
             .summary = "Review protected command history",
             .usage = "ryk history [stats|check|analyze|interactive|export|prune|backup] [options] [--days N] [--strict] [--live] [--json|--robot|--format <value>]",
             .category = .diagnostics,
+            .hidden = true, // use `replay` for history-like review
             .examples = &.{
                 "ryk history stats --days 7",
                 "ryk history check --strict",
@@ -249,6 +252,7 @@ pub const commands =
             .summary = "Run the Rust pre-commit safety scan",
             .usage = "ryk precommit [options]",
             .category = .core_workflow,
+            .hidden = true,
             .examples = &.{
                 "ryk precommit",
                 "ryk precommit --format json",
@@ -260,17 +264,21 @@ pub const commands =
         },
         .{
             .name = "explain",
-            .summary = "Explain why a shell command is blocked or allowed (Zig shell_engine)",
-            .usage = "ryk explain <command> [options]",
-            .category = .core_workflow,
+            .summary = "Explain why a shell command is blocked or allowed",
+            .usage = "ryk explain [--format json] [--] <command>",
+            .category = .getting_started,
             .public = true,
             .examples = &.{
+                "ryk explain \"rm -rf /\"",
                 "ryk explain \"git reset --hard\"",
-                "ryk explain \"rm -rf /tmp/x\" --format json",
+                "ryk explain --format json \"rm -rf /tmp/x\"",
             },
             .details = &.{
-                "Traces pack_id / pattern_name for shell commands via the in-process Zig shell_engine.",
-                "This is different from 'ryk policy explain', which explains Zig .orca/policy.yaml rules for files/network/commands.",
+                "Runs the in-process Zig shell_engine and prints a decision tree: decision, match",
+                "(rule/pack/pattern/regex/span), pipeline steps, and safer-workflow suggestions.",
+                "Nothing is executed — this is a dry-run of the same authority hooks use.",
+                "Use --format json for machine-readable output (schema_version 2 includes span and tips).",
+                "Different from 'ryk policy explain', which explains .orca/policy.yaml file/network/tool rules.",
             },
         },
         .{
@@ -278,6 +286,7 @@ pub const commands =
             .summary = "Classify a shell command's risk without blocking",
             .usage = "ryk classify <command> [options]",
             .category = .diagnostics,
+            .hidden = true,
             .examples = &.{
                 "ryk classify \"git status\"",
                 "ryk classify \"rm -rf /\" --format json",
@@ -289,42 +298,51 @@ pub const commands =
         },
         .{
             .name = "allowlist",
-            .summary = "Manage allowlist entries for pack rules",
-            .usage = "ryk allowlist <add|list|remove|validate|prune|...> [options]",
+            .summary = "Manage permanent pack-exception allowlist entries",
+            .usage = "ryk allowlist <add|add-command|list|remove|validate|prune> [options]",
             .category = .core_workflow,
+            // s-allowlist-cli: live Zig permanent TOML store (no daemon).
+            .hidden = false,
             .examples = &.{
                 "ryk allowlist list",
                 "ryk allowlist add core.git:reset-hard -r \"intentional reset\"",
+                "ryk allowlist add-command \"git status\" -r \"CI bootstrap\"",
                 "ryk allow \"core.git:reset-hard\" -r \"intentional reset\"",
             },
             .details = &.{
-                "Proxies to the Rust daemon allowlist manager.",
-                "Shortcuts: 'orca allow <rule>' and 'orca unallow <rule>' also proxy.",
+                "Permanent pack exceptions (rule id or exact command) with required reason.",
+                "Project file: .orca/allowlist.toml · user: $XDG_CONFIG_HOME/orca/allowlist.toml.",
+                "kind=command short-circuits before packs; kind=rule skips that rule only (E8).",
+                "Shortcuts: 'ryk allow <rule>' and 'ryk unallow <key>'.",
                 "Use 'ryk allowlist --help' for actions and options.",
             },
         },
         .{
             .name = "allow",
-            .summary = "Add a rule to the allowlist (shortcut)",
+            .summary = "Add a rule to the permanent allowlist (shortcut)",
             .usage = "ryk allow <rule-id> -r <reason> [options]",
             .category = .core_workflow,
+            // s-allowlist-cli: live Zig permanent TOML store (no daemon).
+            .hidden = false,
             .examples = &.{
                 "ryk allow core.git:reset-hard -r \"recovering local branch\"",
             },
             .details = &.{
-                "Shortcut for 'ryk allowlist add'. Proxies to the Rust daemon.",
+                "Shortcut for 'ryk allowlist add'. Writes project or user allowlist.toml.",
             },
         },
         .{
             .name = "unallow",
-            .summary = "Remove a rule from the allowlist (shortcut)",
-            .usage = "ryk unallow <rule-id> [options]",
+            .summary = "Remove a permanent allowlist entry (shortcut)",
+            .usage = "ryk unallow <rule-id|exact-command> [options]",
             .category = .core_workflow,
+            // s-allowlist-cli: live Zig permanent TOML store (no daemon).
+            .hidden = false,
             .examples = &.{
                 "ryk unallow core.git:reset-hard",
             },
             .details = &.{
-                "Shortcut for 'ryk allowlist remove'. Proxies to the Rust daemon.",
+                "Shortcut for 'ryk allowlist remove'. Key is rule id or exact command string.",
             },
         },
         .{
@@ -332,13 +350,16 @@ pub const commands =
             .summary = "Allow a blocked command once via short code",
             .usage = "ryk allow-once <code|list|clear|revoke> [options]",
             .category = .core_workflow,
+            // s-once-cli: live Zig pending/allow-once JSONL store (no daemon).
+            .hidden = false,
             .examples = &.{
                 "ryk allow-once list",
-                "ryk allow-once ABC123",
+                "ryk allow-once 510755",
+                "ryk allow-once clear",
             },
             .details = &.{
-                "Proxies to the Rust daemon pending-exception / allow-once store.",
-                "Use 'ryk allow-once --help' for apply and management subcommands.",
+                "Redeems a pending short code from a deny panel into a single-use grant.",
+                "Subcommands: list, clear, revoke. Use 'ryk allow-once --help' for options.",
             },
         },
         .{
@@ -346,6 +367,7 @@ pub const commands =
             .summary = "Suggest allowlist entries from protected history",
             .usage = "ryk suggest-allowlist [options]",
             .category = .diagnostics,
+            .hidden = true,
             .examples = &.{
                 "ryk suggest-allowlist",
                 "ryk suggest-allowlist --confidence high",
@@ -366,6 +388,7 @@ pub const commands =
             .summary = "Dry-run policy / packs against a command file or history dump",
             .usage = "ryk simulate [--file <path>] [options]",
             .category = .diagnostics,
+            .hidden = true,
             .examples = &.{
                 "ryk simulate --file commands.txt",
                 "ryk simulate -f denials.jsonl --format pretty",
@@ -383,6 +406,7 @@ pub const commands =
             .summary = "Issue a short-lived permit for git rebase recovery",
             .usage = "ryk rebase-recover [--ttl <seconds>]",
             .category = .core_workflow,
+            .hidden = true,
             .examples = &.{
                 "ryk rebase-recover",
                 "ryk rebase-recover --ttl 120",
@@ -397,6 +421,7 @@ pub const commands =
             .summary = "Show ryk daemon configuration",
             .usage = "ryk config",
             .category = .diagnostics,
+            .hidden = true,
             .examples = &.{
                 "ryk config",
             },
@@ -409,12 +434,14 @@ pub const commands =
             .name = "packs",
             .summary = "Browse, inspect, and enable safety packs",
             .usage =
-            \\orca packs [--filter <term>] [--enabled|--installed] [--page N] [--page-size N]
-            \\  orca packs show <id> [--no-patterns] [--verbose] [--format json]
-            \\  orca packs enable <id> [id…]
-            \\  orca packs disable <id> [id…]
+            \\ryk packs [--filter <term>] [--enabled|--installed] [--page N] [--page-size N] [--json]
+            \\  ryk packs show <id> [--no-patterns] [--verbose] [--json]
+            \\  ryk packs enable <id> [id…]
+            \\  ryk packs disable <id> [id…]
             ,
             .category = .diagnostics,
+            // Slice 4 / s-packs: live oracle registry + pack_config (no daemon).
+            .hidden = false,
             .examples = &.{
                 "ryk packs",
                 "ryk packs --enabled",
@@ -422,17 +449,17 @@ pub const commands =
                 "ryk packs enable containers.docker database.postgresql",
                 "ryk packs disable containers.docker",
                 "ryk packs --filter database --page-size 10",
-                "ryk packs --format json",
+                "ryk packs --json",
             },
-            .additional_completion_flags = &.{ "--robot", "--no-patterns", "--verbose" },
+            .additional_completion_flags = &.{ "--json", "--no-patterns", "--verbose", "--enabled", "--filter" },
             .details = &.{
-                "Safety packs are Rust shell-rule sets evaluated by the daemon (not policy presets).",
+                "Safety packs are Zig shell_engine oracle rule sets (embedded registry; not policy presets).",
                 "Policy presets use `ryk policy packs` / `ryk policy apply-pack` instead.",
                 "List is sorted and paginated locally; --installed is an alias for --enabled.",
-                "Baseline packs (core.*, system.disk) are always on; opt-in packs are enabled via config or `orca packs enable`.",
+                "Baseline packs (core.*, system.disk) are on by default; list them in `disabled` to opt out (engine honors pack_config).",
                 "Enable/disable writes project `.orca.toml` in a git repo, otherwise user config (`$XDG_CONFIG_HOME/orca/config.toml` or `~/.config/orca/config.toml`).",
-                "`orca packs show <id>` prefers daemon `pack info --json` (human view hides raw regex unless --verbose).",
-                "Use --format json or --robot on the list path for byte-stable daemon output.",
+                "`ryk packs show <id>` reads the oracle registry (human view hides raw regex unless --verbose).",
+                "Use --json or --format json for a stable machine schema (schema_version, packs, counts).",
             },
         },
         .{ .name = "policy", .summary = "Validate, explain, and apply policies", .usage = "ryk policy <check|explain|packs|apply-pack> [...]", .category = .core_workflow, .additional_completion_flags = &.{ "--policy", "--method", "--force", "--preset" }, .examples = &.{
@@ -493,10 +520,6 @@ pub const commands =
         } },
         .{ .name = "ci", .summary = "Run local CI readiness checks", .usage = "ryk ci check [--format markdown|json] [--github-summary <path>]", .category = .advanced, .details = &.{
             "Validates .orca/policy.yaml, rejects dangerous obvious defaults, runs a focused CI-safe redteam fixture, and emits GitHub Actions-friendly output.",
-        } },
-        .{ .name = "demo", .summary = "Create safe local demo evidence", .usage = "ryk demo blocked-action", .category = .getting_started, .details = &.{
-            "Creates a harmless local session showing a destructive command denied by ryk.",
-            "The demo writes replay/report artifacts but does not execute the destructive command.",
         } },
         .{ .name = "shutdown", .summary = "Stop the background ryk daemon", .usage = "ryk shutdown [--daemon]", .category = .advanced, .examples = &.{
             "ryk shutdown",
@@ -772,8 +795,9 @@ pub fn writeWithMode(io: std.Io, writer: anytype, mode: WriteMode) !void {
     }
     try writer.writeAll("\n");
     if (mode == .all) {
+        // Shell deny remediation via explain; permanent allowlist / allow-once are live CLI verbs.
         try writer.writeAll("  ");
-        try tui.theme.paint(io, writer, .muted, "Shell deny remediation: ryk explain / allow-once / allowlist (daemon). Policy files: ryk policy explain.");
+        try tui.theme.paint(io, writer, .muted, "Shell deny remediation: ryk explain \"…\". Policy files: ryk policy explain.");
         try writer.writeAll("\n\n");
     }
 
@@ -1071,13 +1095,23 @@ test "help --all lists full advanced command surface" {
     try std.testing.expect(helpListsPeerCommand(all, "run"));
     try std.testing.expect(helpListsPeerCommand(all, "doctor"));
     try std.testing.expect(helpListsPeerCommand(all, "policy"));
-    try std.testing.expect(helpListsPeerCommand(all, "history"));
     try std.testing.expect(helpListsPeerCommand(all, "init"));
     try std.testing.expect(helpListsPeerCommand(all, "mcp"));
     try std.testing.expect(helpListsPeerCommand(all, "env"));
+    // Live Zig daemon-stop remains on the advanced surface.
+    try std.testing.expect(helpListsPeerCommand(all, "shutdown"));
     // Hard-removed peers: not listed as live usage on help --all
     try std.testing.expect(!helpListsPeerCommand(all, "quickstart"));
     try std.testing.expect(!helpListsPeerCommand(all, "setup"));
+    // Unavailable ports are not product surface.
+    try std.testing.expect(!helpListsPeerCommand(all, "history"));
+    try std.testing.expect(!helpListsPeerCommand(all, "scan"));
+    // Live P0: packs, allow-once, permanent allowlist writers.
+    try std.testing.expect(helpListsPeerCommand(all, "packs"));
+    try std.testing.expect(helpListsPeerCommand(all, "allow-once"));
+    try std.testing.expect(helpListsPeerCommand(all, "allowlist"));
+    try std.testing.expect(helpListsPeerCommand(all, "allow"));
+    try std.testing.expect(helpListsPeerCommand(all, "unallow"));
 }
 
 test "help setup and quickstart print removal notice pointing at start" {
@@ -1095,4 +1129,132 @@ test "help setup and quickstart print removal notice pointing at start" {
     try std.testing.expect(std.mem.indexOf(u8, qs_out, "removed") != null);
     try std.testing.expect(std.mem.indexOf(u8, qs_out, "ryk start") != null);
     try std.testing.expect(std.mem.indexOf(u8, qs_out, "ryk quickstart --") == null);
+}
+
+// ---------------------------------------------------------------------------
+// Slice 1 (P0 honesty) — public help set tells the truth about live verbs.
+// Hide-list = unavailable daemon ports. Live P0: packs, allow-once, allowlist/
+// allow/unallow, shutdown.
+// ---------------------------------------------------------------------------
+
+/// Unavailable daemon-stub ports (plan hide-list). Not product surface.
+const p0_honesty_hide_list = [_][]const u8{
+    "scan",
+    "precommit",
+    "simulate",
+    "classify",
+    "suggest-allowlist",
+    "history",
+    "rebase-recover",
+    "config",
+};
+
+/// Formerly unfinished P0 verbs — now all live (empty sentinel for omit tests).
+const p0_honesty_unfinished = [_][]const u8{};
+
+test "P0 honesty: hide-list verbs are marked hidden; live P0 + shutdown are not" {
+    for (p0_honesty_hide_list) |name| {
+        const info = findCommand(name) orelse {
+            std.debug.print("missing help entry for hide-list command: {s}\n", .{name});
+            try std.testing.expect(false);
+            return;
+        };
+        try std.testing.expect(info.hidden);
+    }
+
+    const shutdown_info = findCommand("shutdown") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!shutdown_info.hidden);
+    const packs_info = findCommand("packs") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!packs_info.hidden);
+    const allow_once_info = findCommand("allow-once") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!allow_once_info.hidden);
+    const allowlist_info = findCommand("allowlist") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!allowlist_info.hidden);
+    const allow_info = findCommand("allow") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!allow_info.hidden);
+    const unallow_info = findCommand("unallow") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!unallow_info.hidden);
+}
+
+/// True when root help text teaches unfinished/hide-list verbs outside peer rows
+/// (e.g. Common-tasks remediation). Peer-column omit alone is not enough: production
+/// `writeWithMode(.all)` historically hardcoded `allow-once` / `allowlist (daemon)`.
+/// Do **not** ban bare substring `allowlist` — live copy may say `--network allowlist`.
+fn helpAdvertisesUnavailableVerb(text: []const u8, name: []const u8) bool {
+    // Exact unfinished verb that must never appear once hidden.
+    if (std.mem.eql(u8, name, "allow-once")) {
+        return std.mem.indexOf(u8, text, "allow-once") != null;
+    }
+    if (std.mem.eql(u8, name, "allowlist")) {
+        // Command teaching / remediation only — not `--network allowlist`.
+        if (std.mem.indexOf(u8, text, "ryk allowlist") != null) return true;
+        if (std.mem.indexOf(u8, text, "allowlist (daemon)") != null) return true;
+        return false;
+    }
+    if (std.mem.eql(u8, name, "allow")) {
+        // Token boundary: "ryk allow" must not match "ryk allowlist" / "ryk allow-once".
+        var search: usize = 0;
+        while (std.mem.indexOfPos(u8, text, search, "ryk allow")) |idx| {
+            const after = idx + "ryk allow".len;
+            if (after >= text.len or (!std.ascii.isAlphanumeric(text[after]) and text[after] != '-' and text[after] != '_')) {
+                return true;
+            }
+            search = idx + 1;
+        }
+        return false;
+    }
+    // Other hide-list / unfinished: "ryk <verb>" teaching form.
+    var needle_buf: [80]u8 = undefined;
+    const ryk_cmd = std.fmt.bufPrint(&needle_buf, "ryk {s}", .{name}) catch return true;
+    return std.mem.indexOf(u8, text, ryk_cmd) != null;
+}
+
+test "P0 honesty: default help and help --all omit hide-list and unfinished P0; still list shutdown" {
+    var buf: [32768]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try write(std.testing.io, &writer);
+    const top = writer.buffered();
+
+    for (p0_honesty_hide_list) |name| {
+        try std.testing.expect(!helpListsPeerCommand(top, name));
+        try std.testing.expect(!helpAdvertisesUnavailableVerb(top, name));
+    }
+    for (p0_honesty_unfinished) |name| {
+        try std.testing.expect(!helpListsPeerCommand(top, name));
+        try std.testing.expect(!helpAdvertisesUnavailableVerb(top, name));
+    }
+    // Default Safe Launch help never listed shutdown / advanced peers (public=false).
+    try std.testing.expect(!helpListsPeerCommand(top, "shutdown"));
+    try std.testing.expect(!helpListsPeerCommand(top, "packs"));
+    try std.testing.expect(!helpListsPeerCommand(top, "allow-once"));
+
+    writer = .fixed(&buf);
+    try writeAll(std.testing.io, &writer);
+    const all = writer.buffered();
+
+    for (p0_honesty_hide_list) |name| {
+        try std.testing.expect(!helpListsPeerCommand(all, name));
+        try std.testing.expect(!helpAdvertisesUnavailableVerb(all, name));
+    }
+    for (p0_honesty_unfinished) |name| {
+        try std.testing.expect(!helpListsPeerCommand(all, name));
+        try std.testing.expect(!helpAdvertisesUnavailableVerb(all, name));
+    }
+    try std.testing.expect(helpListsPeerCommand(all, "shutdown"));
+    try std.testing.expect(helpListsPeerCommand(all, "packs"));
+    try std.testing.expect(helpListsPeerCommand(all, "allow-once"));
+
+    // Explicit full-text: remediation / teaching copy must not name unfinished P0 verbs.
+    try std.testing.expect(std.mem.indexOf(u8, all, "allowlist (daemon)") == null);
+    try std.testing.expect(std.mem.indexOf(u8, all, "ryk allowlist") == null);
+    try std.testing.expect(std.mem.indexOf(u8, all, "ryk unallow") == null);
+    // "ryk allow " teaches the allow shortcut; does not match allowlist / allow-once.
+    try std.testing.expect(std.mem.indexOf(u8, all, "ryk allow ") == null);
+    // Live advanced verbs appear as peer columns on --all (name only; usage is per-command).
+    // helpListsPeerCommand already asserted packs / allow-once above.
+
+    // Live product verbs remain discoverable on the full surface.
+    try std.testing.expect(helpListsPeerCommand(all, "test"));
+    try std.testing.expect(helpListsPeerCommand(all, "explain"));
+    try std.testing.expect(helpListsPeerCommand(all, "start"));
 }

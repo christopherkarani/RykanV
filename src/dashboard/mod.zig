@@ -88,8 +88,6 @@ pub fn writeStatusJson(io: std.Io, allocator: std.mem.Allocator, writer: anytype
     try writer.writeByte(',');
     try writeQuickAction(writer, "ci-check", "orca ci check --format markdown");
     try writer.writeByte(',');
-    try writeQuickAction(writer, "demo-blocked-action", "orca demo blocked-action");
-    try writer.writeByte(',');
     try writeQuickAction(writer, "suggest-allowlist", "orca suggest-allowlist --confidence high");
     try writer.writeByte(',');
     try writeQuickAction(writer, "allowlist-list", "ryk allowlist list");

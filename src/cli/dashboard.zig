@@ -9,7 +9,7 @@ const report_cmd = @import("report.zig");
 const init = @import("init.zig");
 const license_cmd = @import("license.zig");
 const ci_cmd = @import("ci.zig");
-const demo_cmd = @import("demo.zig");
+
 const plugin = @import("plugin.zig");
 const policy = @import("policy.zig");
 const replay = @import("replay.zig");
@@ -63,7 +63,6 @@ const DashboardAction = enum {
     replay_denied,
     report_last,
     ci_check,
-    demo_blocked_action,
     suggest_allowlist,
     allowlist_list,
     license_status,
@@ -83,7 +82,6 @@ const DashboardAction = enum {
             .replay_denied => "replay-denied",
             .report_last => "report-last",
             .ci_check => "ci-check",
-            .demo_blocked_action => "demo-blocked-action",
             .suggest_allowlist => "suggest-allowlist",
             .allowlist_list => "allowlist-list",
             .license_status => "license-status",
@@ -118,7 +116,6 @@ const DashboardAction = enum {
             .replay_denied,
             .report_last,
             .ci_check,
-            .demo_blocked_action,
             => true,
             else => false,
         };
@@ -853,7 +850,6 @@ fn runAllowedAction(io: std.Io, allocator: std.mem.Allocator, action: []const u8
         .replay_denied => replay.command(io, &.{ "--session", "last", "--only", "denied", "--verify" }, stdout, stderr),
         .report_last => report_cmd.command(io, &.{ "--session", "last", "--format", "markdown" }, stdout, stderr),
         .ci_check => ci_cmd.command(io, &.{ "check", "--format", "markdown" }, stdout, stderr),
-        .demo_blocked_action => demo_cmd.command(io, &.{"blocked-action"}, stdout, stderr),
         .license_status => license_cmd.command(io, &.{"status"}, stdout, stderr),
         // Handled above (daemon / openDir / absolute path).
         .suggest_allowlist, .allowlist_list, .init_generic_agent, .policy_check => unreachable,
@@ -1123,7 +1119,7 @@ test "machine dashboard actions exclude workspace-scoped commands" {
     try std.testing.expect(actionAllowedWithoutWorkspace("hermes-doctor"));
     try std.testing.expect(!actionAllowedWithoutWorkspace("replay-last"));
     try std.testing.expect(!actionAllowedWithoutWorkspace("report-last"));
-    try std.testing.expect(!actionAllowedWithoutWorkspace("demo-blocked-action"));
+    try std.testing.expect(!actionAllowedWithoutWorkspace("ci-check"));
     try std.testing.expectError(error.WorkspaceRequired, runAllowedAction(std.testing.io, std.testing.allocator, "replay-last", null));
 }
 
@@ -1241,7 +1237,7 @@ test "dashboard action workspace cwd classification matches remediation surface"
     try std.testing.expect(!actionNeedsWorkspaceCwd("suggest-allowlist"));
     try std.testing.expect(actionNeedsWorkspaceCwd("replay-last"));
     try std.testing.expect(actionNeedsWorkspaceCwd("ci-check"));
-    try std.testing.expect(actionNeedsWorkspaceCwd("demo-blocked-action"));
+    try std.testing.expect(actionNeedsWorkspaceCwd("ci-check"));
 }
 
 test "workspace dashboard doctor inspects the selected workspace" {
