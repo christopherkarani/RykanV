@@ -417,10 +417,13 @@ fn runWithCwdUsing(
         return allow_once.command(io, argv[1..], stdout, stderr);
     }
 
+    // Slice 4 / s-packs: live packs CLI (oracle registry + pack_config; no daemon).
     if (std.mem.eql(u8, command, "packs")) {
-        return rust_legacy_stub.unavailable("packs", stderr);
+        return packs.command(io, argv[1..], stdout, stderr);
     }
 
+    // Slice 1 honesty: hide-list verbs fail short (usage), not a daemon essay.
+    // Remaining unfinished P0: allowlist / allow / unallow (+ hide-list ports).
     if (std.mem.eql(u8, command, "history")) {
         return rust_legacy_stub.unavailable("history", stderr);
     }
@@ -1435,16 +1438,18 @@ test "public dispatch preserves MCP protocol bytes; Zig-native test/explain no l
     const cases = [_]Case{
         // Zig shell_engine: allow git status → exit 0, JSON/text decision output.
         .{ .argv = &.{ "test", "git status" }, .expected_substr = "allow", .code = 0 },
-        // Slice 1 honesty: hidden dead / unfinished verbs fail short (usage), not daemon essay.
-        .{ .argv = &.{ "packs", "--robot" }, .expected_substr = "not available", .code = exit_codes.usage },
+        // s-packs: live oracle registry JSON (no daemon; --robot → machine schema).
+        .{ .argv = &.{ "packs", "--robot" }, .expected_substr = "schema_version", .code = 0 },
+        // Slice 1 honesty: hide-list verbs fail short (usage), not daemon essay.
         .{ .argv = &.{ "history", "export" }, .expected_substr = "not available", .code = exit_codes.usage },
         .{ .argv = &.{ "mcp", "proxy", "--command", "server" }, .expected_substr = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"tools\":[]}}", .code = 10 },
     };
     var env_map = try std.process.Environ.createMap(std.process.Environ.empty, std.testing.allocator);
     defer env_map.deinit();
     for (cases) |case| {
-        var stdout_buf: [1024]u8 = undefined;
-        var stderr_buf: [1024]u8 = undefined;
+        // packs --robot emits full registry JSON (well over 1KiB).
+        var stdout_buf: [256 * 1024]u8 = undefined;
+        var stderr_buf: [4096]u8 = undefined;
         var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
         var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
         const code = try runWithCwdUsing(fakeRawDaemon, fakeRawPacks, fakeRawHistory, fakeRawMcp, std.testing.io, &env_map, std.Io.Dir.cwd(), case.argv, &stdout_writer, &stderr_writer);
@@ -1504,29 +1509,32 @@ test "P0 honesty: hide-list command yields short not-available and usage exit" {
     try expectShortUnavailable("scan", code, stdout_writer.buffered(), stderr_writer.buffered(), true);
 }
 
-test "P0 honesty: unfinished P0 verb packs is not available with usage exit" {
-    // Early packs branch (distinct from proxy / local-mutator). Bare packs is not
-    // raw-passthrough, so brand banner may hit stdout — assert stderr honesty only.
-    var stdout_buf: [2048]u8 = undefined;
+test "P0 honesty: live packs dispatches (not short not-available)" {
+    // s-packs: bare packs lists registry — must not hit honesty stub.
+    var stdout_buf: [65536]u8 = undefined;
     var stderr_buf: [1024]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
     const code = try testRun(&.{"packs"}, &stdout_writer, &stderr_writer);
-    try expectShortUnavailable("packs", code, stdout_writer.buffered(), stderr_writer.buffered(), false);
+    try std.testing.expectEqual(exit_codes.success, code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "not available") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "core.git") != null or
+        std.mem.indexOf(u8, stdout_writer.buffered(), "Safety packs") != null or
+        std.mem.indexOf(u8, stdout_writer.buffered(), "packs") != null);
 }
 
-test "P0 honesty: unfinished local-mutator allow-once is short not-available" {
-    // isDaemonLocalMutatingTopLevel branch — must not remain on long essay after
-    // special-casing only scan/packs/history.
-    var stdout_buf: [512]u8 = undefined;
-    var stderr_buf: [1024]u8 = undefined;
+test "P0 honesty: live allow-once dispatches usage (not short not-available)" {
+    // s-once-cli: bare allow-once is live CLI usage, not honesty stub / local-mutator essay.
+    var stdout_buf: [2048]u8 = undefined;
+    var stderr_buf: [2048]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
     const code = try testRun(&.{"allow-once"}, &stdout_writer, &stderr_writer);
-    // Local mutators are raw-passthrough → empty stdout expected.
-    try expectShortUnavailable("allow-once", code, stdout_writer.buffered(), stderr_writer.buffered(), true);
+    try std.testing.expectEqual(exit_codes.usage, code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "not available") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "Usage: ryk allow-once") != null);
 }
 
 test "P0 honesty: unfinished local-mutator allow is short not-available" {

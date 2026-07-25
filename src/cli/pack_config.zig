@@ -1086,3 +1086,101 @@ test "enablePacks rejects invalid pack id characters" {
         &.{"bad;id"},
     ));
 }
+
+// ── s-packs locked contract tests (Slice 4) ─────────────────────────────────
+// Disable/enable semantics stay on shipped pack_config — no invented core hard-fail.
+
+test "s-packs: disablePacks allows core.git without hard-fail and lists in disabled" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root_z = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root_z);
+    const root = try std.testing.allocator.dupe(u8, root_z);
+    defer std.testing.allocator.free(root);
+    try tmp.dir.createDirPath(std.testing.io, ".git");
+
+    const seed =
+        \\[packs]
+        \\enabled = ["containers.docker"]
+        \\disabled = []
+        \\
+    ;
+    {
+        const f = try tmp.dir.createFile(std.testing.io, ".orca.toml", .{});
+        defer f.close(std.testing.io);
+        try f.writeStreamingAll(std.testing.io, seed);
+    }
+
+    // Plan: baseline / core.* MAY be listed in disabled; engine packIsActive honors it.
+    // Do NOT invent hard-fail "cannot disable core.*".
+    var result = try disablePacks(std.testing.io, std.testing.allocator, root, &.{"core.git"});
+    defer result.deinit(std.testing.allocator);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqual(@as(usize, 1), result.disabled_added.len);
+    try std.testing.expectEqualStrings("core.git", result.disabled_added[0]);
+    // Baseline note is OK (informational); hard-fail message is not.
+    try std.testing.expect(std.mem.indexOf(u8, result.message, "cannot disable") == null);
+
+    const config = try tmp.dir.readFileAlloc(std.testing.io, ".orca.toml", std.testing.allocator, .limited(8192));
+    defer std.testing.allocator.free(config);
+    const disabled = packsArraySlice(config, "disabled") orelse "";
+    try std.testing.expect(std.mem.indexOf(u8, disabled, "core.git") != null);
+
+    var loaded = try loadPackIdsForWorkspace(std.testing.io, std.testing.allocator, root);
+    defer loaded.deinit(std.testing.allocator);
+    var found = false;
+    for (loaded.disabled) |id| {
+        if (std.mem.eql(u8, id, "core.git")) found = true;
+    }
+    try std.testing.expect(found);
+}
+
+test "s-packs: enablePacks writes opt-in pack into project enabled list" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root_z = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root_z);
+    const root = try std.testing.allocator.dupe(u8, root_z);
+    defer std.testing.allocator.free(root);
+    try tmp.dir.createDirPath(std.testing.io, ".git");
+
+    var result = try enablePacks(std.testing.io, std.testing.allocator, root, &.{"containers.docker"});
+    defer result.deinit(std.testing.allocator);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqual(@as(usize, 1), result.added.len);
+    try std.testing.expectEqualStrings("containers.docker", result.added[0]);
+    try std.testing.expect(result.scope == .project);
+    try std.testing.expect(result.config_path != null);
+
+    const config = try tmp.dir.readFileAlloc(std.testing.io, ".orca.toml", std.testing.allocator, .limited(8192));
+    defer std.testing.allocator.free(config);
+    const enabled = packsArraySlice(config, "enabled") orelse "";
+    try std.testing.expect(std.mem.indexOf(u8, enabled, "containers.docker") != null);
+}
+
+test "s-packs: disablePacks removes opt-in from enabled without inventing core hard-fail path" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root_z = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root_z);
+    const root = try std.testing.allocator.dupe(u8, root_z);
+    defer std.testing.allocator.free(root);
+    try tmp.dir.createDirPath(std.testing.io, ".git");
+
+    {
+        var en = try enablePacks(std.testing.io, std.testing.allocator, root, &.{"containers.docker"});
+        defer en.deinit(std.testing.allocator);
+        try std.testing.expect(en.changed);
+    }
+
+    var result = try disablePacks(std.testing.io, std.testing.allocator, root, &.{"containers.docker"});
+    defer result.deinit(std.testing.allocator);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqual(@as(usize, 1), result.removed.len);
+    try std.testing.expectEqualStrings("containers.docker", result.removed[0]);
+
+    const config = try tmp.dir.readFileAlloc(std.testing.io, ".orca.toml", std.testing.allocator, .limited(8192));
+    defer std.testing.allocator.free(config);
+    const enabled = packsArraySlice(config, "enabled") orelse "";
+    try std.testing.expect(std.mem.indexOf(u8, enabled, "containers.docker") == null);
+}

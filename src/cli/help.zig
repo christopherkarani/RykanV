@@ -438,14 +438,14 @@ pub const commands =
             .name = "packs",
             .summary = "Browse, inspect, and enable safety packs",
             .usage =
-            \\orca packs [--filter <term>] [--enabled|--installed] [--page N] [--page-size N]
-            \\  orca packs show <id> [--no-patterns] [--verbose] [--format json]
-            \\  orca packs enable <id> [id…]
-            \\  orca packs disable <id> [id…]
+            \\ryk packs [--filter <term>] [--enabled|--installed] [--page N] [--page-size N] [--json]
+            \\  ryk packs show <id> [--no-patterns] [--verbose] [--json]
+            \\  ryk packs enable <id> [id…]
+            \\  ryk packs disable <id> [id…]
             ,
             .category = .diagnostics,
-            // Slice 1 honesty: unfinished P0 — hidden until packs CLI lands on oracle registry.
-            .hidden = true,
+            // Slice 4 / s-packs: live oracle registry + pack_config (no daemon).
+            .hidden = false,
             .examples = &.{
                 "ryk packs",
                 "ryk packs --enabled",
@@ -453,17 +453,17 @@ pub const commands =
                 "ryk packs enable containers.docker database.postgresql",
                 "ryk packs disable containers.docker",
                 "ryk packs --filter database --page-size 10",
-                "ryk packs --format json",
+                "ryk packs --json",
             },
-            .additional_completion_flags = &.{ "--robot", "--no-patterns", "--verbose" },
+            .additional_completion_flags = &.{ "--json", "--no-patterns", "--verbose", "--enabled", "--filter" },
             .details = &.{
-                "Safety packs are Rust shell-rule sets evaluated by the daemon (not policy presets).",
+                "Safety packs are Zig shell_engine oracle rule sets (embedded registry; not policy presets).",
                 "Policy presets use `ryk policy packs` / `ryk policy apply-pack` instead.",
                 "List is sorted and paginated locally; --installed is an alias for --enabled.",
-                "Baseline packs (core.*, system.disk) are always on; opt-in packs are enabled via config or `orca packs enable`.",
+                "Baseline packs (core.*, system.disk) are on by default; list them in `disabled` to opt out (engine honors pack_config).",
                 "Enable/disable writes project `.orca.toml` in a git repo, otherwise user config (`$XDG_CONFIG_HOME/orca/config.toml` or `~/.config/orca/config.toml`).",
-                "`orca packs show <id>` prefers daemon `pack info --json` (human view hides raw regex unless --verbose).",
-                "Use --format json or --robot on the list path for byte-stable daemon output.",
+                "`ryk packs show <id>` reads the oracle registry (human view hides raw regex unless --verbose).",
+                "Use --json or --format json for a stable machine schema (schema_version, packs, counts).",
             },
         },
         .{ .name = "policy", .summary = "Validate, explain, and apply policies", .usage = "ryk policy <check|explain|packs|apply-pack> [...]", .category = .core_workflow, .additional_completion_flags = &.{ "--policy", "--method", "--force", "--preset" }, .examples = &.{
@@ -1111,8 +1111,10 @@ test "help --all lists full advanced command surface" {
     // Unavailable ports / unfinished P0 verbs are not product surface.
     try std.testing.expect(!helpListsPeerCommand(all, "history"));
     try std.testing.expect(!helpListsPeerCommand(all, "scan"));
-    try std.testing.expect(!helpListsPeerCommand(all, "packs"));
     try std.testing.expect(!helpListsPeerCommand(all, "allowlist"));
+    // Live slices: packs (s-packs) + allow-once (s-once-cli) are product surface on --all.
+    try std.testing.expect(helpListsPeerCommand(all, "packs"));
+    try std.testing.expect(helpListsPeerCommand(all, "allow-once"));
 }
 
 test "help setup and quickstart print removal notice pointing at start" {
@@ -1134,8 +1136,8 @@ test "help setup and quickstart print removal notice pointing at start" {
 
 // ---------------------------------------------------------------------------
 // Slice 1 (P0 honesty) — public help set tells the truth about live verbs.
-// Hide-list = unavailable daemon ports; unfinished P0 = packs/allowlist/allow/unallow/allow-once
-// until those slices land. `shutdown` stays live Zig dispatch and must remain listed.
+// Hide-list = unavailable daemon ports; unfinished P0 = allowlist/allow/unallow
+// until those slices land. Live: packs (s-packs), allow-once (s-once-cli), shutdown.
 // ---------------------------------------------------------------------------
 
 /// Unavailable daemon-stub ports (plan hide-list). Not product surface.
@@ -1151,12 +1153,11 @@ const p0_honesty_hide_list = [_][]const u8{
 };
 
 /// P0 verbs hidden until their implementing slice is green.
+/// packs + allow-once dropped after s-packs / s-once-cli unhide.
 const p0_honesty_unfinished = [_][]const u8{
-    "packs",
     "allowlist",
     "allow",
     "unallow",
-    "allow-once",
 };
 
 test "P0 honesty: hide-list and unfinished verbs are marked hidden; shutdown is not" {
@@ -1179,6 +1180,10 @@ test "P0 honesty: hide-list and unfinished verbs are marked hidden; shutdown is 
 
     const shutdown_info = findCommand("shutdown") orelse return error.TestUnexpectedResult;
     try std.testing.expect(!shutdown_info.hidden);
+    const packs_info = findCommand("packs") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!packs_info.hidden);
+    const allow_once_info = findCommand("allow-once") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!allow_once_info.hidden);
 }
 
 /// True when root help text teaches unfinished/hide-list verbs outside peer rows
@@ -1228,9 +1233,10 @@ test "P0 honesty: default help and help --all omit hide-list and unfinished P0; 
         try std.testing.expect(!helpListsPeerCommand(top, name));
         try std.testing.expect(!helpAdvertisesUnavailableVerb(top, name));
     }
-    // Default Safe Launch help never listed shutdown as a peer; --all must.
+    // Default Safe Launch help never listed shutdown / advanced peers (public=false).
     try std.testing.expect(!helpListsPeerCommand(top, "shutdown"));
-    try std.testing.expect(std.mem.indexOf(u8, top, "allow-once") == null);
+    try std.testing.expect(!helpListsPeerCommand(top, "packs"));
+    try std.testing.expect(!helpListsPeerCommand(top, "allow-once"));
 
     writer = .fixed(&buf);
     try writeAll(std.testing.io, &writer);
@@ -1245,16 +1251,17 @@ test "P0 honesty: default help and help --all omit hide-list and unfinished P0; 
         try std.testing.expect(!helpAdvertisesUnavailableVerb(all, name));
     }
     try std.testing.expect(helpListsPeerCommand(all, "shutdown"));
+    try std.testing.expect(helpListsPeerCommand(all, "packs"));
+    try std.testing.expect(helpListsPeerCommand(all, "allow-once"));
 
     // Explicit full-text: remediation / teaching copy must not name unfinished P0 verbs.
-    // (Peer omit alone greens while footer still says "allow-once / allowlist (daemon)".)
-    try std.testing.expect(std.mem.indexOf(u8, all, "allow-once") == null);
     try std.testing.expect(std.mem.indexOf(u8, all, "allowlist (daemon)") == null);
     try std.testing.expect(std.mem.indexOf(u8, all, "ryk allowlist") == null);
-    try std.testing.expect(std.mem.indexOf(u8, all, "ryk packs") == null);
     try std.testing.expect(std.mem.indexOf(u8, all, "ryk unallow") == null);
     // "ryk allow " teaches the allow shortcut; does not match allowlist / allow-once.
     try std.testing.expect(std.mem.indexOf(u8, all, "ryk allow ") == null);
+    // Live advanced verbs appear as peer columns on --all (name only; usage is per-command).
+    // helpListsPeerCommand already asserted packs / allow-once above.
 
     // Live product verbs remain discoverable on the full surface.
     try std.testing.expect(helpListsPeerCommand(all, "test"));
