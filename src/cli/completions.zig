@@ -479,11 +479,13 @@ fn completionRegistersCommand(output: []const u8, shell: []const u8, name: []con
     return false;
 }
 
-test "P0 honesty: completions omit hide-list and unfinished P0 verbs but include shutdown" {
+test "P0 honesty: completions omit hide-list ports but include live P0 + shutdown" {
     const hidden = [_][]const u8{
         "scan",    "precommit",      "simulate",   "classify", "suggest-allowlist",
-        "history", "rebase-recover", "config",     "packs",    "allowlist",
-        "allow",   "unallow",        "allow-once",
+        "history", "rebase-recover", "config",
+    };
+    const live_p0 = [_][]const u8{
+        "packs", "allowlist", "allow", "unallow", "allow-once", "shutdown",
     };
     const shells = [_][]const u8{ "bash", "zsh", "fish", "powershell" };
     for (shells) |shell| {
@@ -496,7 +498,9 @@ test "P0 honesty: completions omit hide-list and unfinished P0 verbs but include
         try std.testing.expectEqual(exit_codes.success, code);
         const output = stdout_writer.buffered();
 
-        try std.testing.expect(completionRegistersCommand(output, shell, "shutdown"));
+        for (live_p0) |name| {
+            try std.testing.expect(completionRegistersCommand(output, shell, name));
+        }
         for (hidden) |name| {
             try std.testing.expect(!completionRegistersCommand(output, shell, name));
         }

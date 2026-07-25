@@ -53,6 +53,10 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 | `report` | Export a local safety report | `src/cli/report.zig` |
 | `license` | Manage local offline licenses | `src/cli/license.zig` |
 | `test` | Test a shell command with Zig shell_engine packs | `src/cli/shell_test.zig` |
+| `packs` | Browse / enable / disable safety packs (oracle + pack_config) | `src/cli/packs.zig` |
+| `allowlist` | Permanent pack-exception allowlist (rule id / exact command) | `src/cli/allowlist_cmd.zig` |
+| `allow` / `unallow` | Shortcuts for allowlist add / remove | `src/cli/allowlist_cmd.zig` |
+| `allow-once` | Redeem / manage one-time shell exceptions | `src/cli/allow_once.zig` |
 | `diff` / `apply` / `discard` | Staged writes | `src/cli/*.zig` |
 | `mcp` | MCP proxy and inspection | `src/cli/mcp.zig` |
 | `redteam` | Run red-team fixtures | `src/cli/redteam.zig` |
@@ -77,12 +81,11 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 
 ### Not available (hidden; typing yields short notice)
 
-Unavailable former daemon ports and unfinished P0 verbs are **not** listed by `ryk help` / `ryk help --all` or shell completions. Typing them prints a short “not available” message and exits with usage (2). **`shutdown` remains live** and is listed under Advanced.
+Unavailable former daemon ports are **not** listed by `ryk help` / `ryk help --all` or shell completions. Typing them prints a short “not available” message and exits with usage (2). **`shutdown` remains live** and is listed under Advanced. P0 shell-ops verbs (`packs`, `allowlist`, `allow`, `unallow`, `allow-once`) are live Zig surfaces.
 
 | Command | Status |
 |---------|--------|
 | `scan`, `precommit`, `simulate`, `classify`, `suggest-allowlist`, `history`, `rebase-recover`, `config` | Hide-list (unavailable daemon ports) |
-| `packs`, `allowlist`, `allow`, `unallow`, `allow-once` | Unfinished P0 — re-show when their slices land |
 
 ### Exit Codes (`src/cli/exit_codes.zig`)
 

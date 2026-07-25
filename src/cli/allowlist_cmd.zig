@@ -1,0 +1,1985 @@
+//! Permanent pack-exception allowlist CLI (product path).
+//!
+//! Live Zig writers for `ryk allowlist` / `ryk allow` / `ryk unallow` against
+//! `shell_engine.allowlist_store` TOML files. **No daemon.** Distinct from
+//! policy `allowlist.Layered` / `Entry.prefix`.
+//!
+//! --- Expected public API (implementer; tests are the contract) ---
+//!
+//! `command(io, argv, stdout, stderr) !u8`
+//!   argv is after the top-level `allowlist` verb.
+//!   Subcommands:
+//!     add <rule-id> -r|--reason <reason> [--project|--user] [--expires <iso>]
+//!     add-command <cmd> -r|--reason <reason> [--project|--user] [--expires <iso>]
+//!     list [--project|--user] [--json]
+//!     remove <rule-id|exact-command> [--project|--user]
+//!     validate [--strict]
+//!     prune [--dry-run]
+//!   Flags/help: `--help` / `-h` → usage on stdout, exit success.
+//!
+//! `commandAllow(io, argv, stdout, stderr) !u8`
+//!   Shortcut for `allowlist add` (argv after top-level `allow`).
+//!
+//! `commandUnallow(io, argv, stdout, stderr) !u8`
+//!   Shortcut for `allowlist remove` (argv after top-level `unallow`).
+//!
+//! Paths (must match product-wire loaders / plan §4.3):
+//!   project → `<workspace>/.orca/allowlist.toml` where workspace =
+//!             `supervisor.resolveWorkspaceRoot` walk-up (same as packs / hook)
+//!   user    → `$XDG_CONFIG_HOME/orca/allowlist.toml`
+//!             else `~/.config/orca/allowlist.toml`
+//! Default layer when neither `--project` nor `--user`:
+//!   project when the resolved workspace root has `.git` or `.orca/policy.yaml`,
+//!   else user. Nested cwds still write/load the repo-root project file.
+//!
+//! Contracts:
+//! - Writes real store files via `allowlist_store` (add/list/remove/validate/prune).
+//! - No `executeDaemonCli` / daemon proxy on happy path.
+//! - `validate --strict` rejects unknown rule ids (against registry / known pack:pattern).
+//! - `prune` removes expired entries from the targeted file(s); `--dry-run` reports only.
+//! - After green: help unhides `allowlist`, `allow`, `unallow` (compile-required help/mod).
+//! - Acceptance E2E: `allow` rule → evaluate allows with allowlist attribution;
+//!   compound (`git reset --hard; rm -rf /`) still denies (E8).
+//!
+//! Run once wired into monopath (`mod.zig` import + unhide/dispatch):
+//!   `./scripts/zig build test-lib -Dtest-filter="s-allowlist-cli"`
+
+const std = @import("std");
+const core = @import("orca_core").core;
+const exit_codes = @import("exit_codes.zig");
+const help = @import("help.zig");
+const shell_engine = @import("../shell_engine/mod.zig");
+
+const allowlist_store = shell_engine.allowlist_store;
+
+/// Same oracle as shell_engine.registry / packs CLI — known rule ids for validate --strict.
+const packs_json = @embedFile("../shell_engine/oracle_packs.json");
+
+const usage_text =
+    \\Usage: ryk allowlist add <rule-id> -r|--reason <reason> [--project|--user] [--expires <iso>]
+    \\       ryk allowlist add-command <cmd> -r|--reason <reason> [--project|--user] [--expires <iso>]
+    \\       ryk allowlist list [--project|--user] [--json]
+    \\       ryk allowlist remove <rule-id|exact-command> [--project|--user]
+    \\       ryk allowlist validate [--strict] [--project|--user]
+    \\       ryk allowlist prune [--dry-run] [--project|--user]
+    \\
+    \\Shortcuts: ryk allow <rule-id> …   → add rule
+    \\           ryk unallow <key> …     → remove rule or exact command
+    \\
+    \\Permanent pack exceptions (not policy commands.allow). Paths:
+    \\  project → <workspace>/.orca/allowlist.toml (git / workspace root walk-up)
+    \\  user    → $XDG_CONFIG_HOME/orca/allowlist.toml or ~/.config/orca/allowlist.toml
+    \\Default layer: project when workspace root has .git or .orca/policy.yaml, else user.
+    \\
+;
+
+// ---------------------------------------------------------------------------
+// Production surface
+// ---------------------------------------------------------------------------
+
+/// Top-level `ryk allowlist …` (argv after the verb).
+pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
+    if (argv.len == 0) {
+        try stdout.writeAll(usage_text);
+        return exit_codes.success;
+    }
+    if (std.mem.eql(u8, argv[0], "--help") or std.mem.eql(u8, argv[0], "-h")) {
+        try stdout.writeAll(usage_text);
+        return exit_codes.success;
+    }
+
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa_state.deinit();
+    const gpa = gpa_state.allocator();
+
+    var now_buf: [32]u8 = undefined;
+    const now_iso = try core.time.Timestamp.now(io).formatIso(&now_buf);
+
+    const sub = argv[0];
+    if (std.mem.eql(u8, sub, "add")) {
+        return cmdAdd(io, gpa, now_iso, argv[1..], .rule, stdout, stderr);
+    }
+    if (std.mem.eql(u8, sub, "add-command")) {
+        return cmdAdd(io, gpa, now_iso, argv[1..], .command, stdout, stderr);
+    }
+    if (std.mem.eql(u8, sub, "list") or std.mem.eql(u8, sub, "ls") or std.mem.eql(u8, sub, "show")) {
+        return cmdList(io, gpa, now_iso, argv[1..], stdout, stderr);
+    }
+    if (std.mem.eql(u8, sub, "remove") or std.mem.eql(u8, sub, "rm")) {
+        return cmdRemove(io, gpa, argv[1..], stdout, stderr);
+    }
+    if (std.mem.eql(u8, sub, "validate")) {
+        return cmdValidate(io, gpa, now_iso, argv[1..], stdout, stderr);
+    }
+    if (std.mem.eql(u8, sub, "prune")) {
+        return cmdPrune(io, gpa, now_iso, argv[1..], stdout, stderr);
+    }
+
+    try stderr.print("ryk allowlist: unknown subcommand '{s}'\n", .{sub});
+    try stderr.writeAll(usage_text);
+    return exit_codes.usage;
+}
+
+/// Top-level `ryk allow …` shortcut → add rule.
+pub fn commandAllow(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
+    if (argv.len == 0 or std.mem.eql(u8, argv[0], "--help") or std.mem.eql(u8, argv[0], "-h")) {
+        if (argv.len > 0) {
+            try stdout.writeAll(usage_text);
+            return exit_codes.success;
+        }
+        try stderr.writeAll("ryk allow: missing rule-id\n");
+        try stderr.writeAll(usage_text);
+        return exit_codes.usage;
+    }
+    // Prepend synthetic "add" framing via shared add body.
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa_state.deinit();
+    const gpa = gpa_state.allocator();
+    var now_buf: [32]u8 = undefined;
+    const now_iso = try core.time.Timestamp.now(io).formatIso(&now_buf);
+    return cmdAdd(io, gpa, now_iso, argv, .rule, stdout, stderr);
+}
+
+/// Top-level `ryk unallow …` shortcut → remove rule/command key.
+pub fn commandUnallow(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
+    if (argv.len == 0 or std.mem.eql(u8, argv[0], "--help") or std.mem.eql(u8, argv[0], "-h")) {
+        if (argv.len > 0) {
+            try stdout.writeAll(usage_text);
+            return exit_codes.success;
+        }
+        try stderr.writeAll("ryk unallow: missing rule-id or exact command\n");
+        try stderr.writeAll(usage_text);
+        return exit_codes.usage;
+    }
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa_state.deinit();
+    return cmdRemove(io, gpa_state.allocator(), argv, stdout, stderr);
+}
+
+// ---------------------------------------------------------------------------
+// Shared option / path helpers
+// ---------------------------------------------------------------------------
+
+const LayerChoice = enum { auto, project, user };
+
+const CommonFlags = struct {
+    layer: LayerChoice = .auto,
+    as_json: bool = false,
+    strict: bool = false,
+    dry_run: bool = false,
+    reason: ?[]const u8 = null,
+    expires: ?[]const u8 = null,
+    /// Positional non-flag args (rule id, command, remove key).
+    positionals: std.ArrayListUnmanaged([]const u8) = .empty,
+
+    fn deinit(self: *CommonFlags, gpa: std.mem.Allocator) void {
+        self.positionals.deinit(gpa);
+    }
+};
+
+fn parseCommonFlags(gpa: std.mem.Allocator, argv: []const []const u8, stderr: anytype) !struct { CommonFlags, u8 } {
+    var flags: CommonFlags = .{};
+    errdefer flags.deinit(gpa);
+    var i: usize = 0;
+    while (i < argv.len) : (i += 1) {
+        const arg = argv[i];
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            return error.ShowHelp;
+        }
+        if (std.mem.eql(u8, arg, "--project")) {
+            flags.layer = .project;
+        } else if (std.mem.eql(u8, arg, "--user")) {
+            flags.layer = .user;
+        } else if (std.mem.eql(u8, arg, "--json")) {
+            flags.as_json = true;
+        } else if (std.mem.eql(u8, arg, "--strict")) {
+            flags.strict = true;
+        } else if (std.mem.eql(u8, arg, "--dry-run")) {
+            flags.dry_run = true;
+        } else if (std.mem.eql(u8, arg, "-r") or std.mem.eql(u8, arg, "--reason")) {
+            i += 1;
+            if (i >= argv.len) {
+                try stderr.writeAll("ryk allowlist: -r/--reason requires a value\n");
+                return error.Usage;
+            }
+            flags.reason = argv[i];
+        } else if (std.mem.startsWith(u8, arg, "--reason=")) {
+            flags.reason = arg["--reason=".len..];
+        } else if (std.mem.eql(u8, arg, "--expires")) {
+            i += 1;
+            if (i >= argv.len) {
+                try stderr.writeAll("ryk allowlist: --expires requires an ISO-8601 value\n");
+                return error.Usage;
+            }
+            flags.expires = argv[i];
+        } else if (std.mem.startsWith(u8, arg, "--expires=")) {
+            flags.expires = arg["--expires=".len..];
+        } else if (std.mem.startsWith(u8, arg, "-") and arg.len > 1) {
+            try stderr.print("ryk allowlist: unknown option '{s}'\n", .{arg});
+            return error.Usage;
+        } else {
+            try flags.positionals.append(gpa, arg);
+        }
+    }
+    return .{ flags, 0 };
+}
+
+/// Workspace root for project allowlist — same walk-up as product loaders / packs.
+fn resolveWorkspaceRootPath(gpa: std.mem.Allocator, io: std.Io) ![]u8 {
+    return core.supervisor.resolveWorkspaceRoot(io, gpa, null, ".") catch {
+        const cwd_z = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", gpa);
+        defer gpa.free(cwd_z);
+        return try gpa.dupe(u8, cwd_z);
+    };
+}
+
+fn workspaceHasProjectMarker(io: std.Io, gpa: std.mem.Allocator, workspace_root: []const u8) bool {
+    const git_path = std.fs.path.join(gpa, &.{ workspace_root, ".git" }) catch return false;
+    defer gpa.free(git_path);
+    std.Io.Dir.accessAbsolute(io, git_path, .{}) catch {
+        const policy_path = std.fs.path.join(gpa, &.{ workspace_root, ".orca", "policy.yaml" }) catch return false;
+        defer gpa.free(policy_path);
+        std.Io.Dir.accessAbsolute(io, policy_path, .{}) catch return false;
+        return true;
+    };
+    return true;
+}
+
+fn resolveLayer(flags: CommonFlags, io: std.Io, gpa: std.mem.Allocator) allowlist_store.Layer {
+    return switch (flags.layer) {
+        .project => .project,
+        .user => .user,
+        .auto => blk: {
+            const root = resolveWorkspaceRootPath(gpa, io) catch break :blk .user;
+            defer gpa.free(root);
+            break :blk if (workspaceHasProjectMarker(io, gpa, root)) .project else .user;
+        },
+    };
+}
+
+fn resolveUserPath(gpa: std.mem.Allocator) !?[]u8 {
+    if (std.c.getenv("XDG_CONFIG_HOME")) |xdg_z| {
+        const xdg = std.mem.span(xdg_z);
+        if (xdg.len > 0) {
+            return try std.fs.path.join(gpa, &.{ xdg, "orca", "allowlist.toml" });
+        }
+    }
+    if (std.c.getenv("HOME")) |home_z| {
+        const home = std.mem.span(home_z);
+        if (home.len > 0) {
+            return try std.fs.path.join(gpa, &.{ home, ".config", "orca", "allowlist.toml" });
+        }
+    }
+    return null;
+}
+
+fn resolveProjectPath(gpa: std.mem.Allocator, io: std.Io) ![]u8 {
+    // Must match shell_eval.loadProductShellStores: `<workspace>/.orca/allowlist.toml`.
+    const root = try resolveWorkspaceRootPath(gpa, io);
+    defer gpa.free(root);
+    return try std.fs.path.join(gpa, &.{ root, ".orca", "allowlist.toml" });
+}
+
+fn resolvePathForLayer(gpa: std.mem.Allocator, io: std.Io, layer: allowlist_store.Layer) ![]u8 {
+    return switch (layer) {
+        .project => try resolveProjectPath(gpa, io),
+        .user => blk: {
+            const p = try resolveUserPath(gpa) orelse {
+                return error.NoUserConfig;
+            };
+            break :blk p;
+        },
+    };
+}
+
+fn layerName(layer: allowlist_store.Layer) []const u8 {
+    return switch (layer) {
+        .user => "user",
+        .project => "project",
+    };
+}
+
+fn kindName(kind: allowlist_store.EntryKind) []const u8 {
+    return switch (kind) {
+        .rule => "rule",
+        .command => "command",
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Subcommands
+// ---------------------------------------------------------------------------
+
+fn cmdAdd(
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    now_iso: []const u8,
+    argv: []const []const u8,
+    kind: allowlist_store.EntryKind,
+    stdout: anytype,
+    stderr: anytype,
+) !u8 {
+    const parsed = parseCommonFlags(gpa, argv, stderr) catch |err| switch (err) {
+        error.ShowHelp => {
+            try stdout.writeAll(usage_text);
+            return exit_codes.success;
+        },
+        error.Usage => return exit_codes.usage,
+        else => return err,
+    };
+    var flags = parsed[0];
+    defer flags.deinit(gpa);
+
+    if (flags.positionals.items.len == 0) {
+        try stderr.writeAll(switch (kind) {
+            .rule => "ryk allowlist: add requires a rule-id\n",
+            .command => "ryk allowlist: add-command requires an exact command\n",
+        });
+        return exit_codes.usage;
+    }
+    if (flags.positionals.items.len > 1) {
+        try stderr.writeAll("ryk allowlist: unexpected extra arguments\n");
+        return exit_codes.usage;
+    }
+    const key = flags.positionals.items[0];
+    const reason = flags.reason orelse {
+        try stderr.writeAll("ryk allowlist: reason required (-r/--reason)\n");
+        return exit_codes.usage;
+    };
+    if (std.mem.trim(u8, reason, " \t\r\n").len == 0) {
+        try stderr.writeAll("ryk allowlist: reason required (-r/--reason)\n");
+        return exit_codes.usage;
+    }
+
+    const layer = resolveLayer(flags, io, gpa);
+    const path = resolvePathForLayer(gpa, io, layer) catch |err| switch (err) {
+        error.NoUserConfig => {
+            try stderr.writeAll("ryk allowlist: cannot resolve user config path (set XDG_CONFIG_HOME or HOME)\n");
+            return exit_codes.general;
+        },
+        else => return err,
+    };
+    defer gpa.free(path);
+
+    const draft: allowlist_store.Draft = switch (kind) {
+        .rule => .{
+            .kind = .rule,
+            .id = key,
+            .reason = reason,
+            .created_at = now_iso,
+            .expires_at = flags.expires,
+        },
+        .command => .{
+            .kind = .command,
+            .command = key,
+            .reason = reason,
+            .created_at = now_iso,
+            .expires_at = flags.expires,
+        },
+    };
+
+    // Form + reason validation without known-list (strict unknown check is validate --strict).
+    allowlist_store.validateDraft(draft, null) catch |err| {
+        try writeValidateErr(stderr, err);
+        return exit_codes.usage;
+    };
+
+    allowlist_store.addEntry(io, gpa, path, layer, draft, null) catch |err| {
+        try stderr.print("ryk allowlist: failed to write entry: {s}\n", .{@errorName(err)});
+        return exit_codes.general;
+    };
+
+    try stdout.print("Added {s} allowlist entry ({s}): {s}\n", .{ layerName(layer), kindName(kind), key });
+    return exit_codes.success;
+}
+
+fn cmdList(
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    now_iso: []const u8,
+    argv: []const []const u8,
+    stdout: anytype,
+    stderr: anytype,
+) !u8 {
+    const parsed = parseCommonFlags(gpa, argv, stderr) catch |err| switch (err) {
+        error.ShowHelp => {
+            try stdout.writeAll(usage_text);
+            return exit_codes.success;
+        },
+        error.Usage => return exit_codes.usage,
+        else => return err,
+    };
+    var flags = parsed[0];
+    defer flags.deinit(gpa);
+
+    // --project / --user: single layer. auto: merge both (project wins).
+    var outcome: allowlist_store.LoadOutcome = undefined;
+    if (flags.layer == .auto) {
+        const user_path = try resolveUserPath(gpa);
+        defer if (user_path) |p| gpa.free(p);
+        const project_path = try resolveProjectPath(gpa, io);
+        defer gpa.free(project_path);
+        outcome = try allowlist_store.loadMerged(io, gpa, user_path, project_path);
+    } else {
+        const layer = resolveLayer(flags, io, gpa);
+        const path = resolvePathForLayer(gpa, io, layer) catch |err| switch (err) {
+            error.NoUserConfig => {
+                try stderr.writeAll("ryk allowlist: cannot resolve user config path\n");
+                return exit_codes.general;
+            },
+            else => return err,
+        };
+        defer gpa.free(path);
+        outcome = try allowlist_store.loadFile(io, gpa, path, layer);
+    }
+    defer outcome.store.deinit(gpa);
+
+    if (outcome.corrupt) {
+        try stderr.writeAll("ryk allowlist: warning: allowlist file corrupt or unreadable; treating as empty\n");
+    }
+
+    if (flags.as_json) {
+        try writeListJson(stdout, gpa, outcome.store, now_iso);
+    } else {
+        if (outcome.store.entries.len == 0) {
+            try stdout.writeAll("No permanent allowlist entries.\n");
+            return exit_codes.success;
+        }
+        for (outcome.store.entries) |e| {
+            const expired = allowlist_store.isExpired(e, now_iso);
+            const key = allowlist_store.entryKey(e);
+            try stdout.print(
+                "{s}\t{s}\t{s}\t{s}{s}\n",
+                .{
+                    kindName(e.kind),
+                    key,
+                    layerName(e.layer),
+                    e.reason,
+                    if (expired) " [expired]" else "",
+                },
+            );
+        }
+    }
+    return exit_codes.success;
+}
+
+fn writeListJson(stdout: anytype, gpa: std.mem.Allocator, store: allowlist_store.Store, now_iso: []const u8) !void {
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(gpa);
+    try buf.appendSlice(gpa, "{\"schema_version\":1,\"entries\":[");
+    for (store.entries, 0..) |e, i| {
+        if (i > 0) try buf.appendSlice(gpa, ",");
+        try buf.appendSlice(gpa, "{");
+        try buf.appendSlice(gpa, "\"kind\":\"");
+        try buf.appendSlice(gpa, kindName(e.kind));
+        try buf.appendSlice(gpa, "\",");
+        if (e.id) |id| {
+            try buf.appendSlice(gpa, "\"id\":");
+            try appendJsonString(gpa, &buf, id);
+            try buf.appendSlice(gpa, ",");
+        } else {
+            try buf.appendSlice(gpa, "\"id\":null,");
+        }
+        if (e.command) |cmd| {
+            try buf.appendSlice(gpa, "\"command\":");
+            try appendJsonString(gpa, &buf, cmd);
+            try buf.appendSlice(gpa, ",");
+        } else {
+            try buf.appendSlice(gpa, "\"command\":null,");
+        }
+        try buf.appendSlice(gpa, "\"reason\":");
+        try appendJsonString(gpa, &buf, e.reason);
+        try buf.appendSlice(gpa, ",\"layer\":\"");
+        try buf.appendSlice(gpa, layerName(e.layer));
+        try buf.appendSlice(gpa, "\",\"created_at\":");
+        try appendJsonString(gpa, &buf, e.created_at);
+        if (e.expires_at) |exp| {
+            try buf.appendSlice(gpa, ",\"expires_at\":");
+            try appendJsonString(gpa, &buf, exp);
+        } else {
+            try buf.appendSlice(gpa, ",\"expires_at\":null");
+        }
+        try buf.appendSlice(gpa, ",\"expired\":");
+        try buf.appendSlice(gpa, if (allowlist_store.isExpired(e, now_iso)) "true" else "false");
+        try buf.appendSlice(gpa, "}");
+    }
+    try buf.appendSlice(gpa, "]}\n");
+    try stdout.writeAll(buf.items);
+}
+
+fn appendJsonString(gpa: std.mem.Allocator, buf: *std.ArrayListUnmanaged(u8), s: []const u8) !void {
+    try buf.append(gpa, '"');
+    for (s) |c| {
+        switch (c) {
+            '"' => try buf.appendSlice(gpa, "\\\""),
+            '\\' => try buf.appendSlice(gpa, "\\\\"),
+            '\n' => try buf.appendSlice(gpa, "\\n"),
+            '\r' => try buf.appendSlice(gpa, "\\r"),
+            '\t' => try buf.appendSlice(gpa, "\\t"),
+            else => try buf.append(gpa, c),
+        }
+    }
+    try buf.append(gpa, '"');
+}
+
+fn cmdRemove(
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    argv: []const []const u8,
+    stdout: anytype,
+    stderr: anytype,
+) !u8 {
+    const parsed = parseCommonFlags(gpa, argv, stderr) catch |err| switch (err) {
+        error.ShowHelp => {
+            try stdout.writeAll(usage_text);
+            return exit_codes.success;
+        },
+        error.Usage => return exit_codes.usage,
+        else => return err,
+    };
+    var flags = parsed[0];
+    defer flags.deinit(gpa);
+
+    if (flags.positionals.items.len == 0) {
+        try stderr.writeAll("ryk allowlist: remove requires a rule-id or exact command\n");
+        return exit_codes.usage;
+    }
+    if (flags.positionals.items.len > 1) {
+        try stderr.writeAll("ryk allowlist: unexpected extra arguments\n");
+        return exit_codes.usage;
+    }
+    const key = flags.positionals.items[0];
+    const layer = resolveLayer(flags, io, gpa);
+    const path = resolvePathForLayer(gpa, io, layer) catch |err| switch (err) {
+        error.NoUserConfig => {
+            try stderr.writeAll("ryk allowlist: cannot resolve user config path\n");
+            return exit_codes.general;
+        },
+        else => return err,
+    };
+    defer gpa.free(path);
+
+    const removed = allowlist_store.removeEntry(io, gpa, path, layer, key) catch |err| {
+        try stderr.print("ryk allowlist: remove failed: {s}\n", .{@errorName(err)});
+        return exit_codes.general;
+    };
+    if (!removed) {
+        try stderr.print("ryk allowlist: no entry found for key '{s}'\n", .{key});
+        return exit_codes.general;
+    }
+    try stdout.print("Removed allowlist entry: {s}\n", .{key});
+    return exit_codes.success;
+}
+
+fn cmdValidate(
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    now_iso: []const u8,
+    argv: []const []const u8,
+    stdout: anytype,
+    stderr: anytype,
+) !u8 {
+    _ = now_iso;
+    const parsed = parseCommonFlags(gpa, argv, stderr) catch |err| switch (err) {
+        error.ShowHelp => {
+            try stdout.writeAll(usage_text);
+            return exit_codes.success;
+        },
+        error.Usage => return exit_codes.usage,
+        else => return err,
+    };
+    var flags = parsed[0];
+    defer flags.deinit(gpa);
+
+    var outcome: allowlist_store.LoadOutcome = undefined;
+    if (flags.layer == .auto) {
+        const user_path = try resolveUserPath(gpa);
+        defer if (user_path) |p| gpa.free(p);
+        const project_path = try resolveProjectPath(gpa, io);
+        defer gpa.free(project_path);
+        outcome = try allowlist_store.loadMerged(io, gpa, user_path, project_path);
+    } else {
+        const layer = resolveLayer(flags, io, gpa);
+        const path = resolvePathForLayer(gpa, io, layer) catch |err| switch (err) {
+            error.NoUserConfig => {
+                try stderr.writeAll("ryk allowlist: cannot resolve user config path\n");
+                return exit_codes.general;
+            },
+            else => return err,
+        };
+        defer gpa.free(path);
+        outcome = try allowlist_store.loadFile(io, gpa, path, layer);
+    }
+    defer outcome.store.deinit(gpa);
+
+    if (outcome.corrupt) {
+        try stderr.writeAll("ryk allowlist: allowlist file is corrupt or unreadable\n");
+        return exit_codes.general;
+    }
+
+    var known_owned: ?KnownRuleIds = null;
+    defer if (known_owned) |*k| k.deinit();
+    var known_slice: ?[]const []const u8 = null;
+    if (flags.strict) {
+        known_owned = try collectKnownRuleIds(gpa);
+        known_slice = known_owned.?.ids;
+    }
+
+    var issues: usize = 0;
+    for (outcome.store.entries) |e| {
+        const draft: allowlist_store.Draft = .{
+            .kind = e.kind,
+            .id = e.id,
+            .command = e.command,
+            .reason = e.reason,
+            .created_at = e.created_at,
+            .expires_at = e.expires_at,
+        };
+        allowlist_store.validateDraft(draft, known_slice) catch |err| {
+            issues += 1;
+            const key = allowlist_store.entryKey(e);
+            try stderr.print("ryk allowlist: invalid entry '{s}': {s}\n", .{ key, validateErrName(err) });
+        };
+    }
+
+    if (issues > 0) {
+        try stderr.print("ryk allowlist: validate found {d} issue(s)\n", .{issues});
+        return exit_codes.general;
+    }
+    try stdout.print("allowlist ok ({d} entries)\n", .{outcome.store.entries.len});
+    return exit_codes.success;
+}
+
+fn cmdPrune(
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    now_iso: []const u8,
+    argv: []const []const u8,
+    stdout: anytype,
+    stderr: anytype,
+) !u8 {
+    const parsed = parseCommonFlags(gpa, argv, stderr) catch |err| switch (err) {
+        error.ShowHelp => {
+            try stdout.writeAll(usage_text);
+            return exit_codes.success;
+        },
+        error.Usage => return exit_codes.usage,
+        else => return err,
+    };
+    var flags = parsed[0];
+    defer flags.deinit(gpa);
+
+    // Prune operates on explicit layer or both when auto.
+    const layers: []const allowlist_store.Layer = switch (flags.layer) {
+        .project => &[_]allowlist_store.Layer{.project},
+        .user => &[_]allowlist_store.Layer{.user},
+        .auto => &[_]allowlist_store.Layer{ .project, .user },
+    };
+
+    var total_removed: usize = 0;
+    for (layers) |layer| {
+        const path = resolvePathForLayer(gpa, io, layer) catch |err| switch (err) {
+            error.NoUserConfig => continue,
+            else => return err,
+        };
+        defer gpa.free(path);
+
+        var outcome = try allowlist_store.loadFile(io, gpa, path, layer);
+        defer outcome.store.deinit(gpa);
+        if (outcome.corrupt or outcome.store.entries.len == 0) continue;
+
+        var keys: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer {
+            for (keys.items) |k| gpa.free(k);
+            keys.deinit(gpa);
+        }
+        for (outcome.store.entries) |e| {
+            if (allowlist_store.isExpired(e, now_iso)) {
+                try keys.append(gpa, try gpa.dupe(u8, allowlist_store.entryKey(e)));
+            }
+        }
+
+        if (flags.dry_run) {
+            total_removed += keys.items.len;
+            for (keys.items) |k| {
+                try stdout.print("would prune ({s}): {s}\n", .{ layerName(layer), k });
+            }
+            continue;
+        }
+
+        for (keys.items) |k| {
+            const removed = try allowlist_store.removeEntry(io, gpa, path, layer, k);
+            if (removed) total_removed += 1;
+        }
+    }
+
+    if (flags.dry_run) {
+        try stdout.print("prune dry-run: {d} expired entr{s}\n", .{ total_removed, if (total_removed == 1) "y" else "ies" });
+    } else {
+        try stdout.print("pruned {d} expired entr{s}\n", .{ total_removed, if (total_removed == 1) "y" else "ies" });
+    }
+    return exit_codes.success;
+}
+
+fn writeValidateErr(stderr: anytype, err: allowlist_store.ValidateError) !void {
+    try stderr.print("ryk allowlist: {s}\n", .{validateErrName(err)});
+}
+
+fn validateErrName(err: allowlist_store.ValidateError) []const u8 {
+    return switch (err) {
+        error.ReasonRequired => "reason required",
+        error.CommandRequired => "command required",
+        error.RuleIdRequired => "rule id required",
+        error.InvalidRuleIdForm => "invalid rule-id form (expected pack:pattern)",
+        error.UnknownRuleId => "unknown rule id",
+    };
+}
+
+const KnownRuleIds = struct {
+    gpa: std.mem.Allocator,
+    parsed: std.json.Parsed(std.json.Value),
+    ids: []const []const u8,
+    owned_slice: [][]const u8,
+
+    fn deinit(self: *KnownRuleIds) void {
+        for (self.owned_slice) |s| self.gpa.free(s);
+        self.gpa.free(self.owned_slice);
+        self.parsed.deinit();
+        self.* = undefined;
+    }
+};
+
+fn collectKnownRuleIds(gpa: std.mem.Allocator) !KnownRuleIds {
+    const parsed = try std.json.parseFromSlice(std.json.Value, gpa, packs_json, .{});
+    errdefer parsed.deinit();
+    if (parsed.value != .array) return error.BadPacksJson;
+
+    var list: std.ArrayListUnmanaged([]const u8) = .empty;
+    errdefer {
+        for (list.items) |s| gpa.free(s);
+        list.deinit(gpa);
+    }
+
+    for (parsed.value.array.items) |item| {
+        if (item != .object) continue;
+        const obj = item.object;
+        const id_val = obj.get("id") orelse continue;
+        if (id_val != .string) continue;
+        const pack_id = id_val.string;
+        if (std.mem.eql(u8, pack_id, "test.deadline")) continue;
+        for ([_][]const u8{ "safe", "destructive" }) |section| {
+            const sec = obj.get(section) orelse continue;
+            if (sec != .array) continue;
+            for (sec.array.items) |pat| {
+                if (pat != .object) continue;
+                const name_v = pat.object.get("name") orelse continue;
+                if (name_v != .string) continue;
+                const rule = try std.fmt.allocPrint(gpa, "{s}:{s}", .{ pack_id, name_v.string });
+                errdefer gpa.free(rule);
+                try list.append(gpa, rule);
+            }
+        }
+    }
+
+    const owned = try list.toOwnedSlice(gpa);
+    return .{
+        .gpa = gpa,
+        .parsed = parsed,
+        .ids = owned,
+        .owned_slice = owned,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Test helpers (XDG + git workspace isolation; no product side effects)
+// ---------------------------------------------------------------------------
+
+const s_allowlist_cli_now = "2026-07-25T12:00:00Z";
+const s_allowlist_cli_far_expiry = "9999-01-01T00:00:00Z";
+const s_allowlist_cli_expired = "2020-01-01T00:00:00Z";
+
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+fn sAllowlistCliDupEnvZ(name: [*:0]const u8) !?[:0]u8 {
+    if (std.c.getenv(name)) |value| {
+        return try std.testing.allocator.dupeZ(u8, std.mem.span(value));
+    }
+    return null;
+}
+
+fn sAllowlistCliRestoreEnv(name: [*:0]const u8, prev: ?[:0]u8) void {
+    if (prev) |value| {
+        _ = setenv(name, value.ptr, 1);
+        std.testing.allocator.free(value);
+    } else {
+        _ = unsetenv(name);
+    }
+}
+
+fn sAllowlistCliJoin(parts: []const []const u8) ![]u8 {
+    return try std.fs.path.join(std.testing.allocator, parts);
+}
+
+const SAllowlistCliEnv = struct {
+    config_tmp: std.testing.TmpDir,
+    config_root: []u8,
+    prev_config: ?[:0]u8,
+    prev_home: ?[:0]u8,
+
+    fn deinit(self: *@This()) void {
+        sAllowlistCliRestoreEnv("XDG_CONFIG_HOME", self.prev_config);
+        sAllowlistCliRestoreEnv("HOME", self.prev_home);
+        std.testing.allocator.free(self.config_root);
+        self.config_tmp.cleanup();
+    }
+};
+
+fn sAllowlistCliIsolateXdg() !SAllowlistCliEnv {
+    var config_tmp = std.testing.tmpDir(.{});
+    errdefer config_tmp.cleanup();
+
+    const config_z = try config_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(config_z);
+    const config_root = try std.testing.allocator.dupe(u8, config_z);
+    errdefer std.testing.allocator.free(config_root);
+
+    const prev_config = try sAllowlistCliDupEnvZ("XDG_CONFIG_HOME");
+    errdefer if (prev_config) |p| std.testing.allocator.free(p);
+    const prev_home = try sAllowlistCliDupEnvZ("HOME");
+    errdefer if (prev_home) |p| std.testing.allocator.free(p);
+
+    const config_z0 = try std.testing.allocator.dupeZ(u8, config_root);
+    defer std.testing.allocator.free(config_z0);
+    try std.testing.expectEqual(@as(c_int, 0), setenv("XDG_CONFIG_HOME", config_z0.ptr, 1));
+    // Pin HOME away from the real home so user-path fallback never touches the host.
+    try std.testing.expectEqual(@as(c_int, 0), setenv("HOME", config_z0.ptr, 1));
+
+    return .{
+        .config_tmp = config_tmp,
+        .config_root = config_root,
+        .prev_config = prev_config,
+        .prev_home = prev_home,
+    };
+}
+
+const SAllowlistCliWorkspace = struct {
+    tmp: std.testing.TmpDir,
+    root: []u8,
+    /// `realPathFileAlloc` returns a null-terminated allocation; keep `[:0]` so free size matches.
+    prev_cwd: [:0]u8,
+
+    fn deinit(self: *@This()) void {
+        std.process.setCurrentPath(std.testing.io, self.prev_cwd) catch {};
+        std.testing.allocator.free(self.prev_cwd);
+        std.testing.allocator.free(self.root);
+        self.tmp.cleanup();
+    }
+};
+
+/// Temp workspace with cwd set to root. When `with_git`, creates `cwd/.git` so
+/// default layer resolution selects project via workspace-root markers.
+fn sAllowlistCliWorkspace(with_git: bool) !SAllowlistCliWorkspace {
+    var tmp = std.testing.tmpDir(.{});
+    errdefer tmp.cleanup();
+    if (with_git) {
+        try tmp.dir.createDirPath(std.testing.io, ".git");
+    }
+
+    const root_z = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root_z);
+    const root = try std.testing.allocator.dupe(u8, root_z);
+    errdefer std.testing.allocator.free(root);
+
+    const prev_cwd = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    errdefer std.testing.allocator.free(prev_cwd);
+    try std.process.setCurrentDir(std.testing.io, tmp.dir);
+
+    return .{
+        .tmp = tmp,
+        .root = root,
+        .prev_cwd = prev_cwd,
+    };
+}
+
+/// Workspace under the system temp dir (not zig-cache under the monorepo).
+/// Required for "no project markers" cases: walk-up must not hit the repo `.git`.
+const SAllowlistCliAbsWorkspace = struct {
+    root: []u8,
+    prev_cwd: [:0]u8,
+
+    fn deinit(self: *@This()) void {
+        std.process.setCurrentPath(std.testing.io, self.prev_cwd) catch {};
+        std.testing.allocator.free(self.prev_cwd);
+        std.Io.Dir.cwd().deleteTree(std.testing.io, self.root) catch {};
+        std.testing.allocator.free(self.root);
+    }
+};
+
+fn sAllowlistCliAbsWorkspace(with_git: bool) !SAllowlistCliAbsWorkspace {
+    const base: []const u8 = if (std.c.getenv("TMPDIR")) |z| std.mem.span(z) else "/tmp";
+    var name_buf: [64]u8 = undefined;
+    const name = try std.fmt.bufPrint(&name_buf, "ryk-allowlist-cli-{d}", .{@intFromPtr(&name_buf)});
+    const root = try std.fs.path.join(std.testing.allocator, &.{ base, name });
+    errdefer std.testing.allocator.free(root);
+
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, root);
+    errdefer std.Io.Dir.cwd().deleteTree(std.testing.io, root) catch {};
+
+    if (with_git) {
+        const git = try std.fs.path.join(std.testing.allocator, &.{ root, ".git" });
+        defer std.testing.allocator.free(git);
+        try std.Io.Dir.cwd().createDirPath(std.testing.io, git);
+    }
+
+    const prev_cwd = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    errdefer std.testing.allocator.free(prev_cwd);
+    try std.process.setCurrentPath(std.testing.io, root);
+
+    return .{
+        .root = root,
+        .prev_cwd = prev_cwd,
+    };
+}
+
+/// Git-backed temp workspace; cwd set to root for default --project resolution.
+fn sAllowlistCliGitWorkspace() !SAllowlistCliWorkspace {
+    return try sAllowlistCliWorkspace(true);
+}
+
+/// Non-git workspace outside monorepo walk-up → default layer is user.
+fn sAllowlistCliNonGitWorkspace() !SAllowlistCliAbsWorkspace {
+    return try sAllowlistCliAbsWorkspace(false);
+}
+
+/// True when stdout/stderr is the intentional RED stub body (must not green edge tests).
+fn sAllowlistCliIsStubNotImplemented(stdout: []const u8, stderr: []const u8) bool {
+    return std.mem.indexOf(u8, stderr, "not implemented") != null or
+        std.mem.indexOf(u8, stdout, "not implemented") != null;
+}
+
+/// Not-found / missing-key messaging for remove of absent entries.
+fn sAllowlistCliHasNotFoundMsg(blob: []const u8) bool {
+    return std.mem.indexOf(u8, blob, "not found") != null or
+        std.mem.indexOf(u8, blob, "Not found") != null or
+        std.mem.indexOf(u8, blob, "missing") != null or
+        std.mem.indexOf(u8, blob, "Missing") != null or
+        std.mem.indexOf(u8, blob, "no entry") != null or
+        std.mem.indexOf(u8, blob, "No entry") != null or
+        std.mem.indexOf(u8, blob, "does not exist") != null or
+        std.mem.indexOf(u8, blob, "unknown key") != null;
+}
+
+fn sAllowlistCliProjectPath(workspace_root: []const u8) ![]u8 {
+    return try sAllowlistCliJoin(&.{ workspace_root, ".orca", "allowlist.toml" });
+}
+
+fn sAllowlistCliUserPath(xdg_config: []const u8) ![]u8 {
+    return try sAllowlistCliJoin(&.{ xdg_config, "orca", "allowlist.toml" });
+}
+
+fn sAllowlistCliReadFile(path: []const u8) ![]u8 {
+    return try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, std.testing.allocator, .limited(1024 * 1024));
+}
+
+fn sAllowlistCliExpectNoDaemonText(text: []const u8) !void {
+    try std.testing.expect(std.mem.indexOf(u8, text, "daemon") == null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "not yet ported") == null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "executeDaemonCli") == null);
+}
+
+fn sAllowlistCliRunAllowlist(argv: []const []const u8) !struct { code: u8, stdout: []u8, stderr: []u8 } {
+    var stdout_alloc: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    errdefer stdout_alloc.deinit();
+    var stderr_alloc: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    errdefer stderr_alloc.deinit();
+    const code = try command(std.testing.io, argv, &stdout_alloc.writer, &stderr_alloc.writer);
+    return .{
+        .code = code,
+        .stdout = try stdout_alloc.toOwnedSlice(),
+        .stderr = try stderr_alloc.toOwnedSlice(),
+    };
+}
+
+fn sAllowlistCliRunAllow(argv: []const []const u8) !struct { code: u8, stdout: []u8, stderr: []u8 } {
+    var stdout_alloc: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    errdefer stdout_alloc.deinit();
+    var stderr_alloc: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    errdefer stderr_alloc.deinit();
+    const code = try commandAllow(std.testing.io, argv, &stdout_alloc.writer, &stderr_alloc.writer);
+    return .{
+        .code = code,
+        .stdout = try stdout_alloc.toOwnedSlice(),
+        .stderr = try stderr_alloc.toOwnedSlice(),
+    };
+}
+
+fn sAllowlistCliRunUnallow(argv: []const []const u8) !struct { code: u8, stdout: []u8, stderr: []u8 } {
+    var stdout_alloc: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    errdefer stdout_alloc.deinit();
+    var stderr_alloc: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    errdefer stderr_alloc.deinit();
+    const code = try commandUnallow(std.testing.io, argv, &stdout_alloc.writer, &stderr_alloc.writer);
+    return .{
+        .code = code,
+        .stdout = try stdout_alloc.toOwnedSlice(),
+        .stderr = try stderr_alloc.toOwnedSlice(),
+    };
+}
+
+fn sAllowlistCliFreeRun(result: anytype) void {
+    std.testing.allocator.free(result.stdout);
+    std.testing.allocator.free(result.stderr);
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance 1 — add / add-command / list / remove / validate / prune, no daemon
+// ---------------------------------------------------------------------------
+
+test "s-allowlist-cli: add rule writes project allowlist.toml without daemon" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    const reason = "recovering local branch after failed rebase work";
+    const run = try sAllowlistCliRunAllowlist(&.{
+        "add",
+        "core.git:reset-hard",
+        "-r",
+        reason,
+        "--project",
+    });
+    defer sAllowlistCliFreeRun(run);
+
+    try std.testing.expectEqual(exit_codes.success, run.code);
+    try sAllowlistCliExpectNoDaemonText(run.stdout);
+    try sAllowlistCliExpectNoDaemonText(run.stderr);
+
+    const path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(path);
+    var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, path, .project);
+    defer loaded.store.deinit(std.testing.allocator);
+    try std.testing.expect(!loaded.corrupt);
+    try std.testing.expectEqual(@as(usize, 1), loaded.store.entries.len);
+    const e = loaded.store.entries[0];
+    try std.testing.expect(e.kind == .rule);
+    try std.testing.expectEqualStrings("core.git:reset-hard", e.id.?);
+    try std.testing.expectEqualStrings(reason, e.reason);
+    try std.testing.expect(e.layer == .project);
+
+    const raw = try sAllowlistCliReadFile(path);
+    defer std.testing.allocator.free(raw);
+    try std.testing.expect(std.mem.indexOf(u8, raw, "schema_version") != null);
+    try std.testing.expect(std.mem.indexOf(u8, raw, "[[entries]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, raw, "core.git:reset-hard") != null);
+}
+
+test "s-allowlist-cli: add-command writes exact command entry only" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    const reason = "one-off exact status exception for CI bootstrap";
+    const cmd_text = "git status";
+    const run = try sAllowlistCliRunAllowlist(&.{
+        "add-command",
+        cmd_text,
+        "--reason",
+        reason,
+        "--project",
+    });
+    defer sAllowlistCliFreeRun(run);
+
+    try std.testing.expectEqual(exit_codes.success, run.code);
+    try sAllowlistCliExpectNoDaemonText(run.stdout);
+    try sAllowlistCliExpectNoDaemonText(run.stderr);
+
+    const path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(path);
+    var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, path, .project);
+    defer loaded.store.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), loaded.store.entries.len);
+    const e = loaded.store.entries[0];
+    try std.testing.expect(e.kind == .command);
+    try std.testing.expectEqualStrings(cmd_text, e.command.?);
+    try std.testing.expect(e.id == null);
+
+    // Exact-only: near-miss must not match (store contract the CLI must preserve).
+    try std.testing.expect(loaded.store.matchCommand("git status --short", s_allowlist_cli_now) == null);
+    try std.testing.expect(loaded.store.matchCommand(cmd_text, s_allowlist_cli_now) != null);
+}
+
+test "s-allowlist-cli: list shows added entries; --json is parseable" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    const reason = "list surface marker for permanent pack exception";
+    {
+        const add = try sAllowlistCliRunAllowlist(&.{
+            "add",
+            "core.git:reset-hard",
+            "-r",
+            reason,
+            "--project",
+        });
+        defer sAllowlistCliFreeRun(add);
+        try std.testing.expectEqual(exit_codes.success, add.code);
+    }
+
+    {
+        const list = try sAllowlistCliRunAllowlist(&.{ "list", "--project" });
+        defer sAllowlistCliFreeRun(list);
+        try std.testing.expectEqual(exit_codes.success, list.code);
+        try sAllowlistCliExpectNoDaemonText(list.stdout);
+        try std.testing.expect(std.mem.indexOf(u8, list.stdout, "core.git:reset-hard") != null);
+        try std.testing.expect(std.mem.indexOf(u8, list.stdout, reason) != null);
+    }
+
+    {
+        const list_json = try sAllowlistCliRunAllowlist(&.{ "list", "--project", "--json" });
+        defer sAllowlistCliFreeRun(list_json);
+        try std.testing.expectEqual(exit_codes.success, list_json.code);
+        try sAllowlistCliExpectNoDaemonText(list_json.stdout);
+        // Minimal stable JSON shape: schema_version + entries array containing the rule id.
+        try std.testing.expect(std.mem.indexOf(u8, list_json.stdout, "schema_version") != null);
+        try std.testing.expect(std.mem.indexOf(u8, list_json.stdout, "entries") != null);
+        try std.testing.expect(std.mem.indexOf(u8, list_json.stdout, "core.git:reset-hard") != null);
+        var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, list_json.stdout, .{});
+        defer parsed.deinit();
+        try std.testing.expect(parsed.value == .object);
+    }
+}
+
+test "s-allowlist-cli: remove deletes one entry and preserves sibling" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    // Two entries, remove the NON-FIRST key (exact-command). Pop-first / wipe-file greening
+    // must fail — only the targeted command goes away; the earlier rule sibling remains.
+    const cmd_text = "git status";
+    {
+        const add_rule = try sAllowlistCliRunAllowlist(&.{
+            "add",
+            "core.git:reset-hard",
+            "-r",
+            "sibling rule must survive remove of later command key",
+            "--project",
+        });
+        defer sAllowlistCliFreeRun(add_rule);
+        try std.testing.expectEqual(exit_codes.success, add_rule.code);
+    }
+    {
+        const add_cmd = try sAllowlistCliRunAllowlist(&.{
+            "add-command",
+            cmd_text,
+            "-r",
+            "non-first exact command removed by key",
+            "--project",
+        });
+        defer sAllowlistCliFreeRun(add_cmd);
+        try std.testing.expectEqual(exit_codes.success, add_cmd.code);
+    }
+
+    {
+        // Key = command string (entries[1] if append order preserved) — not the first-added rule.
+        const rem = try sAllowlistCliRunAllowlist(&.{ "remove", cmd_text, "--project" });
+        defer sAllowlistCliFreeRun(rem);
+        try std.testing.expectEqual(exit_codes.success, rem.code);
+        try sAllowlistCliExpectNoDaemonText(rem.stdout);
+        try sAllowlistCliExpectNoDaemonText(rem.stderr);
+    }
+
+    const path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(path);
+    var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, path, .project);
+    defer loaded.store.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), loaded.store.entries.len);
+    try std.testing.expect(loaded.store.entries[0].kind == .rule);
+    try std.testing.expectEqualStrings("core.git:reset-hard", loaded.store.entries[0].id.?);
+    try std.testing.expect(loaded.store.matchRule("core.git:reset-hard", s_allowlist_cli_now) != null);
+    try std.testing.expect(loaded.store.matchCommand(cmd_text, s_allowlist_cli_now) == null);
+
+    const raw = try sAllowlistCliReadFile(path);
+    defer std.testing.allocator.free(raw);
+    try std.testing.expect(std.mem.indexOf(u8, raw, "core.git:reset-hard") != null);
+    try std.testing.expect(std.mem.indexOf(u8, raw, cmd_text) == null);
+}
+
+test "s-allowlist-cli: validate rejects missing reason and unknown rule under --strict" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    // add without -r must fail closed (usage/general); must not write.
+    {
+        const bad = try sAllowlistCliRunAllowlist(&.{ "add", "core.git:reset-hard", "--project" });
+        defer sAllowlistCliFreeRun(bad);
+        try std.testing.expect(bad.code != exit_codes.success);
+        try sAllowlistCliExpectNoDaemonText(bad.stderr);
+    }
+
+    // Unknown rule id under validate --strict must fail after a malformed file, or
+    // add itself should reject unknown ids when strict validation is on by default.
+    {
+        // Write a known-good entry first so validate has a file to inspect.
+        const add = try sAllowlistCliRunAllowlist(&.{
+            "add",
+            "core.git:reset-hard",
+            "-r",
+            "known good rule for validate baseline",
+            "--project",
+        });
+        defer sAllowlistCliFreeRun(add);
+        try std.testing.expectEqual(exit_codes.success, add.code);
+    }
+
+    {
+        const ok = try sAllowlistCliRunAllowlist(&.{ "validate", "--project" });
+        defer sAllowlistCliFreeRun(ok);
+        try std.testing.expectEqual(exit_codes.success, ok.code);
+    }
+
+    // Strict success on known-good file (prevents always-fail-under-strict greening).
+    {
+        const strict_ok = try sAllowlistCliRunAllowlist(&.{ "validate", "--strict", "--project" });
+        defer sAllowlistCliFreeRun(strict_ok);
+        try std.testing.expectEqual(exit_codes.success, strict_ok.code);
+        try sAllowlistCliExpectNoDaemonText(strict_ok.stdout);
+        try sAllowlistCliExpectNoDaemonText(strict_ok.stderr);
+    }
+
+    // Inject an unknown rule id into the file and require --strict to fail.
+    const path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(path);
+    try allowlist_store.addEntry(
+        std.testing.io,
+        std.testing.allocator,
+        path,
+        .project,
+        .{
+            .kind = .rule,
+            .id = "not.a.real.pack:fabricated-pattern",
+            .reason = "should fail strict validate",
+            .created_at = s_allowlist_cli_now,
+        },
+        null, // store accepts when known list is null; CLI validate --strict must still reject
+    );
+
+    {
+        const strict = try sAllowlistCliRunAllowlist(&.{ "validate", "--strict", "--project" });
+        defer sAllowlistCliFreeRun(strict);
+        try std.testing.expect(strict.code != exit_codes.success);
+        try sAllowlistCliExpectNoDaemonText(strict.stderr);
+        // Message should mention unknown / invalid rule somehow.
+        const err_blob = if (strict.stderr.len > 0) strict.stderr else strict.stdout;
+        try std.testing.expect(
+            std.mem.indexOf(u8, err_blob, "unknown") != null or
+                std.mem.indexOf(u8, err_blob, "Unknown") != null or
+                std.mem.indexOf(u8, err_blob, "not.a.real.pack") != null or
+                std.mem.indexOf(u8, err_blob, "invalid") != null or
+                std.mem.indexOf(u8, err_blob, "Invalid") != null,
+        );
+    }
+}
+
+test "s-allowlist-cli: prune removes expired entries; dry-run leaves file intact" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    const path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(path);
+    {
+        const orca_dir = try sAllowlistCliJoin(&.{ ws.root, ".orca" });
+        defer std.testing.allocator.free(orca_dir);
+        try std.Io.Dir.cwd().createDirPath(std.testing.io, orca_dir);
+    }
+
+    try allowlist_store.addEntry(
+        std.testing.io,
+        std.testing.allocator,
+        path,
+        .project,
+        .{
+            .kind = .rule,
+            .id = "core.git:reset-hard",
+            .reason = "still valid far-future expiry",
+            .created_at = s_allowlist_cli_now,
+            .expires_at = s_allowlist_cli_far_expiry,
+        },
+        null,
+    );
+    try allowlist_store.addEntry(
+        std.testing.io,
+        std.testing.allocator,
+        path,
+        .project,
+        .{
+            .kind = .command,
+            .command = "git status",
+            .reason = "expired command should be pruned",
+            .created_at = s_allowlist_cli_now,
+            .expires_at = s_allowlist_cli_expired,
+        },
+        null,
+    );
+
+    {
+        const dry = try sAllowlistCliRunAllowlist(&.{ "prune", "--dry-run", "--project" });
+        defer sAllowlistCliFreeRun(dry);
+        try std.testing.expectEqual(exit_codes.success, dry.code);
+        try sAllowlistCliExpectNoDaemonText(dry.stdout);
+        // File still has both entries after dry-run.
+        var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, path, .project);
+        defer loaded.store.deinit(std.testing.allocator);
+        try std.testing.expectEqual(@as(usize, 2), loaded.store.entries.len);
+    }
+
+    {
+        const prune = try sAllowlistCliRunAllowlist(&.{ "prune", "--project" });
+        defer sAllowlistCliFreeRun(prune);
+        try std.testing.expectEqual(exit_codes.success, prune.code);
+        try sAllowlistCliExpectNoDaemonText(prune.stdout);
+        try sAllowlistCliExpectNoDaemonText(prune.stderr);
+    }
+
+    var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, path, .project);
+    defer loaded.store.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), loaded.store.entries.len);
+    try std.testing.expect(loaded.store.entries[0].kind == .rule);
+    try std.testing.expectEqualStrings("core.git:reset-hard", loaded.store.entries[0].id.?);
+}
+
+test "s-allowlist-cli: --user writes under XDG_CONFIG_HOME/orca/allowlist.toml" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    const reason = "user-layer permanent exception for host tooling";
+    const run = try sAllowlistCliRunAllowlist(&.{
+        "add",
+        "core.git:reset-hard",
+        "-r",
+        reason,
+        "--user",
+    });
+    defer sAllowlistCliFreeRun(run);
+    try std.testing.expectEqual(exit_codes.success, run.code);
+
+    const user_path = try sAllowlistCliUserPath(xdg.config_root);
+    defer std.testing.allocator.free(user_path);
+    var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, user_path, .user);
+    defer loaded.store.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), loaded.store.entries.len);
+    try std.testing.expect(loaded.store.entries[0].layer == .user);
+
+    // Project file must not have been created by a --user write.
+    const project_path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(project_path);
+    var project_loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, project_path, .project);
+    defer project_loaded.store.deinit(std.testing.allocator);
+    try std.testing.expect(!project_loaded.corrupt);
+    try std.testing.expectEqual(@as(usize, 0), project_loaded.store.entries.len);
+}
+
+// M1: nested cwd must write project allowlist at workspace root (product loaders),
+// not under the nested directory.
+test "s-allowlist-cli: nested cwd --project writes workspace-root allowlist" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    try ws.tmp.dir.createDirPath(std.testing.io, "nested/deep");
+    const nested = try sAllowlistCliJoin(&.{ ws.root, "nested", "deep" });
+    defer std.testing.allocator.free(nested);
+    try std.process.setCurrentPath(std.testing.io, nested);
+
+    const reason = "nested cwd project allow must land at repo root for loaders";
+    const run = try sAllowlistCliRunAllowlist(&.{
+        "add",
+        "core.git:reset-hard",
+        "-r",
+        reason,
+        "--project",
+    });
+    defer sAllowlistCliFreeRun(run);
+    try std.testing.expectEqual(exit_codes.success, run.code);
+
+    // Product path: <workspace>/.orca/allowlist.toml
+    const project_path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(project_path);
+    var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, project_path, .project);
+    defer loaded.store.deinit(std.testing.allocator);
+    try std.testing.expect(!loaded.corrupt);
+    try std.testing.expectEqual(@as(usize, 1), loaded.store.entries.len);
+    try std.testing.expectEqualStrings("core.git:reset-hard", loaded.store.entries[0].id.?);
+
+    // Must not create a cwd-only nested allowlist that loaders never see.
+    const nested_path = try sAllowlistCliJoin(&.{ nested, ".orca", "allowlist.toml" });
+    defer std.testing.allocator.free(nested_path);
+    std.Io.Dir.cwd().access(std.testing.io, nested_path, .{}) catch {
+        // Missing nested file is the success case (AccessDenied / FileNotFound).
+        return;
+    };
+    // If nested path somehow exists, it must not be the only write target — still fail
+    // because product loaders use workspace root only.
+    try std.testing.expect(false);
+}
+
+test "s-allowlist-cli: nested cwd auto layer uses project when workspace has .git" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    try ws.tmp.dir.createDirPath(std.testing.io, "pkg");
+    const nested = try sAllowlistCliJoin(&.{ ws.root, "pkg" });
+    defer std.testing.allocator.free(nested);
+    try std.process.setCurrentPath(std.testing.io, nested);
+
+    // Neither --project nor --user: walk-up .git → project layer at workspace root.
+    const reason = "auto layer from nested directory must still pick project workspace";
+    const run = try sAllowlistCliRunAllowlist(&.{
+        "add",
+        "core.git:force-push",
+        "-r",
+        reason,
+    });
+    defer sAllowlistCliFreeRun(run);
+    try std.testing.expectEqual(exit_codes.success, run.code);
+
+    const project_path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(project_path);
+    var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, project_path, .project);
+    defer loaded.store.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), loaded.store.entries.len);
+    try std.testing.expect(loaded.store.entries[0].layer == .project);
+
+    // User layer must remain empty under isolated XDG.
+    const user_path = try sAllowlistCliUserPath(xdg.config_root);
+    defer std.testing.allocator.free(user_path);
+    var user_loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, user_path, .user);
+    defer user_loaded.store.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), user_loaded.store.entries.len);
+}
+
+test "s-allowlist-cli: help and missing subcommand are usage-safe without daemon" {
+    {
+        const run = try sAllowlistCliRunAllowlist(&.{"--help"});
+        defer sAllowlistCliFreeRun(run);
+        try std.testing.expectEqual(exit_codes.success, run.code);
+        try sAllowlistCliExpectNoDaemonText(run.stdout);
+        try sAllowlistCliExpectNoDaemonText(run.stderr);
+        // Usage should teach live subcommands (not daemon proxy essay).
+        const blob = if (run.stdout.len > 0) run.stdout else run.stderr;
+        try std.testing.expect(std.mem.indexOf(u8, blob, "add") != null);
+        try std.testing.expect(std.mem.indexOf(u8, blob, "list") != null);
+    }
+    {
+        const run = try sAllowlistCliRunAllowlist(&.{"not-a-subcommand"});
+        defer sAllowlistCliFreeRun(run);
+        try std.testing.expectEqual(exit_codes.usage, run.code);
+        try sAllowlistCliExpectNoDaemonText(run.stderr);
+    }
+    {
+        const run = try sAllowlistCliRunAllowlist(&.{});
+        defer sAllowlistCliFreeRun(run);
+        // Empty argv: help-or-usage, never crash / never daemon.
+        try std.testing.expect(run.code == exit_codes.success or run.code == exit_codes.usage);
+        try sAllowlistCliExpectNoDaemonText(run.stdout);
+        try sAllowlistCliExpectNoDaemonText(run.stderr);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance 2 — allow rule then evaluate allows; compound still denies (E8)
+// ---------------------------------------------------------------------------
+
+test "s-allowlist-cli: allow shortcut then evaluate allows with allowlist attribution" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    const reason = "s-allowlist-cli rule allow attribution marker";
+    {
+        const run = try sAllowlistCliRunAllow(&.{
+            "core.git:reset-hard",
+            "-r",
+            reason,
+            "--project",
+        });
+        defer sAllowlistCliFreeRun(run);
+        try std.testing.expectEqual(exit_codes.success, run.code);
+        try sAllowlistCliExpectNoDaemonText(run.stdout);
+        try sAllowlistCliExpectNoDaemonText(run.stderr);
+    }
+
+    const path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(path);
+    var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, path, .project);
+    defer loaded.store.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), loaded.store.entries.len);
+
+    // Engine path (s-engine contract): kind=rule → allow + exception_* attribution.
+    var eval = try shell_engine.evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+        .permanent_allowlist = loaded.store,
+        .now_iso = s_allowlist_cli_now,
+    });
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .allow);
+    try std.testing.expectEqualStrings("allowlist", eval.exception_source.?);
+    try std.testing.expectEqualStrings("project", eval.exception_layer.?);
+    try std.testing.expectEqualStrings("rule", eval.exception_kind.?);
+    try std.testing.expect(std.mem.indexOf(u8, eval.reason, reason) != null);
+}
+
+test "s-allowlist-cli: allow rule still denies compound / other packs (E8)" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    {
+        const run = try sAllowlistCliRunAllow(&.{
+            "core.git:reset-hard",
+            "-r",
+            "reset exception must not unlock filesystem wipe",
+            "--project",
+        });
+        defer sAllowlistCliFreeRun(run);
+        try std.testing.expectEqual(exit_codes.success, run.code);
+    }
+
+    const path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(path);
+    var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, path, .project);
+    defer loaded.store.deinit(std.testing.allocator);
+
+    var compound = try shell_engine.evaluateCommand(std.testing.allocator, "git reset --hard; rm -rf /", .{
+        .permanent_allowlist = loaded.store,
+        .now_iso = s_allowlist_cli_now,
+    });
+    defer compound.deinit(std.testing.allocator);
+    try std.testing.expect(compound.decision == .deny);
+    try std.testing.expect(compound.exception_source == null);
+    try std.testing.expect(compound.pack_id != null);
+    try std.testing.expectEqualStrings("core.filesystem", compound.pack_id.?);
+
+    var other = try shell_engine.evaluateCommand(std.testing.allocator, "rm -rf /", .{
+        .permanent_allowlist = loaded.store,
+        .now_iso = s_allowlist_cli_now,
+    });
+    defer other.deinit(std.testing.allocator);
+    try std.testing.expect(other.decision == .deny);
+    try std.testing.expect(other.exception_source == null);
+}
+
+test "s-allowlist-cli: add-command then evaluate FULL ALLOWs exact command only" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    const reason = "exact command permanent short-circuit via CLI";
+    const cmd_text = "git reset --hard HEAD";
+    {
+        const run = try sAllowlistCliRunAllowlist(&.{
+            "add-command",
+            cmd_text,
+            "-r",
+            reason,
+            "--project",
+        });
+        defer sAllowlistCliFreeRun(run);
+        try std.testing.expectEqual(exit_codes.success, run.code);
+    }
+
+    const path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(path);
+    var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, path, .project);
+    defer loaded.store.deinit(std.testing.allocator);
+
+    var eval = try shell_engine.evaluateCommand(std.testing.allocator, cmd_text, .{
+        .permanent_allowlist = loaded.store,
+        .now_iso = s_allowlist_cli_now,
+    });
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .allow);
+    try std.testing.expectEqualStrings("allowlist", eval.exception_source.?);
+    try std.testing.expectEqualStrings("command", eval.exception_kind.?);
+    try std.testing.expect(std.mem.indexOf(u8, eval.reason, reason) != null);
+
+    // Non-exact / compound string still denies (no prefix, no full-string near-miss).
+    var miss = try shell_engine.evaluateCommand(std.testing.allocator, "git reset --hard HEAD~1", .{
+        .permanent_allowlist = loaded.store,
+        .now_iso = s_allowlist_cli_now,
+    });
+    defer miss.deinit(std.testing.allocator);
+    try std.testing.expect(miss.decision == .deny);
+
+    var compound = try shell_engine.evaluateCommand(std.testing.allocator, "git reset --hard HEAD; rm -rf /", .{
+        .permanent_allowlist = loaded.store,
+        .now_iso = s_allowlist_cli_now,
+    });
+    defer compound.deinit(std.testing.allocator);
+    try std.testing.expect(compound.decision == .deny);
+}
+
+test "s-allowlist-cli: unallow shortcut removes rule so evaluate denies again" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    // Seed rule first, then command. Unallow the NON-FIRST key (command string) so
+    // pop-first greening fails; the rule sibling must remain and still evaluate-allow.
+    const cmd_text = "git status";
+    {
+        const add = try sAllowlistCliRunAllow(&.{
+            "core.git:reset-hard",
+            "-r",
+            "rule sibling must survive unallow of later command",
+            "--project",
+        });
+        defer sAllowlistCliFreeRun(add);
+        try std.testing.expectEqual(exit_codes.success, add.code);
+    }
+    {
+        const add_cmd = try sAllowlistCliRunAllowlist(&.{
+            "add-command",
+            cmd_text,
+            "-r",
+            "non-first exact command removed via unallow shortcut",
+            "--project",
+        });
+        defer sAllowlistCliFreeRun(add_cmd);
+        try std.testing.expectEqual(exit_codes.success, add_cmd.code);
+    }
+    {
+        const rem = try sAllowlistCliRunUnallow(&.{ cmd_text, "--project" });
+        defer sAllowlistCliFreeRun(rem);
+        try std.testing.expectEqual(exit_codes.success, rem.code);
+        try sAllowlistCliExpectNoDaemonText(rem.stdout);
+        try sAllowlistCliExpectNoDaemonText(rem.stderr);
+    }
+
+    const path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(path);
+    {
+        var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, path, .project);
+        defer loaded.store.deinit(std.testing.allocator);
+        try std.testing.expectEqual(@as(usize, 1), loaded.store.entries.len);
+        try std.testing.expect(loaded.store.entries[0].kind == .rule);
+        try std.testing.expectEqualStrings("core.git:reset-hard", loaded.store.entries[0].id.?);
+        try std.testing.expect(loaded.store.matchRule("core.git:reset-hard", s_allowlist_cli_now) != null);
+        try std.testing.expect(loaded.store.matchCommand(cmd_text, s_allowlist_cli_now) == null);
+
+        // Rule still in force: evaluate allows with allowlist attribution (not pop-first).
+        var still = try shell_engine.evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+            .permanent_allowlist = loaded.store,
+            .now_iso = s_allowlist_cli_now,
+        });
+        defer still.deinit(std.testing.allocator);
+        try std.testing.expect(still.decision == .allow);
+        try std.testing.expectEqualStrings("allowlist", still.exception_source.?);
+        try std.testing.expectEqualStrings("rule", still.exception_kind.?);
+    }
+
+    // Second step: unallow the remaining rule key → evaluate denies again.
+    {
+        const rem_rule = try sAllowlistCliRunUnallow(&.{ "core.git:reset-hard", "--project" });
+        defer sAllowlistCliFreeRun(rem_rule);
+        try std.testing.expectEqual(exit_codes.success, rem_rule.code);
+    }
+    {
+        var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, path, .project);
+        defer loaded.store.deinit(std.testing.allocator);
+        try std.testing.expectEqual(@as(usize, 0), loaded.store.entries.len);
+        try std.testing.expect(loaded.store.matchRule("core.git:reset-hard", s_allowlist_cli_now) == null);
+
+        var eval = try shell_engine.evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+            .permanent_allowlist = loaded.store,
+            .now_iso = s_allowlist_cli_now,
+        });
+        defer eval.deinit(std.testing.allocator);
+        try std.testing.expect(eval.decision == .deny);
+        try std.testing.expect(eval.exception_source == null);
+    }
+}
+
+test "s-allowlist-cli: remove exact-command key empties store and restores deny" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    const cmd_text = "git reset --hard HEAD";
+    {
+        const add = try sAllowlistCliRunAllowlist(&.{
+            "add-command",
+            cmd_text,
+            "-r",
+            "exact command to remove by command string",
+            "--project",
+        });
+        defer sAllowlistCliFreeRun(add);
+        try std.testing.expectEqual(exit_codes.success, add.code);
+    }
+    {
+        const rem = try sAllowlistCliRunAllowlist(&.{ "remove", cmd_text, "--project" });
+        defer sAllowlistCliFreeRun(rem);
+        try std.testing.expectEqual(exit_codes.success, rem.code);
+        try sAllowlistCliExpectNoDaemonText(rem.stdout);
+        try sAllowlistCliExpectNoDaemonText(rem.stderr);
+    }
+
+    const path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(path);
+    var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, path, .project);
+    defer loaded.store.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), loaded.store.entries.len);
+    try std.testing.expect(loaded.store.matchCommand(cmd_text, s_allowlist_cli_now) == null);
+
+    var eval = try shell_engine.evaluateCommand(std.testing.allocator, cmd_text, .{
+        .permanent_allowlist = loaded.store,
+        .now_iso = s_allowlist_cli_now,
+    });
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .deny);
+    try std.testing.expect(eval.exception_source == null);
+}
+
+test "s-allowlist-cli: unallow exact-command key removes entry and restores deny" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    const cmd_text = "git status";
+    {
+        const add = try sAllowlistCliRunAllowlist(&.{
+            "add-command",
+            cmd_text,
+            "-r",
+            "exact command removed via unallow shortcut",
+            "--project",
+        });
+        defer sAllowlistCliFreeRun(add);
+        try std.testing.expectEqual(exit_codes.success, add.code);
+    }
+    {
+        const rem = try sAllowlistCliRunUnallow(&.{ cmd_text, "--project" });
+        defer sAllowlistCliFreeRun(rem);
+        try std.testing.expectEqual(exit_codes.success, rem.code);
+        try sAllowlistCliExpectNoDaemonText(rem.stdout);
+        try sAllowlistCliExpectNoDaemonText(rem.stderr);
+    }
+
+    const path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(path);
+    var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, path, .project);
+    defer loaded.store.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), loaded.store.entries.len);
+
+    var eval = try shell_engine.evaluateCommand(std.testing.allocator, cmd_text, .{
+        .permanent_allowlist = loaded.store,
+        .now_iso = s_allowlist_cli_now,
+    });
+    defer eval.deinit(std.testing.allocator);
+    // "git status" is typically allow under packs; exception attribution must be gone.
+    try std.testing.expect(eval.exception_source == null);
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance 3 — help unhides allowlist / allow / unallow after green
+// (implementer: surgical help.zig unhide + remove from p0_honesty_unfinished)
+// ---------------------------------------------------------------------------
+
+test "s-allowlist-cli: help exposes allowlist allow unallow (not hidden)" {
+    const names = [_][]const u8{ "allowlist", "allow", "unallow" };
+    for (names) |name| {
+        const info = help.findCommand(name) orelse {
+            std.debug.print("missing help entry for {s}\n", .{name});
+            try std.testing.expect(false);
+            return;
+        };
+        try std.testing.expect(!info.hidden);
+    }
+}
+
+test "s-allowlist-cli: root help --all lists allowlist allow unallow as peers" {
+    var buf: [32768]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try help.writeWithMode(std.testing.io, &writer, .all);
+    const text = writer.buffered();
+
+    // Peer-column rows only (not `--network allowlist` in run details).
+    try std.testing.expect(sAllowlistCliHelpListsPeer(text, "allowlist"));
+    try std.testing.expect(sAllowlistCliHelpListsPeer(text, "allow"));
+    try std.testing.expect(sAllowlistCliHelpListsPeer(text, "unallow"));
+}
+
+/// Mirror of help.zig private `helpListsPeerCommand` (peer column: 4 spaces + name + space).
+fn sAllowlistCliHelpListsPeer(text: []const u8, name: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, "    ")) continue;
+        if (std.mem.startsWith(u8, line, "    --")) continue;
+        const rest = line[4..];
+        if (rest.len <= name.len) continue;
+        if (std.mem.startsWith(u8, rest, name) and rest[name.len] == ' ') return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Branch / edge paths
+// ---------------------------------------------------------------------------
+
+test "s-allowlist-cli: add requires reason flag" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    const run = try sAllowlistCliRunAllowlist(&.{ "add", "core.git:reset-hard", "--project" });
+    defer sAllowlistCliFreeRun(run);
+    try std.testing.expect(run.code == exit_codes.usage or run.code == exit_codes.general);
+
+    const path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(path);
+    var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, path, .project);
+    defer loaded.store.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), loaded.store.entries.len);
+}
+
+test "s-allowlist-cli: add rejects invalid rule-id form without write" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    const run = try sAllowlistCliRunAllowlist(&.{
+        "add",
+        "not-a-valid-rule-id",
+        "-r",
+        "invalid form must not land on disk",
+        "--project",
+    });
+    defer sAllowlistCliFreeRun(run);
+    try std.testing.expect(run.code != exit_codes.success);
+
+    const path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(path);
+    var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, path, .project);
+    defer loaded.store.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), loaded.store.entries.len);
+}
+
+test "s-allowlist-cli: remove missing key is non-success or explicit not-found" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    const run = try sAllowlistCliRunAllowlist(&.{ "remove", "core.git:reset-hard", "--project" });
+    defer sAllowlistCliFreeRun(run);
+    // Must not green on the intentional RED stub body.
+    try std.testing.expect(!sAllowlistCliIsStubNotImplemented(run.stdout, run.stderr));
+    try sAllowlistCliExpectNoDaemonText(run.stdout);
+    try sAllowlistCliExpectNoDaemonText(run.stderr);
+
+    // Dedicated remove-missing path: not-found messaging required either way.
+    // Prefer non-success; success is only OK when messaging is explicit.
+    const blob = if (run.stderr.len > 0) run.stderr else run.stdout;
+    try std.testing.expect(sAllowlistCliHasNotFoundMsg(blob));
+    if (run.code == exit_codes.success) {
+        // Chatty success must still be a real remove path, not a no-op green.
+        try std.testing.expect(blob.len > 0);
+    } else {
+        try std.testing.expect(run.code == exit_codes.usage or run.code == exit_codes.general);
+    }
+}
+
+test "s-allowlist-cli: default layer is project inside git workspace (no layer flags)" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    const reason = "default project layer without --project flag";
+    const run = try sAllowlistCliRunAllowlist(&.{
+        "add",
+        "core.git:reset-hard",
+        "-r",
+        reason,
+        // intentionally no --project / --user
+    });
+    defer sAllowlistCliFreeRun(run);
+    try std.testing.expectEqual(exit_codes.success, run.code);
+    try sAllowlistCliExpectNoDaemonText(run.stdout);
+    try sAllowlistCliExpectNoDaemonText(run.stderr);
+
+    const project_path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(project_path);
+    var project_loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, project_path, .project);
+    defer project_loaded.store.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), project_loaded.store.entries.len);
+    try std.testing.expect(project_loaded.store.entries[0].layer == .project);
+    try std.testing.expectEqualStrings("core.git:reset-hard", project_loaded.store.entries[0].id.?);
+
+    // Must not have fallen through to user layer.
+    const user_path = try sAllowlistCliUserPath(xdg.config_root);
+    defer std.testing.allocator.free(user_path);
+    var user_loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, user_path, .user);
+    defer user_loaded.store.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), user_loaded.store.entries.len);
+}
+
+test "s-allowlist-cli: default layer is user outside git workspace (no layer flags)" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    // cwd has no `.git` (pack_config-style check of cwd only — not parent walk).
+    var ws = try sAllowlistCliNonGitWorkspace();
+    defer ws.deinit();
+
+    const reason = "default user layer without --user flag outside git";
+    const run = try sAllowlistCliRunAllowlist(&.{
+        "add",
+        "core.git:reset-hard",
+        "-r",
+        reason,
+        // intentionally no --project / --user
+    });
+    defer sAllowlistCliFreeRun(run);
+    try std.testing.expectEqual(exit_codes.success, run.code);
+    try sAllowlistCliExpectNoDaemonText(run.stdout);
+    try sAllowlistCliExpectNoDaemonText(run.stderr);
+
+    const user_path = try sAllowlistCliUserPath(xdg.config_root);
+    defer std.testing.allocator.free(user_path);
+    var user_loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, user_path, .user);
+    defer user_loaded.store.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), user_loaded.store.entries.len);
+    try std.testing.expect(user_loaded.store.entries[0].layer == .user);
+    try std.testing.expectEqualStrings("core.git:reset-hard", user_loaded.store.entries[0].id.?);
+    try std.testing.expectEqualStrings(reason, user_loaded.store.entries[0].reason);
+
+    // No project allowlist under the non-git cwd.
+    const project_path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(project_path);
+    var project_loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, project_path, .project);
+    defer project_loaded.store.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), project_loaded.store.entries.len);
+}

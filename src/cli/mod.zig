@@ -51,6 +51,7 @@ pub const shell_eval = @import("shell_eval.zig");
 pub const shell_test = @import("shell_test.zig");
 pub const shell_explain = @import("shell_explain.zig");
 pub const allow_once = @import("allow_once.zig");
+pub const allowlist_cmd = @import("allowlist_cmd.zig");
 pub const rust_legacy_stub = @import("rust_legacy_stub.zig");
 pub const rust_visibility = @import("rust_visibility.zig");
 pub const feed_writer = @import("feed_writer.zig");
@@ -94,6 +95,8 @@ test {
     _ = hook;
     _ = shell_test;
     _ = shell_explain;
+    _ = allow_once;
+    _ = allowlist_cmd;
     _ = @import("explain_render.zig");
     _ = rust_legacy_stub;
     _ = rust_visibility;
@@ -411,8 +414,8 @@ fn runWithCwdUsing(
     }
 
     // Slice 1 honesty: unfinished / hide-list verbs fail short (usage), not a daemon essay.
-    // Later slices unhide + re-register green paths (packs, allowlist, allow-once, …).
-    // s-once-cli: live allow-once redeem/list/clear/revoke (Zig store; no daemon).
+    // Live P0: allow-once, packs, permanent allowlist writers (Zig store; no daemon).
+    // s-once-cli: live allow-once redeem/list/clear/revoke.
     if (std.mem.eql(u8, command, "allow-once")) {
         return allow_once.command(io, argv[1..], stdout, stderr);
     }
@@ -422,14 +425,23 @@ fn runWithCwdUsing(
         return packs.command(io, argv[1..], stdout, stderr);
     }
 
+    // Slice 2 / s-allowlist-cli: permanent pack-exception allowlist (TOML store; no daemon).
+    if (std.mem.eql(u8, command, "allowlist")) {
+        return allowlist_cmd.command(io, argv[1..], stdout, stderr);
+    }
+    if (std.mem.eql(u8, command, "allow")) {
+        return allowlist_cmd.commandAllow(io, argv[1..], stdout, stderr);
+    }
+    if (std.mem.eql(u8, command, "unallow")) {
+        return allowlist_cmd.commandUnallow(io, argv[1..], stdout, stderr);
+    }
+
     // Slice 1 honesty: hide-list verbs fail short (usage), not a daemon essay.
-    // Remaining unfinished P0: allowlist / allow / unallow (+ hide-list ports).
     if (std.mem.eql(u8, command, "history")) {
         return rust_legacy_stub.unavailable("history", stderr);
     }
 
-    // Local mutators (allow/unallow/config/rebase-recover + allowlist writers).
-    // allow-once is live above; remaining unfinished P0 stay short-unavailable.
+    // Remaining hide-list local mutators (config/rebase-recover).
     if (isDaemonLocalMutatingInvocation(command, argv[1..])) {
         return rust_legacy_stub.unavailable(command, stderr);
     }
@@ -542,15 +554,17 @@ fn proxyVersionCommand(comptime execute_cli: anytype, io: std.Io, stdout: anytyp
 /// Top-level commands that previously proxied through the Rust daemon via ExecuteCli.
 /// `test` / `explain` are Zig-native; remaining entries stub until ported or dropped.
 fn isDaemonProxyCommand(command: []const u8) bool {
+    // allowlist is live Zig (s-allowlist-cli); no longer a daemon proxy surface.
     return std.mem.eql(u8, command, "scan") or
         std.mem.eql(u8, command, "precommit") or
-        std.mem.eql(u8, command, "allowlist") or
         std.mem.eql(u8, command, "classify") or
         std.mem.eql(u8, command, "suggest-allowlist") or
         std.mem.eql(u8, command, "simulate");
 }
 
 /// Commands that always mutate policy/config: never sent over ExecuteCli UDS.
+/// Live Zig mutators (allow/unallow/allow-once) remain classified here for machine-mode
+/// detection only; dispatch routes them to Zig CLI before honesty stubs.
 fn isDaemonLocalMutatingTopLevel(command: []const u8) bool {
     return std.mem.eql(u8, command, "allow") or
         std.mem.eql(u8, command, "unallow") or
@@ -563,16 +577,6 @@ fn isDaemonLocalMutatingTopLevel(command: []const u8) bool {
 fn isDaemonLocalMutatingInvocation(command: []const u8, command_args: []const []const u8) bool {
     // Top-level mutators always go local (including `--help`).
     if (isDaemonLocalMutatingTopLevel(command)) return true;
-    if (std.mem.eql(u8, command, "allowlist")) {
-        for (command_args) |arg| {
-            if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) return false;
-        }
-        if (command_args.len == 0) return false;
-        const sub = command_args[0];
-        if (std.mem.eql(u8, sub, "list") or std.mem.eql(u8, sub, "show") or
-            std.mem.eql(u8, sub, "ls")) return false;
-        return true;
-    }
     if (std.mem.eql(u8, command, "suggest-allowlist")) {
         for (command_args) |arg| {
             if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) return false;
@@ -1011,7 +1015,7 @@ test "phase A proxy commands construct daemon argv and render success" {
 
     try std.testing.expect(!isDaemonProxyCommand("explain"));
     try std.testing.expect(!isDaemonProxyCommand("test"));
-    try std.testing.expect(isDaemonProxyCommand("allowlist"));
+    try std.testing.expect(!isDaemonProxyCommand("allowlist"));
     try std.testing.expect(!isDaemonProxyCommand("allow"));
     try std.testing.expect(!isDaemonProxyCommand("unallow"));
     try std.testing.expect(!isDaemonProxyCommand("allow-once"));
@@ -1022,8 +1026,6 @@ test "phase A proxy commands construct daemon argv and render success" {
     try std.testing.expect(isDaemonProxyCommand("simulate"));
     try std.testing.expect(isDaemonLocalMutatingTopLevel("allow"));
     try std.testing.expect(isDaemonLocalMutatingTopLevel("allow-once"));
-    try std.testing.expect(isDaemonLocalMutatingInvocation("allowlist", &.{"add"}));
-    try std.testing.expect(!isDaemonLocalMutatingInvocation("allowlist", &.{"list"}));
     try std.testing.expect(isDaemonLocalMutatingInvocation("suggest-allowlist", &.{ "--apply", "1" }));
     try std.testing.expect(isDaemonLocalMutatingInvocation("suggest-allowlist", &.{ "--undo", "60" }));
     try std.testing.expect(!isDaemonLocalMutatingInvocation("suggest-allowlist", &.{"--non-interactive"}));
@@ -1031,12 +1033,6 @@ test "phase A proxy commands construct daemon argv and render success" {
     try std.testing.expect(!isDaemonProxyCommand("init"));
 
     // Direct proxyDaemonCommand helper still works for remaining stubbed ExecuteCli surfaces.
-    const allowlist_code = try proxyDaemonCommand(fakeAllowlistProxySuccess, "allowlist", &.{"list"}, std.testing.io, &stdout_writer, &stderr_writer);
-    try std.testing.expectEqual(exit_codes.success, allowlist_code);
-    try std.testing.expectEqualStrings("allowlist ok\n", stdout_writer.buffered());
-
-    stdout_writer = .fixed(&stdout_buf);
-    stderr_writer = .fixed(&stderr_buf);
     const classify_code = try proxyDaemonCommand(fakeClassifyProxySuccess, "classify", &.{"rm -rf /tmp/x"}, std.testing.io, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, classify_code);
     try std.testing.expectEqualStrings("classify ok\n", stdout_writer.buffered());
@@ -1537,15 +1533,18 @@ test "P0 honesty: live allow-once dispatches usage (not short not-available)" {
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "Usage: ryk allow-once") != null);
 }
 
-test "P0 honesty: unfinished local-mutator allow is short not-available" {
-    // Second local-mutator sample (allow shortcut) shares the same contract.
-    var stdout_buf: [512]u8 = undefined;
-    var stderr_buf: [1024]u8 = undefined;
+test "P0 honesty: live allow dispatches usage (not short not-available)" {
+    // s-allowlist-cli: bare allow is live CLI usage, not honesty stub.
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
     const code = try testRun(&.{"allow"}, &stdout_writer, &stderr_writer);
-    try expectShortUnavailable("allow", code, stdout_writer.buffered(), stderr_writer.buffered(), true);
+    try std.testing.expectEqual(exit_codes.usage, code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "not available") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk allow") != null or
+        std.mem.indexOf(u8, stderr_writer.buffered(), "allowlist") != null);
 }
 
 test "P0 honesty: shutdown still dispatches live Zig path (not not-available)" {
@@ -1793,7 +1792,8 @@ test "top-level report exports preserve exact generated bytes" {
 }
 
 test "banner suppressed on machine proxy path (packs --format json)" {
-    var stdout_buf: [1024]u8 = undefined;
+    // Live packs --json dumps the full oracle catalog (>>1KiB).
+    var stdout_buf: [256 * 1024]u8 = undefined;
     var stderr_buf: [512]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);

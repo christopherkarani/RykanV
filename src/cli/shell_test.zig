@@ -60,8 +60,13 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     try shell_eval.loadProductShellStores(io, std.heap.smp_allocator, workspace, &stores);
     defer stores.deinit(std.heap.smp_allocator);
 
+    // Allow-once cwd-scope matches exact evaluate cwd (hook uses event cwd). Prefer
+    // process realpath so grants redeemed at the deny site match `ryk test` here.
+    const process_cwd = std.Io.Dir.cwd().realPathFileAlloc(io, ".", std.heap.smp_allocator) catch null;
+    defer if (process_cwd) |p| std.heap.smp_allocator.free(p);
+
     var eval = try shell_engine.evaluateCommand(std.heap.smp_allocator, command_text, .{
-        .cwd = workspace,
+        .cwd = process_cwd orelse workspace,
         .default_packs_only = true,
         .extra_enabled = packs.enabled,
         .disabled = packs.disabled,

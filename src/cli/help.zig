@@ -301,48 +301,51 @@ pub const commands =
         },
         .{
             .name = "allowlist",
-            .summary = "Manage allowlist entries for pack rules",
-            .usage = "ryk allowlist <add|list|remove|validate|prune|...> [options]",
+            .summary = "Manage permanent pack-exception allowlist entries",
+            .usage = "ryk allowlist <add|add-command|list|remove|validate|prune> [options]",
             .category = .core_workflow,
-            // Slice 1 honesty: unfinished P0 — hidden until allowlist CLI lands.
-            .hidden = true,
+            // s-allowlist-cli: live Zig permanent TOML store (no daemon).
+            .hidden = false,
             .examples = &.{
                 "ryk allowlist list",
                 "ryk allowlist add core.git:reset-hard -r \"intentional reset\"",
+                "ryk allowlist add-command \"git status\" -r \"CI bootstrap\"",
                 "ryk allow \"core.git:reset-hard\" -r \"intentional reset\"",
             },
             .details = &.{
-                "Proxies to the Rust daemon allowlist manager.",
-                "Shortcuts: 'orca allow <rule>' and 'orca unallow <rule>' also proxy.",
+                "Permanent pack exceptions (rule id or exact command) with required reason.",
+                "Project file: .orca/allowlist.toml · user: $XDG_CONFIG_HOME/orca/allowlist.toml.",
+                "kind=command short-circuits before packs; kind=rule skips that rule only (E8).",
+                "Shortcuts: 'ryk allow <rule>' and 'ryk unallow <key>'.",
                 "Use 'ryk allowlist --help' for actions and options.",
             },
         },
         .{
             .name = "allow",
-            .summary = "Add a rule to the allowlist (shortcut)",
+            .summary = "Add a rule to the permanent allowlist (shortcut)",
             .usage = "ryk allow <rule-id> -r <reason> [options]",
             .category = .core_workflow,
-            // Slice 1 honesty: unfinished P0 — hidden until allowlist CLI lands.
-            .hidden = true,
+            // s-allowlist-cli: live Zig permanent TOML store (no daemon).
+            .hidden = false,
             .examples = &.{
                 "ryk allow core.git:reset-hard -r \"recovering local branch\"",
             },
             .details = &.{
-                "Shortcut for 'ryk allowlist add'. Proxies to the Rust daemon.",
+                "Shortcut for 'ryk allowlist add'. Writes project or user allowlist.toml.",
             },
         },
         .{
             .name = "unallow",
-            .summary = "Remove a rule from the allowlist (shortcut)",
-            .usage = "ryk unallow <rule-id> [options]",
+            .summary = "Remove a permanent allowlist entry (shortcut)",
+            .usage = "ryk unallow <rule-id|exact-command> [options]",
             .category = .core_workflow,
-            // Slice 1 honesty: unfinished P0 — hidden until allowlist CLI lands.
-            .hidden = true,
+            // s-allowlist-cli: live Zig permanent TOML store (no daemon).
+            .hidden = false,
             .examples = &.{
                 "ryk unallow core.git:reset-hard",
             },
             .details = &.{
-                "Shortcut for 'ryk allowlist remove'. Proxies to the Rust daemon.",
+                "Shortcut for 'ryk allowlist remove'. Key is rule id or exact command string.",
             },
         },
         .{
@@ -1108,13 +1111,15 @@ test "help --all lists full advanced command surface" {
     // Hard-removed peers: not listed as live usage on help --all
     try std.testing.expect(!helpListsPeerCommand(all, "quickstart"));
     try std.testing.expect(!helpListsPeerCommand(all, "setup"));
-    // Unavailable ports / unfinished P0 verbs are not product surface.
+    // Unavailable ports are not product surface.
     try std.testing.expect(!helpListsPeerCommand(all, "history"));
     try std.testing.expect(!helpListsPeerCommand(all, "scan"));
-    try std.testing.expect(!helpListsPeerCommand(all, "allowlist"));
-    // Live slices: packs (s-packs) + allow-once (s-once-cli) are product surface on --all.
+    // Live P0: packs, allow-once, permanent allowlist writers.
     try std.testing.expect(helpListsPeerCommand(all, "packs"));
     try std.testing.expect(helpListsPeerCommand(all, "allow-once"));
+    try std.testing.expect(helpListsPeerCommand(all, "allowlist"));
+    try std.testing.expect(helpListsPeerCommand(all, "allow"));
+    try std.testing.expect(helpListsPeerCommand(all, "unallow"));
 }
 
 test "help setup and quickstart print removal notice pointing at start" {
@@ -1136,8 +1141,8 @@ test "help setup and quickstart print removal notice pointing at start" {
 
 // ---------------------------------------------------------------------------
 // Slice 1 (P0 honesty) — public help set tells the truth about live verbs.
-// Hide-list = unavailable daemon ports; unfinished P0 = allowlist/allow/unallow
-// until those slices land. Live: packs (s-packs), allow-once (s-once-cli), shutdown.
+// Hide-list = unavailable daemon ports. Live P0: packs, allow-once, allowlist/
+// allow/unallow, shutdown.
 // ---------------------------------------------------------------------------
 
 /// Unavailable daemon-stub ports (plan hide-list). Not product surface.
@@ -1152,26 +1157,13 @@ const p0_honesty_hide_list = [_][]const u8{
     "config",
 };
 
-/// P0 verbs hidden until their implementing slice is green.
-/// packs + allow-once dropped after s-packs / s-once-cli unhide.
-const p0_honesty_unfinished = [_][]const u8{
-    "allowlist",
-    "allow",
-    "unallow",
-};
+/// Formerly unfinished P0 verbs — now all live (empty sentinel for omit tests).
+const p0_honesty_unfinished = [_][]const u8{};
 
-test "P0 honesty: hide-list and unfinished verbs are marked hidden; shutdown is not" {
+test "P0 honesty: hide-list verbs are marked hidden; live P0 + shutdown are not" {
     for (p0_honesty_hide_list) |name| {
         const info = findCommand(name) orelse {
             std.debug.print("missing help entry for hide-list command: {s}\n", .{name});
-            try std.testing.expect(false);
-            return;
-        };
-        try std.testing.expect(info.hidden);
-    }
-    for (p0_honesty_unfinished) |name| {
-        const info = findCommand(name) orelse {
-            std.debug.print("missing help entry for unfinished P0 command: {s}\n", .{name});
             try std.testing.expect(false);
             return;
         };
@@ -1184,6 +1176,12 @@ test "P0 honesty: hide-list and unfinished verbs are marked hidden; shutdown is 
     try std.testing.expect(!packs_info.hidden);
     const allow_once_info = findCommand("allow-once") orelse return error.TestUnexpectedResult;
     try std.testing.expect(!allow_once_info.hidden);
+    const allowlist_info = findCommand("allowlist") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!allowlist_info.hidden);
+    const allow_info = findCommand("allow") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!allow_info.hidden);
+    const unallow_info = findCommand("unallow") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!unallow_info.hidden);
 }
 
 /// True when root help text teaches unfinished/hide-list verbs outside peer rows
