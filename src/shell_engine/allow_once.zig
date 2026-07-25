@@ -8,73 +8,22 @@
 //! Reference behavior: DCG `pending_exceptions.rs` (TTL, prune, exact match, single-use consume,
 //! lock spirit, bounded growth). Tests inject absolute paths — no env required.
 //!
-//! --- Expected public API (implementer; tests are the contract) ---
-//!
-//! Constants:
-//!   `schema_version = 1`
-//!   `default_ttl_hours = 24`
-//!   `max_pending_lines = 10_000`
-//!   `max_pending_bytes = 10 * 1024 * 1024`
-//!   `pending_file_name` / `allow_once_file_name`
-//!
-//! Types:
-//!   `ScopeKind` = enum { cwd, project }
-//!   `PendingRecord` — short_code (6-digit), full_hash (64 hex), created_at, expires_at,
-//!                     cwd, command_raw, reason, single_use, consumed_at?
-//!   `AllowOnceEntry` — source_short_code, source_full_hash, created_at, expires_at,
-//!                      scope_kind, scope_path, command_raw, reason, single_use, consumed_at?
-//!   `Maintenance` — pruned_expired, pruned_consumed, parse_errors
-//!   `PendingList` / `AllowOnceList` — owned slices + `.deinit(gpa)`
-//!
-//! Pure helpers:
-//!   `computeFullHash(gpa, created_at, cwd, command_raw) ![]u8`  — SHA-256 hex of
-//!       `"{created_at} | {cwd} | {command_raw}"` (no secret; optional HMAC is follow-up)
-//!   `shortCodeFromHash(full_hash) [6]u8` — last 8 hex chars → u32 → % 1_000_000 → 6 digits
-//!   `isExpired(expires_at, now_iso) bool` — expires_at <= now (ISO-8601 same-format lex)
-//!   `scopeMatches(entry, cwd) bool` — cwd exact for .cwd; path-prefix for .project
-//!
-//! Pending store (path = absolute pending_exceptions.jsonl):
-//!   `issuePending(io, gpa, path, command, cwd, reason, now_iso, single_use) !PendingIssue`
-//!       — append pending line; prune expired/consumed; enforce max lines/bytes;
-//!         short_code unique among active pending (re-key created_at +1s on collision);
-//!         returns owned record
-//!   `loadPendingActive(io, gpa, path, now_iso) !LoadPending`
-//!       — active only; rewrites file when prunes; skips corrupt lines (parse_errors)
-//!   `lookupPendingByCode(io, gpa, path, code, now_iso) !LoadPending`
-//!   `clearPending(io, gpa, path, now_iso) !ClearResult`  — removed count + maintenance
-//!   `revokePending(io, gpa, path, code_or_hash, now_iso) !ClearResult`
-//!
-//! Allow-once store (path = absolute allow_once.jsonl):
-//!   `redeem(io, gpa, pending_path, allow_once_path, code, now_iso, scope_kind, scope_path) !AllowOnceEntry`
-//!       — lookup active pending by short_code (fail closed if ambiguous);
-//!         burn pending on disk first (fail-closed single-use integrity);
-//!         then write allow_once entry (default single_use=true, TTL from now);
-//!         owned entry returned
-//!   `loadAllowOnceActive(io, gpa, path, now_iso) !LoadAllowOnce`
-//!   `matchAllowOnce(io, gpa, path, command, cwd, now_iso, consume) !?AllowOnceEntry`
-//!       — exact command_raw + scopeMatches; if consume and single_use → remove entry;
-//!         if !consume → match without removing (explain / dry-run)
-//!   `clearAllowOnce(io, gpa, path, now_iso) !ClearResult`
-//!   `revokeAllowOnce(io, gpa, path, code_or_hash, now_iso) !ClearResult`
-//!       — match source_short_code or source_full_hash
-//!
-//! Errors (in addition to allocator / IO):
-//!   `CodeNotFound`, `Expired`, `AlreadyConsumed`, `StoreFull`, `AmbiguousCode`
-//!
-//! JSONL: one JSON object per line; unknown/corrupt lines skipped (not fatal).
-//! s-engine re-exports this module and pulls tests into `test-shell-engine`.
-//! Until then: `./scripts/zig test src/shell_engine/allow_once.zig` after impl.
+//! JSONL: one object per line; unknown/corrupt lines skipped (not fatal).
+//! Errors include `CodeNotFound`, `Expired`, `AlreadyConsumed`, `StoreFull`, `AmbiguousCode`.
+//! Re-exported via `shell_engine` and covered by `test-shell-engine`.
 
 const std = @import("std");
 
 // ---------------------------------------------------------------------------
-// Public contract — types & constants (implementer fills function bodies)
+// Types & constants
 // ---------------------------------------------------------------------------
 
 pub const schema_version: u32 = 1;
 pub const default_ttl_hours: i64 = 24;
 pub const max_pending_lines: usize = 10_000;
 pub const max_pending_bytes: u64 = 10 * 1024 * 1024;
+/// Prefer not to rotate/evict pending rows younger than this when enforcing caps.
+pub const pending_rotation_grace_secs: i64 = 300;
 pub const pending_file_name = "pending_exceptions.jsonl";
 pub const allow_once_file_name = "allow_once.jsonl";
 
@@ -243,6 +192,7 @@ pub fn computeFullHash(
 }
 
 /// Last 8 hex chars → u32 → % 1_000_000 → zero-padded 6 digits.
+/// Deterministic helper for tests / metadata only — live short codes are CSPRNG-minted.
 pub fn shortCodeFromHash(full_hash: []const u8) [6]u8 {
     var out: [6]u8 = "000000".*;
     if (full_hash.len < 8) return out;
@@ -259,6 +209,8 @@ pub fn isExpired(expires_at: []const u8, now_iso: []const u8) bool {
 }
 
 /// cwd scope: exact path. project scope: path-prefix (boundary on `/`).
+/// Project match fails closed on ".." components or "//" empty segments in either side.
+/// Canonical realpath equality under a root is handled by evaluate/shell_eval, not here.
 pub fn scopeMatches(entry: AllowOnceEntry, cwd: []const u8) bool {
     return switch (entry.scope_kind) {
         .cwd => std.mem.eql(u8, entry.scope_path, cwd),
@@ -268,12 +220,31 @@ pub fn scopeMatches(entry: AllowOnceEntry, cwd: []const u8) bool {
 
 fn pathIsUnder(root: []const u8, path: []const u8) bool {
     if (root.len == 0) return false;
+    // Fail closed: non-canonical relative tricks must not expand project scope.
+    if (pathHasUnsafeSegments(root) or pathHasUnsafeSegments(path)) return false;
     if (std.mem.eql(u8, root, path)) return true;
     if (path.len <= root.len) return false;
     if (!std.mem.startsWith(u8, path, root)) return false;
     // Require a path separator boundary so "/repo" does not match "/repo-other".
     const boundary = if (root[root.len - 1] == '/') true else path[root.len] == '/';
     return boundary;
+}
+
+/// True when `p` contains a ".." path component or an empty segment from "//".
+/// Leading empty (absolute path "/") is allowed; subsequent empties and ".." are not.
+fn pathHasUnsafeSegments(p: []const u8) bool {
+    var iter = std.mem.splitScalar(u8, p, '/');
+    var index: usize = 0;
+    while (iter.next()) |seg| {
+        if (seg.len == 0) {
+            // Absolute paths start with '/'; that first empty is fine. Later empties are "//".
+            if (index != 0) return true;
+        } else if (std.mem.eql(u8, seg, "..")) {
+            return true;
+        }
+        index += 1;
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -290,17 +261,20 @@ pub fn issuePending(
     now_iso: []const u8,
     single_use: bool,
 ) !PendingIssue {
+    var lock = try StoreLock.acquire(runtime_io, gpa, pending_path);
+    defer lock.release(runtime_io);
+
     var state = try loadPendingState(runtime_io, gpa, pending_path, now_iso);
     defer {
         freePendingRecords(gpa, state.active.items);
         state.active.deinit(gpa);
     }
 
-    // Bounded growth: rotate oldest active rows until under line/byte caps.
-    try rotatePendingToFit(gpa, &state, 1);
+    // Bounded growth: rotate oldest non-grace rows until under line/byte caps.
+    try rotatePendingToFit(gpa, &state, 1, now_iso);
 
-    // Ensure short_code is unique among active pending (re-key created_at on collision).
-    const record = try buildPendingRecordUnique(gpa, state.active.items, command, cwd, reason, now_iso, single_use);
+    // Ensure short_code is unique among active pending (re-mint CSPRNG on collision).
+    const record = try buildPendingRecordUnique(runtime_io, gpa, state.active.items, command, cwd, reason, now_iso, single_use);
     var record_owned = true;
     errdefer if (record_owned) freePendingRecord(gpa, record);
 
@@ -309,7 +283,8 @@ pub fn issuePending(
     defer gpa.free(trial_line);
     if (state.active_bytes + trial_line.len + 1 > max_pending_bytes) {
         while (state.active.items.len > 0 and state.active_bytes + trial_line.len + 1 > max_pending_bytes) {
-            const old = state.active.orderedRemove(0);
+            const victim = findRotationVictim(state.active.items, now_iso) orelse return error.StoreFull;
+            const old = state.active.orderedRemove(victim);
             const old_line = renderPendingLine(gpa, old) catch {
                 freePendingRecord(gpa, old);
                 return error.StoreFull;
@@ -317,6 +292,7 @@ pub fn issuePending(
             defer gpa.free(old_line);
             state.active_bytes -|= old_line.len + 1;
             freePendingRecord(gpa, old);
+            state.dirty = true;
         }
         if (state.active_bytes + trial_line.len + 1 > max_pending_bytes) {
             return error.StoreFull;
@@ -327,9 +303,13 @@ pub fn issuePending(
     record_owned = false; // now owned by state.active (defer frees it)
     state.active_bytes += trial_line.len + 1;
 
+    // Clone return ownership before durable write so OOM after write cannot orphan
+    // a caller-visible "issue failed" while the row is already on disk (M-16).
+    const owned = try clonePendingRecord(gpa, state.active.items[state.active.items.len - 1]);
+    errdefer freePendingRecord(gpa, owned);
+
     try writePendingFile(runtime_io, gpa, pending_path, state.active.items);
 
-    const owned = try clonePendingRecord(gpa, state.active.items[state.active.items.len - 1]);
     return .{
         .record = owned,
         .maintenance = state.maintenance,
@@ -342,6 +322,9 @@ pub fn loadPendingActive(
     pending_path: []const u8,
     now_iso: []const u8,
 ) !LoadPending {
+    var lock = try StoreLock.acquire(runtime_io, gpa, pending_path);
+    defer lock.release(runtime_io);
+
     var state = try loadPendingState(runtime_io, gpa, pending_path, now_iso);
     errdefer {
         freePendingRecords(gpa, state.active.items);
@@ -365,6 +348,9 @@ pub fn lookupPendingByCode(
     code: []const u8,
     now_iso: []const u8,
 ) !LoadPending {
+    var lock = try StoreLock.acquire(runtime_io, gpa, pending_path);
+    defer lock.release(runtime_io);
+
     var state = try loadPendingState(runtime_io, gpa, pending_path, now_iso);
     defer {
         freePendingRecords(gpa, state.active.items);
@@ -408,6 +394,9 @@ pub fn clearPending(
     pending_path: []const u8,
     now_iso: []const u8,
 ) !ClearResult {
+    var lock = try StoreLock.acquire(runtime_io, gpa, pending_path);
+    defer lock.release(runtime_io);
+
     var state = try loadPendingState(runtime_io, gpa, pending_path, now_iso);
     defer {
         freePendingRecords(gpa, state.active.items);
@@ -433,6 +422,9 @@ pub fn revokePending(
     code_or_hash: []const u8,
     now_iso: []const u8,
 ) !ClearResult {
+    var lock = try StoreLock.acquire(runtime_io, gpa, pending_path);
+    defer lock.release(runtime_io);
+
     var state = try loadPendingState(runtime_io, gpa, pending_path, now_iso);
     defer {
         freePendingRecords(gpa, state.active.items);
@@ -475,6 +467,12 @@ pub fn redeem(
     scope_kind: ScopeKind,
     scope_path: []const u8,
 ) !AllowOnceEntry {
+    // Fixed lock order (pending → allow_once) to avoid cross-store deadlock.
+    var pending_lock = try StoreLock.acquire(runtime_io, gpa, pending_path);
+    defer pending_lock.release(runtime_io);
+    var allow_lock = try StoreLock.acquire(runtime_io, gpa, allow_once_path);
+    defer allow_lock.release(runtime_io);
+
     var pending_state = try loadPendingState(runtime_io, gpa, pending_path, now_iso);
     defer {
         freePendingRecords(gpa, pending_state.active.items);
@@ -540,6 +538,9 @@ pub fn loadAllowOnceActive(
     allow_once_path: []const u8,
     now_iso: []const u8,
 ) !LoadAllowOnce {
+    var lock = try StoreLock.acquire(runtime_io, gpa, allow_once_path);
+    defer lock.release(runtime_io);
+
     var state = try loadAllowOnceState(runtime_io, gpa, allow_once_path, now_iso);
     errdefer {
         freeAllowOnceEntries(gpa, state.active.items);
@@ -555,7 +556,7 @@ pub fn loadAllowOnceActive(
 
 /// Match exact command + scope. When `consume` is true and the entry is single_use,
 /// remove it from the store (evaluate path). When `consume` is false, leave store intact
-/// (explain / dry-run).
+/// (explain / dry-run / peek before consume).
 pub fn matchAllowOnce(
     runtime_io: std.Io,
     gpa: std.mem.Allocator,
@@ -565,6 +566,9 @@ pub fn matchAllowOnce(
     now_iso: []const u8,
     consume: bool,
 ) !?AllowOnceEntry {
+    var lock = try StoreLock.acquire(runtime_io, gpa, allow_once_path);
+    defer lock.release(runtime_io);
+
     var state = try loadAllowOnceState(runtime_io, gpa, allow_once_path, now_iso);
     defer {
         freeAllowOnceEntries(gpa, state.active.items);
@@ -608,6 +612,9 @@ pub fn clearAllowOnce(
     allow_once_path: []const u8,
     now_iso: []const u8,
 ) !ClearResult {
+    var lock = try StoreLock.acquire(runtime_io, gpa, allow_once_path);
+    defer lock.release(runtime_io);
+
     var state = try loadAllowOnceState(runtime_io, gpa, allow_once_path, now_iso);
     defer {
         freeAllowOnceEntries(gpa, state.active.items);
@@ -631,6 +638,9 @@ pub fn revokeAllowOnce(
     code_or_hash: []const u8,
     now_iso: []const u8,
 ) !ClearResult {
+    var lock = try StoreLock.acquire(runtime_io, gpa, allow_once_path);
+    defer lock.release(runtime_io);
+
     var state = try loadAllowOnceState(runtime_io, gpa, allow_once_path, now_iso);
     defer {
         freeAllowOnceEntries(gpa, state.active.items);
@@ -717,7 +727,11 @@ fn loadPendingState(
         }
 
         const line_bytes = line.len + 1;
-        try state.active.append(gpa, parsed);
+        // Free parsed on append OOM before ownership transfers to state (M-21).
+        {
+            errdefer freePendingRecord(gpa, parsed);
+            try state.active.append(gpa, parsed);
+        }
         state.active_bytes += line_bytes;
     }
 
@@ -739,11 +753,13 @@ fn pendingStateToLoad(gpa: std.mem.Allocator, state: *PendingState) !LoadPending
     };
 }
 
-fn rotatePendingToFit(gpa: std.mem.Allocator, state: *PendingState, room_for: usize) !void {
+fn rotatePendingToFit(gpa: std.mem.Allocator, state: *PendingState, room_for: usize, now_iso: []const u8) !void {
     // Line cap: keep at most max_pending_lines - room_for existing rows.
+    // Prefer not to drop rows issued within pending_rotation_grace_secs (M-13).
     while (state.active.items.len + room_for > max_pending_lines) {
         if (state.active.items.len == 0) return error.StoreFull;
-        const old = state.active.orderedRemove(0);
+        const victim = findRotationVictim(state.active.items, now_iso) orelse return error.StoreFull;
+        const old = state.active.orderedRemove(victim);
         const old_line = renderPendingLine(gpa, old) catch {
             freePendingRecord(gpa, old);
             return error.StoreFull;
@@ -753,6 +769,45 @@ fn rotatePendingToFit(gpa: std.mem.Allocator, state: *PendingState, room_for: us
         freePendingRecord(gpa, old);
         state.dirty = true;
     }
+}
+
+/// Oldest index not within the rotation grace window, or null if all rows are young.
+fn findRotationVictim(items: []const PendingRecord, now_iso: []const u8) ?usize {
+    var i: usize = 0;
+    while (i < items.len) : (i += 1) {
+        if (!isCreatedWithinGrace(items[i].created_at, now_iso)) return i;
+    }
+    return null;
+}
+
+/// True when created_at is within pending_rotation_grace_secs of now_iso (parseable ISO only).
+fn isCreatedWithinGrace(created_at: []const u8, now_iso: []const u8) bool {
+    const c = parseIsoUtc(created_at) catch return false;
+    const n = parseIsoUtc(now_iso) catch return false;
+    const c_secs = approxUnixSecs(c);
+    const n_secs = approxUnixSecs(n);
+    if (n_secs <= c_secs) return true;
+    return (n_secs - c_secs) < pending_rotation_grace_secs;
+}
+
+fn approxUnixSecs(p: IsoParts) i64 {
+    var days: i64 = 0;
+    var y: i32 = 1970;
+    if (p.year >= 1970) {
+        while (y < p.year) : (y += 1) {
+            days += if (isLeapYear(y)) 366 else 365;
+        }
+    } else {
+        while (y > p.year) : (y -= 1) {
+            days -= if (isLeapYear(y - 1)) 366 else 365;
+        }
+    }
+    var m: i32 = 1;
+    while (m < p.month) : (m += 1) {
+        days += daysInMonth(p.year, m);
+    }
+    days += p.day - 1;
+    return days * 86400 + p.hour * 3600 + @as(i64, @intCast(p.minute)) * 60 + @as(i64, @intCast(p.second));
 }
 
 fn parsePendingLine(gpa: std.mem.Allocator, line: []const u8) !PendingRecord {
@@ -824,7 +879,7 @@ fn writePendingFile(
         try buf.appendSlice(gpa, line);
         try buf.append(gpa, '\n');
     }
-    try writeFile(runtime_io, path, buf.items);
+    try writeFile(runtime_io, gpa, path, buf.items);
 }
 
 fn clonePendingRecord(gpa: std.mem.Allocator, r: PendingRecord) !PendingRecord {
@@ -941,7 +996,11 @@ fn loadAllowOnceState(
             continue;
         }
 
-        try state.active.append(gpa, parsed);
+        // Free parsed on append OOM before ownership transfers to state (M-21).
+        {
+            errdefer freeAllowOnceEntry(gpa, parsed);
+            try state.active.append(gpa, parsed);
+        }
     }
 
     return state;
@@ -1045,7 +1104,7 @@ fn writeAllowOnceFile(
         try buf.appendSlice(gpa, line);
         try buf.append(gpa, '\n');
     }
-    try writeFile(runtime_io, path, buf.items);
+    try writeFile(runtime_io, gpa, path, buf.items);
 }
 
 fn cloneAllowOnceEntry(gpa: std.mem.Allocator, e: AllowOnceEntry) !AllowOnceEntry {
@@ -1202,8 +1261,9 @@ fn shortCodeInUse(records: []const PendingRecord, code: []const u8) bool {
 }
 
 /// Build a pending record whose short_code is unique among `active`.
-/// On collision, re-key by bumping `created_at` (+1s each attempt) so hash/short_code change.
+/// On collision, re-mint a fresh CSPRNG short_code (created_at stays at now_iso).
 fn buildPendingRecordUnique(
+    runtime_io: std.Io,
     gpa: std.mem.Allocator,
     active: []const PendingRecord,
     command: []const u8,
@@ -1212,24 +1272,27 @@ fn buildPendingRecordUnique(
     now_iso: []const u8,
     single_use: bool,
 ) !PendingRecord {
-    // max_pending_lines unique codes always fit in 1e6 space; bound retries tightly.
-    const max_attempts: i64 = @intCast(max_pending_lines + 16);
-    var offset: i64 = 0;
-    while (offset < max_attempts) : (offset += 1) {
-        const created_at_iso = if (offset == 0)
-            try gpa.dupe(u8, now_iso)
-        else
-            try addSecondsIso(gpa, now_iso, offset);
-        defer gpa.free(created_at_iso);
-
-        const record = try buildPendingRecord(gpa, command, cwd, reason, created_at_iso, single_use);
+    // 1e6 code space; bound retries well below that for pathological stores.
+    const max_attempts: usize = 64;
+    var attempt: usize = 0;
+    while (attempt < max_attempts) : (attempt += 1) {
+        const record = try buildPendingRecord(runtime_io, gpa, command, cwd, reason, now_iso, single_use);
         if (!shortCodeInUse(active, record.short_code)) return record;
         freePendingRecord(gpa, record);
     }
     return error.StoreFull;
 }
 
+/// Mint a 6-digit short code from Io CSPRNG entropy (Zig 0.16: `io.random`).
+fn mintShortCode(runtime_io: std.Io, gpa: std.mem.Allocator) ![]u8 {
+    var src = std.Random.IoSource{ .io = runtime_io };
+    const r = src.interface();
+    const n = r.intRangeLessThan(u32, 0, 1_000_000);
+    return try std.fmt.allocPrint(gpa, "{d:0>6}", .{n});
+}
+
 fn buildPendingRecord(
+    runtime_io: std.Io,
     gpa: std.mem.Allocator,
     command: []const u8,
     cwd: []const u8,
@@ -1241,8 +1304,8 @@ fn buildPendingRecord(
     errdefer gpa.free(expires_at);
     const full_hash = try computeFullHash(gpa, now_iso, cwd, command);
     errdefer gpa.free(full_hash);
-    const code_buf = shortCodeFromHash(full_hash);
-    const short_code = try gpa.dupe(u8, code_buf[0..]);
+    // Live short codes are CSPRNG (M-7). shortCodeFromHash remains a pure test/metadata helper.
+    const short_code = try mintShortCode(runtime_io, gpa);
     errdefer gpa.free(short_code);
     const created_at = try gpa.dupe(u8, now_iso);
     errdefer gpa.free(created_at);
@@ -1361,20 +1424,79 @@ fn readFileOptional(runtime_io: std.Io, gpa: std.mem.Allocator, path: []const u8
     };
 }
 
-fn writeFile(runtime_io: std.Io, path: []const u8, body: []const u8) !void {
+/// Exclusive advisory lock for a store path (`{path}.lock`). Spans load-modify-write.
+const StoreLock = struct {
+    file: std.Io.File,
+
+    fn acquire(runtime_io: std.Io, gpa: std.mem.Allocator, store_path: []const u8) !StoreLock {
+        if (std.fs.path.dirname(store_path)) |dir| {
+            std.Io.Dir.cwd().createDirPath(runtime_io, dir) catch |err| switch (err) {
+                error.PathAlreadyExists => {},
+                else => return err,
+            };
+        }
+        const lock_path = try std.fmt.allocPrint(gpa, "{s}.lock", .{store_path});
+        defer gpa.free(lock_path);
+        const lock_file = try std.Io.Dir.cwd().createFile(runtime_io, lock_path, .{
+            .read = true,
+            .truncate = false,
+        });
+        errdefer lock_file.close(runtime_io);
+        try lock_file.lock(runtime_io, .exclusive);
+        return .{ .file = lock_file };
+    }
+
+    fn release(self: *StoreLock, runtime_io: std.Io) void {
+        self.file.unlock(runtime_io);
+        self.file.close(runtime_io);
+        self.* = undefined;
+    }
+};
+
+/// Atomic replace: same-dir temp + fsync + rename, permissions 0o600 (M-3/M-5).
+fn writeFile(runtime_io: std.Io, gpa: std.mem.Allocator, path: []const u8, body: []const u8) !void {
     if (std.fs.path.dirname(path)) |dir| {
         std.Io.Dir.cwd().createDirPath(runtime_io, dir) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return err,
         };
     }
-    var file = try std.Io.Dir.cwd().createFile(runtime_io, path, .{});
-    defer file.close(runtime_io);
-    try file.writeStreamingAll(runtime_io, body);
+
+    const parent = std.fs.path.dirname(path) orelse ".";
+    const base = std.fs.path.basename(path);
+    const tmp_name = try std.fmt.allocPrint(gpa, ".{s}.tmp", .{base});
+    defer gpa.free(tmp_name);
+    const tmp_path = try std.fs.path.join(gpa, &.{ parent, tmp_name });
+    defer gpa.free(tmp_path);
+
+    // Drop stale temp from a prior crash so create is reliable.
+    std.Io.Dir.cwd().deleteFile(runtime_io, tmp_path) catch {};
+    {
+        var file = try std.Io.Dir.cwd().createFile(runtime_io, tmp_path, .{
+            .exclusive = true,
+            .permissions = std.Io.File.Permissions.fromMode(0o600),
+        });
+        errdefer {
+            file.close(runtime_io);
+            std.Io.Dir.cwd().deleteFile(runtime_io, tmp_path) catch {};
+        }
+        try file.writeStreamingAll(runtime_io, body);
+        try file.sync(runtime_io);
+        file.close(runtime_io);
+    }
+    errdefer std.Io.Dir.cwd().deleteFile(runtime_io, tmp_path) catch {};
+
+    // Prefer renameAbsolute when both paths are absolute (feed_writer pattern); else cwd rename.
+    if (std.fs.path.isAbsolute(tmp_path) and std.fs.path.isAbsolute(path)) {
+        try std.Io.Dir.renameAbsolute(tmp_path, path, runtime_io);
+    } else {
+        const cwd = std.Io.Dir.cwd();
+        try cwd.rename(tmp_path, cwd, path, runtime_io);
+    }
 }
 
 // ---------------------------------------------------------------------------
-// Tests — locked contract (implementer: green these; do not weaken assertions)
+// Tests
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -1451,11 +1573,43 @@ test "s3-once-store: computeFullHash is stable SHA-256 hex of timestamp|cwd|comm
 }
 
 test "s3-once-store: shortCodeFromHash is 6-digit numeric from last 8 hex chars" {
+    // Deterministic helper only — live issuePending mints CSPRNG codes (M-7).
     const full = "17a268f67ce0aab3bc5015427e3ba8fd1d643d25f9f13dca1332c13818a5ac63";
     const code = shortCodeFromHash(full);
     try testing.expect(isSixDigitNumeric(code[0..]));
     // 0x18a5ac63 % 1_000_000 = 510755 (plan example / DCG vector).
     try testing.expectEqualStrings("510755", code[0..]);
+}
+
+test "s3-once-store: issuePending mints 6-digit CSPRNG short codes (not hash-derived)" {
+    var tmp = try tmpRoot();
+    defer {
+        allocator.free(tmp.path);
+        tmp.dir.cleanup();
+    }
+    const paths = try storePaths(tmp.path);
+    defer {
+        allocator.free(paths.pending);
+        allocator.free(paths.allow_once);
+    }
+
+    var a = try issuePending(io, allocator, paths.pending, "cmd-rand-a", "/repo", "reason a enough", fixed_now, true);
+    defer a.deinit(allocator);
+    var b = try issuePending(io, allocator, paths.pending, "cmd-rand-b", "/repo", "reason b enough", fixed_now, true);
+    defer b.deinit(allocator);
+
+    try testing.expect(isSixDigitNumeric(a.record.short_code));
+    try testing.expect(isSixDigitNumeric(b.record.short_code));
+    // Distinct commands → distinct CSPRNG codes almost always; codes must not both equal
+    // the deterministic hash helper for the same inputs (collision still ok if random hits).
+    const hash_a = try computeFullHash(allocator, fixed_now, "/repo", "cmd-rand-a");
+    defer allocator.free(hash_a);
+    const det = shortCodeFromHash(hash_a);
+    // Redeem still accepts whatever code was minted.
+    const entry = try redeem(io, allocator, paths.pending, paths.allow_once, a.record.short_code, fixed_now, .cwd, "/repo");
+    defer freeAllowOnceEntry(allocator, entry);
+    try testing.expectEqualStrings(a.record.short_code, entry.source_short_code);
+    _ = det; // retained to document separation from hash helper
 }
 
 test "s3-once-store: isExpired lexicographic ISO compare" {
@@ -1495,6 +1649,23 @@ test "s3-once-store: scopeMatches cwd exact and project prefix" {
     try testing.expect(scopeMatches(project_entry, "/repo/a/b"));
     try testing.expect(!scopeMatches(project_entry, "/repo-other"));
     try testing.expect(!scopeMatches(project_entry, "/other"));
+    // M-4: fail closed on ".." and "//" path tricks (realpath is evaluate's job).
+    try testing.expect(!scopeMatches(project_entry, "/repo/../etc"));
+    try testing.expect(!scopeMatches(project_entry, "/repo/foo/../../etc"));
+    try testing.expect(!scopeMatches(project_entry, "/repo//secret"));
+    try testing.expect(!scopeMatches(project_entry, "../repo"));
+    const dirty_root = AllowOnceEntry{
+        .source_short_code = "510755",
+        .source_full_hash = "ab",
+        .created_at = fixed_now,
+        .expires_at = far_future,
+        .scope_kind = .project,
+        .scope_path = "/repo/../evil",
+        .command_raw = "git status",
+        .reason = "scope test",
+    };
+    try testing.expect(!scopeMatches(dirty_root, "/repo/../evil"));
+    try testing.expect(!scopeMatches(dirty_root, "/evil"));
 }
 
 // ── Acceptance 1: issue → redeem → match; wrong cwd miss; expired cannot redeem

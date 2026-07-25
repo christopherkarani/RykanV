@@ -21,6 +21,11 @@ const supervisor = core.supervisor;
 pub const ShellCommandEvent = struct {
     command: []const u8,
     cwd: ?[]const u8 = null,
+    /// Session/workspace root for pack config + permanent allowlist loads.
+    /// When set (hook/session), product stores load from this root only.
+    /// When null, `zigEvaluator` walks up from tool cwd — residual: nested
+    /// `.git` / `.orca` under agent-controlled cwd can still hijack loads (M-9).
+    workspace_root: ?[]const u8 = null,
 };
 
 pub const ShellCommandEvaluatorFn = *const fn (
@@ -157,30 +162,48 @@ pub const ProductShellStores = struct {
     }
 };
 
-fn resolveUserAllowlistPath(allocator: std.mem.Allocator) !?[]u8 {
-    if (std.c.getenv("XDG_CONFIG_HOME")) |xdg| {
-        return try std.fs.path.join(allocator, &.{ std.mem.span(xdg), "orca", "allowlist.toml" });
+/// Match CLI empty checks: empty `XDG_CONFIG_HOME` falls back to HOME (not join under "").
+fn resolveUserAllowlistPath(allocator: std.mem.Allocator) error{OutOfMemory}!?[]u8 {
+    if (std.c.getenv("XDG_CONFIG_HOME")) |xdg_z| {
+        const xdg = std.mem.span(xdg_z);
+        if (xdg.len > 0) {
+            return try std.fs.path.join(allocator, &.{ xdg, "orca", "allowlist.toml" });
+        }
     }
-    const home = std.c.getenv("HOME") orelse return null;
-    return try std.fs.path.join(allocator, &.{ std.mem.span(home), ".config", "orca", "allowlist.toml" });
+    if (std.c.getenv("HOME")) |home_z| {
+        const home = std.mem.span(home_z);
+        if (home.len > 0) {
+            return try std.fs.path.join(allocator, &.{ home, ".config", "orca", "allowlist.toml" });
+        }
+    }
+    return null;
 }
 
-fn resolveAllowOnceJsonlPath(allocator: std.mem.Allocator) !?[]u8 {
-    if (std.c.getenv("XDG_DATA_HOME")) |xdg| {
-        return try std.fs.path.join(allocator, &.{
-            std.mem.span(xdg),
-            "orca",
-            shell_engine.allow_once.allow_once_file_name,
-        });
+/// Match CLI empty checks: empty `XDG_DATA_HOME` falls back to HOME (not join under "").
+fn resolveAllowOnceJsonlPath(allocator: std.mem.Allocator) error{OutOfMemory}!?[]u8 {
+    if (std.c.getenv("XDG_DATA_HOME")) |xdg_z| {
+        const xdg = std.mem.span(xdg_z);
+        if (xdg.len > 0) {
+            return try std.fs.path.join(allocator, &.{
+                xdg,
+                "orca",
+                shell_engine.allow_once.allow_once_file_name,
+            });
+        }
     }
-    const home = std.c.getenv("HOME") orelse return null;
-    return try std.fs.path.join(allocator, &.{
-        std.mem.span(home),
-        ".local",
-        "share",
-        "orca",
-        shell_engine.allow_once.allow_once_file_name,
-    });
+    if (std.c.getenv("HOME")) |home_z| {
+        const home = std.mem.span(home_z);
+        if (home.len > 0) {
+            return try std.fs.path.join(allocator, &.{
+                home,
+                ".local",
+                "share",
+                "orca",
+                shell_engine.allow_once.allow_once_file_name,
+            });
+        }
+    }
+    return null;
 }
 
 /// Load permanent allowlist (user + project) and resolve allow-once path for product
@@ -188,20 +211,34 @@ fn resolveAllowOnceJsonlPath(allocator: std.mem.Allocator) !?[]u8 {
 ///
 /// - Project file: `<workspace>/.orca/allowlist.toml`
 /// - User file: `$XDG_CONFIG_HOME/orca/allowlist.toml` or `~/.config/orca/allowlist.toml`
+///   (empty `XDG_CONFIG_HOME` falls back to HOME, matching allowlist CLI)
 /// - Allow-once: `$XDG_DATA_HOME/orca/allow_once.jsonl` or `~/.local/share/orca/allow_once.jsonl`
+///   (empty `XDG_DATA_HOME` falls back to HOME, matching allow-once CLI)
 ///
 /// Missing files → empty layer / match miss. Corrupt permanent file → empty + no panic.
 /// Does **not** set `EvaluateOptions.allowlists` (Layered pre-pack banned on product path).
+///
+/// **Project kind=command:** stripped after merge (M-10). Project layer may only
+/// contribute `kind=rule` (E8 skip-this-rule). User-layer `kind=command` remains.
+/// Residual: CLI `ryk allowlist add --project` can still write command entries to
+/// disk; product evaluate ignores them until attestation policy lands.
+///
+/// Error set is OOM-only: path joins and loadMerged only fail on allocation;
+/// corrupt/missing stores are empty layers, not errors.
 pub fn loadProductShellStores(
     runtime_io: std.Io,
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
     out: *ProductShellStores,
-) !void {
+) error{OutOfMemory}!void {
     out.* = .{};
     errdefer out.deinit(allocator);
 
-    const iso = try core.time.Timestamp.now(runtime_io).formatIso(&out.now_iso_buf);
+    const iso = core.time.Timestamp.now(runtime_io).formatIso(&out.now_iso_buf) catch {
+        // formatIso only fails if the stack buffer is too small (compile-time contract).
+        // Map to OOM rather than invent a DaemonError for an impossible runtime case.
+        return error.OutOfMemory;
+    };
     out.now_iso = out.now_iso_buf[0..iso.len];
 
     const user_path = try resolveUserAllowlistPath(allocator);
@@ -219,7 +256,62 @@ pub fn loadProductShellStores(
     );
     out.permanent = outcome.store;
 
+    // M-10: project kind=command is pre-pack FULL ALLOW from agent-writable tree.
+    // Keep project kind=rule (E8) and all user-layer entries (including command).
+    stripProjectCommandEntries(allocator, &out.permanent);
+
     out.allow_once_path = try resolveAllowOnceJsonlPath(allocator);
+}
+
+/// Free permanent entry fields owned by the store (mirrors allowlist_store.freeEntry).
+fn freePermanentEntryFields(gpa: std.mem.Allocator, e: shell_engine.allowlist_store.PermanentEntry) void {
+    if (e.id) |id| gpa.free(id);
+    if (e.command) |c| gpa.free(c);
+    gpa.free(e.reason);
+    gpa.free(e.created_at);
+    if (e.expires_at) |x| gpa.free(x);
+}
+
+/// Drop project-layer `kind=command` entries from a product permanent store.
+/// Rebuilds the owned entries slice; frees dropped entry fields.
+/// On allocation failure while rebuilding, empties the store (fail closed).
+fn stripProjectCommandEntries(gpa: std.mem.Allocator, store: *shell_engine.allowlist_store.Store) void {
+    if (!store.owned or store.entries.len == 0) return;
+
+    var keep_n: usize = 0;
+    for (store.entries) |e| {
+        if (!(e.layer == .project and e.kind == .command)) keep_n += 1;
+    }
+    if (keep_n == store.entries.len) return;
+
+    if (keep_n == 0) {
+        for (store.entries) |e| freePermanentEntryFields(gpa, e);
+        gpa.free(store.entries);
+        store.entries = &.{};
+        store.owned = false;
+        return;
+    }
+
+    const new_entries = gpa.alloc(shell_engine.allowlist_store.PermanentEntry, keep_n) catch {
+        // Fail closed: prefer empty permanent store over leaving project full-allows.
+        for (store.entries) |e| freePermanentEntryFields(gpa, e);
+        gpa.free(store.entries);
+        store.entries = &.{};
+        store.owned = false;
+        return;
+    };
+
+    var i: usize = 0;
+    for (store.entries) |e| {
+        if (e.layer == .project and e.kind == .command) {
+            freePermanentEntryFields(gpa, e);
+        } else {
+            new_entries[i] = e;
+            i += 1;
+        }
+    }
+    gpa.free(store.entries);
+    store.entries = new_entries;
 }
 
 fn zigEvaluator(
@@ -230,10 +322,23 @@ fn zigEvaluator(
     // Missing config → baseline only. Unreadable / oversized config fails closed.
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();
-    // Discover enclosing workspace/repo root so nested cwds still load /repo/.orca.toml.
-    const cwd_hint = shell_event.cwd orelse ".";
-    const workspace = supervisor.resolveWorkspaceRoot(io, allocator, null, cwd_hint) catch cwd_hint;
-    defer if (workspace.ptr != cwd_hint.ptr) allocator.free(workspace);
+
+    // M-14: realpath evaluate cwd so allow-once scope matches test/explain and
+    // Darwin /var vs /private/var does not void cwd-scoped grants.
+    const eval_cwd = try resolveEffectiveCwd(allocator, shell_event.cwd);
+    defer allocator.free(eval_cwd);
+
+    // M-9: prefer session-bound workspace_root when provided (hook). When null,
+    // walk up from tool cwd — residual hijack if agent plants nested .git/.orca.
+    var walkup_owned: ?[]const u8 = null;
+    defer if (walkup_owned) |w| allocator.free(w);
+    const workspace: []const u8 = if (shell_event.workspace_root) |wr| wr else blk: {
+        const cwd_hint = shell_event.cwd orelse ".";
+        const resolved = supervisor.resolveWorkspaceRoot(io, allocator, null, cwd_hint) catch cwd_hint;
+        if (resolved.ptr != cwd_hint.ptr) walkup_owned = resolved;
+        break :blk resolved;
+    };
+
     var packs = pack_config.loadPackIdsForWorkspace(io, allocator, workspace) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.HomeDirectoryNotFound => pack_config.LoadedPackIds{},
@@ -257,12 +362,15 @@ fn zigEvaluator(
 
     // Permanent pack exceptions + allow-once via distinct API (not options.allowlists).
     // consume_allow_once defaults true for hook/run/shim (burns single-use).
+    // loadProductShellStores is error{OutOfMemory}!void — map honestly (M-20).
     var stores: ProductShellStores = .{};
-    loadProductShellStores(io, allocator, workspace, &stores) catch return error.OutOfMemory;
+    loadProductShellStores(io, allocator, workspace, &stores) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+    };
     defer stores.deinit(allocator);
 
     var eval = shell_engine.evaluateCommand(allocator, shell_event.command, .{
-        .cwd = shell_event.cwd,
+        .cwd = eval_cwd,
         .default_packs_only = true,
         .extra_enabled = packs.enabled,
         .disabled = packs.disabled,
@@ -1345,7 +1453,13 @@ pub fn evaluateCommand(
 
     const classification = intercept.commands.classifyArgv(argv);
 
-    const shell_event = ShellCommandEvent{ .command = display, .cwd = cwd };
+    // Prefer audit workspace_root when present so run/shim bind packs/stores to session
+    // root (M-9). Null keeps walk-up residual for bare evaluate callers.
+    const shell_event = ShellCommandEvent{
+        .command = display,
+        .cwd = cwd,
+        .workspace_root = if (audit_options) |opts| opts.workspace_root else null,
+    };
     const daemon_response = evaluateParsed(allocator, shell_event, evaluator_override) catch |err| {
         if (metadata_out) |out| {
             out.* = try rust_visibility.metadataForUnavailable(allocator, event_source_run, null, err);
@@ -3570,7 +3684,7 @@ fn sProductWireGitWorkspace() !struct {
     return .{ .tmp = tmp, .root = root };
 }
 
-test "s-product-wire: zigEvaluator loads project permanent kind=command into permanent_allowlist (not options.allowlists)" {
+test "s-product-wire: project permanent kind=command is stripped (M-10; not FULL ALLOW)" {
     const allocator = std.testing.allocator;
     var xdg = try sProductWireIsolateXdg();
     defer xdg.deinit();
@@ -3581,22 +3695,10 @@ test "s-product-wire: zigEvaluator loads project permanent kind=command into per
     const reason = "s-product-wire permanent command marker reason for zigEvaluator";
     try sProductWireWriteProjectCommandAllow(ws.root, cmd, reason);
 
-    // Baseline without entry would deny; with permanent product load → Allow + reason.
+    // M-10: project-layer kind=command must not unlock on product path.
     {
         var parsed = try zigEvaluator(allocator, .{
             .command = cmd,
-            .cwd = ws.root,
-        });
-        defer parsed.deinit();
-        try std.testing.expectEqual(daemon.ResponseStatus.allow, daemon.responseStatus(parsed.value.result));
-        const got_reason = daemon.responseReason(parsed.value.result) orelse "";
-        try std.testing.expect(std.mem.indexOf(u8, got_reason, reason) != null);
-    }
-
-    // Exact-only: near-miss still denies (proves not Layered prefix via options.allowlists).
-    {
-        var parsed = try zigEvaluator(allocator, .{
-            .command = "git reset --hard HEAD~1",
             .cwd = ws.root,
         });
         defer parsed.deinit();
@@ -3604,6 +3706,45 @@ test "s-product-wire: zigEvaluator loads project permanent kind=command into per
         const got_reason = daemon.responseReason(parsed.value.result) orelse "";
         try std.testing.expect(std.mem.indexOf(u8, got_reason, reason) == null);
     }
+
+    // Bound workspace_root path still strips (not a walk-up artifact).
+    {
+        var parsed = try zigEvaluator(allocator, .{
+            .command = cmd,
+            .cwd = ws.root,
+            .workspace_root = ws.root,
+        });
+        defer parsed.deinit();
+        try std.testing.expectEqual(daemon.ResponseStatus.deny, daemon.responseStatus(parsed.value.result));
+    }
+}
+
+test "s-product-wire: loadProductShellStores strips project command keeps rule + user command" {
+    const allocator = std.testing.allocator;
+    var xdg = try sProductWireIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sProductWireGitWorkspace();
+    defer ws.deinit();
+
+    try sProductWireWriteProjectCommandAllow(ws.root, "git reset --hard HEAD", "project-cmd-should-drop");
+    try sProductWireWriteProjectRuleAllow(ws.root, "core.git:reset-hard", "project-rule-keep");
+    try sProductWireWriteUserCommandAllow(xdg.config_root, "npm test", "user-cmd-keep");
+
+    var stores: ProductShellStores = .{};
+    try loadProductShellStores(std.testing.io, allocator, ws.root, &stores);
+    defer stores.deinit(allocator);
+
+    var saw_project_cmd = false;
+    var saw_project_rule = false;
+    var saw_user_cmd = false;
+    for (stores.permanent.entries) |e| {
+        if (e.layer == .project and e.kind == .command) saw_project_cmd = true;
+        if (e.layer == .project and e.kind == .rule) saw_project_rule = true;
+        if (e.layer == .user and e.kind == .command) saw_user_cmd = true;
+    }
+    try std.testing.expect(!saw_project_cmd);
+    try std.testing.expect(saw_project_rule);
+    try std.testing.expect(saw_user_cmd);
 }
 
 test "s-product-wire: zigEvaluator loads user permanent allowlist from XDG_CONFIG_HOME" {

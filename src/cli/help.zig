@@ -218,7 +218,7 @@ pub const commands =
             .summary = "Scan files for destructive commands",
             .usage = "ryk scan [--staged|--paths <path>...] [options]",
             .category = .core_workflow,
-            // Slice 1 honesty: unavailable daemon port — not product surface.
+            // Unavailable daemon-backed ports stay hidden (not product surface).
             .hidden = true,
             .examples = &.{
                 "ryk scan --staged",
@@ -234,8 +234,7 @@ pub const commands =
             .summary = "Review protected command history",
             .usage = "ryk history [stats|check|analyze|interactive|export|prune|backup] [options] [--days N] [--strict] [--live] [--json|--robot|--format <value>]",
             .category = .diagnostics,
-            // Slice 1 honesty: unavailable daemon port — not product surface (use `replay`).
-            .hidden = true,
+            .hidden = true, // use `replay` for history-like review
             .examples = &.{
                 "ryk history stats --days 7",
                 "ryk history check --strict",
@@ -253,7 +252,6 @@ pub const commands =
             .summary = "Run the Rust pre-commit safety scan",
             .usage = "ryk precommit [options]",
             .category = .core_workflow,
-            // Slice 1 honesty: unavailable daemon port — not product surface.
             .hidden = true,
             .examples = &.{
                 "ryk precommit",
@@ -288,7 +286,6 @@ pub const commands =
             .summary = "Classify a shell command's risk without blocking",
             .usage = "ryk classify <command> [options]",
             .category = .diagnostics,
-            // Slice 1 honesty: unavailable daemon port — not product surface.
             .hidden = true,
             .examples = &.{
                 "ryk classify \"git status\"",
@@ -370,7 +367,6 @@ pub const commands =
             .summary = "Suggest allowlist entries from protected history",
             .usage = "ryk suggest-allowlist [options]",
             .category = .diagnostics,
-            // Slice 1 honesty: unavailable daemon port — not product surface.
             .hidden = true,
             .examples = &.{
                 "ryk suggest-allowlist",
@@ -392,7 +388,6 @@ pub const commands =
             .summary = "Dry-run policy / packs against a command file or history dump",
             .usage = "ryk simulate [--file <path>] [options]",
             .category = .diagnostics,
-            // Slice 1 honesty: unavailable daemon port — not product surface.
             .hidden = true,
             .examples = &.{
                 "ryk simulate --file commands.txt",
@@ -411,7 +406,6 @@ pub const commands =
             .summary = "Issue a short-lived permit for git rebase recovery",
             .usage = "ryk rebase-recover [--ttl <seconds>]",
             .category = .core_workflow,
-            // Slice 1 honesty: unavailable daemon port — not product surface.
             .hidden = true,
             .examples = &.{
                 "ryk rebase-recover",
@@ -427,7 +421,6 @@ pub const commands =
             .summary = "Show ryk daemon configuration",
             .usage = "ryk config",
             .category = .diagnostics,
-            // Slice 1 honesty: unavailable daemon port — not product surface.
             .hidden = true,
             .examples = &.{
                 "ryk config",
@@ -802,8 +795,7 @@ pub fn writeWithMode(io: std.Io, writer: anytype, mode: WriteMode) !void {
     }
     try writer.writeAll("\n");
     if (mode == .all) {
-        // Slice 1 honesty: do not teach unfinished allow-once / allowlist verbs.
-        // Shell deny remediation is live via `ryk explain` (+ policy explain for file rules).
+        // Shell deny remediation via explain; permanent allowlist / allow-once are live CLI verbs.
         try writer.writeAll("  ");
         try tui.theme.paint(io, writer, .muted, "Shell deny remediation: ryk explain \"…\". Policy files: ryk policy explain.");
         try writer.writeAll("\n\n");
@@ -1106,7 +1098,7 @@ test "help --all lists full advanced command surface" {
     try std.testing.expect(helpListsPeerCommand(all, "init"));
     try std.testing.expect(helpListsPeerCommand(all, "mcp"));
     try std.testing.expect(helpListsPeerCommand(all, "env"));
-    // Live Zig daemon-stop remains on the advanced surface (Slice 1 honesty).
+    // Live Zig daemon-stop remains on the advanced surface.
     try std.testing.expect(helpListsPeerCommand(all, "shutdown"));
     // Hard-removed peers: not listed as live usage on help --all
     try std.testing.expect(!helpListsPeerCommand(all, "quickstart"));

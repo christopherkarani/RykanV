@@ -2,6 +2,7 @@
 //!
 //! Distinct from policy `allowlist.Layered` / `Entry.prefix`.
 //! Types: kind rule|command, id/command, reason, created_at, expires_at, layer.
+//! No `prefix` field — permanent path is never prefix-based.
 //!
 //! TOML (illustrative product schema):
 //! ```toml
@@ -18,41 +19,7 @@
 //!
 //! Paths (product): project `.orca/allowlist.toml`, user `~/.config/orca/allowlist.toml`
 //! (or `$XDG_CONFIG_HOME/orca/allowlist.toml`). Tests inject absolute paths.
-//!
-//! --- Expected public API (implementer; tests are the contract) ---
-//!
-//! `EntryKind` = enum { rule, command }
-//! `Layer`     = enum { user, project }
-//!
-//! `PermanentEntry` fields:
-//!   kind, id (?), command (?), reason, created_at, expires_at (?), layer
-//!   — no `prefix` field; permanent path is never prefix-based.
-//!
-//! `Store` { entries: []PermanentEntry, owned: bool }
-//!   `.deinit(allocator)`
-//!   `.matchCommand(command, now_iso) ?PermanentEntry`  — exact trimmed equality only
-//!   `.matchRule(rule_id, now_iso) ?PermanentEntry`     — E8 skip-this-rule lookup
-//!
-//! `LoadOutcome` { store: Store, corrupt: bool }
-//!   corrupt=true means file existed but was unreadable/invalid → empty store, no panic
-//!
-//! `loadFile(io, allocator, path, layer) !LoadOutcome`
-//! `loadMerged(io, allocator, user_path: ?[]const u8, project_path: ?[]const u8) !LoadOutcome`
-//!   project wins on same key (rule id or exact command); missing file = empty layer
-//!
-//! `Draft` { kind, id ?, command ?, reason, created_at, expires_at ? }
-//! `ValidateError` = ReasonRequired | CommandRequired | RuleIdRequired |
-//!                   InvalidRuleIdForm | UnknownRuleId
-//! `validateDraft(draft, known_rule_ids: ?[]const []const u8) ValidateError!void`
-//! `isValidRuleIdForm(id) bool`  — nonempty pack + ":" + nonempty pattern
-//!
-//! `addEntry(io, allocator, path, layer, draft, known_rule_ids) !void`
-//! `removeEntry(io, allocator, path, layer, key) !bool`  — key = rule id or exact command
-//! `entryKey(entry) []const u8`
-//! `isExpired(entry, now_iso) bool`
-//!
-//! s-engine re-exports this module and pulls tests into `test-shell-engine`.
-//! Until then: `./scripts/zig test src/shell_engine/allowlist_store.zig` after impl.
+//! Re-exported via `shell_engine` and covered by `test-shell-engine`.
 
 const std = @import("std");
 
@@ -285,7 +252,13 @@ fn absorbLayer(
     outcome.store.owned = false;
     defer gpa.free(items);
 
-    for (items) |e| {
+    // Index loop so OOM mid-merge frees the current entry + remaining unmerged items.
+    var i: usize = 0;
+    errdefer {
+        while (i < items.len) : (i += 1) freeEntry(gpa, items[i]);
+    }
+    while (i < items.len) {
+        const e = items[i];
         const key = entryKey(e);
         var replaced = false;
         for (list.items, 0..) |existing, idx| {
@@ -299,8 +272,15 @@ fn absorbLayer(
         if (!replaced) {
             try list.append(gpa, e);
         }
+        // Ownership transferred into list; advance past e so errdefer skips it.
+        i += 1;
     }
 }
+
+pub const MutateError = error{
+    /// File exists but is unreadable/invalid; refuse to wipe and rewrite.
+    CorruptStore,
+};
 
 pub fn addEntry(
     runtime_io: std.Io,
@@ -312,14 +292,14 @@ pub fn addEntry(
 ) !void {
     try validateDraft(draft, known_rule_ids);
 
+    var lock = try StoreLock.acquire(runtime_io, gpa, path);
+    defer lock.release(runtime_io);
+
     var outcome = try loadFile(runtime_io, gpa, path, layer);
-    // Corrupt file: start from empty (fail-closed load) and rewrite cleanly.
+    // Corrupt file: do not wipe prior content — refuse the mutation.
     if (outcome.corrupt) {
         outcome.store.deinit(gpa);
-        outcome = .{
-            .store = .{ .entries = &.{}, .owned = false },
-            .corrupt = false,
-        };
+        return error.CorruptStore;
     }
     defer outcome.store.deinit(gpa);
 
@@ -329,9 +309,11 @@ pub fn addEntry(
         list.deinit(gpa);
     }
 
-    // Clone existing entries into working list
+    // Clone existing entries into working list (clone-then-append: free clone if append OOMs).
     for (outcome.store.entries) |e| {
-        try list.append(gpa, try cloneEntry(gpa, e));
+        const cloned = try cloneEntry(gpa, e);
+        errdefer freeEntry(gpa, cloned);
+        try list.append(gpa, cloned);
     }
 
     const new_entry = try draftToEntry(gpa, draft, layer);
@@ -359,7 +341,7 @@ pub fn addEntry(
 
     const body = try renderToml(gpa, list.items);
     defer gpa.free(body);
-    try writeFile(runtime_io, path, body);
+    try writeFile(runtime_io, gpa, path, body);
 
     // Ownership transferred into file; free working list
     for (list.items) |e| freeEntry(gpa, e);
@@ -373,10 +355,13 @@ pub fn removeEntry(
     layer: Layer,
     key: []const u8,
 ) !bool {
+    var lock = try StoreLock.acquire(runtime_io, gpa, path);
+    defer lock.release(runtime_io);
+
     var outcome = try loadFile(runtime_io, gpa, path, layer);
     defer outcome.store.deinit(gpa);
     if (outcome.corrupt) {
-        // Nothing trustworthy to remove.
+        // Nothing trustworthy to remove; leave bytes untouched.
         return false;
     }
 
@@ -392,7 +377,10 @@ pub fn removeEntry(
             removed = true;
             continue;
         }
-        try list.append(gpa, try cloneEntry(gpa, e));
+        // Clone-then-append: free clone if append OOMs (list errdefer only covers items).
+        const cloned = try cloneEntry(gpa, e);
+        errdefer freeEntry(gpa, cloned);
+        try list.append(gpa, cloned);
     }
 
     if (!removed) {
@@ -403,7 +391,7 @@ pub fn removeEntry(
 
     const body = try renderToml(gpa, list.items);
     defer gpa.free(body);
-    try writeFile(runtime_io, path, body);
+    try writeFile(runtime_io, gpa, path, body);
 
     for (list.items) |e| freeEntry(gpa, e);
     list.deinit(gpa);
@@ -473,16 +461,62 @@ fn draftToEntry(gpa: std.mem.Allocator, draft: Draft, layer: Layer) !PermanentEn
     };
 }
 
-fn writeFile(runtime_io: std.Io, path: []const u8, body: []const u8) !void {
+/// Exclusive advisory lock for a store path (`{path}.lock`). Spans load-modify-write.
+const StoreLock = struct {
+    file: std.Io.File,
+
+    fn acquire(runtime_io: std.Io, gpa: std.mem.Allocator, store_path: []const u8) !StoreLock {
+        if (std.fs.path.dirname(store_path)) |dir| {
+            std.Io.Dir.cwd().createDirPath(runtime_io, dir) catch |err| switch (err) {
+                error.PathAlreadyExists => {},
+                else => return err,
+            };
+        }
+        const lock_path = try std.fmt.allocPrint(gpa, "{s}.lock", .{store_path});
+        defer gpa.free(lock_path);
+        const lock_file = try std.Io.Dir.cwd().createFile(runtime_io, lock_path, .{
+            .read = true,
+            .truncate = false,
+        });
+        errdefer lock_file.close(runtime_io);
+        try lock_file.lock(runtime_io, .exclusive);
+        return .{ .file = lock_file };
+    }
+
+    fn release(self: *StoreLock, runtime_io: std.Io) void {
+        self.file.unlock(runtime_io);
+        self.file.close(runtime_io);
+        self.* = undefined;
+    }
+};
+
+/// Atomic same-directory temp write + renameAbsolute; owner-only mode (0o600).
+fn writeFile(runtime_io: std.Io, gpa: std.mem.Allocator, path: []const u8, body: []const u8) !void {
     if (std.fs.path.dirname(path)) |dir| {
         std.Io.Dir.cwd().createDirPath(runtime_io, dir) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return err,
         };
     }
-    var file = try std.Io.Dir.cwd().createFile(runtime_io, path, .{});
-    defer file.close(runtime_io);
-    try file.writeStreamingAll(runtime_io, body);
+    const perms: std.Io.File.Permissions = @enumFromInt(0o600);
+    // Unique suffix so concurrent writers do not clobber each other's temps.
+    const pid = std.c.getpid();
+    const nonce = std.Io.Clock.Timestamp.now(runtime_io, .awake).raw.nanoseconds;
+    const temp_path = try std.fmt.allocPrint(gpa, "{s}.tmp.{d}.{d}", .{ path, pid, nonce });
+    defer gpa.free(temp_path);
+    errdefer std.Io.Dir.cwd().deleteFile(runtime_io, temp_path) catch {};
+
+    {
+        var file = try std.Io.Dir.cwd().createFile(runtime_io, temp_path, .{
+            .exclusive = true,
+            .permissions = perms,
+        });
+        errdefer file.close(runtime_io);
+        try file.writeStreamingAll(runtime_io, body);
+        try file.sync(runtime_io);
+        file.close(runtime_io);
+    }
+    try std.Io.Dir.renameAbsolute(temp_path, path, runtime_io);
 }
 
 fn renderToml(gpa: std.mem.Allocator, entries: []const PermanentEntry) ![]u8 {
@@ -566,7 +600,9 @@ fn parseToml(gpa: std.mem.Allocator, raw: []const u8, layer: Layer) ParseError!S
 
         if (std.mem.eql(u8, line, "[[entries]]")) {
             if (current) |p| {
+                // partialToEntry owns entry strings; free entry if append OOMs.
                 const entry = try partialToEntry(gpa, p, layer);
+                errdefer freeEntry(gpa, entry);
                 freePartial(gpa, p);
                 current = null;
                 try list.append(gpa, entry);
@@ -631,6 +667,7 @@ fn parseToml(gpa: std.mem.Allocator, raw: []const u8, layer: Layer) ParseError!S
 
     if (current) |p| {
         const entry = try partialToEntry(gpa, p, layer);
+        errdefer freeEntry(gpa, entry);
         freePartial(gpa, p);
         current = null;
         try list.append(gpa, entry);
@@ -1073,6 +1110,68 @@ test "s2-store: corrupt file treated as empty without panic" {
     try testing.expectEqual(@as(usize, 1), merged.store.entries.len);
 }
 
+test "s2-store: addEntry on multi-entry corrupt file fails without wipe" {
+    var tmp = try tmpRoot();
+    defer {
+        allocator.free(tmp.path);
+        tmp.dir.cleanup();
+    }
+    const path = try joinPath(tmp.path, "allowlist.toml");
+    defer allocator.free(path);
+
+    // Seed two durable entries, then poison the on-disk TOML so loadFile marks corrupt.
+    try addEntry(io, allocator, path, .project, .{
+        .kind = .rule,
+        .id = "core.git:reset-hard",
+        .reason = "first durable exception",
+        .created_at = "2026-07-25T12:00:00Z",
+    }, null);
+    try addEntry(io, allocator, path, .project, .{
+        .kind = .command,
+        .command = "git status",
+        .reason = "second durable exception",
+        .created_at = "2026-07-25T12:30:00Z",
+    }, null);
+
+    const good = try readFileAbsolute(path);
+    defer allocator.free(good);
+    try testing.expect(std.mem.indexOf(u8, good, "core.git:reset-hard") != null);
+    try testing.expect(std.mem.indexOf(u8, good, "git status") != null);
+
+    // Unknown array-of-tables trips parseToml Corrupt while leaving prior entry text present.
+    const poisoned = try std.fmt.allocPrint(allocator, "{s}\n[[not-entries]]\nkind = \"garbage\"\n", .{good});
+    defer allocator.free(poisoned);
+    try writeFileAbsolute(path, poisoned);
+
+    {
+        var loaded = try loadFile(io, allocator, path, .project);
+        defer loaded.store.deinit(allocator);
+        try testing.expect(loaded.corrupt);
+        try testing.expectEqual(@as(usize, 0), loaded.store.entries.len);
+    }
+
+    try testing.expectError(error.CorruptStore, addEntry(io, allocator, path, .project, .{
+        .kind = .rule,
+        .id = "core.git:push-force-long",
+        .reason = "must not replace multi-entry corrupt store",
+        .created_at = "2026-07-25T16:00:00Z",
+    }, null));
+
+    // Bytes must be unchanged — no silent wipe to empty+new.
+    const after = try readFileAbsolute(path);
+    defer allocator.free(after);
+    try testing.expectEqualStrings(poisoned, after);
+    try testing.expect(std.mem.indexOf(u8, after, "core.git:reset-hard") != null);
+    try testing.expect(std.mem.indexOf(u8, after, "git status") != null);
+    try testing.expect(std.mem.indexOf(u8, after, "push-force-long") == null);
+
+    // removeEntry stays careful: false, no rewrite.
+    try testing.expect(!(try removeEntry(io, allocator, path, .project, "core.git:reset-hard")));
+    const after_remove = try readFileAbsolute(path);
+    defer allocator.free(after_remove);
+    try testing.expectEqualStrings(poisoned, after_remove);
+}
+
 // ── Acceptance 2: kind=command exact-only (no prefix on permanent path) ──────
 
 test "s2-store: kind=command is exact-only no prefix match" {
@@ -1128,8 +1227,7 @@ test "s2-store: kind=command trims whitespace for exact match" {
 }
 
 test "s2-store: permanent entries have no prefix field and are not Layered" {
-    // Compile-time / structural guard: PermanentEntry must not expose policy-style prefix.
-    // If this fails to compile, implementer reintroduced Layered/prefix on permanent types.
+    // Structural guard: PermanentEntry must not expose policy-style prefix.
     const draft = Draft{
         .kind = .command,
         .command = "true",

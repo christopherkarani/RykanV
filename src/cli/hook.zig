@@ -1016,7 +1016,14 @@ fn evaluateShellCommandRoute(
     session_id: ?[]const u8,
 ) !HookResponse {
     const evaluator = evaluator_override orelse defaultShellCommandEvaluator;
-    const daemon_response = evaluator(allocator, shell_event) catch |err| {
+    // Bind session workspace so zigEvaluator loads packs/stores from hook root, not
+    // agent-controlled tool cwd walk-up (M-9). Preserve host cwd for allow-once scope.
+    const event_for_eval = ShellCommandEvent{
+        .command = shell_event.command,
+        .cwd = shell_event.cwd,
+        .workspace_root = workspace_root,
+    };
+    const daemon_response = evaluator(allocator, event_for_eval) catch |err| {
         if (!std.mem.eql(u8, host_name, "hermes")) recordShellHookUnavailable(io, allocator, workspace_root, host_name, err);
         return try makeFailClosedHookResponse(
             allocator,
@@ -1387,16 +1394,17 @@ fn buildAgentVisibleDaemonDeny(
     } else try buildMessage(allocator, decision, "command");
     errdefer allocator.free(message);
 
-    // Embed real short code in the agent-visible message so Codex guard stderr
-    // (sentinel + message + reason) surfaces a redeemable 6-digit code.
-    if (short_code_owned) |code| {
-        const with_code = try std.fmt.allocPrint(
+    // Pending is issued for the human/operator path, but the redeemable short code
+    // must never appear in agent-visible message or remediation_commands (M-1).
+    // Agents scrape deny panels; embedding digits would enable self-service bypass.
+    if (short_code_owned != null) {
+        const with_recourse = try std.fmt.allocPrint(
             allocator,
-            "{s}\nRecourse: ryk allow-once {s}",
-            .{ message, code },
+            "{s}\nRecourse: operator can run ryk allow-once <code> from local host UI",
+            .{message},
         );
         allocator.free(message);
-        message = with_code;
+        message = with_recourse;
     }
 
     const suggestions = try collectDaemonSuggestionTexts(allocator, result);
@@ -1404,12 +1412,13 @@ fn buildAgentVisibleDaemonDeny(
         for (suggestions) |s| allocator.free(s);
         allocator.free(suggestions);
     }
-    const remediation_commands = try buildRemediationCommands(allocator, safe_rule, short_code_owned);
+    // Always placeholder — never embed redeemable digits on the agent channel.
+    const remediation_commands = try buildRemediationCommands(allocator, safe_rule);
     errdefer {
         for (remediation_commands) |c| allocator.free(c);
         allocator.free(remediation_commands);
     }
-    // short_code is only needed for remediation/message construction; free after use.
+    // Code was only needed to know pending was issued; free (not agent-visible).
     if (short_code_owned) |c| {
         allocator.free(c);
         short_code_owned = null;
@@ -1459,18 +1468,16 @@ fn collectDaemonSuggestionTexts(allocator: std.mem.Allocator, result: std.json.V
     return try list.toOwnedSlice(allocator);
 }
 
-fn buildRemediationCommands(allocator: std.mem.Allocator, rule_id: ?[]const u8, short_code: ?[]const u8) ![][]const u8 {
+/// Agent-facing remediation only — never embeds a redeemable short code (M-1).
+/// Pending is still issued server-side; operators redeem out-of-band via TTY/UI.
+fn buildRemediationCommands(allocator: std.mem.Allocator, rule_id: ?[]const u8) ![][]const u8 {
     var list: std.ArrayList([]const u8) = .empty;
     errdefer {
         for (list.items) |s| allocator.free(s);
         list.deinit(allocator);
     }
     try list.append(allocator, try allocator.dupe(u8, "ryk explain \"<command>\""));
-    if (short_code) |code| {
-        try list.append(allocator, try std.fmt.allocPrint(allocator, "ryk allow-once {s}", .{code}));
-    } else {
-        try list.append(allocator, try allocator.dupe(u8, "ryk allow-once <code>"));
-    }
+    try list.append(allocator, try allocator.dupe(u8, "ryk allow-once <code>"));
     if (rule_id) |rid| {
         try list.append(allocator, try std.fmt.allocPrint(allocator, "ryk allowlist add {s} -r \"reason\"", .{rid}));
     } else {
@@ -4160,8 +4167,8 @@ test "hook PreToolUse denies notify with structural to+body under effects.deny" 
 
 // ---------------------------------------------------------------------------
 // s-once-cli — pack deny issues pending short code (when store enabled)
-// Locked INITIAL tests: RED until hook deny path calls allow_once.issuePending
-// and surfaces a real 6-digit code in remediation / human panel / codex guard.
+// M-1: pending is issued for the operator path, but redeemable digits must never
+// appear in agent-visible message / remediation / codex guard / human panel JSON.
 // ---------------------------------------------------------------------------
 
 test {
@@ -4239,6 +4246,7 @@ fn sOnceCliHookPendingPath(xdg_data: []const u8) ![]u8 {
 }
 
 /// Extract first real 6-digit short code after `allow-once ` (not the placeholder `<code>`).
+/// Used to assert agent-visible channels do **not** embed redeemable digits (M-1).
 fn sOnceCliHookExtractShortCode(blob: []const u8) ?[]const u8 {
     const marker = "allow-once ";
     var search_from: usize = 0;
@@ -4264,6 +4272,30 @@ fn sOnceCliHookExtractShortCode(blob: []const u8) ?[]const u8 {
         search_from = start + 1;
     }
     return null;
+}
+
+/// Load the pending short code for a command from the store (operator channel).
+fn sOnceCliHookPendingCodeForCommand(
+    allocator: std.mem.Allocator,
+    xdg_data: []const u8,
+    cmd_text: []const u8,
+    now_iso: []const u8,
+) ![]const u8 {
+    const pending_path = try sOnceCliHookPendingPath(xdg_data);
+    defer allocator.free(pending_path);
+    var loaded = try shell_engine.allow_once.loadPendingActive(
+        std.testing.io,
+        allocator,
+        pending_path,
+        now_iso,
+    );
+    defer loaded.deinit(allocator);
+    for (loaded.list.records) |rec| {
+        if (std.mem.eql(u8, rec.command_raw, cmd_text)) {
+            return try allocator.dupe(u8, rec.short_code);
+        }
+    }
+    return error.TestUnexpectedResult;
 }
 
 fn sOnceCliHookConcatRemediation(allocator: std.mem.Allocator, result: HookResponse) ![]u8 {
@@ -4310,7 +4342,7 @@ fn sOnceCliHookRealZigDeny(
 }
 
 test "s-once-cli: hook pack deny issues pending short code when store enabled" {
-    // Acceptance: pack deny → pending line + real 6-digit code in user-facing recourse.
+    // Acceptance: pack deny → pending row issued; agent-visible channel has no digits.
     var xdg = try sOnceCliHookIsolateXdg();
     defer xdg.deinit();
 
@@ -4332,14 +4364,13 @@ test "s-once-cli: hook pack deny issues pending short code when store enabled" {
 
     const blob = try sOnceCliHookConcatRemediation(allocator, result);
     defer allocator.free(blob);
-    const code = sOnceCliHookExtractShortCode(blob) orelse {
-        std.debug.print("expected real 6-digit allow-once code in remediation/message, got:\n{s}\n", .{blob});
-        try std.testing.expect(false);
-        return;
-    };
-    try std.testing.expectEqual(@as(usize, 6), code.len);
+    // M-1: agent-visible message/remediation must not embed redeemable digits.
+    try std.testing.expect(sOnceCliHookExtractShortCode(blob) == null);
+    try std.testing.expect(std.mem.indexOf(u8, blob, "allow-once") != null);
+    try std.testing.expect(std.mem.indexOf(u8, blob, "operator") != null or
+        std.mem.indexOf(u8, blob, "<code>") != null);
 
-    // Pending store must contain the issued code for this command.
+    // Pending store must still hold a real 6-digit code for this command (operator path).
     const pending_path = try sOnceCliHookPendingPath(xdg.data_root);
     defer allocator.free(pending_path);
     var loaded = try shell_engine.allow_once.loadPendingActive(
@@ -4352,15 +4383,26 @@ test "s-once-cli: hook pack deny issues pending short code when store enabled" {
     try std.testing.expect(loaded.list.records.len >= 1);
     var found = false;
     for (loaded.list.records) |rec| {
-        if (std.mem.eql(u8, rec.short_code, code) and std.mem.eql(u8, rec.command_raw, cmd_text)) {
-            found = true;
-            break;
+        if (std.mem.eql(u8, rec.command_raw, cmd_text) and rec.short_code.len == 6) {
+            var digits_ok = true;
+            for (rec.short_code) |c| {
+                if (c < '0' or c > '9') {
+                    digits_ok = false;
+                    break;
+                }
+            }
+            if (digits_ok) {
+                // And that code must not leak into agent-visible blob.
+                try std.testing.expect(std.mem.indexOf(u8, blob, rec.short_code) == null);
+                found = true;
+                break;
+            }
         }
     }
     try std.testing.expect(found);
 }
 
-test "s-once-cli: human deny panel mentions real allow-once code when store enabled" {
+test "s-once-cli: human deny panel redacts allow-once code (operator path only)" {
     var xdg = try sOnceCliHookIsolateXdg();
     defer xdg.deinit();
 
@@ -4373,7 +4415,8 @@ test "s-once-cli: human deny panel mentions real allow-once code when store enab
     defer std.testing.allocator.free(ws_root);
 
     const allocator = std.testing.allocator;
-    var result = try sOnceCliHookRealZigDeny(allocator, "git reset --hard", ws_root, ws_root);
+    const cmd_text = "git reset --hard";
+    var result = try sOnceCliHookRealZigDeny(allocator, cmd_text, ws_root, ws_root);
     defer result.deinit(allocator);
     try std.testing.expectEqual(PluginDecision.block, result.decision);
 
@@ -4383,25 +4426,24 @@ test "s-once-cli: human deny panel mentions real allow-once code when store enab
     const human = stderr_alloc.written();
     try std.testing.expect(std.mem.indexOf(u8, human, "RYK BLOCKED") != null or
         std.mem.indexOf(u8, human, "BLOCKED") != null);
-    const code = sOnceCliHookExtractShortCode(human) orelse {
-        // Also accept code living only on HookResponse if panel pulls from remediation later.
-        const blob = try sOnceCliHookConcatRemediation(allocator, result);
-        defer allocator.free(blob);
-        const from_resp = sOnceCliHookExtractShortCode(blob);
-        try std.testing.expect(from_resp != null);
-        // Panel itself must still teach allow-once with the concrete code.
-        try std.testing.expect(std.mem.indexOf(u8, human, "allow-once") != null);
-        try std.testing.expect(from_resp != null);
-        try std.testing.expect(std.mem.indexOf(u8, human, from_resp.?) != null);
-        return;
-    };
-    try std.testing.expectEqual(@as(usize, 6), code.len);
+    // Teaches allow-once recourse without embedding redeemable digits (M-1).
     try std.testing.expect(std.mem.indexOf(u8, human, "allow-once") != null);
+    try std.testing.expect(sOnceCliHookExtractShortCode(human) == null);
+
+    const blob = try sOnceCliHookConcatRemediation(allocator, result);
+    defer allocator.free(blob);
+    try std.testing.expect(sOnceCliHookExtractShortCode(blob) == null);
+
+    // Pending still issued for operator redeem out-of-band.
+    const code = try sOnceCliHookPendingCodeForCommand(allocator, xdg.data_root, cmd_text, "2026-07-25T12:00:00Z");
+    defer allocator.free(code);
+    try std.testing.expectEqual(@as(usize, 6), code.len);
+    try std.testing.expect(std.mem.indexOf(u8, human, code) == null);
+    try std.testing.expect(std.mem.indexOf(u8, blob, code) == null);
 }
 
-test "s-once-cli: codex guard deny mentions real short code when store enabled" {
-    // Acceptance 3 (Codex path): user-facing guard *stderr* must carry a real 6-digit
-    // short code. Digits only in HookResponse.remediation_commands must not green this —
+test "s-once-cli: codex guard deny redacts short code when store enabled" {
+    // M-1: Codex agent-visible guard stderr must NOT carry redeemable digits.
     // writeCodexGuardBlock is what Codex agents see (sentinel + message + reason).
     var xdg = try sOnceCliHookIsolateXdg();
     defer xdg.deinit();
@@ -4415,7 +4457,8 @@ test "s-once-cli: codex guard deny mentions real short code when store enabled" 
     defer std.testing.allocator.free(ws_root);
 
     const allocator = std.testing.allocator;
-    var result = try sOnceCliHookRealZigDeny(allocator, "git reset --hard", ws_root, ws_root);
+    const cmd_text = "git reset --hard";
+    var result = try sOnceCliHookRealZigDeny(allocator, cmd_text, ws_root, ws_root);
     defer result.deinit(allocator);
     try std.testing.expectEqual(PluginDecision.block, result.decision);
 
@@ -4424,20 +4467,18 @@ test "s-once-cli: codex guard deny mentions real short code when store enabled" 
     try writeCodexGuardBlock(allocator, &stderr_alloc.writer, result.message, result.reason);
     const written = stderr_alloc.written();
     try std.testing.expect(containsGuardSentinel(written));
+    try std.testing.expect(std.mem.indexOf(u8, written, "allow-once") != null);
+    // Extractor skips placeholder `ryk allow-once <code>`; real digits must not appear.
+    try std.testing.expect(sOnceCliHookExtractShortCode(written) == null);
 
-    // Hard requirement: guard stderr itself (not only remediation blob) has real digits.
-    // Extractor skips placeholder `ryk allow-once <code>` in the fixed sentinel.
-    const code_in_guard = sOnceCliHookExtractShortCode(written);
-    try std.testing.expect(code_in_guard != null);
-    try std.testing.expectEqual(@as(usize, 6), code_in_guard.?.len);
-
-    // When response surfaces a code, the same digits must appear on guard stderr
-    // (message/reason threaded into writeCodexGuardBlock, or sentinel rewritten).
     const blob = try sOnceCliHookConcatRemediation(allocator, result);
     defer allocator.free(blob);
-    if (sOnceCliHookExtractShortCode(blob)) |code_in_resp| {
-        try std.testing.expect(std.mem.indexOf(u8, written, code_in_resp) != null);
-    }
+    try std.testing.expect(sOnceCliHookExtractShortCode(blob) == null);
+
+    const code = try sOnceCliHookPendingCodeForCommand(allocator, xdg.data_root, cmd_text, "2026-07-25T12:00:00Z");
+    defer allocator.free(code);
+    try std.testing.expect(std.mem.indexOf(u8, written, code) == null);
+    try std.testing.expect(std.mem.indexOf(u8, blob, code) == null);
 }
 
 test "s-once-cli: hook deny without resolvable store still blocks without crash" {
@@ -4460,6 +4501,7 @@ test "s-once-cli: hook deny without resolvable store still blocks without crash"
 
 test "s-once-cli: hook deny → pending code → redeem → evaluate allows once → second denies" {
     // Full acceptance chain at the hook + CLI + engine seams.
+    // Code comes from pending store (operator channel), never agent-visible blob (M-1).
     var xdg = try sOnceCliHookIsolateXdg();
     defer xdg.deinit();
 
@@ -4481,14 +4523,19 @@ test "s-once-cli: hook deny → pending code → redeem → evaluate allows once
 
     const blob = try sOnceCliHookConcatRemediation(allocator, deny);
     defer allocator.free(blob);
-    const code = sOnceCliHookExtractShortCode(blob) orelse {
-        std.debug.print("hook deny did not surface a redeemable short code:\n{s}\n", .{blob});
-        try std.testing.expect(false);
-        return;
-    };
+    try std.testing.expect(sOnceCliHookExtractShortCode(blob) == null);
 
-    // Redeem via allow-once CLI (same XDG data dir).
+    const code = try sOnceCliHookPendingCodeForCommand(allocator, xdg.data_root, cmd_text, now);
+    defer allocator.free(code);
+    try std.testing.expectEqual(@as(usize, 6), code.len);
+    try std.testing.expect(std.mem.indexOf(u8, blob, code) == null);
+
+    // Redeem via allow-once CLI (operator-bound env; same XDG data dir).
     const allow_once_cli = @import("allow_once.zig");
+    const prev_op = try sOnceCliHookDupEnvZ("ORCA_OPERATOR");
+    defer sOnceCliHookRestoreEnv("ORCA_OPERATOR", prev_op);
+    try std.testing.expectEqual(@as(c_int, 0), setenv("ORCA_OPERATOR", "1", 1));
+
     var stdout_alloc: std.Io.Writer.Allocating = .init(allocator);
     defer stdout_alloc.deinit();
     var stderr_alloc: std.Io.Writer.Allocating = .init(allocator);

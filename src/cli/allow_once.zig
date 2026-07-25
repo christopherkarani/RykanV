@@ -3,50 +3,21 @@
 //! Live Zig surface for `ryk allow-once` against `shell_engine.allow_once`
 //! pending + active JSONL stores. **No daemon.**
 //!
-//! Paths (must match product-wire loaders / plan §4.3 / s3-once-store brand):
+//! Paths (must match product-wire loaders / s3-once-store brand):
 //!   pending  → `$XDG_DATA_HOME/orca/pending_exceptions.jsonl`
 //!              else `~/.local/share/orca/pending_exceptions.jsonl`
 //!   active   → `$XDG_DATA_HOME/orca/allow_once.jsonl`
 //!              else `~/.local/share/orca/allow_once.jsonl`
 //!
-//! --- Expected public API (implementer; tests are the contract) ---
-//!
-//! `command(io, argv, stdout, stderr) !u8`
-//!   argv is after the top-level `allow-once` verb.
-//!   Subcommands / forms:
-//!     <code> [-y] [--json] [--scope cwd|project]
-//!         Redeem active pending short code → mint single-use allow-once entry.
-//!         Default scope_path = pending record cwd (where deny was issued); project
-//!         scope → workspace root enclosing that cwd. Bare "." / empty pending cwd
-//!         upgrades to process realpath so grants match absolute evaluate cwds.
-//!         `-y` / `--yes` skips any confirmation (non-TTY safe).
-//!         Success copy suggests permanent allowlist for frequent commands.
-//!     list [--json]
-//!         List active (non-expired, non-consumed) allow-once grants.
-//!     clear [pending|active|all]
-//!         Clear store(s); default `all` when omitted.
-//!     revoke <code|hash>
-//!         Revoke matching pending and/or allow-once rows by short code or full hash.
-//!     --help / -h → usage on stdout, exit success.
-//!
-//! Contracts:
-//! - Writes real store files via `shell_engine.allow_once` (no daemon proxy).
-//! - Redeem honors `AmbiguousCode` + re-issue guidance (do not blind-retry post-burn).
-//! - Default redeem scope_path = pending.cwd (grant matches deny site / product evaluate).
-//! - After green: help unhides `allow-once` (compile-required help/mod); dispatch live.
-//!
-//! Acceptance (plan Slice 3 / unit s-once-cli):
-//!   1. Deny → pending code → redeem → evaluate allows once → second denies
-//!   2. Redeem → explain-style non-consume still allows → consume burns → third denies
-//!   3. list / clear / revoke; help unhide; hook path (see hook.zig tests)
-//!
-//! Pull into monopath via hook.zig test import (or mod.zig after dispatch lands):
-//!   `./scripts/zig build test-lib -Dtest-filter="s-once-cli"`
+//! Subcommands: `<code> [-y] [--json] [--scope cwd|project]`, `list`, `clear`, `revoke`.
+//! Default redeem scope_path is the pending record cwd (grant matches deny site).
+//! Redeem is operator-bound (M-1): TTY confirmation or ORCA_OPERATOR=1 / RYK_OPERATOR=1.
 
 const std = @import("std");
 const core = @import("orca_core").core;
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
+const interactive = @import("interactive.zig");
 const shell_engine = @import("../shell_engine/mod.zig");
 
 const allow_once_store = shell_engine.allow_once;
@@ -61,8 +32,12 @@ const usage_text =
     \\       ryk allow-once clear [pending|active|all]
     \\       ryk allow-once revoke <code|hash>
     \\
-    \\Redeem a pending short code (from a deny panel) into a single-use allow-once
-    \\grant for the exact command and scope. Management: list, clear, revoke.
+    \\Redeem a pending short code into a single-use allow-once grant for the exact
+    \\command and scope. Management: list, clear, revoke.
+    \\
+    \\Redeem is operator-bound: interactive TTY confirmation, or set
+    \\ORCA_OPERATOR=1 / RYK_OPERATOR=1 for non-interactive operator redeem.
+    \\-y/--yes skips TTY confirmation only (does not authorize non-TTY redeem).
     \\
     \\Paths: $XDG_DATA_HOME/orca/ (or ~/.local/share/orca/)
     \\  pending_exceptions.jsonl · allow_once.jsonl
@@ -130,6 +105,23 @@ fn resolveOrcaDataDir(gpa: std.mem.Allocator) !?[]u8 {
     return null;
 }
 
+/// True when the process is explicitly operator-bound for non-interactive redeem.
+/// Agents must not be able to set this ambiently from ordinary host shells without
+/// the human operator configuring the environment (M-1).
+fn operatorRedeemAuthorized() bool {
+    return envTruthy("ORCA_OPERATOR") or envTruthy("RYK_OPERATOR");
+}
+
+fn envTruthy(name: [*:0]const u8) bool {
+    const raw = std.c.getenv(name) orelse return false;
+    const v = std.mem.span(raw);
+    return std.mem.eql(u8, v, "1") or
+        std.mem.eql(u8, v, "true") or
+        std.mem.eql(u8, v, "TRUE") or
+        std.mem.eql(u8, v, "yes") or
+        std.mem.eql(u8, v, "YES");
+}
+
 fn cmdRedeem(
     io: std.Io,
     gpa: std.mem.Allocator,
@@ -183,9 +175,34 @@ fn cmdRedeem(
             return exit_codes.usage;
         }
     }
-    // Non-TTY path is always non-interactive; -y/--yes is accepted for scripts/agents.
-    if (!yes) {
-        // Future: optional confirmation when stdin is a TTY. Product path is silent redeem.
+    // M-1 redeem gate: fail closed unless operator-bound.
+    // - ORCA_OPERATOR=1 / RYK_OPERATOR=1 → non-interactive operator redeem
+    // - stdin TTY → interactive confirmation (unless -y)
+    // - else → refuse (-y alone is not enough for agents/scripts)
+    if (!operatorRedeemAuthorized()) {
+        const is_tty = std.Io.File.stdin().isTty(io) catch false;
+        if (!is_tty) {
+            try stderr.writeAll(
+                \\ryk allow-once: redeem requires interactive TTY confirmation, or ORCA_OPERATOR=1 (or RYK_OPERATOR=1) for non-interactive operator redeem
+                \\
+            );
+            return exit_codes.usage;
+        }
+        if (!yes) {
+            const accepted = interactive.askConfirmInteractive(
+                io,
+                stdout,
+                "Redeem allow-once short code and grant a single-use shell exception?",
+                false,
+            ) catch |err| {
+                try stderr.print("ryk allow-once: confirmation failed: {s}\n", .{@errorName(err)});
+                return exit_codes.general;
+            };
+            if (!accepted) {
+                try stdout.writeAll("canceled\n");
+                return exit_codes.success;
+            }
+        }
     }
 
     // Scope path: prefer the pending record's cwd (where the deny was issued) so redeem
@@ -538,16 +555,19 @@ const SOnceCliEnv = struct {
     data_root: []u8,
     prev_data: ?[:0]u8,
     prev_home: ?[:0]u8,
+    prev_operator: ?[:0]u8,
 
     fn deinit(self: *@This()) void {
         sOnceCliRestoreEnv("XDG_DATA_HOME", self.prev_data);
         sOnceCliRestoreEnv("HOME", self.prev_home);
+        sOnceCliRestoreEnv("ORCA_OPERATOR", self.prev_operator);
         std.testing.allocator.free(self.data_root);
         self.data_tmp.cleanup();
     }
 };
 
 /// Isolate allow-once JSONL under a temp `$XDG_DATA_HOME` (and pin HOME away from host).
+/// Also sets ORCA_OPERATOR=1 so redeem tests exercise the operator non-interactive path.
 fn sOnceCliIsolateXdg() !SOnceCliEnv {
     var data_tmp = std.testing.tmpDir(.{});
     errdefer data_tmp.cleanup();
@@ -561,18 +581,23 @@ fn sOnceCliIsolateXdg() !SOnceCliEnv {
     errdefer if (prev_data) |p| std.testing.allocator.free(p);
     const prev_home = try sOnceCliDupEnvZ("HOME");
     errdefer if (prev_home) |p| std.testing.allocator.free(p);
+    const prev_operator = try sOnceCliDupEnvZ("ORCA_OPERATOR");
+    errdefer if (prev_operator) |p| std.testing.allocator.free(p);
 
     const data_z0 = try std.testing.allocator.dupeZ(u8, data_root);
     defer std.testing.allocator.free(data_z0);
     try std.testing.expectEqual(@as(c_int, 0), setenv("XDG_DATA_HOME", data_z0.ptr, 1));
     // Pin HOME so fallback `~/.local/share/orca` never touches the host home.
     try std.testing.expectEqual(@as(c_int, 0), setenv("HOME", data_z0.ptr, 1));
+    // Operator gate for non-TTY redeem tests (M-1).
+    try std.testing.expectEqual(@as(c_int, 0), setenv("ORCA_OPERATOR", "1", 1));
 
     return .{
         .data_tmp = data_tmp,
         .data_root = data_root,
         .prev_data = prev_data,
         .prev_home = prev_home,
+        .prev_operator = prev_operator,
     };
 }
 
@@ -731,6 +756,9 @@ test "s-once-cli: help and missing args are usage-safe without daemon" {
         try std.testing.expect(std.mem.indexOf(u8, run.stdout, "allow-once") != null or
             std.mem.indexOf(u8, run.stdout, "Usage") != null or
             std.mem.indexOf(u8, run.stdout, "usage") != null);
+        // Operator-bound redeem documented on help.
+        try std.testing.expect(std.mem.indexOf(u8, run.stdout, "ORCA_OPERATOR") != null or
+            std.mem.indexOf(u8, run.stdout, "operator") != null);
     }
     {
         const run = try sOnceCliRun(&.{});
@@ -740,6 +768,42 @@ test "s-once-cli: help and missing args are usage-safe without daemon" {
         try sOnceCliExpectNoDaemonText(run.stdout);
         try sOnceCliExpectNoDaemonText(run.stderr);
     }
+}
+
+test "s-once-cli: non-TTY redeem without ORCA_OPERATOR fails closed" {
+    // M-1: -y alone must not authorize silent agent redeem on non-TTY.
+    var xdg = try sOnceCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sOnceCliWorkspace();
+    defer ws.deinit();
+
+    // Isolate sets ORCA_OPERATOR=1; clear it to exercise the fail-closed path.
+    _ = unsetenv("ORCA_OPERATOR");
+    _ = unsetenv("RYK_OPERATOR");
+
+    const cmd_text = "git reset --hard";
+    var issued = try sOnceCliIssuePending(xdg.data_root, cmd_text, ws.root, "m1 silent redeem gate");
+    defer issued.deinit(std.testing.allocator);
+    const code = issued.record.short_code;
+
+    const run = try sOnceCliRun(&.{ code, "-y" });
+    defer sOnceCliFreeRun(run);
+    try std.testing.expect(run.code != exit_codes.success);
+    try std.testing.expect(std.mem.indexOf(u8, run.stderr, "ORCA_OPERATOR") != null or
+        std.mem.indexOf(u8, run.stderr, "TTY") != null or
+        std.mem.indexOf(u8, run.stderr, "operator") != null);
+
+    // Pending must remain unredeemed (gate is before store mutate).
+    const pending_path = try sOnceCliPendingPath(xdg.data_root);
+    defer std.testing.allocator.free(pending_path);
+    var loaded = try allow_once_store.loadPendingActive(
+        std.testing.io,
+        std.testing.allocator,
+        pending_path,
+        s_once_cli_now,
+    );
+    defer loaded.deinit(std.testing.allocator);
+    try std.testing.expect(loaded.list.records.len >= 1);
 }
 
 test "s-once-cli: redeem pending code writes allow_once.jsonl and burns pending" {
@@ -1240,7 +1304,7 @@ test "s-once-cli: redeem --scope project allows evaluate from subdirectory" {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 3 — help unhide (compile-required help.zig / mod.zig for implementer)
+// Acceptance — help surfaces allow-once
 // ---------------------------------------------------------------------------
 
 test "s-once-cli: help exposes allow-once (not hidden)" {

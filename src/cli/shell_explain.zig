@@ -211,17 +211,18 @@ fn sProductWireIsolateXdg() !struct {
     };
 }
 
-fn sProductWireWriteProjectCommandAllow(root: []const u8, command_text: []const u8, reason: []const u8) !void {
-    const orca_dir = try sProductWireJoin(&.{ root, ".orca" });
+/// User-layer kind=command (product path allows; project kind=command is stripped M-10).
+fn sProductWireWriteUserCommandAllow(xdg_config: []const u8, command_text: []const u8, reason: []const u8) !void {
+    const orca_dir = try sProductWireJoin(&.{ xdg_config, "orca" });
     defer std.testing.allocator.free(orca_dir);
     try std.Io.Dir.cwd().createDirPath(std.testing.io, orca_dir);
-    const path = try sProductWireJoin(&.{ root, ".orca", "allowlist.toml" });
+    const path = try sProductWireJoin(&.{ xdg_config, "orca", "allowlist.toml" });
     defer std.testing.allocator.free(path);
     try shell_engine.allowlist_store.addEntry(
         std.testing.io,
         std.testing.allocator,
         path,
-        .project,
+        .user,
         .{
             .kind = .command,
             .command = command_text,
@@ -285,7 +286,8 @@ test "s-product-wire: shell_explain loads permanent allowlist (attribution, exit
 
     const cmd = "git reset --hard HEAD";
     const reason = "s-product-wire shell_explain permanent command marker";
-    try sProductWireWriteProjectCommandAllow(root, cmd, reason);
+    // User-layer command (project kind=command is stripped on product load — M-10).
+    try sProductWireWriteUserCommandAllow(xdg.config_root, cmd, reason);
 
     const previous_cwd = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(previous_cwd);
@@ -337,7 +339,7 @@ test "s-product-wire: shell_explain sets consume_allow_once false (does not burn
         try std.testing.expect(std.mem.indexOf(u8, out, reason) != null);
     }
 
-    // Still available after explain: ryk test consumes once.
+    // M-12: ryk test is also dry-run (consume_allow_once=false) — grant survives.
     {
         var stdout_buf: [4096]u8 = undefined;
         var stderr_buf: [1024]u8 = undefined;
@@ -349,14 +351,35 @@ test "s-product-wire: shell_explain sets consume_allow_once false (does not burn
         try std.testing.expect(std.mem.indexOf(u8, out, reason) != null);
     }
 
-    // Burned after real consume.
+    // Explicit consume (hook/run/shim path) burns; second consume misses.
+    var stores: shell_eval.ProductShellStores = .{};
+    try shell_eval.loadProductShellStores(std.testing.io, std.testing.allocator, root, &stores);
+    defer stores.deinit(std.testing.allocator);
     {
-        var stdout_buf: [4096]u8 = undefined;
-        var stderr_buf: [1024]u8 = undefined;
-        var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-        var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-        const code = try shell_test.command(std.testing.io, &.{cmd}, &stdout_writer, &stderr_writer);
-        try std.testing.expectEqual(@as(u8, 2), code);
+        var eval = try shell_engine.evaluateCommand(std.testing.allocator, cmd, .{
+            .cwd = root,
+            .default_packs_only = true,
+            .permanent_allowlist = stores.permanent,
+            .allow_once_path = stores.allow_once_path,
+            .io = std.testing.io,
+            .now_iso = stores.now_iso,
+            .consume_allow_once = true,
+        });
+        defer eval.deinit(std.testing.allocator);
+        try std.testing.expect(eval.decision == .allow);
+    }
+    {
+        var eval = try shell_engine.evaluateCommand(std.testing.allocator, cmd, .{
+            .cwd = root,
+            .default_packs_only = true,
+            .permanent_allowlist = stores.permanent,
+            .allow_once_path = stores.allow_once_path,
+            .io = std.testing.io,
+            .now_iso = stores.now_iso,
+            .consume_allow_once = true,
+        });
+        defer eval.deinit(std.testing.allocator);
+        try std.testing.expect(eval.decision == .deny);
     }
 }
 

@@ -5,6 +5,7 @@ const tui = @import("../tui/mod.zig");
 const suggestions = @import("suggestions.zig");
 const pack_config = @import("pack_config.zig");
 const onboarding = @import("onboarding.zig");
+const danger_confirmation = @import("danger_confirmation.zig");
 const util = @import("orca_core").core.util;
 
 /// Embedded oracle pack definitions (same source as `shell_engine.registry`).
@@ -180,6 +181,12 @@ fn runDisable(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: any
     const allocator = std.heap.smp_allocator;
     const ids = parseIdList(argv, stderr) catch return exit_codes.usage;
 
+    // M-2: baseline pack disable is operator break-glass only (agent-reachable CLI).
+    if (idsIncludeBaseline(ids)) {
+        const gate = try confirmBaselineDisable(io, stdout, stderr);
+        if (!gate) return exit_codes.usage;
+    }
+
     const workspace_root = onboarding.resolveWorkspaceRoot(io, allocator) catch {
         try stderr.writeAll("ryk packs: could not resolve workspace root.\n");
         return exit_codes.general;
@@ -193,6 +200,46 @@ fn runDisable(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: any
     defer result.deinit(allocator);
 
     return printMutationResult(io, stdout, result);
+}
+
+fn idsIncludeBaseline(ids: []const []const u8) bool {
+    for (ids) |id| {
+        if (pack_config.isBaselinePackId(id)) return true;
+    }
+    return false;
+}
+
+/// Require `ORCA_OPERATOR=1` or interactive TTY confirm before disabling baseline packs.
+fn confirmBaselineDisable(io: std.Io, stdout: anytype, stderr: anytype) !bool {
+    if (pack_config.isOperatorBreakGlass()) return true;
+
+    const stdin = std.Io.File.stdin();
+    const is_tty = (stdin.isTty(io) catch false) and (std.Io.File.stdout().isTty(io) catch false);
+    if (!is_tty) {
+        try stderr.writeAll(
+            \\ryk packs disable: refusing to disable baseline packs (core, core.*, system.disk)
+            \\without break-glass. Set ORCA_OPERATOR=1 or re-run in an interactive TTY to confirm.
+            \\Baseline opt-outs are written to user config; project .orca.toml cannot drop them.
+            \\
+        );
+        return false;
+    }
+
+    const decision = danger_confirmation.decide(
+        io,
+        stdout,
+        "Disable baseline safety pack(s)? This weakens default shell protection.",
+        false,
+        true,
+        null,
+    ) catch return false;
+    return switch (decision) {
+        .proceed => true,
+        .cancelled, .requires_yes => blk: {
+            try stderr.writeAll("ryk packs disable: cancelled (baseline packs left enabled).\n");
+            break :blk false;
+        },
+    };
 }
 
 fn parseIdList(argv: []const []const u8, stderr: anytype) ![]const []const u8 {
@@ -800,6 +847,64 @@ fn failIfCalled(_: std.Io, _: []const []const u8, _: anytype, _: anytype) !u8 {
 // Test-only: pack_config for loadPackIdsForWorkspace membership (not production path).
 const test_pack_config = @import("pack_config.zig");
 
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+fn sPacksDupEnvZ(name: [*:0]const u8) !?[:0]u8 {
+    const raw = std.c.getenv(name) orelse return null;
+    return try std.testing.allocator.dupeZ(u8, std.mem.span(raw));
+}
+
+fn sPacksRestoreEnv(name: [*:0]const u8, prev: ?[:0]u8) void {
+    if (prev) |value| {
+        _ = setenv(name, value.ptr, 1);
+        std.testing.allocator.free(value);
+    } else {
+        _ = unsetenv(name);
+    }
+}
+
+const SPacksXdg = struct {
+    tmp: std.testing.TmpDir,
+    root: []u8,
+    prev_xdg: ?[:0]u8,
+    prev_operator: ?[:0]u8,
+
+    fn deinit(self: *@This()) void {
+        sPacksRestoreEnv("XDG_CONFIG_HOME", self.prev_xdg);
+        sPacksRestoreEnv("ORCA_OPERATOR", self.prev_operator);
+        std.testing.allocator.free(self.root);
+        self.tmp.cleanup();
+    }
+};
+
+/// Isolate user pack config + grant ORCA_OPERATOR break-glass for baseline disable tests.
+fn sPacksIsolateXdgWithOperator() !SPacksXdg {
+    var tmp = std.testing.tmpDir(.{});
+    errdefer tmp.cleanup();
+    const root_z = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root_z);
+    const root = try std.testing.allocator.dupe(u8, root_z);
+    errdefer std.testing.allocator.free(root);
+
+    const prev_xdg = try sPacksDupEnvZ("XDG_CONFIG_HOME");
+    errdefer if (prev_xdg) |p| std.testing.allocator.free(p);
+    const prev_operator = try sPacksDupEnvZ("ORCA_OPERATOR");
+    errdefer if (prev_operator) |p| std.testing.allocator.free(p);
+
+    const root_z0 = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z0);
+    try std.testing.expectEqual(@as(c_int, 0), setenv("XDG_CONFIG_HOME", root_z0.ptr, 1));
+    try std.testing.expectEqual(@as(c_int, 0), setenv("ORCA_OPERATOR", "1", 1));
+
+    return .{
+        .tmp = tmp,
+        .root = root,
+        .prev_xdg = prev_xdg,
+        .prev_operator = prev_operator,
+    };
+}
+
 fn sliceContainsId(ids: []const []const u8, want: []const u8) bool {
     for (ids) |id| {
         if (std.mem.eql(u8, id, want)) return true;
@@ -1019,6 +1124,9 @@ test "s-packs: enable opt-in pack writes project config without daemon" {
 test "s-packs: disable core.git uses shipped pack_config semantics without hard-fail" {
     try withGitWorkspace(struct {
         fn body(workspace_root: []const u8) !void {
+            var xdg = try sPacksIsolateXdgWithOperator();
+            defer xdg.deinit();
+
             var stdout_buf: [4096]u8 = undefined;
             var stderr_buf: [2048]u8 = undefined;
             var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
@@ -1031,18 +1139,46 @@ test "s-packs: disable core.git uses shipped pack_config semantics without hard-
                 &stdout_writer,
                 &stderr_writer,
             );
-            // Shipped semantics: baseline/core.* MAY be listed in disabled — no hard-fail.
+            // With ORCA_OPERATOR break-glass: baseline opt-out succeeds (user config); no hard-fail.
             try std.testing.expectEqual(exit_codes.success, code);
             const combined = try std.fmt.allocPrint(std.testing.allocator, "{s}{s}", .{ stdout_writer.buffered(), stderr_writer.buffered() });
             defer std.testing.allocator.free(combined);
             try std.testing.expect(std.mem.indexOf(u8, combined, "cannot disable") == null);
             try std.testing.expect(std.mem.indexOf(u8, combined, "Cannot disable") == null);
             try std.testing.expect(std.mem.indexOf(u8, combined, "hard-fail") == null);
+            try std.testing.expect(std.mem.indexOf(u8, combined, "daemon may still") == null);
 
-            // pack_config.disablePacks: baseline id in disabled list (not mere whole-file substring).
+            // Effective disabled list merges user baseline opt-out.
             var loaded = try test_pack_config.loadPackIdsForWorkspace(std.testing.io, std.testing.allocator, workspace_root);
             defer loaded.deinit(std.testing.allocator);
             try std.testing.expect(sliceContainsId(loaded.disabled, "core.git"));
+        }
+    }.body);
+}
+
+test "s-packs: disable baseline without ORCA_OPERATOR refuses non-interactively" {
+    try withGitWorkspace(struct {
+        fn body(_: []const u8) !void {
+            const prev = try sPacksDupEnvZ("ORCA_OPERATOR");
+            defer sPacksRestoreEnv("ORCA_OPERATOR", prev);
+            _ = unsetenv("ORCA_OPERATOR");
+
+            var stdout_buf: [4096]u8 = undefined;
+            var stderr_buf: [2048]u8 = undefined;
+            var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+            var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+            const code = try commandWithExecutor(
+                failIfCalled,
+                std.testing.io,
+                &.{ "disable", "core.git" },
+                &stdout_writer,
+                &stderr_writer,
+            );
+            try std.testing.expect(code != exit_codes.success);
+            const err = stderr_writer.buffered();
+            try std.testing.expect(std.mem.indexOf(u8, err, "ORCA_OPERATOR") != null or
+                std.mem.indexOf(u8, err, "baseline") != null);
         }
     }.body);
 }
@@ -1095,6 +1231,9 @@ test "s-packs: enable containers.docker then list --json reports enabled true" {
 test "s-packs: disable core.git then list --json reports enabled false" {
     try withGitWorkspace(struct {
         fn body(workspace_root: []const u8) !void {
+            var xdg = try sPacksIsolateXdgWithOperator();
+            defer xdg.deinit();
+
             {
                 var stdout_buf: [4096]u8 = undefined;
                 var stderr_buf: [2048]u8 = undefined;

@@ -55,7 +55,9 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     defer packs.deinit(std.heap.smp_allocator);
 
     // Permanent + allow-once on product path (distinct API, not options.allowlists).
-    // consume_allow_once defaults true — burns single-use on hit.
+    // consume_allow_once=false: `ryk test` is dry-run / inspect — never burns single-use
+    // (M-12). Host execution (hook/run/shim) still defaults to true. Optional `--consume`
+    // flag is deferred.
     var stores: shell_eval.ProductShellStores = .{};
     try shell_eval.loadProductShellStores(io, std.heap.smp_allocator, workspace, &stores);
     defer stores.deinit(std.heap.smp_allocator);
@@ -74,7 +76,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         .allow_once_path = stores.allow_once_path,
         .io = io,
         .now_iso = stores.now_iso,
-        // consume_allow_once: default true
+        .consume_allow_once = false,
     });
     defer eval.deinit(std.heap.smp_allocator);
 
@@ -133,7 +135,7 @@ test "joinArgs" {
 // ---------------------------------------------------------------------------
 // s-product-wire — ryk test product loaders
 // Loads permanent + allow-once into EvaluateOptions (not allowlists);
-// consume_allow_once defaults true (burns single-use).
+// consume_allow_once=false (dry-run; does not burn single-use) — M-12.
 // ---------------------------------------------------------------------------
 
 const s_product_wire_now_seed = "2099-01-01T12:00:00Z";
@@ -306,7 +308,7 @@ test "s-product-wire: shell_test loads permanent allowlist and allows with attri
     try std.testing.expect(std.mem.indexOf(u8, out, reason) != null);
 }
 
-test "s-product-wire: shell_test consume_allow_once defaults true (burns single-use)" {
+test "s-product-wire: shell_test consume_allow_once false (does not burn single-use)" {
     var xdg = try sProductWireIsolateXdg();
     defer xdg.deinit();
 
@@ -319,7 +321,7 @@ test "s-product-wire: shell_test consume_allow_once defaults true (burns single-
     defer std.testing.allocator.free(root);
 
     const cmd = "git reset --hard HEAD";
-    const reason = "s-product-wire shell_test allow-once consume marker";
+    const reason = "s-product-wire shell_test allow-once dry-run marker";
     try sProductWireSeedAllowOnce(xdg.data_root, cmd, root, reason);
 
     const previous_cwd = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
@@ -327,7 +329,7 @@ test "s-product-wire: shell_test consume_allow_once defaults true (burns single-
     try std.process.setCurrentDir(std.testing.io, tmp.dir);
     defer std.process.setCurrentPath(std.testing.io, previous_cwd) catch {};
 
-    // First evaluate: allow + consume.
+    // First evaluate: allow, no consume (M-12).
     {
         var stdout_buf: [4096]u8 = undefined;
         var stderr_buf: [1024]u8 = undefined;
@@ -340,14 +342,67 @@ test "s-product-wire: shell_test consume_allow_once defaults true (burns single-
         try std.testing.expect(std.mem.indexOf(u8, out, reason) != null);
     }
 
-    // Second evaluate: burned → deny (exit 2).
+    // Second evaluate: grant still present → allow again.
     {
         var stdout_buf: [4096]u8 = undefined;
         var stderr_buf: [1024]u8 = undefined;
         var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
         var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
         const code = try command(std.testing.io, &.{cmd}, &stdout_writer, &stderr_writer);
-        try std.testing.expectEqual(@as(u8, 2), code);
+        try std.testing.expectEqual(@as(u8, 0), code);
+        const out = stdout_writer.buffered();
+        try std.testing.expect(std.mem.indexOf(u8, out, "allow") != null);
+    }
+}
+
+test "s-product-wire: explicit consume_allow_once true burns single-use (engine path)" {
+    // Proves burn still works when consume is opted in (hook/run/shim default).
+    // `ryk test` command path stays dry-run; this uses evaluateCommand directly.
+    var xdg = try sProductWireIsolateXdg();
+    defer xdg.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, ".git");
+    const root_z = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root_z);
+    const root = try std.testing.allocator.dupe(u8, root_z);
+    defer std.testing.allocator.free(root);
+
+    const cmd = "git reset --hard HEAD";
+    const reason = "s-product-wire explicit consume burn marker";
+    try sProductWireSeedAllowOnce(xdg.data_root, cmd, root, reason);
+
+    var stores: shell_eval.ProductShellStores = .{};
+    try shell_eval.loadProductShellStores(std.testing.io, std.testing.allocator, root, &stores);
+    defer stores.deinit(std.testing.allocator);
+
+    {
+        var eval = try shell_engine.evaluateCommand(std.testing.allocator, cmd, .{
+            .cwd = root,
+            .default_packs_only = true,
+            .permanent_allowlist = stores.permanent,
+            .allow_once_path = stores.allow_once_path,
+            .io = std.testing.io,
+            .now_iso = stores.now_iso,
+            .consume_allow_once = true,
+        });
+        defer eval.deinit(std.testing.allocator);
+        try std.testing.expect(eval.decision == .allow);
+        try std.testing.expect(std.mem.indexOf(u8, eval.reason, reason) != null);
+    }
+    {
+        var eval = try shell_engine.evaluateCommand(std.testing.allocator, cmd, .{
+            .cwd = root,
+            .default_packs_only = true,
+            .permanent_allowlist = stores.permanent,
+            .allow_once_path = stores.allow_once_path,
+            .io = std.testing.io,
+            .now_iso = stores.now_iso,
+            .consume_allow_once = true,
+        });
+        defer eval.deinit(std.testing.allocator);
+        try std.testing.expect(eval.decision == .deny);
     }
 }
 

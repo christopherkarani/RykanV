@@ -4,45 +4,14 @@
 //! `shell_engine.allowlist_store` TOML files. **No daemon.** Distinct from
 //! policy `allowlist.Layered` / `Entry.prefix`.
 //!
-//! --- Expected public API (implementer; tests are the contract) ---
+//! Paths (must match product-wire loaders):
+//!   project → `<workspace>/.orca/allowlist.toml` (workspace-root walk-up)
+//!   user    → `$XDG_CONFIG_HOME/orca/allowlist.toml` else `~/.config/orca/allowlist.toml`
+//! Default layer when neither `--project` nor `--user`: project when the resolved
+//! workspace root has `.git` or `.orca/policy.yaml`, else user.
 //!
-//! `command(io, argv, stdout, stderr) !u8`
-//!   argv is after the top-level `allowlist` verb.
-//!   Subcommands:
-//!     add <rule-id> -r|--reason <reason> [--project|--user] [--expires <iso>]
-//!     add-command <cmd> -r|--reason <reason> [--project|--user] [--expires <iso>]
-//!     list [--project|--user] [--json]
-//!     remove <rule-id|exact-command> [--project|--user]
-//!     validate [--strict]
-//!     prune [--dry-run]
-//!   Flags/help: `--help` / `-h` → usage on stdout, exit success.
-//!
-//! `commandAllow(io, argv, stdout, stderr) !u8`
-//!   Shortcut for `allowlist add` (argv after top-level `allow`).
-//!
-//! `commandUnallow(io, argv, stdout, stderr) !u8`
-//!   Shortcut for `allowlist remove` (argv after top-level `unallow`).
-//!
-//! Paths (must match product-wire loaders / plan §4.3):
-//!   project → `<workspace>/.orca/allowlist.toml` where workspace =
-//!             `supervisor.resolveWorkspaceRoot` walk-up (same as packs / hook)
-//!   user    → `$XDG_CONFIG_HOME/orca/allowlist.toml`
-//!             else `~/.config/orca/allowlist.toml`
-//! Default layer when neither `--project` nor `--user`:
-//!   project when the resolved workspace root has `.git` or `.orca/policy.yaml`,
-//!   else user. Nested cwds still write/load the repo-root project file.
-//!
-//! Contracts:
-//! - Writes real store files via `allowlist_store` (add/list/remove/validate/prune).
-//! - No `executeDaemonCli` / daemon proxy on happy path.
-//! - `validate --strict` rejects unknown rule ids (against registry / known pack:pattern).
-//! - `prune` removes expired entries from the targeted file(s); `--dry-run` reports only.
-//! - After green: help unhides `allowlist`, `allow`, `unallow` (compile-required help/mod).
-//! - Acceptance E2E: `allow` rule → evaluate allows with allowlist attribution;
-//!   compound (`git reset --hard; rm -rf /`) still denies (E8).
-//!
-//! Run once wired into monopath (`mod.zig` import + unhide/dispatch):
-//!   `./scripts/zig build test-lib -Dtest-filter="s-allowlist-cli"`
+//! Subcommands: `add`, `add-command`, `list`, `remove`, `validate`, `prune`.
+//! Shortcuts: `commandAllow` → add, `commandUnallow` → remove.
 
 const std = @import("std");
 const core = @import("orca_core").core;
@@ -208,12 +177,25 @@ fn parseCommonFlags(gpa: std.mem.Allocator, argv: []const []const u8, stderr: an
         } else if (std.mem.eql(u8, arg, "--expires")) {
             i += 1;
             if (i >= argv.len) {
-                try stderr.writeAll("ryk allowlist: --expires requires an ISO-8601 value\n");
+                try stderr.writeAll("ryk allowlist: --expires requires an ISO-8601 value (YYYY-MM-DDTHH:MM:SSZ)\n");
+                return error.Usage;
+            }
+            if (!isValidExpiresIsoZ(argv[i])) {
+                try stderr.writeAll(
+                    "ryk allowlist: --expires must be UTC ISO-Z like product timestamps (YYYY-MM-DDTHH:MM:SSZ)\n",
+                );
                 return error.Usage;
             }
             flags.expires = argv[i];
         } else if (std.mem.startsWith(u8, arg, "--expires=")) {
-            flags.expires = arg["--expires=".len..];
+            const value = arg["--expires=".len..];
+            if (!isValidExpiresIsoZ(value)) {
+                try stderr.writeAll(
+                    "ryk allowlist: --expires must be UTC ISO-Z like product timestamps (YYYY-MM-DDTHH:MM:SSZ)\n",
+                );
+                return error.Usage;
+            }
+            flags.expires = value;
         } else if (std.mem.startsWith(u8, arg, "-") and arg.len > 1) {
             try stderr.print("ryk allowlist: unknown option '{s}'\n", .{arg});
             return error.Usage;
@@ -299,6 +281,59 @@ fn layerName(layer: allowlist_store.Layer) []const u8 {
     };
 }
 
+/// Product timestamp shape from `core.time.Timestamp.formatIso`: `YYYY-MM-DDTHH:MM:SSZ`.
+/// Lexicographic compare in `allowlist_store.isExpired` requires this exact form.
+pub fn isValidExpiresIsoZ(value: []const u8) bool {
+    if (value.len != 20) return false;
+    // YYYY-MM-DDTHH:MM:SSZ
+    inline for (.{ 0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18 }) |i| {
+        if (value[i] < '0' or value[i] > '9') return false;
+    }
+    if (value[4] != '-' or value[7] != '-') return false;
+    if (value[10] != 'T') return false;
+    if (value[13] != ':' or value[16] != ':') return false;
+    if (value[19] != 'Z') return false;
+    // Mild range checks (month/day/hour/minute/second) — reject obvious garbage.
+    const month = (value[5] - '0') * 10 + (value[6] - '0');
+    const day = (value[8] - '0') * 10 + (value[9] - '0');
+    const hour = (value[11] - '0') * 10 + (value[12] - '0');
+    const minute = (value[14] - '0') * 10 + (value[15] - '0');
+    const second = (value[17] - '0') * 10 + (value[18] - '0');
+    if (month < 1 or month > 12) return false;
+    if (day < 1 or day > 31) return false;
+    if (hour > 23 or minute > 59 or second > 59) return false;
+    return true;
+}
+
+/// Operator break-glass for permanent exception mutations (M-2 partial).
+fn isOperatorBreakGlass() bool {
+    return envFlagTruthy("ORCA_OPERATOR") or envFlagTruthy("RYK_OPERATOR");
+}
+
+fn envFlagTruthy(name: [*:0]const u8) bool {
+    const raw = std.c.getenv(name) orelse return false;
+    const value = std.mem.span(raw);
+    return std.mem.eql(u8, value, "1") or
+        std.mem.eql(u8, value, "true") or
+        std.mem.eql(u8, value, "yes") or
+        std.mem.eql(u8, value, "TRUE") or
+        std.mem.eql(u8, value, "YES");
+}
+
+/// Refuse agent-reachable allowlist mutations unless operator env or interactive TTY.
+fn requireAllowlistMutateGate(io: std.Io, stderr: anytype) !bool {
+    if (isOperatorBreakGlass()) return true;
+    const is_tty = (std.Io.File.stdin().isTty(io) catch false) and
+        (std.Io.File.stdout().isTty(io) catch false);
+    if (is_tty) return true;
+    try stderr.writeAll(
+        \\ryk allowlist: permanent exception mutations require ORCA_OPERATOR=1 or an interactive TTY
+        \\(agent-reachable FULL ALLOW path). Re-run as an operator, or set ORCA_OPERATOR=1.
+        \\
+    );
+    return false;
+}
+
 fn kindName(kind: allowlist_store.EntryKind) []const u8 {
     return switch (kind) {
         .rule => "rule",
@@ -350,6 +385,9 @@ fn cmdAdd(
         try stderr.writeAll("ryk allowlist: reason required (-r/--reason)\n");
         return exit_codes.usage;
     }
+
+    // M-2 partial: permanent FULL ALLOW / rule exceptions are operator-gated.
+    if (!try requireAllowlistMutateGate(io, stderr)) return exit_codes.usage;
 
     const layer = resolveLayer(flags, io, gpa);
     const path = resolvePathForLayer(gpa, io, layer) catch |err| switch (err) {
@@ -826,10 +864,12 @@ const SAllowlistCliEnv = struct {
     config_root: []u8,
     prev_config: ?[:0]u8,
     prev_home: ?[:0]u8,
+    prev_operator: ?[:0]u8,
 
     fn deinit(self: *@This()) void {
         sAllowlistCliRestoreEnv("XDG_CONFIG_HOME", self.prev_config);
         sAllowlistCliRestoreEnv("HOME", self.prev_home);
+        sAllowlistCliRestoreEnv("ORCA_OPERATOR", self.prev_operator);
         std.testing.allocator.free(self.config_root);
         self.config_tmp.cleanup();
     }
@@ -848,18 +888,23 @@ fn sAllowlistCliIsolateXdg() !SAllowlistCliEnv {
     errdefer if (prev_config) |p| std.testing.allocator.free(p);
     const prev_home = try sAllowlistCliDupEnvZ("HOME");
     errdefer if (prev_home) |p| std.testing.allocator.free(p);
+    const prev_operator = try sAllowlistCliDupEnvZ("ORCA_OPERATOR");
+    errdefer if (prev_operator) |p| std.testing.allocator.free(p);
 
     const config_z0 = try std.testing.allocator.dupeZ(u8, config_root);
     defer std.testing.allocator.free(config_z0);
     try std.testing.expectEqual(@as(c_int, 0), setenv("XDG_CONFIG_HOME", config_z0.ptr, 1));
     // Pin HOME away from the real home so user-path fallback never touches the host.
     try std.testing.expectEqual(@as(c_int, 0), setenv("HOME", config_z0.ptr, 1));
+    // Operator break-glass so non-TTY unit tests can exercise permanent mutations.
+    try std.testing.expectEqual(@as(c_int, 0), setenv("ORCA_OPERATOR", "1", 1));
 
     return .{
         .config_tmp = config_tmp,
         .config_root = config_root,
         .prev_config = prev_config,
         .prev_home = prev_home,
+        .prev_operator = prev_operator,
     };
 }
 
@@ -1802,8 +1847,7 @@ test "s-allowlist-cli: unallow exact-command key removes entry and restores deny
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 3 — help unhides allowlist / allow / unallow after green
-// (implementer: surgical help.zig unhide + remove from p0_honesty_unfinished)
+// Acceptance — help surfaces allowlist / allow / unallow
 // ---------------------------------------------------------------------------
 
 test "s-allowlist-cli: help exposes allowlist allow unallow (not hidden)" {
@@ -1846,6 +1890,71 @@ fn sAllowlistCliHelpListsPeer(text: []const u8, name: []const u8) bool {
 // ---------------------------------------------------------------------------
 // Branch / edge paths
 // ---------------------------------------------------------------------------
+
+test "s-allowlist-cli: isValidExpiresIsoZ accepts product Timestamp format only" {
+    try std.testing.expect(isValidExpiresIsoZ("2026-07-25T12:00:00Z"));
+    try std.testing.expect(isValidExpiresIsoZ("9999-01-01T00:00:00Z"));
+    try std.testing.expect(!isValidExpiresIsoZ("2026-07-25"));
+    try std.testing.expect(!isValidExpiresIsoZ("2026-07-25T12:00:00+00:00"));
+    try std.testing.expect(!isValidExpiresIsoZ("2026-07-25 12:00:00Z"));
+    try std.testing.expect(!isValidExpiresIsoZ("2026-13-01T00:00:00Z"));
+    try std.testing.expect(!isValidExpiresIsoZ("not-a-date"));
+    try std.testing.expect(!isValidExpiresIsoZ(""));
+}
+
+test "s-allowlist-cli: --expires rejects non ISO-Z shape with usage" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    const run = try sAllowlistCliRunAllowlist(&.{
+        "add",
+        "core.git:reset-hard",
+        "-r",
+        "bad expires must fail closed",
+        "--expires",
+        "tomorrow",
+        "--project",
+    });
+    defer sAllowlistCliFreeRun(run);
+    try std.testing.expectEqual(exit_codes.usage, run.code);
+    try std.testing.expect(std.mem.indexOf(u8, run.stderr, "expires") != null or
+        std.mem.indexOf(u8, run.stderr, "ISO") != null);
+
+    const path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(path);
+    var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, path, .project);
+    defer loaded.store.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), loaded.store.entries.len);
+}
+
+test "s-allowlist-cli: --expires accepts YYYY-MM-DDTHH:MM:SSZ and writes entry" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    const exp = "2026-12-31T23:59:59Z";
+    const run = try sAllowlistCliRunAllowlist(&.{
+        "add",
+        "core.git:reset-hard",
+        "-r",
+        "expires shape ok",
+        "--expires",
+        exp,
+        "--project",
+    });
+    defer sAllowlistCliFreeRun(run);
+    try std.testing.expectEqual(exit_codes.success, run.code);
+
+    const path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(path);
+    var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, path, .project);
+    defer loaded.store.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), loaded.store.entries.len);
+    try std.testing.expectEqualStrings(exp, loaded.store.entries[0].expires_at.?);
+}
 
 test "s-allowlist-cli: add requires reason flag" {
     var xdg = try sAllowlistCliIsolateXdg();

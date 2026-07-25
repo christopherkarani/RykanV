@@ -320,6 +320,9 @@ fn collectPermanentRuleSkipIds(
 }
 
 /// Plan §4.1 step 1: exact allow-once hit before permanent/packs.
+/// Two-phase consume (M-15): peek without burning, build Evaluation, then consume
+/// single_use only after the allow Evaluation is fully constructed. Prevents losing
+/// the exception when post-match allocation fails.
 fn tryAllowOnce(
     allocator: std.mem.Allocator,
     trimmed: []const u8,
@@ -331,6 +334,29 @@ fn tryAllowOnce(
     const now = options.now_iso orelse return null;
     const cwd = options.cwd orelse "";
 
+    const storeFail = struct {
+        fn deny(
+            alloc: std.mem.Allocator,
+            opts: EvaluateOptions,
+            started: i64,
+        ) !Evaluation {
+            try endOuterStep(opts.trace, .{ .message = "allow_once store failure (fail-closed)" });
+            return try finalizeEval(
+                alloc,
+                opts.trace,
+                denyStatic(
+                    "zig.shell:allow-once",
+                    "zig.shell",
+                    "allow-once-store-error",
+                    .critical,
+                    "Allow-once store failed (fail-closed).",
+                ),
+                elapsedMs(started),
+            );
+        }
+    }.deny;
+
+    // Phase 1: peek (consume=false) so eval construction cannot burn the grant first.
     const matched = allow_once.matchAllowOnce(
         io,
         allocator,
@@ -338,25 +364,21 @@ fn tryAllowOnce(
         trimmed,
         cwd,
         now,
-        options.consume_allow_once,
+        false,
     ) catch {
-        // Store IO / parse failure → fail closed (do not unlock).
-        try endOuterStep(options.trace, .{ .message = "allow_once store failure (fail-closed)" });
-        return try finalizeEval(
-            allocator,
-            options.trace,
-            denyStatic(
-                "zig.shell:allow-once",
-                "zig.shell",
-                "allow-once-store-error",
-                .critical,
-                "Allow-once store failed (fail-closed).",
-            ),
-            elapsedMs(started_ms),
-        );
+        return try storeFail(allocator, options, started_ms);
     };
     const entry = matched orelse return null;
     defer allow_once.freeAllowOnceEntry(allocator, entry);
+
+    // M-6: product path rejects multi-use allow-once (single_use=false). Those
+    // entries act like permanent unlocks from an agent-writable store without
+    // operator integrity binding. Treat as miss so packs still apply.
+    // Residual: entries remain on disk until redeem/CLI validation rejects mint.
+    if (!entry.single_use) {
+        try endOuterStep(options.trace, .{ .message = "allow_once single_use=false ignored (product)" });
+        return null;
+    }
 
     const detail = try std.fmt.allocPrint(
         allocator,
@@ -366,7 +388,7 @@ fn tryAllowOnce(
     defer allocator.free(detail);
     try endOuterStep(options.trace, .{ .message = detail });
 
-    return try finalizeEval(
+    var eval = try finalizeEval(
         allocator,
         options.trace,
         try allowExceptionOwned(
@@ -378,6 +400,32 @@ fn tryAllowOnce(
         ),
         elapsedMs(started_ms),
     );
+    errdefer eval.deinit(allocator);
+
+    // Phase 2: durable consume only after Evaluation is built.
+    if (options.consume_allow_once) {
+        const consumed = allow_once.matchAllowOnce(
+            io,
+            allocator,
+            path,
+            trimmed,
+            cwd,
+            now,
+            true,
+        ) catch {
+            eval.deinit(allocator);
+            return try storeFail(allocator, options, started_ms);
+        };
+        if (consumed) |burned| {
+            allow_once.freeAllowOnceEntry(allocator, burned);
+        } else {
+            // Entry vanished between peek and consume (concurrent use) — fail closed.
+            eval.deinit(allocator);
+            return try storeFail(allocator, options, started_ms);
+        }
+    }
+
+    return eval;
 }
 
 /// Plan §4.1 step 2: permanent kind=command exact → FULL ALLOW pre-pack.
