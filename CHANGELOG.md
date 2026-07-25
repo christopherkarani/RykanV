@@ -1,5 +1,40 @@
 # Changelog
 
+## [1.2.9] - 2026-07-25
+
+## What's Changed
+* feat: proxy daemon CLI and surface shell deny remediation by @christopherkarani in https://github.com/christopherkarani/rykan/pull/48
+* feat(cli): P0 one-product UX (start, deny, doctor, help) by @christopherkarani in https://github.com/christopherkarani/rykan/pull/49
+* feat(cli): P2a power baseline — packs productized + orca status by @christopherkarani in https://github.com/christopherkarani/rykan/pull/50
+* feat(cli): mode×severity shell matrix and day-2 policy loop (P2b) by @christopherkarani in https://github.com/christopherkarani/rykan/pull/51
+* fix: harden dashboard, redaction, and host integrations by @christopherkarani in https://github.com/christopherkarani/rykan/pull/52
+* feat(cli): readiness contracts, daemon hardening, and OpenClaw honesty by @christopherkarani in https://github.com/christopherkarani/rykan/pull/53
+* fix: close residual PR #53 security risks by @christopherkarani in https://github.com/christopherkarani/rykan/pull/54
+* feat(install): polish curl|sh installer UX with step receipt by @christopherkarani in https://github.com/christopherkarani/rykan/pull/55
+* feat(policy): effect-class semantic intent for host and MCP tools by @christopherkarani in https://github.com/christopherkarani/rykan/pull/56
+* feat(policy): Phase B structural args, network tags, and shell effect merge by @christopherkarani in https://github.com/christopherkarani/rykan/pull/57
+* feat(policy): Phase C user effect packs and tools discovery by @christopherkarani in https://github.com/christopherkarani/rykan/pull/58
+* fix(policy): address PR #57 review gaps on proxy and shell classifiers by @christopherkarani in https://github.com/christopherkarani/rykan/pull/59
+* feat(policy): Phase D local residual effect classifier by @christopherkarani in https://github.com/christopherkarani/rykan/pull/61
+* feat(security): OS filesystem sandbox for orca run (Landlock + Seatbelt) by @christopherkarani in https://github.com/christopherkarani/rykan/pull/63
+* feat(cli): viral Safe Launch surface for agent operators by @christopherkarani in https://github.com/christopherkarani/rykan/pull/64
+* feat: add Phase 2 network route forcing by @christopherkarani in https://github.com/christopherkarani/rykan/pull/65
+* refactor(orca-rs): remove orphan CLI surface and dead guard APIs by @christopherkarani in https://github.com/christopherkarani/rykan/pull/66
+* feat: Zig shell_engine sole Evaluate authority; static PCRE2 by @christopherkarani in https://github.com/christopherkarani/rykan/pull/67
+* chore(scripts): drop dead daemon stubs and orca-rs gate paths by @christopherkarani in https://github.com/christopherkarani/rykan/pull/68
+* feat(shell_engine): Phase 1 hard fence — pack order + structure smart checks by @christopherkarani in https://github.com/christopherkarani/rykan/pull/69
+* feat(policy): Phase 2 YOLO/Strict modes and session sticky trust by @christopherkarani in https://github.com/christopherkarani/rykan/pull/70
+* feat(fm-steward): Phase 3 Mac risk-card steward with timeout fallback by @christopherkarani in https://github.com/christopherkarani/rykan/pull/71
+* feat(fm-steward): wire real on-device SystemLanguageModel by @christopherkarani in https://github.com/christopherkarani/rykan/pull/72
+* feat(fm-steward): residual attach surface + soft-edge integrity by @christopherkarani in https://github.com/christopherkarani/rykan/pull/73
+* feat(hooks): Phase 4 wire FM steward into product shell paths by @christopherkarani in https://github.com/christopherkarani/rykan/pull/74
+* feat(brand): Phase 5a product identity cut Orca → ryk by @christopherkarani in https://github.com/christopherkarani/rykan/pull/75
+* feat(cli): P0 permanent allowlist, allow-once, and packs CLI by @christopherkarani in https://github.com/christopherkarani/rykan/pull/77
+* feat(cli): DCG-parity ryk explain + remove demo by @christopherkarani in https://github.com/christopherkarani/rykan/pull/76
+
+
+**Full Changelog**: https://github.com/christopherkarani/rykan/compare/v1.2.8...v1.2.9
+
 ## Unreleased
 
 ### Breaking

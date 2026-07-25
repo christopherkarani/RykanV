@@ -1,6 +1,6 @@
 {
   "name": "@orca-sec/pi-orca",
-  "version": "1.2.8",
+  "version": "1.2.9",
   "description": "Official ryk (formerly Orca) Pi integration for bash/file protection. Package id @orca-sec/pi-orca kept during dual-name window; prefer display brand ryk / slash /ryk-*. Do not treat as a separate product. Not publishing a hard rename in 5a.",
   "type": "module",
   "license": "Apache-2.0",
@@ -47,7 +47,7 @@
     "smoke": "bash scripts/smoke.sh"
   },
   "dependencies": {
-    "@orca-sec/orca": "1.2.8"
+    "@orca-sec/orca": "1.2.9"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.79.0"
