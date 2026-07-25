@@ -6,15 +6,26 @@ const supervisor = core.supervisor;
 const exit_codes = @import("exit_codes.zig");
 const init = @import("init.zig");
 const plugin = @import("plugin.zig");
+const child_process = @import("child_process.zig");
+const grok_install = @import("grok_install.zig");
 const daemon = @import("daemon.zig");
 const shell_eval = @import("shell_eval.zig");
 const resource_root = @import("../resource_root.zig");
 const suggestions = @import("suggestions.zig");
+const env_util = @import("../env_util.zig");
 
 pub const default_preset = "generic-agent";
 
-/// Agent hosts wired during setup / quickstart integration.
-pub const supported_hosts = [_][]const u8{ "codex", "claude", "opencode", "openclaw", "hermes" };
+/// Agent hosts detected and wired during setup.
+pub const supported_hosts = [_][]const u8{
+    "claude",
+    "codex",
+    "hermes",
+    "openclaw",
+    "pi",
+    "grok",
+    "opencode",
+};
 
 pub const Flags = struct {
     auto: bool = false,
@@ -38,7 +49,7 @@ pub const ProtectionMode = enum {
     pub fn description(self: ProtectionMode) []const u8 {
         return switch (self) {
             .command_guard => "Hook-based shell command blocking via the in-process Zig shell_engine (fast, host-integrated).",
-            .firewall => "Sandboxed sessions through `orca run` with network, file, and secret policies.",
+            .firewall => "Sandboxed sessions through `ryk run` with network, file, and secret policies.",
             .maximum_protection => "Command Guard plus Firewall together (recommended).",
         };
     }
@@ -95,10 +106,31 @@ pub const HostStatus = struct {
     installed: bool,
 };
 
+pub const HostEvidence = enum {
+    not_applicable,
+    native,
+    installed_fail_closed,
+    contract_only,
+    configuration_only,
+    wrapper_required,
+
+    pub fn label(self: HostEvidence) []const u8 {
+        return switch (self) {
+            .not_applicable => "not applicable",
+            .native => "host-native veto verified",
+            .installed_fail_closed => "fail-closed integration installed and hook contract verified",
+            .contract_only => "hook contract verified; host activation unverified",
+            .configuration_only => "installation files verified; live host activation unverified",
+            .wrapper_required => "hook contract verified; use `ryk run -- openclaw` until native veto is proven",
+        };
+    }
+};
+
 pub const VerificationOutcome = struct {
     safe_allowed: bool,
     dangerous_denied: bool,
     hook_verified: ?bool = null,
+    host_evidence: HostEvidence = .not_applicable,
     firewall_ready: ?bool = null,
     detail: []const u8,
 
@@ -124,7 +156,7 @@ pub fn resolveWorkspaceRoot(io: std.Io, allocator: std.mem.Allocator) ![]u8 {
     return resolveWorkspaceRootFromCwd(io, allocator, std.Io.Dir.cwd());
 }
 
-/// Resolves the Orca workspace root starting from a caller-provided working directory.
+/// Resolves the ryk workspace root starting from a caller-provided working directory.
 pub fn resolveWorkspaceRootFromCwd(io: std.Io, allocator: std.mem.Allocator, cwd: std.Io.Dir) ![]u8 {
     const cwd_path = try cwd.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(cwd_path);
@@ -190,7 +222,7 @@ pub fn parseFlags(argv: []const []const u8, stderr: anytype, command_label: []co
             flags.preset = argv[index];
             continue;
         }
-        const help_command = if (std.mem.eql(u8, command_label, "orca quickstart")) "quickstart" else "setup";
+        const help_command = if (std.mem.eql(u8, command_label, "ryk quickstart")) "quickstart" else "setup";
         if (yes_is_auto) {
             try suggestions.writeUnknownOption(stderr, command_label, arg, &.{ "--auto", "--no-interact", "--yes", "--preset" }, help_command);
         } else {
@@ -238,8 +270,18 @@ pub fn collectHostStatuses(io: std.Io, allocator: std.mem.Allocator, doctor_repo
     errdefer list.deinit(allocator);
 
     for (supported_hosts) |host_name| {
-        const detected = plugin.binaryInPath(io, allocator, host_name);
-        const installed = plugin.hostPluginInstalledFromReport(host_name, doctor_report);
+        const detected = if (std.mem.eql(u8, host_name, "pi"))
+            @import("host_status.zig").inspectPi(io, allocator).binary_detected
+        else if (std.mem.eql(u8, host_name, "grok"))
+            isSupportedGrokCli(allocator)
+        else
+            plugin.binaryInPath(io, allocator, host_name);
+        const installed = if (std.mem.eql(u8, host_name, "pi"))
+            @import("host_status.zig").inspectPi(io, allocator).extension_installed
+        else if (std.mem.eql(u8, host_name, "grok"))
+            detected and grok_install.installed(io, allocator)
+        else
+            plugin.hostPluginInstalledFromReport(host_name, doctor_report);
         try list.append(allocator, .{
             .name = host_name,
             .detected = detected,
@@ -248,6 +290,17 @@ pub fn collectHostStatuses(io: std.Io, allocator: std.mem.Allocator, doctor_repo
     }
 
     return try list.toOwnedSlice(allocator);
+}
+
+fn isSupportedGrokCli(allocator: std.mem.Allocator) bool {
+    const result = child_process.runHostCommandCaptureTimed(
+        allocator,
+        &.{ "grok", "--help" },
+        2_000,
+    ) catch return false;
+    defer result.deinit(allocator);
+    if (result.timed_out or result.exit_code != 0) return false;
+    return grok_install.isSupportedCliHelp(result.stdout);
 }
 
 pub fn parseHostsCsv(allocator: std.mem.Allocator, csv: []const u8) ![][]const u8 {
@@ -276,9 +329,9 @@ pub fn deinitHostList(allocator: std.mem.Allocator, hosts: [][]const u8) void {
 pub fn daemonRemediation(status: DaemonHealthStatus) []const u8 {
     return switch (status) {
         .compatible => "Daemon is ready.",
-        .unavailable => "Install orca-daemon beside orca, then run: orca doctor",
-        .incompatible => "Upgrade orca and orca-daemon together, then run: orca doctor",
-        .degraded => "Restart the daemon: orca shutdown --daemon && orca doctor",
+        .unavailable => "Install the ryk background service, then run: ryk doctor",
+        .incompatible => "Upgrade ryk and its background service together, then run: ryk doctor",
+        .degraded => "Restart the background service: ryk shutdown --daemon && ryk doctor",
     };
 }
 
@@ -393,6 +446,7 @@ pub fn runVerification(
     mode: ProtectionMode,
     selected_hosts: []const []const u8,
     evaluator: ?shell_eval.ShellCommandEvaluatorFn,
+    host_verifier: ?HostVerifierFn,
 ) !VerificationOutcome {
     var outcome = if (mode.needsCommandGuard())
         try verifyShellEvaluation(allocator, workspace_root, evaluator)
@@ -402,21 +456,85 @@ pub fn runVerification(
             .dangerous_denied = true,
             .detail = "Firewall-only mode: shell command verification skipped.",
         };
-    outcome.hook_verified = if (mode.needsCommandGuard()) blk: {
-        if (selected_hosts.len == 0) break :blk null;
-        break :blk try verifyHookPath(io, allocator, workspace_root, selected_hosts[0]);
-    } else null;
+    outcome.hook_verified = if (mode.needsCommandGuard())
+        try verifySelectedHostHooks(io, allocator, workspace_root, selected_hosts, host_verifier)
+    else
+        null;
+    outcome.host_evidence = if (mode.needsCommandGuard())
+        classifyHostEvidence(selected_hosts)
+    else
+        .not_applicable;
     outcome.firewall_ready = if (mode.needsFirewall()) verifyFirewallReady(io, workspace_root) else null;
-    if (outcome.hook_verified == false or outcome.firewall_ready == false) {
-        if (!outcome.passed()) {
-            // detail already set by shell verification
-        } else if (outcome.hook_verified == false) {
-            outcome.detail = "Shell evaluation passed, but hook verification failed.";
+    if (outcome.safe_allowed and outcome.dangerous_denied) {
+        if (outcome.hook_verified == false) {
+            outcome.detail = "Shell evaluation passed, but host hook verification failed.";
         } else if (outcome.firewall_ready == false) {
             outcome.detail = "Shell evaluation passed, but firewall policy is missing.";
+        } else if (outcome.hook_verified == true and outcome.host_evidence != .native) {
+            outcome.detail = outcome.host_evidence.label();
         }
     }
     return outcome;
+}
+
+pub const HostVerifierFn = *const fn (
+    std.Io,
+    std.mem.Allocator,
+    []const u8,
+    []const u8,
+) anyerror!bool;
+
+fn defaultHostVerifier(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    host: []const u8,
+) !bool {
+    // Pi's extension does not route through `ryk hook`; installation completeness
+    // is verified by its installer/status path instead.
+    if (std.mem.eql(u8, host, "pi")) {
+        var env_map = try env_util.createProcessMap(allocator);
+        defer env_map.deinit();
+        const home = (try env_util.getOwned(&env_map, allocator, "HOME")) orelse return false;
+        defer allocator.free(home);
+        return @import("pi_install.zig").isCompleteAtHome(io, allocator, home);
+    }
+    // A Hermes hook that can silently fail open is not a successful security
+    // integration even when the direct contract fixture parses correctly.
+    if (std.mem.eql(u8, host, "hermes") and @import("host_status.zig").hermesFailOpenFromEnv()) {
+        return false;
+    }
+    return verifyHookPath(io, allocator, workspace_root, host);
+}
+
+pub fn classifyHostEvidence(selected_hosts: []const []const u8) HostEvidence {
+    if (selected_hosts.len == 0) return .not_applicable;
+    for (selected_hosts) |host| {
+        if (std.mem.eql(u8, host, "openclaw")) return .wrapper_required;
+    }
+    for (selected_hosts) |host| {
+        if (std.mem.eql(u8, host, "pi")) return .configuration_only;
+    }
+    // Installation already validated the exact managed hook registration. The
+    // direct smoke then proves that registered adapter's fail-closed contract.
+    // This is strong installation-chain evidence, but intentionally not labeled
+    // as a host-native veto test.
+    return .installed_fail_closed;
+}
+
+pub fn verifySelectedHostHooks(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    selected_hosts: []const []const u8,
+    host_verifier: ?HostVerifierFn,
+) !?bool {
+    if (selected_hosts.len == 0) return null;
+    const verify = host_verifier orelse defaultHostVerifier;
+    for (selected_hosts) |host| {
+        if (!try verify(io, allocator, workspace_root, host)) return false;
+    }
+    return true;
 }
 
 /// Parses `ryk start` flags.
@@ -576,6 +694,13 @@ test "onboarding verifyShellEvaluation with selective mock" {
     try std.testing.expect(outcome.passed());
 }
 
+test "onboarding host evidence distinguishes installed chain from native proof" {
+    try std.testing.expectEqual(HostEvidence.not_applicable, classifyHostEvidence(&.{}));
+    try std.testing.expectEqual(HostEvidence.installed_fail_closed, classifyHostEvidence(&.{"codex"}));
+    try std.testing.expectEqual(HostEvidence.configuration_only, classifyHostEvidence(&.{"pi"}));
+    try std.testing.expectEqual(HostEvidence.wrapper_required, classifyHostEvidence(&.{ "codex", "openclaw" }));
+}
+
 test "onboarding checkDaemonHealth reports unavailable from mock checker" {
     const failing_checker = struct {
         fn check(_: std.mem.Allocator, _: bool) !void {
@@ -585,7 +710,7 @@ test "onboarding checkDaemonHealth reports unavailable from mock checker" {
 
     const check = try checkDaemonHealth(std.testing.allocator, false, failing_checker);
     try std.testing.expectEqual(DaemonHealthStatus.unavailable, check.status);
-    try std.testing.expect(std.mem.indexOf(u8, check.detail, "orca-daemon") != null);
+    try std.testing.expect(std.mem.indexOf(u8, check.detail, "ryk companion service") != null);
 }
 
 test "onboarding checkDaemonHealth reports incompatible protocol" {
@@ -637,6 +762,7 @@ test "onboarding runVerification for firewall skips shell evaluation" {
         .firewall,
         &selected,
         null,
+        null,
     );
     try std.testing.expect(outcome.passed());
     try std.testing.expectEqualStrings("Firewall-only mode: shell command verification skipped.", outcome.detail);
@@ -663,6 +789,28 @@ test "onboarding runVerification for maximum protection with mocks" {
         .maximum_protection,
         &selected,
         mockOnboardingEvaluator,
+        null,
     );
     try std.testing.expect(outcome.passed());
+}
+
+test "onboarding supports all seven requested hosts" {
+    for ([_][]const u8{ "claude", "codex", "hermes", "openclaw", "pi", "grok", "opencode" }) |host| {
+        try std.testing.expect(isSupportedHost(host));
+    }
+    try std.testing.expect(!isSupportedHost("unknown"));
+}
+
+test "onboarding verifies every selected host before success" {
+    const verifier = struct {
+        fn verify(_: std.Io, _: std.mem.Allocator, _: []const u8, host: []const u8) !bool {
+            return !std.mem.eql(u8, host, "claude");
+        }
+    }.verify;
+
+    const selected = [_][]const u8{ "codex", "claude", "hermes" };
+    try std.testing.expectEqual(
+        false,
+        (try verifySelectedHostHooks(std.testing.io, std.testing.allocator, ".", &selected, verifier)).?,
+    );
 }

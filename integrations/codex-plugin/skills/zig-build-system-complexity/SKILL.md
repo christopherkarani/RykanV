@@ -16,7 +16,7 @@ zig build --help
 test -f build.zig.zon && sed -n '1,180p' build.zig.zon
 ```
 
-As of 2026-05-13, Zig `0.16.0` is the latest tagged release. Orca-style repos may still be pinned to `0.15.2`; do not silently rewrite build APIs for a newer Zig unless the task is an upgrade.
+As of 2026-05-13, Zig `0.16.0` is the latest tagged release. ryk-style repos may still be pinned to `0.15.2`; do not silently rewrite build APIs for a newer Zig unless the task is an upgrade.
 
 ## Build Graph Rules
 

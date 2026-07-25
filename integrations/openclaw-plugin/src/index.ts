@@ -38,7 +38,7 @@ interface OpenClawPluginApi {
   on: <K extends string>(
     hookName: K,
     handler: (event: unknown, ctx: unknown) => unknown | Promise<unknown>,
-    opts?: { priority?: number }
+    opts?: { priority?: number; timeoutMs?: number }
   ) => void;
 }
 
@@ -52,13 +52,13 @@ const ALLOW_DECISIONS = new Set(['allow', 'warn', 'context_only']);
 
 /** Matches Zig `openclaw_status.enforcement_note` intent (prefer wrapper; npm unprotected). */
 export const ENFORCEMENT_NOTE =
-  'unprotected for npm/ClawHub (hooks no-op); prefer wrapper: orca run -- openclaw';
+  'unprotected for npm/ClawHub (hooks no-op); prefer wrapper: ryk run -- openclaw';
 
 /** Standing warning text for npm/ClawHub unprotected installs. */
 export const UNPROTECTED_NOOP_WARNING =
-  `[orca] unprotected: npm/ClawHub/CLI-metadata install — OpenClaw wires api.on to a no-op, ` +
+  `[ryk] unprotected: npm/ClawHub/CLI-metadata install — OpenClaw wires api.on to a no-op, ` +
   `so before_tool_call / after_tool_call hooks will NOT fire and cannot block tools. ` +
-  `Prefer wrapper: \`orca run -- openclaw\` (${ENFORCEMENT_NOTE}).`;
+  `Prefer wrapper: \`ryk run -- openclaw\` (${ENFORCEMENT_NOTE}).`;
 
 function redactSecrets(data: unknown): unknown {
   if (data === null || data === undefined) return data;
@@ -156,7 +156,7 @@ export function findOrca(cwd?: string): string | null {
   return null;
 }
 
-/** Normalize OpenClaw tool events into the envelope Orca hook understands. */
+/** Normalize OpenClaw tool events into the envelope ryk hook understands. */
 export function normalizeOpenClawToolEvent(event: unknown): Record<string, unknown> {
   const e = (event && typeof event === 'object' ? event : {}) as Record<string, unknown>;
   const params =
@@ -226,20 +226,20 @@ function normalizeBlockingDecision(
         base.message ||
         base.reason ||
         (decision === 'error'
-          ? 'Orca returned error; blocking as a precaution.'
-          : 'Orca blocked this command.'),
+          ? 'ryk returned error; blocking as a precaution.'
+          : 'ryk blocked this command.'),
     };
   }
   if (decision === 'ask') {
     return failClosedBlock(
       'orca_ask_unsupported',
-      'Orca requested interactive approval (ask); OpenClaw has no ask UX — blocking.'
+      'ryk requested interactive approval (ask); OpenClaw has no ask UX — blocking.'
     );
   }
   if (!ALLOW_DECISIONS.has(decision)) {
     return failClosedBlock(
       'orca_unrecognized_decision',
-      `Orca returned unrecognized decision "${decision}"; blocking as a precaution.`
+      `ryk returned unrecognized decision "${decision}"; blocking as a precaution.`
     );
   }
   return {
@@ -256,7 +256,7 @@ function normalizeBlockingDecision(
 }
 
 /**
- * Parse Orca hook stdout into a decision.
+ * Parse ryk hook stdout into a decision.
  * Non-blocking: soft-allow on empty/malformed.
  * Blocking: fail closed on empty/whitespace, parse errors, missing/non-string decision,
  * `ask`, and unrecognized decisions (no OpenClaw ask UX).
@@ -268,8 +268,8 @@ export function parseHookResponse(stdout: string, blocking: boolean): OrcaRespon
   if (!stdout.trim()) {
     return fail(
       'orca_empty_response',
-      'Orca returned empty output; blocking as a precaution.',
-      'Orca returned empty output; allowing non-blocking event.'
+      'ryk returned empty output; blocking as a precaution.',
+      'ryk returned empty output; allowing non-blocking event.'
     );
   }
 
@@ -279,16 +279,16 @@ export function parseHookResponse(stdout: string, blocking: boolean): OrcaRespon
   } catch {
     return fail(
       'orca_parse_error',
-      'Orca returned unreadable JSON; blocking as a precaution.',
-      'Orca returned unreadable JSON; allowing non-blocking event.'
+      'ryk returned unreadable JSON; blocking as a precaution.',
+      'ryk returned unreadable JSON; allowing non-blocking event.'
     );
   }
 
   if (!parsed || typeof parsed !== 'object') {
     return fail(
       'orca_missing_decision',
-      'Orca response missing decision; blocking as a precaution.',
-      'Orca response missing decision; allowing non-blocking event.'
+      'ryk response missing decision; blocking as a precaution.',
+      'ryk response missing decision; allowing non-blocking event.'
     );
   }
 
@@ -297,8 +297,8 @@ export function parseHookResponse(stdout: string, blocking: boolean): OrcaRespon
   if (typeof decisionRaw !== 'string') {
     return fail(
       'orca_missing_decision',
-      'Orca response missing decision; blocking as a precaution.',
-      'Orca response missing decision; allowing non-blocking event.'
+      'ryk response missing decision; blocking as a precaution.',
+      'ryk response missing decision; allowing non-blocking event.'
     );
   }
 
@@ -350,16 +350,16 @@ async function callOrca(
     return parseHookResponse(stdout, blocking);
   } catch (err: unknown) {
     const safeErr = redactSecrets({ message: (err as Error).message });
-    logger?.error?.(`[orca] Hook ${event} failed: ${(safeErr as { message: string }).message}`);
+    logger?.error?.(`[ryk] Hook ${event} failed: ${(safeErr as { message: string }).message}`);
 
     return blocking
       ? failClosedBlock(
           'orca_hook_error',
-          'Orca hook failed; blocking as a precaution.'
+          'ryk hook failed; blocking as a precaution.'
         )
       : softAllow(
           'orca_hook_error',
-          'Orca hook failed; allowing because this event is non-blocking.'
+          'ryk hook failed; allowing because this event is non-blocking.'
         );
   }
 }
@@ -391,8 +391,8 @@ export default function orcaPlugin(api: OpenClawPluginApi): void {
 
   if (typeof api.on !== 'function') {
     logger?.warn?.(
-      '[orca] OpenClaw plugin API does not expose hook registration (api.on). ' +
-        'Plugin will not register lifecycle hooks. State: unprotected for hook grade; prefer wrapper: `orca run -- openclaw`.'
+      '[ryk] OpenClaw plugin API does not expose hook registration (api.on). ' +
+        'Plugin will not register lifecycle hooks. State: unprotected for hook grade; prefer wrapper: `ryk run -- openclaw`.'
     );
     return;
   }
@@ -406,9 +406,9 @@ export default function orcaPlugin(api: OpenClawPluginApi): void {
     // wrapper path instead of a false sense of enforcement.
     if (!orcaBin) {
       logger?.warn?.(
-        '[orca] Binary not found in PATH (or ORCA_BIN). ' +
+        '[ryk] Binary not found in PATH (or RYK_BIN). ' +
           'npm/ClawHub install remains unprotected (hooks no-op); ' +
-          'prefer wrapper: `orca run -- openclaw`.'
+          'prefer wrapper: `ryk run -- openclaw`.'
       );
     }
     return;
@@ -416,26 +416,26 @@ export default function orcaPlugin(api: OpenClawPluginApi): void {
 
   if (!orcaBin) {
     logger?.warn?.(
-      '[orca] Binary not found in PATH (or ORCA_BIN). ' +
+      '[ryk] Binary not found in PATH (or RYK_BIN). ' +
         'Registering fail-closed before_tool_call vetoes. ' +
-        'Install Orca or set ORCA_BIN to an absolute path. Prefer wrapper: `orca run -- openclaw`.'
+        'Install ryk or set RYK_BIN to an absolute path. Prefer wrapper: `ryk run -- openclaw`.'
     );
     // Fail closed only when hooks can actually fire (bundled / real api.on).
     api.on(
       'before_tool_call',
       async () => ({
         block: true,
-        blockReason: 'Orca binary not found; blocking as a precaution.',
+        blockReason: 'ryk binary not found; blocking as a precaution.',
       }),
       { timeoutMs: 5_000 }
     );
     return;
   }
 
-  logger?.info?.(`[orca] Plugin loaded. Binary: ${orcaBin}`);
+  logger?.info?.(`[ryk] Plugin loaded. Binary: ${orcaBin}`);
 
   api.on('session_start', async (event) => {
-    logger?.info?.('[orca] Plugin ready for session.');
+    logger?.info?.('[ryk] Plugin ready for session.');
     await callOrca(
       orcaBin,
       'session.start',
@@ -454,13 +454,13 @@ export default function orcaPlugin(api: OpenClawPluginApi): void {
       const response = await callOrca(orcaBin, 'tool.before', normalized, sessionId, true, logger);
 
       if (response.decision === 'block') {
-        const msg = response.message || response.reason || 'Orca blocked this command.';
-        logger?.error?.(`[orca] Blocked tool execution: ${msg}`);
+        const msg = response.message || response.reason || 'ryk blocked this command.';
+        logger?.error?.(`[ryk] Blocked tool execution: ${msg}`);
         return { block: true, blockReason: msg };
       }
 
       if (response.decision === 'warn') {
-        logger?.warn?.(`[orca] Warning: ${response.message || response.reason}`);
+        logger?.warn?.(`[ryk] Warning: ${response.message || response.reason}`);
       }
 
       // Do not return { params: undefined } — some hosts treat that as a rewrite.

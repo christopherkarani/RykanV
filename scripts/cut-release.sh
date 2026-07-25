@@ -433,7 +433,7 @@ phase_notes() {
 
   local prev_tag="" repo
   prev_tag="$(git describe --tags --abbrev=0 2>/dev/null || true)"
-  repo="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || printf 'christopherkarani/Orca')"
+  repo="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || printf 'christopherkarani/rykan')"
 
   local body=""
   if command -v gh >/dev/null; then
@@ -531,7 +531,7 @@ const fs = require("fs");
 const p = "packaging/npm/package.json";
 const v = process.argv[1];
 const j = JSON.parse(fs.readFileSync(p, "utf8"));
-const base = "https://github.com/christopherkarani/Orca/releases/download/v" + v;
+const base = "https://github.com/christopherkarani/rykan/releases/download/v" + v;
 if (j.ryk) j.ryk.artifactBaseUrl = base;
 if (j.orca) j.orca.artifactBaseUrl = base;
 fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
@@ -823,7 +823,7 @@ phase_publish_homebrew() {
 # ---------------------------------------------------------------------------
 phase_done() {
   local repo url
-  repo="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || printf 'christopherkarani/Orca')"
+  repo="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || printf 'christopherkarani/rykan')"
   url="https://github.com/${repo}/releases/tag/v${VERSION}"
 
   printf '\n=== cut-release complete ===\n'

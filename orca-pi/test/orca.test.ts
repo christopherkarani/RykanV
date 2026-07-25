@@ -363,16 +363,16 @@ test("session start quietly initializes a missing policy and probes health", asy
 		[cwd, cwd],
 	);
 	assert.equal(context.notifications.length, 0);
-	assert.equal(context.statuses.at(-1)?.text, "orca ready");
+	assert.equal(context.statuses.at(-1)?.text, "ryk ready");
 	assert.ok(
 		context.statuses.every(
 			(entry) =>
 				entry.text === undefined ||
-				entry.text === "orca degraded" ||
-				entry.text === "orca ready" ||
-				entry.text === "orca bypass",
+				entry.text === "ryk degraded" ||
+				entry.text === "ryk ready" ||
+				entry.text === "ryk bypass",
 		),
-		"expected footer status to contain Orca state only",
+		"expected footer status to contain ryk state only",
 	);
 	rmSync(cwd, { recursive: true, force: true });
 });
@@ -613,7 +613,7 @@ test("custom tool unavailable fails closed", async () => {
 		{},
 	);
 	assert.equal(result?.block, true);
-	assert.match(result?.reason ?? "", /Orca is unavailable/);
+	assert.match(result?.reason ?? "", /ryk is unavailable/);
 });
 
 test("session bypass skips decide tool for custom tools", async () => {
@@ -621,7 +621,7 @@ test("session bypass skips decide tool for custom tools", async () => {
 	const { spawn, calls } = makeSpawn([{ code: 3, stdout: errorJson() }]);
 	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
 	const { ctx, selections } = makeCtx();
-	selections.push("Disable Orca for this Pi session");
+	selections.push("Disable ryk for this Pi session");
 
 	// First call triggers unavailable → user disables session.
 	const first = await fireToolCall(
@@ -900,7 +900,7 @@ test("allowOnceBypassEnabled honors env and strict mode", () => {
 	);
 	assert.deepEqual(askOptionsFor("policy", false), [
 		"Block",
-		"Disable Orca for this Pi session",
+		"Disable ryk for this Pi session",
 		"Show policy reason",
 	]);
 	assert.ok(askOptionsFor("unavailable", true).includes("Run once anyway"));
@@ -956,7 +956,7 @@ test("once-bypass records an audit event", async () => {
 	);
 	assert.equal(result, undefined);
 	assert.ok(
-		notifications.some((n) => /orca audit: once-bypass/i.test(n.message)),
+		notifications.some((n) => /ryk audit: once-bypass/i.test(n.message)),
 	);
 	const audit = messages.find((m) => m.message.customType === "orca.audit");
 	assert.ok(audit);
@@ -1039,7 +1039,7 @@ test("read tool unavailable path fails closed in noninteractive mode", async () 
 		{ path: "README.md" },
 	);
 	assert.equal(result?.block, true);
-	assert.match(result?.reason ?? "", /Orca is unavailable|could not evaluate this read/i);
+	assert.match(result?.reason ?? "", /ryk is unavailable|could not evaluate this read/i);
 });
 
 test("session bypass skips write and read evaluation", async () => {
@@ -1067,10 +1067,10 @@ test("session bypass skips write and read evaluation", async () => {
 	assert.equal(readResult, undefined);
 	assert.equal(calls.length, 0);
 	assert.ok(
-		notifications.some((n) => /write allowed without Orca/i.test(n.message)),
+		notifications.some((n) => /write allowed without ryk/i.test(n.message)),
 	);
 	assert.ok(
-		notifications.some((n) => /read allowed without Orca/i.test(n.message)),
+		notifications.some((n) => /read allowed without ryk/i.test(n.message)),
 	);
 });
 
@@ -1134,7 +1134,7 @@ test("bash dangerous command with Orca deny returns block", async () => {
 	assert.deepEqual(result, {
 		block: true,
 		reason:
-			"Orca blocked this bash command: destructive filesystem command • rule core.filesystem:destructive-rm",
+			"ryk blocked this bash command: destructive filesystem command • rule core.filesystem:destructive-rm",
 	});
 	assert.equal(messages.length, 1);
 	assert.equal(messages[0].message.customType, "orca-decision");
@@ -1147,7 +1147,7 @@ test("bash dangerous command with Orca deny returns block", async () => {
 	);
 	const inlineDecision = messages[0].message.content;
 	assert.match(inlineDecision, /┏━+/);
-	assert.match(inlineDecision, /ORCA \/\/ BLOCKED/);
+	assert.match(inlineDecision, /RYK \/\/ BLOCKED/);
 	assert.match(
 		inlineDecision,
 		/COMMAND STOPPED BEFORE EXECUTION/,
@@ -1206,7 +1206,7 @@ test("bash dangerous command with Orca deny blocks even when exit code is not 2"
 	assert.deepEqual(result, {
 		block: true,
 		reason:
-			"Orca blocked this bash command: destructive filesystem command • rule core.filesystem:destructive-rm",
+			"ryk blocked this bash command: destructive filesystem command • rule core.filesystem:destructive-rm",
 	});
 });
 
@@ -1218,7 +1218,7 @@ test("Orca error in non-interactive mode blocks", async () => {
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(result.block, true);
-	assert.match(result.reason, /Run \/orca-setup/);
+	assert.match(result.reason, /Run \/ryk-setup/);
 });
 
 test("Orca error in interactive mode waits for the user's decision", async () => {
@@ -1244,14 +1244,14 @@ test("Orca error in interactive mode waits for the user's decision", async () =>
 	const askWidget = widgets.find((entry) => entry.key === "orca-block");
 	assert.ok(askWidget, "expected Orca ask widget");
 	assert.deepEqual(askWidget.opts, { placement: "aboveEditor" });
-	assert.match(askWidget.value?.join("\n") ?? "", /ORCA \/\/ YOUR CALL/);
+	assert.match(askWidget.value?.join("\n") ?? "", /RYK \/\/ YOUR CALL/);
 	assert.match(
 		askWidget.value?.join("\n") ?? "",
-		/ORCA PAUSED THIS COMMAND/,
+		/RYK PAUSED THIS COMMAND/,
 	);
 	assert.match(
 		askWidget.value?.join("\n") ?? "",
-		/Choose: Run once, repair Orca, or keep it blocked\./,
+		/Choose: Run once, repair ryk, or keep it blocked\./,
 	);
 	assert.ok(
 		askWidget.value?.every((line) => line.length === 56),
@@ -1273,7 +1273,7 @@ test("auto mode blocks print sessions even when hasUI is true", async () => {
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(result.block, true);
-	assert.match(result.reason, /Run \/orca-setup/);
+	assert.match(result.reason, /Run \/ryk-setup/);
 });
 
 test("strict mode blocks", async () => {
@@ -1318,7 +1318,7 @@ test("child process failure follows unavailable policy", async () => {
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(result.block, true);
-	assert.match(result.reason, /Orca is unavailable/);
+	assert.match(result.reason, /ryk is unavailable/);
 });
 
 test("session bypass allows subsequent bash calls during same session", async () => {
@@ -1326,7 +1326,7 @@ test("session bypass allows subsequent bash calls during same session", async ()
 	const { spawn, calls } = makeSpawn([{ code: 3, stdout: errorJson() }]);
 	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
 	const { ctx, selections } = makeCtx();
-	selections.push("Disable Orca for this Pi session");
+	selections.push("Disable ryk for this Pi session");
 
 	const first = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	const second = await fireToolCall(handlers.get("tool_call")![0], ctx);
@@ -1346,7 +1346,7 @@ test("session bypass does not leak across Pi session ids", async () => {
 	const secondSession = makeCtx({
 		sessionManager: { getSessionId: () => "session-b" },
 	});
-	firstSession.selections.push("Disable Orca for this Pi session");
+	firstSession.selections.push("Disable ryk for this Pi session");
 
 	await fireToolCall(handlers.get("tool_call")![0], firstSession.ctx);
 	const result = await fireToolCall(
@@ -1439,10 +1439,10 @@ test("/orca-stop disables Pi bash protection until /orca-start re-enables it", a
 		true,
 	);
 	assert.equal(
-		statuses.some((entry) => entry.text === "orca bypass"),
+		statuses.some((entry) => entry.text === "ryk bypass"),
 		true,
 	);
-	assert.equal(statuses.at(-1)?.text, "orca ready");
+	assert.equal(statuses.at(-1)?.text, "ryk ready");
 	rmSync(cwd, { recursive: true, force: true });
 });
 
@@ -1488,11 +1488,11 @@ test("/orca-mode changes mode", async () => {
 	await commands.get("orca-mode")!.handler("strict", ctx);
 	assert.match(notifications.at(-1)!.message, /strict/);
 	assert.match(notifications.at(-1)!.message, /Coverage:/);
-	assert.match(notifications.at(-1)!.message, /orca run/);
+	assert.match(notifications.at(-1)!.message, /ryk run/);
 	assert.match(notifications.at(-1)!.message, /prefer strict|Production/i);
 
 	await commands.get("orca-mode")!.handler("", ctx);
-	assert.match(notifications.at(-1)!.message, /Orca Pi mode: strict/);
+	assert.match(notifications.at(-1)!.message, /ryk Pi mode: strict/);
 	assert.match(notifications.at(-1)!.message, /bash \+ write \+ edit \+ read policy-protected/);
 });
 
@@ -1571,7 +1571,7 @@ test("helpers resolve modes and sanitize reasons", () => {
 	);
 	assert.match(
 		safeOrcaReason({ reason: "blocked token=abc123", rule_id: "rule" }),
-		/Orca blocked this bash command: blocked token=\[redacted\] • rule rule/,
+		/ryk blocked this bash command: blocked token=\[redacted\] • rule rule/,
 	);
 });
 

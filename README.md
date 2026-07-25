@@ -1,4 +1,4 @@
-# ryk &nbsp;[![Version](https://img.shields.io/badge/version-1.2.8-blue)](https://github.com/christopherkarani/Orca/releases) [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE) [![Zig](https://img.shields.io/badge/built%20with-Zig-orange)](https://ziglang.org) [![Build](https://img.shields.io/github/actions/workflow/status/christopherkarani/Orca/build.yml?branch=main&label=build)](https://github.com/christopherkarani/Orca/actions/workflows/build.yml) [![Stars](https://img.shields.io/github/stars/christopherkarani/Orca?style=social)](https://github.com/christopherkarani/Orca)
+# ryk &nbsp;[![Version](https://img.shields.io/badge/version-1.2.9-blue)](https://github.com/christopherkarani/rykan/releases) [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE) [![Zig](https://img.shields.io/badge/built%20with-Zig-orange)](https://ziglang.org) [![Build](https://img.shields.io/github/actions/workflow/status/christopherkarani/rykan/build.yml?branch=main&label=build)](https://github.com/christopherkarani/rykan/actions/workflows/build.yml) [![Stars](https://img.shields.io/github/stars/christopherkarani/rykan?style=social)](https://github.com/christopherkarani/rykan)
 
 # ryk
 
@@ -17,13 +17,8 @@ It is also dangerous.
 ryk is **graded mediation** (not a universal sandbox): it evaluates actions on paths it actually mediates. Day-1 path is Safe Launch — get protected, run your agent, check status, review the session. See [Protection grades](#protection-grades) for what that guarantee means.
 
 ```bash
-# Install
-brew tap christopherkarani/orca
-brew install --formula orca   # installs ryk + orca alias
-
-# Get protected (policy + hosts + Ask on risk)
-ryk start
-# or: ryk start   # same product
+# Install and configure protection
+brew install christopherkarani/orca/ryk
 
 # Run your agent
 ryk claude
@@ -197,25 +192,24 @@ Actions on a mediation path are evaluated against your policy. Paths that bypass
 | OpenCode               | `orca opencode`                      |
 | OpenClaw               | `orca openclaw`                      |
 | Hermes                 | `orca hermes`                        |
-| Custom commands        | advanced: `orca run -- <command>`    |
+| Custom commands        | advanced: `ryk run -- <command>`     |
 
-One policy file can protect multiple agents. Host aliases (`ryk <agent>`) are the taught launch path; `orca run` remains the advanced engine for custom commands and CI flags.
+One policy file can protect multiple agents. Host aliases (`ryk <agent>`) are the taught launch path; `ryk run` is the advanced engine for custom commands and CI flags.
 
 ---
 
 ## Quick start (Safe Launch)
 
-### 1. Install Orca
+### 1. Install ryk
 
 ```bash
-brew tap christopherkarani/orca
-brew install --formula orca
+brew install christopherkarani/orca/ryk
 ```
 
 Or use the install script:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/christopherkarani/Orca/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh | sh
 ```
 
 ---

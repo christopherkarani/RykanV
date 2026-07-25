@@ -1,10 +1,12 @@
-//! Unified host integration status + install smoke helpers for Orca plugins.
+//! Unified host integration status + install smoke helpers for ryk plugins.
 //!
 //! Product fields (human + JSON): host, wired, shell_gate, fail_stance,
 //! smoke_allow, smoke_deny, fix. Smoke maps to each host's real veto path.
 
 const std = @import("std");
 const env_util = @import("../env_util.zig");
+const child_process = @import("child_process.zig");
+const pi_install = @import("pi_install.zig");
 
 pub const managed_hosts = [_][]const u8{ "codex", "claude", "opencode", "openclaw", "hermes" };
 pub const pi_process_command = "ryk run -- pi";
@@ -24,8 +26,8 @@ pub const PiStatus = struct {
     }
 
     pub fn detail(self: PiStatus) []const u8 {
-        if (self.extension_installed) return "Orca extension installed; coverage unknown until live smoke";
-        if (self.binary_detected) return "Pi detected; Orca extension not installed";
+        if (self.extension_installed) return "ryk extension installed; coverage unknown until live smoke";
+        if (self.binary_detected) return "Pi detected; ryk extension not installed";
         return "Pi not detected";
     }
 };
@@ -112,7 +114,10 @@ pub const HostStatusRow = struct {
 
 /// Hook event name for shell veto per managed host.
 pub fn shellGate(host: []const u8) []const u8 {
-    if (std.mem.eql(u8, host, "codex") or std.mem.eql(u8, host, "claude")) return "PreToolUse";
+    if (std.mem.eql(u8, host, "codex") or
+        std.mem.eql(u8, host, "claude") or
+        std.mem.eql(u8, host, "grok"))
+        return "PreToolUse";
     if (std.mem.eql(u8, host, "opencode")) return "tool.execute.before";
     if (std.mem.eql(u8, host, "openclaw")) return "tool.before";
     if (std.mem.eql(u8, host, "hermes")) return "pre_tool_call";
@@ -142,9 +147,9 @@ pub fn formatFix(
             return try allocator.dupe(u8, "./scripts/host-live-e2e.sh pi  # verify extension coverage");
         }
         if (std.mem.eql(u8, wired, "no")) {
-            return try allocator.dupe(u8, "pi install npm:@orca-sec/pi-orca  # Pi detected; extension missing");
+            return try allocator.dupe(u8, "ryk start  # install the bundled Pi extension");
         }
-        return try allocator.dupe(u8, "install Pi, then: pi install npm:@orca-sec/pi-orca");
+        return try allocator.dupe(u8, "install Pi, then run: ryk start");
     }
     // Degraded first: deny works but allow failed → daemon/policy, not reinstall.
     if (smoke.isDegraded() or (smoke.deny == .pass and smoke.allow == .fail)) {
@@ -152,23 +157,23 @@ pub fn formatFix(
     }
     if (smoke.deny == .fail) {
         if (std.mem.eql(u8, host, "hermes")) {
-            return try allocator.dupe(u8, "orca plugin doctor hermes; set ORCA_BIN; ORCA_HERMES_FAIL_OPEN=0 for fail-closed");
+            return try allocator.dupe(u8, "ryk plugin doctor hermes; set RYK_BIN; RYK_HERMES_FAIL_OPEN=0 for fail-closed");
         }
-        return try std.fmt.allocPrint(allocator, "orca plugin doctor {s}", .{host});
+        return try std.fmt.allocPrint(allocator, "ryk plugin doctor {s}", .{host});
     }
     if (smoke.allow == .fail) {
-        return try std.fmt.allocPrint(allocator, "orca plugin doctor {s}", .{host});
+        return try std.fmt.allocPrint(allocator, "ryk plugin doctor {s}", .{host});
     }
     if (std.mem.eql(u8, wired, "yes") or std.mem.eql(u8, wired, "partial")) {
         if (std.mem.eql(u8, host, "hermes") and hermes_fail_open) {
-            return try allocator.dupe(u8, "export ORCA_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes");
+            return try allocator.dupe(u8, "export RYK_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes");
         }
         return try allocator.dupe(u8, "—");
     }
     if (std.mem.eql(u8, wired, "no")) {
-        return try std.fmt.allocPrint(allocator, "orca plugin install {s} --yes", .{host});
+        return try std.fmt.allocPrint(allocator, "ryk plugin install {s} --yes", .{host});
     }
-    return try std.fmt.allocPrint(allocator, "install {s} CLI, then orca plugin install {s} --yes", .{ host, host });
+    return try std.fmt.allocPrint(allocator, "install {s} CLI, then ryk plugin install {s} --yes", .{ host, host });
 }
 
 /// Pure smoke decision parser — unit-tested without spawning hooks.
@@ -186,8 +191,8 @@ pub fn interpretSmokeOutcome(
         return std.mem.eql(u8, decision, "allow");
     }
     if (std.mem.eql(u8, expected, "block")) {
-        // Codex 0.125+: deny is exit 2 + stderr sentinel; stdout JSON is intentionally empty.
-        if (std.mem.eql(u8, host, "codex")) {
+        // Codex and Grok deny with exit 2; stdout JSON may be intentionally empty.
+        if (std.mem.eql(u8, host, "codex") or std.mem.eql(u8, host, "grok")) {
             if (exit_code == 2) return true;
             // Defensive: accept decision=block JSON if a host version emits it.
             if (exit_code == 0) {
@@ -219,6 +224,12 @@ fn extractDecision(stdout: []const u8) ?[]const u8 {
 
 /// Minimal shell veto fixtures matching each host envelope (command in payload).
 pub fn buildHookFixture(allocator: std.mem.Allocator, host: []const u8, event: []const u8, command: []const u8) ![]u8 {
+    if (std.mem.eql(u8, host, "grok")) {
+        // Grok sends its Claude-compatible hook object directly on stdin.
+        return try std.fmt.allocPrint(allocator,
+            \\{{"hook_event_name":"{s}","session_id":"ryk-smoke","cwd":"/tmp","tool_name":"bash","tool_input":{{"command":"{s}"}}}}
+        , .{ event, command });
+    }
     if (std.mem.eql(u8, host, "hermes")) {
         return try std.fmt.allocPrint(allocator,
             \\{{"version":1,"host":"hermes","event":"{s}","payload":{{"tool_name":"terminal","tool_input":{{"command":"{s}"}},"command":"{s}"}}}}
@@ -243,7 +254,7 @@ pub fn buildHookFixture(allocator: std.mem.Allocator, host: []const u8, event: [
 pub const safe_smoke_command = "git status";
 pub const danger_smoke_command = "rm -rf /";
 
-/// Resolve an orca CLI binary for hook smoke. Null when only the unit-test harness is available.
+/// Resolve a ryk CLI binary for hook smoke. Null when only the unit-test harness is available.
 fn resolveSmokeBinary(io: std.Io, allocator: std.mem.Allocator) !?[]u8 {
     var env_map = env_util.createProcessMap(allocator) catch null;
     defer if (env_map) |*m| m.deinit();
@@ -263,14 +274,16 @@ fn resolveSmokeBinary(io: std.Io, allocator: std.mem.Allocator) !?[]u8 {
     // Real CLI binaries are named `ryk` or legacy `orca` (or `.exe`). The zig test harness is not.
     const brand = @import("brand.zig");
     if (brand.isPrimaryInvocation(base) or brand.isLegacyInvocation(base)) {
-        return self_exe;
+        const owned = try allocator.dupe(u8, self_exe);
+        allocator.free(self_exe);
+        return owned;
     }
     allocator.free(self_exe);
     return null;
 }
 
-/// Spawn `orca hook <host> <event>` with fixture JSON on stdin.
-/// Returns error.SmokeBinaryUnavailable when no orca CLI can be resolved (unit tests).
+/// Spawn `ryk hook <host> <event>` with fixture JSON on stdin.
+/// Returns error.SmokeBinaryUnavailable when no ryk CLI can be resolved (unit tests).
 pub fn smokeTestHookPayload(
     allocator: std.mem.Allocator,
     host: []const u8,
@@ -278,45 +291,23 @@ pub fn smokeTestHookPayload(
     fixture_json: []const u8,
     expected_decision: []const u8,
 ) !bool {
-    // Pipe-based spawn needs a real Threaded Io (single-threaded reports OOM on pipe spawn).
     var threaded = std.Io.Threaded.init(allocator, .{
         .environ = env_util.processEnviron(),
     });
     defer threaded.deinit();
     const io = threaded.io();
+    const ryk_bin = try resolveSmokeBinary(io, allocator) orelse return error.SmokeBinaryUnavailable;
+    defer allocator.free(ryk_bin);
 
-    const orca_bin = try resolveSmokeBinary(io, allocator) orelse return error.SmokeBinaryUnavailable;
-    defer allocator.free(orca_bin);
-
-    const argv = &[_][]const u8{ orca_bin, "hook", host, event };
-    var child = try std.process.spawn(io, .{
-        .argv = argv,
-        .stdin = .pipe,
-        .stdout = .pipe,
-        .stderr = .ignore,
-    });
-
-    if (child.stdin) |*stdin| {
-        try stdin.writeStreamingAll(io, fixture_json);
-        stdin.close(io);
-        child.stdin = null;
-    }
-
-    var stdout_list: std.ArrayList(u8) = .empty;
-    defer stdout_list.deinit(allocator);
-    if (child.stdout) |out| {
-        var buf: [4096]u8 = undefined;
-        var reader = out.reader(io, &buf);
-        while (stdout_list.items.len < 64 * 1024) {
-            const n = reader.interface.readSliceShort(buf[0..@min(buf.len, 64 * 1024 - stdout_list.items.len)]) catch break;
-            if (n == 0) break;
-            try stdout_list.appendSlice(allocator, buf[0..n]);
-        }
-    }
-
-    const term = try child.wait(io);
-    const exit_code: u8 = if (term == .exited) term.exited else 255;
-    return interpretSmokeOutcome(host, expected_decision, exit_code, stdout_list.items, "");
+    const result = try child_process.runHostCommandInputCaptureTimed(
+        allocator,
+        &.{ ryk_bin, "hook", host, event },
+        fixture_json,
+        5_000,
+    );
+    defer result.deinit(allocator);
+    if (result.timed_out) return false;
+    return interpretSmokeOutcome(host, expected_decision, result.exit_code, result.stdout, result.stderr);
 }
 
 pub fn runHostSmokePair(allocator: std.mem.Allocator, host: []const u8) !HostSmokePair {
@@ -364,11 +355,11 @@ pub fn writeHostSmokeReport(stdout: anytype, host: []const u8, smoke: HostSmokeP
         .degraded => {
             try stdout.writeAll("  smoke: DEGRADED — deny works but safe allow failed (daemon down or policy?)\n");
             try stdout.writeAll("  status: NOT ready / NOT fully usable — fail-closed is active but everyday use may break\n");
-            try stdout.writeAll("  fix: orca doctor  # start/repair daemon first\n");
+            try stdout.writeAll("  fix: ryk doctor  # start/repair daemon first\n");
         },
         .not_protected => {
             try stdout.writeAll("  smoke: FAILED — deny did not fire; host is NOT protected\n");
-            try stdout.print("  fix: orca plugin doctor {s}\n", .{host});
+            try stdout.print("  fix: ryk plugin doctor {s}\n", .{host});
         },
         .unknown => {
             try stdout.writeAll("  smoke: not run — do not treat host as protected or ready\n");
@@ -376,7 +367,7 @@ pub fn writeHostSmokeReport(stdout: anytype, host: []const u8, smoke: HostSmokeP
     }
 }
 
-/// Inspect Pi host presence separately from the official Orca extension package.
+/// Inspect Pi host presence separately from legacy npm registration.
 pub fn inspectPi(io: std.Io, allocator: std.mem.Allocator) PiStatus {
     const binary_detected = binaryInPath(io, allocator, "pi");
     var env_map = env_util.createProcessMap(allocator) catch return .{ .binary_detected = binary_detected };
@@ -386,7 +377,8 @@ pub fn inspectPi(io: std.Io, allocator: std.mem.Allocator) PiStatus {
     defer allocator.free(home);
     return .{
         .binary_detected = binary_detected,
-        .extension_installed = piExtensionInstalledAtHome(io, allocator, home),
+        .extension_installed = pi_install.isCompleteAtHome(io, allocator, home) or
+            legacyPiExtensionInstalledAtHome(io, allocator, home),
     };
 }
 
@@ -404,7 +396,7 @@ const PiSettings = struct {
     packages: []const []const u8 = &.{},
 };
 
-fn piExtensionInstalledAtHome(io: std.Io, allocator: std.mem.Allocator, home: []const u8) bool {
+fn legacyPiExtensionInstalledAtHome(io: std.Io, allocator: std.mem.Allocator, home: []const u8) bool {
     const package_root = std.fs.path.join(allocator, &.{ home, ".pi/agent/npm/node_modules/@orca-sec/pi-orca" }) catch return false;
     defer allocator.free(package_root);
     const manifest_path = std.fs.path.join(allocator, &.{ package_root, "package.json" }) catch return false;
@@ -515,7 +507,7 @@ fn readHermesStanceFile(allocator: std.mem.Allocator) ?[]u8 {
 pub fn hermesFailOpenFromEnv() bool {
     var env_map = env_util.createProcessMap(std.heap.page_allocator) catch return true;
     defer env_map.deinit();
-    const value = env_util.getOwned(&env_map, std.heap.page_allocator, "ORCA_HERMES_FAIL_OPEN") catch null;
+    const value = env_util.getOwnedBrand(&env_map, std.heap.page_allocator, "HERMES_FAIL_OPEN") catch null;
     defer if (value) |v| std.heap.page_allocator.free(v);
 
     // When env is set (non-empty), it wins.
@@ -536,6 +528,10 @@ pub fn hermesFailOpenFromEnv() bool {
 // Tests
 // ---------------------------------------------------------------------------
 
+test {
+    _ = pi_install;
+}
+
 test "interpretSmokeOutcome allow requires exit 0 and decision allow" {
     try std.testing.expect(interpretSmokeOutcome("claude", "allow", 0, "{\"decision\":\"allow\"}\n", ""));
     try std.testing.expect(!interpretSmokeOutcome("claude", "allow", 0, "{\"decision\":\"block\"}\n", ""));
@@ -547,6 +543,19 @@ test "interpretSmokeOutcome block for flexible hosts uses decision JSON" {
     try std.testing.expect(interpretSmokeOutcome("hermes", "block", 0, "{\n  \"decision\": \"block\"\n}\n", ""));
     try std.testing.expect(interpretSmokeOutcome("opencode", "block", 0, "{\"decision\":\"block\",\"reason\":\"x\"}", ""));
     try std.testing.expect(!interpretSmokeOutcome("openclaw", "block", 0, "{\"decision\":\"allow\"}", ""));
+}
+
+test "Grok host status uses raw PreToolUse fixtures and exit-two deny" {
+    try std.testing.expectEqualStrings("PreToolUse", shellGate("grok"));
+    try std.testing.expect(interpretSmokeOutcome("grok", "block", 2, "", ""));
+    try std.testing.expect(!interpretSmokeOutcome("grok", "block", 0, "", ""));
+
+    const fixture = try buildHookFixture(std.testing.allocator, "grok", "PreToolUse", "git status");
+    defer std.testing.allocator.free(fixture);
+    try std.testing.expect(std.mem.startsWith(u8, fixture, "{\"hook_event_name\":\"PreToolUse\""));
+    try std.testing.expect(std.mem.indexOf(u8, fixture, "\"cwd\":\"/tmp\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture, "\"tool_input\":{\"command\":\"git status\"}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture, "\"payload\"") == null);
 }
 
 test "interpretSmokeOutcome codex deny uses exit code 2" {
@@ -568,6 +577,7 @@ test "buildHookFixture embeds host event and command" {
 test "shellGate and failStance cover all P1 hosts" {
     try std.testing.expectEqualStrings("PreToolUse", shellGate("codex"));
     try std.testing.expectEqualStrings("PreToolUse", shellGate("claude"));
+    try std.testing.expectEqualStrings("PreToolUse", shellGate("grok"));
     try std.testing.expectEqualStrings("tool.execute.before", shellGate("opencode"));
     try std.testing.expectEqualStrings("tool.before", shellGate("openclaw"));
     try std.testing.expectEqualStrings("pre_tool_call", shellGate("hermes"));
@@ -586,22 +596,22 @@ test "formatFix prefers smoke failure and hermes fail-open remediation" {
 
     const hermes_open = try formatFix(allocator, "hermes", "yes", .{}, true);
     defer allocator.free(hermes_open);
-    try std.testing.expect(std.mem.indexOf(u8, hermes_open, "ORCA_HERMES_FAIL_OPEN=0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hermes_open, "RYK_HERMES_FAIL_OPEN=0") != null);
 
     const pi_fix = try formatFix(allocator, "pi", "—", .{}, true);
     defer allocator.free(pi_fix);
-    try std.testing.expect(std.mem.indexOf(u8, pi_fix, "pi install") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pi_fix, "ryk start") != null);
     try std.testing.expect(std.mem.indexOf(u8, pi_fix, "coverage") == null);
 }
 
 test "Pi status distinguishes host detection from extension installation" {
     const binary_only = PiStatus{ .binary_detected = true };
     try std.testing.expectEqualStrings("no", binary_only.wiredLabel());
-    try std.testing.expectEqualStrings("Pi detected; Orca extension not installed", binary_only.detail());
+    try std.testing.expectEqualStrings("Pi detected; ryk extension not installed", binary_only.detail());
 
     const installed = PiStatus{ .binary_detected = true, .extension_installed = true };
     try std.testing.expectEqualStrings("yes", installed.wiredLabel());
-    try std.testing.expectEqualStrings("Orca extension installed; coverage unknown until live smoke", installed.detail());
+    try std.testing.expectEqualStrings("ryk extension installed; coverage unknown until live smoke", installed.detail());
 
     const absent = PiStatus{};
     try std.testing.expectEqualStrings("—", absent.wiredLabel());
@@ -618,19 +628,19 @@ test "Pi extension installation requires registration and official package marke
         .sub_path = ".pi/agent/npm/node_modules/@orca-sec/pi-orca/package.json",
         .data = "{\"name\":\"@orca-sec/pi-orca\",\"version\":\"1.2.8\"}",
     });
-    try std.testing.expect(!piExtensionInstalledAtHome(std.testing.io, std.testing.allocator, home));
+    try std.testing.expect(!legacyPiExtensionInstalledAtHome(std.testing.io, std.testing.allocator, home));
 
     try tmp.dir.writeFile(std.testing.io, .{
         .sub_path = ".pi/agent/npm/node_modules/@orca-sec/pi-orca/extensions/orca.ts",
         .data = "export default function orca() {}",
     });
-    try std.testing.expect(!piExtensionInstalledAtHome(std.testing.io, std.testing.allocator, home));
+    try std.testing.expect(!legacyPiExtensionInstalledAtHome(std.testing.io, std.testing.allocator, home));
 
     try tmp.dir.writeFile(std.testing.io, .{
         .sub_path = ".pi/agent/settings.json",
         .data = "{\"packages\":[\"npm:@orca-sec/pi-orca\"]}",
     });
-    try std.testing.expect(piExtensionInstalledAtHome(std.testing.io, std.testing.allocator, home));
+    try std.testing.expect(legacyPiExtensionInstalledAtHome(std.testing.io, std.testing.allocator, home));
 }
 
 test "Pi process command is exact and copyable" {

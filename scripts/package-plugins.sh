@@ -10,7 +10,7 @@ case "${DIST_DIR}" in
   *) DIST_DIR_ABS="${REPO_ROOT}/${DIST_DIR}" ;;
 esac
 
-echo "Packaging Orca plugins v${VERSION}..."
+echo "Packaging ryk plugins v${VERSION}..."
 
 rm -rf "${DIST_DIR_ABS}"
 mkdir -p "${DIST_DIR_ABS}"

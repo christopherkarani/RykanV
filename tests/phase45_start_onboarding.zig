@@ -71,6 +71,7 @@ test "phase45 maximum protection verifies shell path with mock evaluator" {
         .maximum_protection,
         &.{},
         onboarding.mockOnboardingEvaluator,
+        null,
     );
     try std.testing.expect(outcome.passed());
 }

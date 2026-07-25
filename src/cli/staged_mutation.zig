@@ -1,4 +1,4 @@
-//! Shared CLI path for `orca apply` / `orca discard`.
+//! Shared CLI path for `ryk apply` / `ryk discard`.
 //! Mutation never happens without --dry-run exit, --yes, or interactive confirm (default No).
 
 const std = @import("std");
@@ -24,8 +24,8 @@ pub const Kind = enum {
 
     fn auditCommand(self: Kind) []const u8 {
         return switch (self) {
-            .apply => "orca apply",
-            .discard => "orca discard",
+            .apply => "ryk apply",
+            .discard => "ryk discard",
         };
     }
 
@@ -62,7 +62,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     const is_tty = std.Io.File.stdin().isTty(io) catch false;
     if (!options.dry_run and !options.yes and !is_tty) {
         try stderr.print(
-            "orca {s}: mutation requires --yes (or run interactively), or use --dry-run to preview.\n",
+            "ryk {s}: mutation requires --yes (or run interactively), or use --dry-run to preview.\n",
             .{name},
         );
         return exit_codes.usage;
@@ -168,7 +168,7 @@ pub fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stder
             options.yes = true;
         } else {
             var prefix_buf: [32]u8 = undefined;
-            const prefix = try std.fmt.bufPrint(&prefix_buf, "orca {s}", .{name});
+            const prefix = try std.fmt.bufPrint(&prefix_buf, "ryk {s}", .{name});
             try suggestions.writeUnknownOption(
                 stderr,
                 prefix,

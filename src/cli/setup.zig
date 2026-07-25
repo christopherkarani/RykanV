@@ -1,5 +1,5 @@
 //! Host-integration setup library used by onboarding flows.
-//! Public CLI door is `ryk start` — top-level `orca setup` is hard-removed from the dispatcher.
+//! Public CLI door is `ryk start` — top-level `ryk setup` is hard-removed from the dispatcher.
 
 const std = @import("std");
 
@@ -64,7 +64,7 @@ fn parseSetupFlags(argv: []const []const u8, stderr: anytype) !onboarding.Flags 
         filtered[count] = arg;
         count += 1;
     }
-    return onboarding.parseFlags(filtered[0..count], stderr, "orca setup", true);
+    return onboarding.parseFlags(filtered[0..count], stderr, "ryk setup", true);
 }
 
 const SetupRenderOpts = struct {
@@ -167,7 +167,7 @@ fn runAutoSetup(io: std.Io, cwd: std.Io.Dir, preset: []const u8, stdout: anytype
             switch (readiness) {
                 .protected => {},
                 .degraded => {
-                    try stdout.writeAll("    → DEGRADED (deny ok, allow failed) — not ready; fix: orca doctor\n");
+                    try stdout.writeAll("    → DEGRADED (deny ok, allow failed) — not ready; fix: ryk doctor\n");
                     degraded_count += 1;
                 },
                 .not_protected => {
@@ -181,8 +181,8 @@ fn runAutoSetup(io: std.Io, cwd: std.Io.Dir, preset: []const u8, stdout: anytype
         }
     }
 
-    try stdout.writeAll("\nPi: not managed by `orca plugin install` / setup host loop; verify extension coverage with live smoke.\n");
-    try stdout.writeAll("  Install: pi install npm:@orca-sec/pi-orca · process: ryk run -- pi\n");
+    try stdout.writeAll("\nPi: bundled setup is managed automatically by `ryk start` (no npm step).\n");
+    try stdout.writeAll("  Verify: ryk doctor · process-level isolation: ryk run -- pi\n");
 
     if (!any_detected) {
         try stdout.writeAll("\nNo agent hosts detected in PATH.\n");
@@ -199,14 +199,14 @@ fn runAutoSetup(io: std.Io, cwd: std.Io.Dir, preset: []const u8, stdout: anytype
     if (degraded_count > 0) {
         try stdout.print("Setup finished with {d} degraded host(s) — deny ok but allow failed (not ready).\n", .{degraded_count});
         try stdout.writeAll("Monitoring/partial — not fully ready for protect.\n");
-        try stdout.writeAll("Fix daemon first: orca doctor --check\n");
+        try stdout.writeAll("Fix daemon first: ryk doctor --check\n");
         try stdout.writeAll("Live host E2E (optional): ./scripts/host-live-e2e.sh\n");
         // Nonzero: degraded hosts mean setup is not complete (honest exit contract).
         return exit_codes.general;
     }
 
     try style.maybeColor(io, stdout, style.Style.green, style.Glyph.party ++ " Setup complete!");
-    try stdout.writeAll("\nNext: ryk claude  (or codex / pi / …) · orca status · orca replay\n");
+    try stdout.writeAll("\nNext: ryk claude  (or codex / pi / …) · ryk status · ryk replay\n");
     try stdout.writeAll("Re-run: ryk start --auto\n");
     return exit_codes.success;
 }
@@ -272,7 +272,7 @@ fn runGuidedSetup(
         if (!render.embedded) {
             try tui.render.stepLine(io, stdout, .failed, "Policy", "Policy setup failed.", 0);
         }
-        try stderr.print("orca setup: policy init returned non-success code {d}\n", .{policy_code});
+        try stderr.print("ryk setup: policy init returned non-success code {d}\n", .{policy_code});
         return policy_code;
     }
     if (!render.embedded) {
@@ -473,7 +473,7 @@ fn runGuidedSetup(
     }
 
     try style.maybeColor(io, stdout, style.Style.green, style.Glyph.party ++ " Guided setup complete!");
-    try stdout.writeAll("\nRun 'orca doctor' or 'ryk run -- <command>' to get started.\n");
+    try stdout.writeAll("\nRun 'ryk doctor' or 'ryk run -- <command>' to get started.\n");
     return exit_codes.success;
 }
 

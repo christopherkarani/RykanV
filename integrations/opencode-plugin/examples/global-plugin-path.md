@@ -1,6 +1,6 @@
 # Global Plugin Path
 
-This example shows how to install the Orca plugin globally so it applies to all OpenCode sessions on your machine.
+This example shows how to install the ryk plugin globally so it applies to all OpenCode sessions on your machine.
 
 ## Steps
 
@@ -10,10 +10,10 @@ This example shows how to install the Orca plugin globally so it applies to all 
    mkdir -p ~/.config/opencode/plugins
    ```
 
-2. Copy the Orca plugin file into the global plugins directory:
+2. Copy the ryk plugin file into the global plugins directory:
 
    ```bash
-   # Adjust the source path to point to the Orca repository
+   # Adjust the source path to point to the ryk repository
    cp /path/to/orca-repo/integrations/opencode-plugin/orca.ts ~/.config/opencode/plugins/orca.ts
    ```
 
@@ -27,19 +27,19 @@ This example shows how to install the Orca plugin globally so it applies to all 
 
 ## Verify
 
-Run the Orca plugin doctor:
+Run the ryk plugin doctor:
 
 ```bash
-orca plugin doctor opencode
+ryk plugin doctor opencode
 ```
 
 Expected output includes:
 - `opencode: found` in the plugin directories section.
-- Orca binary detected in PATH or at a known build path.
+- ryk binary detected in PATH or at a known build path.
 
 ## Notes
 
 - Global plugins apply across all projects and sessions.
 - They are useful for consistent policy enforcement on a single machine.
-- For stronger protection, also run OpenCode through Orca: `orca run -- opencode`.
+- For stronger protection, also run OpenCode through ryk: `ryk run -- opencode`.
 - The plugin file contains no secrets and is safe to keep in your home directory.

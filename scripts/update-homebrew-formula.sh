@@ -20,7 +20,7 @@ fail() {
 [ -n "$VERSION" ] || fail "usage: $0 <version>  (or set RYK_VERSION / ORCA_VERSION)"
 [ -f "$TEMPLATE" ] || fail "homebrew template not found: $TEMPLATE"
 
-BASE_URL="https://github.com/christopherkarani/Orca/releases/download/v${VERSION}"
+BASE_URL="https://github.com/christopherkarani/rykan/releases/download/v${VERSION}"
 DIST_DIR="${RYK_DIST_DIR:-${ORCA_DIST_DIR:-}}"
 
 if [ -n "$DIST_DIR" ]; then

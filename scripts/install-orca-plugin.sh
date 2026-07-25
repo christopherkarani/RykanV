@@ -105,15 +105,15 @@ if ! ORCA_BIN="$(resolve_orca_bin)"; then
 fi
 
 if ! orca_executable "$ORCA_BIN" >/dev/null 2>&1; then
-  echo "orca binary not found after install attempt" >&2
+  echo "ryk binary not found after install attempt" >&2
   exit 1
 fi
 
 ORCA_BIN="$(orca_executable "$ORCA_BIN")"
 
 if [ "$HOST" = "hermes" ] && ! orca_supports_hermes "$ORCA_BIN"; then
-  echo "orca at ${ORCA_BIN} does not support Hermes hooks (upgrade required)" >&2
-  echo "Hint: build locally (zig build) or set ORCA_BIN to a current Orca binary" >&2
+  echo "ryk at ${ORCA_BIN} does not support Hermes hooks (upgrade required)" >&2
+  echo "Hint: build locally (zig build) or set RYK_BIN to a current ryk binary" >&2
   exit 1
 fi
 

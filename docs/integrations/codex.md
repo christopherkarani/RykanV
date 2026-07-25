@@ -63,12 +63,12 @@ zig build
 If your Codex version supports repo marketplace sources, add this repository:
 
 ```bash
-codex plugin marketplace add chriskarani/orca
+codex plugin marketplace add christopherkarani/rykan
 ```
 
-Then install Orca from Codex's plugin UI/directory after adding the marketplace.
+Then install ryk from Codex's plugin UI/directory after adding the marketplace.
 
-This command adds the Orca repository as a plugin marketplace source. This is not the same as being listed in the official Codex marketplace.
+This command adds the ryk repository as a plugin marketplace source. This is not the same as being listed in the official Codex marketplace.
 
 ### Local marketplace example
 

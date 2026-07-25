@@ -167,8 +167,10 @@ pub const OpenClawHostInstall = struct {
 pub const HermesPaths = struct {
     repo_manifest_exists: bool,
     repo_source_exists: bool,
+    repo_mapping_exists: bool,
     user_manifest_exists: bool,
     user_source_exists: bool,
+    user_mapping_exists: bool,
     config_references_plugin: bool,
 };
 
@@ -387,20 +389,26 @@ pub fn collectPluginDoctorReportWithHermesSmoke(
     defer allocator.free(hermes_repo_manifest_path);
     const hermes_repo_source_path = try std.fs.path.join(allocator, &.{ hermes_plugin_dir, "__init__.py" });
     defer allocator.free(hermes_repo_source_path);
+    const hermes_repo_mapping_path = try std.fs.path.join(allocator, &.{ hermes_plugin_dir, "mapping.py" });
+    defer allocator.free(hermes_repo_mapping_path);
     const hermes_user_root = try hermesUserPluginRoot(allocator);
     defer allocator.free(hermes_user_root);
     const hermes_user_manifest_path = try std.fs.path.join(allocator, &.{ hermes_user_root, "plugin.yaml" });
     defer allocator.free(hermes_user_manifest_path);
     const hermes_user_source_path = try std.fs.path.join(allocator, &.{ hermes_user_root, "__init__.py" });
     defer allocator.free(hermes_user_source_path);
+    const hermes_user_mapping_path = try std.fs.path.join(allocator, &.{ hermes_user_root, "mapping.py" });
+    defer allocator.free(hermes_user_mapping_path);
     const hermes_config_path = try hermesConfigPath(allocator);
     defer allocator.free(hermes_config_path);
 
     const hermes_paths = HermesPaths{
         .repo_manifest_exists = fileExistsAbsolute(io, hermes_repo_manifest_path),
         .repo_source_exists = fileExistsAbsolute(io, hermes_repo_source_path),
+        .repo_mapping_exists = fileExistsAbsolute(io, hermes_repo_mapping_path),
         .user_manifest_exists = fileExistsAbsolute(io, hermes_user_manifest_path),
         .user_source_exists = fileExistsAbsolute(io, hermes_user_source_path),
+        .user_mapping_exists = fileExistsAbsolute(io, hermes_user_mapping_path),
         .config_references_plugin = fileContains(allocator, hermes_config_path, "orca"),
     };
 
@@ -418,8 +426,18 @@ pub fn collectPluginDoctorReportWithHermesSmoke(
     defer allocator.free(claude_bundled_manifest);
 
     const marketplace = MarketplaceStatus{
-        .codex_marketplace = fileExistsAbsolute(io, codex_marketplace_path),
-        .claude_marketplace = fileExistsAbsolute(io, claude_marketplace_path),
+        .codex_marketplace = plugin_install.marketplaceRegistersExpectedPlugin(
+            io,
+            allocator,
+            codex_marketplace_path,
+            .codex,
+        ),
+        .claude_marketplace = plugin_install.marketplaceRegistersExpectedPlugin(
+            io,
+            allocator,
+            claude_marketplace_path,
+            .claude,
+        ),
         .codex_plugin_manifest = fileExistsAbsolute(io, codex_bundled_manifest),
         .claude_plugin_manifest = fileExistsAbsolute(io, claude_bundled_manifest),
         .codex_user_plugin = fileExistsAbsolute(io, codex_user_plugin_path),
@@ -448,7 +466,7 @@ pub fn collectPluginDoctorReportWithHermesSmoke(
         break :blk result.passed;
     };
     if (!hermes_hook_smoke_passed) {
-        try appendWarning(allocator, &warnings, "Hermes hook smoke test failed: Orca may be too old for Hermes hooks (upgrade via ./scripts/install-orca-plugin.sh hermes)");
+        try appendWarning(allocator, &warnings, "Hermes hook smoke test failed: reinstall the integration with `ryk start`");
     }
 
     const os = core.platform.detectOs();
@@ -500,13 +518,13 @@ fn appendWarning(allocator: std.mem.Allocator, warnings: *std.ArrayList([]const 
 // ---------------------------------------------------------------------------
 
 fn writeDoctorPlain(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, report: PluginDoctorReport, target: DoctorTarget) !void {
-    try stdout.writeAll("Orca Plugin Doctor\n\n");
+    try stdout.writeAll("ryk Plugin Doctor\n\n");
 
-    try stdout.print("Orca version: {s}\n", .{report.orca_version});
+    try stdout.print("ryk version: {s}\n", .{report.orca_version});
     if (report.orca_binary_path) |path| {
-        try stdout.print("Orca binary: {s}\n", .{path});
+        try stdout.print("ryk binary: {s}\n", .{path});
     } else {
-        try stdout.writeAll("Orca binary: unknown\n");
+        try stdout.writeAll("ryk binary: unknown\n");
     }
     try stdout.print("Current directory: {s}\n", .{report.cwd});
     try stdout.print("Workspace root: {s}\n", .{report.workspace_root});
@@ -582,13 +600,13 @@ fn writeDoctorPlain(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, r
             try stdout.print("  host binary: {s}\n", .{if (report.host_binaries.codex) "detected" else "not detected"});
             if (!report.host_binaries.codex) try stdout.writeAll("    → Fix: install Codex and re-run ryk start or ryk plugin install codex\n");
             try stdout.print("  bundled plugin directory: {s}\n", .{if (report.plugin_directories.codex) "present" else "missing"});
-            if (!report.plugin_directories.codex) try stdout.writeAll("    → Fix: install Orca runtime assets or set ORCA_RESOURCE_ROOT\n");
+            if (!report.plugin_directories.codex) try stdout.writeAll("    → Fix: reinstall ryk runtime assets\n");
             try stdout.print("  user plugin registration: {s}\n", .{if (report.marketplace.codex_user_plugin) "installed" else "missing"});
             if (!report.marketplace.codex_user_plugin) try stdout.writeAll("    → Fix: ryk start or ryk plugin install codex\n");
             try stdout.print("  marketplace file: {s}\n", .{if (report.marketplace.codex_marketplace) "present" else "missing"});
             if (!report.marketplace.codex_marketplace) try stdout.writeAll("    → Fix: ryk start or ryk plugin install codex\n");
             try stdout.print("  bundled plugin manifest: {s}\n", .{if (report.marketplace.codex_plugin_manifest) "present" else "missing"});
-            if (!report.marketplace.codex_plugin_manifest) try stdout.writeAll("    → Fix: install Orca runtime assets or set ORCA_RESOURCE_ROOT\n");
+            if (!report.marketplace.codex_plugin_manifest) try stdout.writeAll("    → Fix: reinstall ryk runtime assets\n");
             try stdout.writeAll("  install: use 'ryk plugin install codex --dry-run' to preview\n");
         },
         .claude => {
@@ -596,13 +614,13 @@ fn writeDoctorPlain(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, r
             try stdout.print("  host binary: {s}\n", .{if (report.host_binaries.claude) "detected" else "not detected"});
             if (!report.host_binaries.claude) try stdout.writeAll("    → Fix: install Claude Code and re-run ryk start or ryk plugin install claude\n");
             try stdout.print("  bundled plugin directory: {s}\n", .{if (report.plugin_directories.claude) "present" else "missing"});
-            if (!report.plugin_directories.claude) try stdout.writeAll("    → Fix: install Orca runtime assets or set ORCA_RESOURCE_ROOT\n");
+            if (!report.plugin_directories.claude) try stdout.writeAll("    → Fix: reinstall ryk runtime assets\n");
             try stdout.print("  user plugin registration: {s}\n", .{if (report.marketplace.claude_user_plugin) "installed" else "missing"});
             if (!report.marketplace.claude_user_plugin) try stdout.writeAll("    → Fix: ryk start or ryk plugin install claude\n");
             try stdout.print("  marketplace file: {s}\n", .{if (report.marketplace.claude_marketplace) "present" else "missing"});
             if (!report.marketplace.claude_marketplace) try stdout.writeAll("    → Fix: ryk start or ryk plugin install claude\n");
             try stdout.print("  bundled plugin manifest: {s}\n", .{if (report.marketplace.claude_plugin_manifest) "present" else "missing"});
-            if (!report.marketplace.claude_plugin_manifest) try stdout.writeAll("    → Fix: install Orca runtime assets or set ORCA_RESOURCE_ROOT\n");
+            if (!report.marketplace.claude_plugin_manifest) try stdout.writeAll("    → Fix: reinstall ryk runtime assets\n");
             try stdout.writeAll("  install: use 'ryk plugin install claude --dry-run' to preview\n");
         },
         .opencode => {
@@ -623,7 +641,7 @@ fn writeDoctorPlain(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, r
             try stdout.print("  host binary: {s}\n", .{if (report.host_binaries.openclaw) "detected" else "not detected"});
             if (!report.host_binaries.openclaw) try stdout.writeAll("    → Fix: install OpenClaw and re-run ryk start or ryk plugin install openclaw\n");
             try stdout.print("  bundled plugin directory: {s}\n", .{if (report.plugin_directories.openclaw) "present" else "missing"});
-            if (!report.plugin_directories.openclaw) try stdout.writeAll("    → Fix: install Orca runtime assets or set ORCA_RESOURCE_ROOT\n");
+            if (!report.plugin_directories.openclaw) try stdout.writeAll("    → Fix: reinstall ryk runtime assets\n");
             try stdout.print("  host plugin installed: {s}\n", .{if (report.openclaw_paths.host_plugin_installed) "yes" else "no"});
             if (!report.openclaw_paths.host_plugin_installed) try stdout.writeAll("    → Fix: ryk start or ryk plugin install openclaw\n");
             try stdout.print("  host plugin manifest (openclaw.plugin.json): {s}\n", .{if (report.openclaw_paths.plugin_manifest_exists) "exists" else "not found"});
@@ -643,18 +661,22 @@ fn writeDoctorPlain(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, r
             if (!report.hermes_paths.repo_manifest_exists) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
             try stdout.print("  repo __init__.py: {s}\n", .{if (report.hermes_paths.repo_source_exists) "exists" else "not found"});
             if (!report.hermes_paths.repo_source_exists) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
+            try stdout.print("  repo mapping.py: {s}\n", .{if (report.hermes_paths.repo_mapping_exists) "exists" else "not found"});
+            if (!report.hermes_paths.repo_mapping_exists) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
             try stdout.print("  user plugin path (~/.hermes/plugins/orca/plugin.yaml): {s}\n", .{if (report.hermes_paths.user_manifest_exists) "exists" else "not found"});
             if (!report.hermes_paths.user_manifest_exists) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
+            try stdout.print("  user mapping.py: {s}\n", .{if (report.hermes_paths.user_mapping_exists) "exists" else "not found"});
+            if (!report.hermes_paths.user_mapping_exists) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
             try stdout.print("  config references plugin: {s}\n", .{if (report.hermes_paths.config_references_plugin) "yes" else "unknown/no"});
             if (!report.hermes_paths.config_references_plugin) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
             const hermes_fail_open = host_status.hermesFailOpenFromEnv();
             try stdout.print("  fail stance: {s}\n", .{host_status.failStance("hermes", hermes_fail_open)});
             if (hermes_fail_open) {
-                try stdout.writeAll("    → WARN: Hermes is fail-open when Orca is degraded (default product stance).\n");
-                try stdout.writeAll("    → Fix: export ORCA_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes\n");
+                try stdout.writeAll("    → WARN: Hermes is fail-open when ryk is degraded (default product stance).\n");
+                try stdout.writeAll("    → Fix: export RYK_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes\n");
             }
             try stdout.print("  hook smoke test (pre_tool_call allow): {s}\n", .{if (report.hermes_hook_smoke_passed) "passed" else "FAILED"});
-            if (!report.hermes_hook_smoke_passed) try stdout.writeAll("    → Fix: upgrade Orca (./scripts/install-orca-plugin.sh hermes) or set ORCA_BIN to a build with Hermes host support\n");
+            if (!report.hermes_hook_smoke_passed) try stdout.writeAll("    → Fix: upgrade ryk and reinstall the Hermes integration\n");
             try stdout.writeAll("  install: use 'ryk plugin install hermes --dry-run' to preview\n");
             try stdout.writeAll("  note: Hermes hooks are additive; strongest protection remains 'ryk run -- hermes'\n");
             try stdout.writeAll("  note: Gateway (Telegram/Discord) may omit the block reason in chat; check agent tool errors.\n");
@@ -785,11 +807,11 @@ fn writeUnifiedHostStatusTable(
         try stdout.print("  fix {s}: {s}\n", .{ line.host, line.fix });
     }
     if (include_pi) {
-        try stdout.writeAll("  note pi: not managed by `ryk plugin install`; extension coverage unknown until live smoke\n");
-        try stdout.writeAll("    → install: pi install npm:@orca-sec/pi-orca · process: ryk run -- pi\n");
+        try stdout.writeAll("  note pi: bundled extension setup is managed by `ryk start` (no npm step)\n");
+        try stdout.writeAll("    → verify: ryk doctor · process isolation: ryk run -- pi\n");
     }
     if (hostPluginInstalledFromReport("hermes", report) and hermes_fail_open and (target == .all or target == .hermes)) {
-        try stdout.writeAll("  warn hermes: effective fail-open when Orca degraded — set ORCA_HERMES_FAIL_OPEN=0 or use ryk run -- hermes\n");
+        try stdout.writeAll("  warn hermes: effective fail-open when ryk is degraded — use ryk run -- hermes for wrapper enforcement\n");
     }
 }
 
@@ -869,8 +891,10 @@ fn writeDoctorJson(stdout: anytype, report: PluginDoctorReport, target: DoctorTa
     try stdout.writeAll("  \"hermes_paths\": {\n");
     try stdout.print("    \"repo_manifest_exists\": {s},\n", .{if (report.hermes_paths.repo_manifest_exists) "true" else "false"});
     try stdout.print("    \"repo_source_exists\": {s},\n", .{if (report.hermes_paths.repo_source_exists) "true" else "false"});
+    try stdout.print("    \"repo_mapping_exists\": {s},\n", .{if (report.hermes_paths.repo_mapping_exists) "true" else "false"});
     try stdout.print("    \"user_manifest_exists\": {s},\n", .{if (report.hermes_paths.user_manifest_exists) "true" else "false"});
     try stdout.print("    \"user_source_exists\": {s},\n", .{if (report.hermes_paths.user_source_exists) "true" else "false"});
+    try stdout.print("    \"user_mapping_exists\": {s},\n", .{if (report.hermes_paths.user_mapping_exists) "true" else "false"});
     try stdout.print("    \"config_references_plugin\": {s}\n", .{if (report.hermes_paths.config_references_plugin) "true" else "false"});
     try stdout.writeAll("  },\n");
 
@@ -1368,7 +1392,7 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
         }
     }
 
-    try stdout.writeAll("Orca Plugin Install\n\n");
+    try stdout.writeAll("ryk Plugin Install\n\n");
 
     const workspace_root = try plugin_install.resolveWorkspaceInstallRoot(io, allocator);
     defer allocator.free(workspace_root);
@@ -1496,10 +1520,14 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
                 defer allocator.free(manifest_source);
                 const source_source = try std.fs.path.join(allocator, &.{ plugin_dir, "__init__.py" });
                 defer allocator.free(source_source);
+                const mapping_source = try std.fs.path.join(allocator, &.{ plugin_dir, "mapping.py" });
+                defer allocator.free(mapping_source);
                 const manifest_destination = try std.fs.path.join(allocator, &.{ destination_path, "plugin.yaml" });
                 defer allocator.free(manifest_destination);
                 const source_destination = try std.fs.path.join(allocator, &.{ destination_path, "__init__.py" });
                 defer allocator.free(source_destination);
+                const mapping_destination = try std.fs.path.join(allocator, &.{ destination_path, "mapping.py" });
+                defer allocator.free(mapping_destination);
                 // Existing install: plugin source already present (hybrid L4 — do not silent-flip).
                 const hermes_was_existing = fileExistsAbsolute(io, source_destination);
 
@@ -1513,7 +1541,10 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
                         try stdout.writeAll("  fail stance (new install): fail-closed via .orca_fail_stance\n");
                     }
                 } else {
-                    if (!fileExistsAbsolute(io, manifest_source) or !fileExistsAbsolute(io, source_source)) {
+                    if (!fileExistsAbsolute(io, manifest_source) or
+                        !fileExistsAbsolute(io, source_source) or
+                        !fileExistsAbsolute(io, mapping_source))
+                    {
                         try stdout.writeAll("  action: failed (Hermes plugin files missing)\n");
                         return exit_codes.general;
                     }
@@ -1531,7 +1562,14 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
                         },
                         else => return err,
                     };
-                    if (manifest_installed or source_installed) {
+                    const mapping_installed = installFileIfSafe(allocator, mapping_source, mapping_destination) catch |err| switch (err) {
+                        error.RefusingToOverwriteDifferentFile => {
+                            try stdout.print("  action: failed (destination exists and differs: {s})\n", .{mapping_destination});
+                            return exit_codes.general;
+                        },
+                        else => return err,
+                    };
+                    if (manifest_installed or source_installed or mapping_installed) {
                         try stdout.print("  action: installed to {s}\n", .{destination_path});
                     } else {
                         try stdout.print("  action: already up-to-date at {s}\n", .{destination_path});
@@ -1541,10 +1579,10 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
                         try writeHermesFailClosedStance(allocator, destination_path);
                         try stdout.writeAll("  fail stance: fail-closed (new install default)\n");
                         try stdout.writeAll("    → Written: ~/.hermes/plugins/orca/.orca_fail_stance\n");
-                        try stdout.writeAll("    → Override: export ORCA_HERMES_FAIL_OPEN=1  (or: ryk run -- hermes for process wrap)\n");
+                        try stdout.writeAll("    → Override: export RYK_HERMES_FAIL_OPEN=1  (or: ryk run -- hermes for process wrap)\n");
                     } else {
                         try stdout.writeAll("  fail stance: left unchanged (existing install; product default is fail-open unless env/stance set)\n");
-                        try stdout.writeAll("    → Safer path: export ORCA_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes\n");
+                        try stdout.writeAll("    → Safer path: export RYK_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes\n");
                     }
                     if (binaryInPath(io, allocator, "hermes")) {
                         const status = try runHermesEnable(allocator);
@@ -1553,6 +1591,7 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
                         } else {
                             try stdout.print("  enable: failed (hermes exit code: {d})\n", .{status});
                             try writeHermesEnableHelper(allocator, destination_path);
+                            return exit_codes.child_failure;
                         }
                     } else {
                         try stdout.writeAll("  enable: hermes binary not found in PATH\n");
@@ -1636,17 +1675,16 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
                 smoke_degraded = true;
             }
             if (t == .hermes and host_status.hermesFailOpenFromEnv()) {
-                try stdout.writeAll("  warn: Hermes effective stance is fail-open — tools may run if Orca is degraded.\n");
-                try stdout.writeAll("    → export ORCA_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes\n");
+                try stdout.writeAll("  warn: Hermes effective stance is fail-open — tools may run if ryk is degraded.\n");
+                try stdout.writeAll("    → export RYK_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes\n");
             }
         }
     }
 
-    // Pi is never managed by plugin install / install-all (honest non-management).
+    // Pi is managed by the unified start flow, not the legacy plugin subcommand.
     if (!dry_run and (target == .all or all_detected)) {
-        try stdout.writeAll("\nPi: not managed by `ryk plugin install`; extension coverage requires live smoke.\n");
-        try stdout.writeAll("  Install: pi install npm:@orca-sec/pi-orca · process: ryk run -- pi\n");
-        try stdout.writeAll("  Live check: ./scripts/host-live-e2e.sh pi\n");
+        try stdout.writeAll("\nPi: bundled extension setup is managed by `ryk start` (no npm step).\n");
+        try stdout.writeAll("  Verify: ryk doctor · process isolation: ryk run -- pi\n");
     }
 
     try stdout.writeAll("\n");
@@ -1658,7 +1696,7 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
     }
     if (smoke_degraded) {
         try stdout.writeAll("Install completed but smoke is DEGRADED (deny ok, allow failed).\n");
-        try stdout.writeAll("Host is safe/fail-closed but NOT ready — fix daemon: orca doctor\n");
+        try stdout.writeAll("Host is safe/fail-closed but NOT ready — inspect with: ryk doctor\n");
         // Exit 0: protection proof (deny) passed; yellow is messaging-only per L3.
     }
     return exit_codes.success;
@@ -1676,8 +1714,8 @@ fn mcpServerCommand(_: std.Io, argv: []const []const u8, stdout: anytype, stderr
                 \\  ryk plugin mcp-server [--help]
                 \\
                 \\Status: limited / deferred
-                \\  The Orca MCP plugin server is planned but not yet active.
-                \\  When implemented, it will expose safe read-only Orca capabilities as MCP tools:
+                \\  The ryk MCP plugin server is planned but not yet active.
+                \\  When implemented, it will expose safe read-only ryk capabilities as MCP tools:
                 \\    - orca_doctor
                 \\    - orca_plugin_doctor
                 \\    - orca_policy_check
@@ -1699,9 +1737,9 @@ fn mcpServerCommand(_: std.Io, argv: []const []const u8, stdout: anytype, stderr
         return exit_codes.usage;
     }
 
-    try stdout.writeAll("Orca Plugin MCP Server\n\n");
+    try stdout.writeAll("ryk Plugin MCP Server\n\n");
     try stdout.writeAll("Status: limited / deferred\n");
-    try stdout.writeAll("  The Orca MCP plugin server is planned but not yet active.\n");
+    try stdout.writeAll("  The ryk MCP plugin server is planned but not yet active.\n");
     try stdout.writeAll("  It does not listen on any port or transport.\n\n");
     try stdout.writeAll("Planned safe tools (when implemented):\n");
     try stdout.writeAll("  - orca_doctor\n");
@@ -1828,7 +1866,9 @@ pub fn detectOpenClawHostInstall(io: std.Io, allocator: std.mem.Allocator, openc
     const manifest_exists = fileExistsAbsolute(io, manifest_path);
     const package_exists = fileExistsAbsolute(io, package_json_path);
     const source_exists = fileExistsAbsolute(io, source_path);
-    var host_plugin_installed = manifest_exists or package_exists or source_exists;
+    // A partial directory must never be reported as protected. The host CLI's
+    // own registry is the only alternative proof of a complete installation.
+    var host_plugin_installed = manifest_exists and package_exists and source_exists;
     var detection_note: []const u8 = "checked host extension directory";
 
     if (!host_plugin_installed and openclaw_in_path) {
@@ -1868,13 +1908,22 @@ pub fn captureChildOutput(allocator: std.mem.Allocator, argv: []const []const u8
 }
 
 pub fn hostPluginInstalledFromReport(host_name: []const u8, report: PluginDoctorReport) bool {
-    if (std.mem.eql(u8, host_name, "hermes")) return report.hermes_paths.user_manifest_exists;
+    if (std.mem.eql(u8, host_name, "hermes")) {
+        return report.hermes_paths.user_manifest_exists and
+            report.hermes_paths.user_source_exists and
+            report.hermes_paths.user_mapping_exists and
+            report.hermes_paths.config_references_plugin;
+    }
     if (std.mem.eql(u8, host_name, "openclaw")) return report.openclaw_paths.host_plugin_installed;
     if (std.mem.eql(u8, host_name, "opencode")) {
         return report.opencode_paths.project_plugin_exists or report.opencode_paths.global_plugin_exists;
     }
-    if (std.mem.eql(u8, host_name, "codex")) return report.marketplace.codex_user_plugin;
-    if (std.mem.eql(u8, host_name, "claude")) return report.marketplace.claude_user_plugin;
+    if (std.mem.eql(u8, host_name, "codex")) {
+        return report.marketplace.codex_user_plugin and report.marketplace.codex_marketplace;
+    }
+    if (std.mem.eql(u8, host_name, "claude")) {
+        return report.marketplace.claude_user_plugin and report.marketplace.claude_marketplace;
+    }
     return false;
 }
 
@@ -1903,7 +1952,10 @@ pub fn verifyHostInstallAfterChild(
 pub fn hostPluginInstalledFromDoctorJson(host_name: []const u8, root: std.json.Value) bool {
     if (std.mem.eql(u8, host_name, "hermes")) {
         const paths = root.object.get("hermes_paths") orelse return false;
-        return jsonBoolField(paths.object, "user_manifest_exists");
+        return jsonBoolField(paths.object, "user_manifest_exists") and
+            jsonBoolField(paths.object, "user_source_exists") and
+            jsonBoolField(paths.object, "user_mapping_exists") and
+            jsonBoolField(paths.object, "config_references_plugin");
     }
     if (std.mem.eql(u8, host_name, "openclaw")) {
         const paths = root.object.get("openclaw_paths") orelse return false;
@@ -1916,11 +1968,13 @@ pub fn hostPluginInstalledFromDoctorJson(host_name: []const u8, root: std.json.V
     }
     if (std.mem.eql(u8, host_name, "codex")) {
         const marketplace = root.object.get("marketplace") orelse return false;
-        return jsonBoolField(marketplace.object, "codex_user_plugin");
+        return jsonBoolField(marketplace.object, "codex_user_plugin") and
+            jsonBoolField(marketplace.object, "codex_marketplace");
     }
     if (std.mem.eql(u8, host_name, "claude")) {
         const marketplace = root.object.get("marketplace") orelse return false;
-        return jsonBoolField(marketplace.object, "claude_user_plugin");
+        return jsonBoolField(marketplace.object, "claude_user_plugin") and
+            jsonBoolField(marketplace.object, "claude_marketplace");
     }
     return false;
 }
@@ -1968,22 +2022,13 @@ pub fn hermesConfigPath(allocator: std.mem.Allocator) ![]u8 {
 pub fn installFileIfSafe(allocator: std.mem.Allocator, source_path: []const u8, destination_path: []const u8) !bool {
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();
-    if (fileExistsAbsolute(io, destination_path)) {
-        const same = try filesEqual(allocator, source_path, destination_path);
-        if (same) return false;
-        return error.RefusingToOverwriteDifferentFile;
-    }
-
-    const parent = std.fs.path.dirname(destination_path) orelse return error.InvalidPath;
-    try std.Io.Dir.cwd().createDirPath(io, parent);
-
-    const source = try std.Io.Dir.cwd().readFileAlloc(io, source_path, allocator, .limited(1024 * 1024));
-    defer allocator.free(source);
-    const dest_file = try std.Io.Dir.cwd().createFile(io, destination_path, .{ .exclusive = true });
-    defer dest_file.close(io);
-    try dest_file.writeStreamingAll(io, source);
-    try dest_file.sync(io);
-    return true;
+    return plugin_install.installFileIfSafe(
+        io,
+        allocator,
+        source_path,
+        destination_path,
+        false,
+    );
 }
 
 pub fn filesEqual(allocator: std.mem.Allocator, lhs_path: []const u8, rhs_path: []const u8) !bool {
@@ -2086,7 +2131,6 @@ pub const SmokeResult = struct {
 };
 
 pub fn smokeTestHook(allocator: std.mem.Allocator, host: []const u8, event: []const u8, fixture_path: []const u8, expected_decision: []const u8) !SmokeResult {
-    // Pipe spawn needs Threaded Io (single-threaded reports OOM).
     var threaded = std.Io.Threaded.init(allocator, .{
         .environ = env_util.processEnviron(),
     });
@@ -2095,37 +2139,23 @@ pub fn smokeTestHook(allocator: std.mem.Allocator, host: []const u8, event: []co
     const self_exe = try std.process.executablePathAlloc(io, allocator);
     defer allocator.free(self_exe);
     const argv = &[_][]const u8{ self_exe, "hook", host, event };
-    var child = try std.process.spawn(io, .{
-        .argv = argv,
-        .stdin = .pipe,
-        .stdout = .pipe,
-        .stderr = .ignore,
-    });
 
     const fixture = try std.Io.Dir.cwd().readFileAlloc(io, fixture_path, allocator, .limited(256 * 1024));
     defer allocator.free(fixture);
-    if (child.stdin) |stdin| {
-        try stdin.writeStreamingAll(io, fixture);
-        stdin.close(io);
-        child.stdin = null;
-    }
-
-    const stdout = if (child.stdout) |out| blk: {
-        var list: std.ArrayList(u8) = .empty;
-        errdefer list.deinit(allocator);
-        var buf: [4096]u8 = undefined;
-        var reader = out.reader(io, &buf);
-        while (list.items.len < 256 * 1024) {
-            const n = reader.interface.readSliceShort(buf[0..@min(buf.len, 256 * 1024 - list.items.len)]) catch break;
-            if (n == 0) break;
-            try list.appendSlice(allocator, buf[0..n]);
-        }
-        break :blk try list.toOwnedSlice(allocator);
-    } else try allocator.dupe(u8, "");
-    defer allocator.free(stdout);
-    const term = try child.wait(io);
-    const exit_code: u8 = if (term == .exited) term.exited else 255;
-    const passed = host_status.interpretSmokeOutcome(host, expected_decision, exit_code, stdout, "");
+    const result = try child_process.runHostCommandInputCaptureTimed(
+        allocator,
+        argv,
+        fixture,
+        10_000,
+    );
+    defer result.deinit(allocator);
+    const passed = !result.timed_out and host_status.interpretSmokeOutcome(
+        host,
+        expected_decision,
+        result.exit_code,
+        result.stdout,
+        result.stderr,
+    );
     return .{ .passed = passed };
 }
 
@@ -2149,16 +2179,17 @@ fn writeHermesEnableHelper(allocator: std.mem.Allocator, plugin_dir: []const u8)
 
     const help_path = try std.fs.path.join(allocator, &.{ resolved_dir, "ENABLE.txt" });
     defer allocator.free(help_path);
-    if (std.fs.path.dirname(help_path)) |parent| try std.Io.Dir.cwd().createDirPath(io, parent);
-
-    const file = try std.Io.Dir.cwd().createFile(io, help_path, .{ .truncate = true });
-    defer file.close(io);
-    try file.writeStreamingAll(io, "Orca plugin files are installed.\nTo enable, run:\n  hermes plugins enable orca\n");
-    try file.sync(io);
+    _ = try plugin_install.installTextIfSafe(
+        io,
+        allocator,
+        "ryk plugin files are installed.\nTo enable, run:\n  hermes plugins enable orca\n",
+        help_path,
+        true,
+    );
 }
 
 /// New Hermes installs: write fail-closed stance next to the plugin (hybrid L4).
-/// Env `ORCA_HERMES_FAIL_OPEN` always overrides this file at runtime.
+/// Env `RYK_HERMES_FAIL_OPEN` (and its legacy alias) overrides this file.
 fn writeHermesFailClosedStance(allocator: std.mem.Allocator, plugin_dir: []const u8) !void {
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();
@@ -2174,18 +2205,18 @@ fn writeHermesFailClosedStance(allocator: std.mem.Allocator, plugin_dir: []const
 
     const stance_path = try std.fs.path.join(allocator, &.{ resolved_dir, host_status.hermes_fail_stance_filename });
     defer allocator.free(stance_path);
-    if (std.fs.path.dirname(stance_path)) |parent| try std.Io.Dir.cwd().createDirPath(io, parent);
-
-    const file = try std.Io.Dir.cwd().createFile(io, stance_path, .{ .truncate = true });
-    defer file.close(io);
-    try file.writeStreamingAll(io,
+    _ = try plugin_install.installTextIfSafe(
+        io,
+        allocator,
         \\fail-closed
         \\# Written by `ryk plugin install hermes` for new installs.
-        \\# Env ORCA_HERMES_FAIL_OPEN overrides this file (0=fail-closed, 1=fail-open).
+        \\# Env RYK_HERMES_FAIL_OPEN overrides this file (0=fail-closed, 1=fail-open).
         \\# Easy full protection: ryk run -- hermes
         \\
+    ,
+        stance_path,
+        false,
     );
-    try file.sync(io);
 }
 
 // ---------------------------------------------------------------------------
@@ -2219,8 +2250,8 @@ test "plugin doctor prints expected sections" {
     try std.testing.expectEqual(exit_codes.success, code);
 
     const output = stdout_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "Orca Plugin Doctor") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Orca version:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk Plugin Doctor") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk version:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Policy:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Host status:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "SMOKE ALLOW") != null);
@@ -2293,8 +2324,10 @@ fn pluginDoctorReportOwnedFieldsHarness(allocator: std.mem.Allocator) !void {
         .hermes_paths = .{
             .repo_manifest_exists = false,
             .repo_source_exists = false,
+            .repo_mapping_exists = false,
             .user_manifest_exists = false,
             .user_source_exists = false,
+            .user_mapping_exists = false,
             .config_references_plugin = false,
         },
         .hermes_hook_smoke_passed = true,
@@ -2695,6 +2728,44 @@ test "plugin install hermes --dry-run reports safe preview" {
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 
+test "Hermes managed file install rejects symlinked parent and final file" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "source.py", .data = "managed" });
+    try tmp.dir.createDirPath(std.testing.io, "outside");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "outside/keep.py", .data = "keep" });
+    try tmp.dir.symLink(std.testing.io, "outside", "linked-parent", .{});
+    try tmp.dir.symLink(std.testing.io, "outside/keep.py", "linked-file.py", .{});
+
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+    const source = try std.fs.path.join(std.testing.allocator, &.{ root, "source.py" });
+    defer std.testing.allocator.free(source);
+    const through_parent = try std.fs.path.join(std.testing.allocator, &.{ root, "linked-parent", "__init__.py" });
+    defer std.testing.allocator.free(through_parent);
+    const linked_file = try std.fs.path.join(std.testing.allocator, &.{ root, "linked-file.py" });
+    defer std.testing.allocator.free(linked_file);
+
+    try std.testing.expectError(
+        error.NotDir,
+        installFileIfSafe(std.testing.allocator, source, through_parent),
+    );
+    try std.testing.expectError(
+        error.RefusingSymlinkPluginPath,
+        installFileIfSafe(std.testing.allocator, source, linked_file),
+    );
+    const preserved = try tmp.dir.readFileAlloc(
+        std.testing.io,
+        "outside/keep.py",
+        std.testing.allocator,
+        .limited(64),
+    );
+    defer std.testing.allocator.free(preserved);
+    try std.testing.expectEqualStrings("keep", preserved);
+}
+
 test "plugin install all --dry-run reports all five targets" {
     var stdout_buf: [4096]u8 = undefined;
     var stderr_buf: [256]u8 = undefined;
@@ -2997,7 +3068,7 @@ fn pluginListTestReport() PluginDoctorReport {
         .host_binaries = .{ .codex = false, .claude = false, .opencode = false, .openclaw = false, .hermes = false },
         .opencode_paths = .{ .project_plugin_exists = false, .global_plugin_exists = false, .config_references_plugin = false },
         .openclaw_paths = .{ .host_plugin_installed = false, .plugin_manifest_exists = false, .package_json_exists = false, .source_exists = false, .detection_note = "" },
-        .hermes_paths = .{ .repo_manifest_exists = false, .repo_source_exists = false, .user_manifest_exists = false, .user_source_exists = false, .config_references_plugin = false },
+        .hermes_paths = .{ .repo_manifest_exists = false, .repo_source_exists = false, .repo_mapping_exists = false, .user_manifest_exists = false, .user_source_exists = false, .user_mapping_exists = false, .config_references_plugin = false },
         .hermes_hook_smoke_passed = false,
         .marketplace = .{ .codex_marketplace = false, .claude_marketplace = false, .codex_plugin_manifest = true, .claude_plugin_manifest = true, .codex_user_plugin = false, .claude_user_plugin = false },
         .platform_summary = "",

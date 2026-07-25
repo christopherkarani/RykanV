@@ -1,4 +1,4 @@
-//! OS filesystem sandbox helpers for `orca run`.
+//! OS filesystem sandbox helpers for `ryk run`.
 //!
 //! Keeps apply-before-exec wiring, spawn hooks, auto-degrade messaging, and
 //! posture audit/banner helpers out of the main `run.zig` orchestration file.
@@ -152,7 +152,7 @@ pub fn auditSandboxPosture(
         .event_id = try core.event.generateEventId(ts),
         .timestamp = ts,
         .event_type = .sandbox_posture,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .orca, .display = "ryk" },
         .target = .{ .kind = .session, .value = "os_filesystem_sandbox" },
         .decision = .{
             .result = .observe,

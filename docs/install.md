@@ -32,7 +32,7 @@ Do not use an install-only path without verification. Download the archive, veri
 
 ## Homebrew
 
-Homebrew distribution uses the `christopherkarani/homebrew-orca` tap and the GitHub Release archives from `christopherkarani/Orca`.
+Homebrew distribution uses the `christopherkarani/homebrew-orca` tap and the GitHub Release archives from `christopherkarani/rykan`.
 
 Maintainer release flow:
 
@@ -46,9 +46,7 @@ brew test dist/package-manifests/homebrew/Formula/orca.rb
 User install after the tap repository is published:
 
 ```sh
-brew tap christopherkarani/orca
-brew install --formula ryk   # or: brew install --formula orca (compat)
-ryk plugin install hermes --yes
+brew install christopherkarani/orca/ryk
 ```
 
 ## Manual Artifact Install

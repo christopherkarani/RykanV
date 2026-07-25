@@ -16,7 +16,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         return if (argv.len == 0) exit_codes.usage else exit_codes.success;
     }
     if (!std.mem.eql(u8, argv[0], "check")) {
-        try suggestions.writeUnknownSubcommand(stderr, "orca ci", argv[0], &.{"check"}, "ci");
+        try suggestions.writeUnknownSubcommand(stderr, "ryk ci", argv[0], &.{"check"}, "ci");
         return exit_codes.usage;
     }
     const options = parseOptions(argv[1..], stderr) catch |err| switch (err) {
@@ -62,22 +62,22 @@ fn parseOptions(argv: []const []const u8, stderr: anytype) !Options {
         if (std.mem.eql(u8, arg, "--format")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca ci check: --format requires markdown or json.\n");
+                try stderr.writeAll("ryk ci check: --format requires markdown or json.\n");
                 return error.Usage;
             }
             if (std.mem.eql(u8, argv[index], "markdown")) options.format = .markdown else if (std.mem.eql(u8, argv[index], "json")) options.format = .json else {
-                try stderr.writeAll("orca ci check: --format supports markdown or json.\n");
+                try stderr.writeAll("ryk ci check: --format supports markdown or json.\n");
                 return error.Usage;
             }
         } else if (std.mem.eql(u8, arg, "--github-summary")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca ci check: --github-summary requires a path.\n");
+                try stderr.writeAll("ryk ci check: --github-summary requires a path.\n");
                 return error.Usage;
             }
             options.github_summary = argv[index];
         } else {
-            try suggestions.writeUnknownOption(stderr, "orca ci check", arg, &.{ "--format", "--github-summary" }, "ci");
+            try suggestions.writeUnknownOption(stderr, "ryk ci check", arg, &.{ "--format", "--github-summary" }, "ci");
             return error.Usage;
         }
     }

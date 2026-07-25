@@ -1,6 +1,6 @@
 ---
 name: Plugin security issue
-about: Report a security issue in an Orca plugin or host integration
+about: Report a security issue in a ryk plugin or host integration
 title: "[Plugin Security] "
 ---
 
@@ -12,7 +12,7 @@ Remove secrets, tokens, credentials, private keys, and private paths from logs a
 
 ## Environment
 
-- Orca version:
+- ryk version:
 - Plugin version:
 - OS:
 - Host tool:

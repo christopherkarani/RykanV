@@ -51,12 +51,12 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     }
 
     const host = Host.parse(argv[0]) orelse {
-        try stderr.print("orca hook: unknown host '{s}'. Expected codex, claude, opencode, openclaw, or hermes.\n", .{argv[0]});
+        try stderr.print("ryk hook: unknown host '{s}'. Expected codex, claude, grok, opencode, openclaw, or hermes.\n", .{argv[0]});
         return exit_codes.usage;
     };
 
     if (argv.len < 2) {
-        try stderr.writeAll("orca hook: expected event name.\n");
+        try stderr.writeAll("ryk hook: expected event name.\n");
         return exit_codes.usage;
     }
 
@@ -68,7 +68,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
             if (isOpenCodeInformationalEvent(event_name)) {
                 return hookCommand(io, host, .SessionStart, event_name, argv[2..], stdout, stderr);
             }
-            try stderr.print("orca hook: unknown OpenCode event '{s}'.\n", .{event_name});
+            try stderr.print("ryk hook: unknown OpenCode event '{s}'.\n", .{event_name});
             return exit_codes.usage;
         }
     else if (host == .openclaw)
@@ -77,7 +77,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
             if (isOpenClawInformationalEvent(event_name)) {
                 return hookCommand(io, host, .SessionStart, event_name, argv[2..], stdout, stderr);
             }
-            try stderr.print("orca hook: unknown OpenClaw event '{s}'.\n", .{event_name});
+            try stderr.print("ryk hook: unknown OpenClaw event '{s}'.\n", .{event_name});
             return exit_codes.usage;
         }
     else if (host == .hermes)
@@ -85,12 +85,12 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
             if (isHermesInformationalEvent(event_name)) {
                 return hookCommand(io, host, .SessionStart, event_name, argv[2..], stdout, stderr);
             }
-            try stderr.print("orca hook: unknown Hermes event '{s}'.\n", .{event_name});
+            try stderr.print("ryk hook: unknown Hermes event '{s}'.\n", .{event_name});
             return exit_codes.usage;
         }
     else
         Event.parse(event_name) orelse {
-            try stderr.print("orca hook: unknown event '{s}'.\n", .{event_name});
+            try stderr.print("ryk hook: unknown event '{s}'.\n", .{event_name});
             return exit_codes.usage;
         };
 
@@ -104,6 +104,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
 const Host = enum {
     codex,
     claude,
+    grok,
     opencode,
     openclaw,
     hermes,
@@ -111,6 +112,7 @@ const Host = enum {
     pub fn parse(value: []const u8) ?Host {
         if (std.mem.eql(u8, value, "codex")) return .codex;
         if (std.mem.eql(u8, value, "claude")) return .claude;
+        if (std.mem.eql(u8, value, "grok")) return .grok;
         if (std.mem.eql(u8, value, "opencode")) return .opencode;
         if (std.mem.eql(u8, value, "openclaw")) return .openclaw;
         if (std.mem.eql(u8, value, "hermes") or std.mem.eql(u8, value, "hermess")) return .hermes;
@@ -134,6 +136,37 @@ const Event = enum {
         return null;
     }
 };
+
+const GrokHookPayloadError = error{
+    InvalidGrokHookPayload,
+    GrokHookEventMismatch,
+    UnsupportedGrokPreToolUse,
+};
+
+/// Validate Grok's raw hook object and return it as the host-adapter payload.
+/// Grok's PreToolUse schema is Claude-compatible: tool_name + tool_input,
+/// with hook_event_name/cwd/session_id at the same object level.
+fn grokHookPayload(value: std.json.Value, event: Event) GrokHookPayloadError!std.json.Value {
+    if (value != .object) return error.InvalidGrokHookPayload;
+
+    const hook_event_name = extractString(value, "hook_event_name") orelse return error.InvalidGrokHookPayload;
+    if (!std.mem.eql(u8, hook_event_name, @tagName(event))) return error.GrokHookEventMismatch;
+
+    if (event == .PreToolUse) {
+        const cwd = extractString(value, "cwd") orelse return error.InvalidGrokHookPayload;
+        const tool_name = extractString(value, "tool_name") orelse return error.InvalidGrokHookPayload;
+        const tool_input = value.object.get("tool_input") orelse return error.InvalidGrokHookPayload;
+        if (std.mem.trim(u8, cwd, " \t\r\n").len == 0 or
+            std.mem.trim(u8, tool_name, " \t\r\n").len == 0 or
+            tool_input != .object)
+        {
+            return error.InvalidGrokHookPayload;
+        }
+        if (!isShellTool(tool_name)) return error.UnsupportedGrokPreToolUse;
+    }
+
+    return value;
+}
 
 // OpenCode uses dot-separated event names. Map them to internal events.
 // Some OpenCode events are purely informational and do not have a matching
@@ -210,44 +243,45 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             try stdout.writeAll(
                 \\Usage:
-                \\  orca hook codex SessionStart
-                \\  orca hook codex UserPromptSubmit
-                \\  orca hook codex PreToolUse
-                \\  orca hook codex PermissionRequest
-                \\  orca hook codex PostToolUse
-                \\  orca hook codex Stop
-                \\  orca hook claude SessionStart
-                \\  orca hook claude UserPromptSubmit
-                \\  orca hook claude PreToolUse
-                \\  orca hook claude PermissionRequest
-                \\  orca hook claude PostToolUse
-                \\  orca hook claude SessionEnd
-                \\  orca hook opencode session.created
-                \\  orca hook opencode tool.execute.before
-                \\  orca hook opencode tool.execute.after
-                \\  orca hook opencode permission.asked
-                \\  orca hook opencode permission.replied
-                \\  orca hook opencode file.edited
-                \\  orca hook opencode command.executed
-                \\  orca hook opencode session.updated
-                \\  orca hook opencode session.idle
-                \\  orca hook opencode session.error
-                \\  orca hook opencode shell.env
-                \\  orca hook openclaw session.start
-                \\  orca hook openclaw tool.before
-                \\  orca hook openclaw tool.after
-                \\  orca hook openclaw permission.before
-                \\  orca hook openclaw permission.after
-                \\  orca hook openclaw session.end
-                \\  orca hook hermes on_session_start
-                \\  orca hook hermes pre_tool_call
-                \\  orca hook hermes post_tool_call
-                \\  orca hook hermes pre_llm_call
-                \\  orca hook hermes post_llm_call
-                \\  orca hook hermes on_session_end
-                \\  orca hook hermes on_session_finalize
-                \\  orca hook hermes on_session_reset
-                \\  orca hook hermes subagent_stop
+                \\  ryk hook codex SessionStart
+                \\  ryk hook codex UserPromptSubmit
+                \\  ryk hook codex PreToolUse
+                \\  ryk hook codex PermissionRequest
+                \\  ryk hook codex PostToolUse
+                \\  ryk hook codex Stop
+                \\  ryk hook claude SessionStart
+                \\  ryk hook claude UserPromptSubmit
+                \\  ryk hook claude PreToolUse
+                \\  ryk hook claude PermissionRequest
+                \\  ryk hook claude PostToolUse
+                \\  ryk hook claude SessionEnd
+                \\  ryk hook grok PreToolUse
+                \\  ryk hook opencode session.created
+                \\  ryk hook opencode tool.execute.before
+                \\  ryk hook opencode tool.execute.after
+                \\  ryk hook opencode permission.asked
+                \\  ryk hook opencode permission.replied
+                \\  ryk hook opencode file.edited
+                \\  ryk hook opencode command.executed
+                \\  ryk hook opencode session.updated
+                \\  ryk hook opencode session.idle
+                \\  ryk hook opencode session.error
+                \\  ryk hook opencode shell.env
+                \\  ryk hook openclaw session.start
+                \\  ryk hook openclaw tool.before
+                \\  ryk hook openclaw tool.after
+                \\  ryk hook openclaw permission.before
+                \\  ryk hook openclaw permission.after
+                \\  ryk hook openclaw session.end
+                \\  ryk hook hermes on_session_start
+                \\  ryk hook hermes pre_tool_call
+                \\  ryk hook hermes post_tool_call
+                \\  ryk hook hermes pre_llm_call
+                \\  ryk hook hermes post_llm_call
+                \\  ryk hook hermes on_session_end
+                \\  ryk hook hermes on_session_finalize
+                \\  ryk hook hermes on_session_reset
+                \\  ryk hook hermes subagent_stop
                 \\
                 \\Options:
                 \\  --ci     CI mode: ask decisions become block.
@@ -259,7 +293,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
             ci_mode = true;
             continue;
         }
-        try stderr.print("orca hook: unknown option '{s}'.\n", .{arg});
+        try stderr.print("ryk hook: unknown option '{s}'.\n", .{arg});
         return exit_codes.usage;
     }
 
@@ -269,19 +303,22 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
 
     // Read payload from stdin (hooks always read from stdin)
     const payload_text = readBoundedStdin(io, allocator, max_payload_len) catch |err| {
+        if (shouldFailClosedOnPreEval(host, event)) {
+            return try emitPreEvalFailClosed(
+                allocator,
+                host,
+                stdout,
+                stderr,
+                "hook",
+                if (err == error.PayloadTooLarge) "payload too large" else "stdin read failed",
+                if (err == error.PayloadTooLarge)
+                    "ryk hook: JSON payload exceeds maximum size; ryk blocked it before evaluation."
+                else
+                    "ryk hook: failed to read the hook payload; ryk blocked it before evaluation.",
+            );
+        }
         if (err == error.PayloadTooLarge) {
-            if (shouldFailClosedOnPreEval(host, event)) {
-                return try emitPreEvalFailClosed(
-                    allocator,
-                    host,
-                    stdout,
-                    stderr,
-                    "hook",
-                    "payload too large",
-                    "orca hook: JSON payload exceeds maximum size; Orca blocked it before evaluation.",
-                );
-            }
-            try stderr.writeAll("orca hook: JSON payload exceeds maximum size.\n");
+            try stderr.writeAll("ryk hook: JSON payload exceeds maximum size.\n");
             return exit_codes.general;
         }
         return err;
@@ -289,7 +326,18 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
     defer allocator.free(payload_text);
 
     if (payload_text.len == 0) {
-        try stderr.writeAll("orca hook: no JSON payload received on stdin.\n");
+        if (shouldFailClosedOnPreEval(host, event)) {
+            return try emitPreEvalFailClosed(
+                allocator,
+                host,
+                stdout,
+                stderr,
+                "hook",
+                "empty payload",
+                "ryk hook: no JSON payload received; ryk blocked it before evaluation.",
+            );
+        }
+        try stderr.writeAll("ryk hook: no JSON payload received on stdin.\n");
         return exit_codes.usage;
     }
 
@@ -303,52 +351,78 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
                 stderr,
                 "hook",
                 "invalid JSON",
-                "orca hook: invalid JSON; Orca blocked it before evaluation.",
+                "ryk hook: invalid JSON; ryk blocked it before evaluation.",
             );
         }
-        try stderr.print("orca hook: invalid JSON ({s}).\n", .{@errorName(err)});
+        try stderr.print("ryk hook: invalid JSON ({s}).\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer parsed.deinit();
 
-    // Validate version
-    const version_value = extractInteger(parsed.value, "version") orelse 0;
-    if (version_value != 1) {
-        if (shouldFailClosedOnPreEval(host, event)) {
+    // Grok sends its Claude-compatible event object directly on stdin. Other
+    // integrations use ryk's versioned host/event/payload envelope.
+    const raw_grok_payload: ?std.json.Value = if (host == .grok)
+        grokHookPayload(parsed.value, event) catch |err| {
             return try emitPreEvalFailClosed(
                 allocator,
                 host,
                 stdout,
                 stderr,
                 "hook",
-                "unsupported schema version",
-                "orca hook: unsupported schema version; Orca blocked it before evaluation.",
+                switch (err) {
+                    error.GrokHookEventMismatch => "event mismatch",
+                    error.UnsupportedGrokPreToolUse => "unsupported Grok PreToolUse action",
+                    else => "invalid Grok hook payload",
+                },
+                "ryk hook: malformed or mismatched Grok event; ryk blocked it before evaluation.",
             );
         }
-        try stderr.print("orca hook: unsupported schema version {d}. Expected 1.\n", .{version_value});
-        return exit_codes.general;
-    }
+    else
+        null;
 
-    // Validate host matches
-    const request_host = extractString(parsed.value, "host") orelse "";
-    if (!std.mem.eql(u8, request_host, @tagName(host))) {
-        if (shouldFailClosedOnPreEval(host, event)) {
-            return try emitPreEvalFailClosed(
-                allocator,
-                host,
-                stdout,
-                stderr,
-                "hook",
-                "host mismatch",
-                "orca hook: host mismatch; Orca blocked it before evaluation.",
-            );
+    if (host != .grok) {
+        // Validate version.
+        const version_value = extractInteger(parsed.value, "version") orelse 0;
+        if (version_value != 1) {
+            if (shouldFailClosedOnPreEval(host, event)) {
+                return try emitPreEvalFailClosed(
+                    allocator,
+                    host,
+                    stdout,
+                    stderr,
+                    "hook",
+                    "unsupported schema version",
+                    "ryk hook: unsupported schema version; ryk blocked it before evaluation.",
+                );
+            }
+            try stderr.print("ryk hook: unsupported schema version {d}. Expected 1.\n", .{version_value});
+            return exit_codes.general;
         }
-        try stderr.print("orca hook: host mismatch. Expected '{s}', got '{s}'.\n", .{ @tagName(host), request_host });
-        return exit_codes.general;
+
+        // Validate host matches.
+        const request_host = extractString(parsed.value, "host") orelse "";
+        if (!std.mem.eql(u8, request_host, @tagName(host))) {
+            if (shouldFailClosedOnPreEval(host, event)) {
+                return try emitPreEvalFailClosed(
+                    allocator,
+                    host,
+                    stdout,
+                    stderr,
+                    "hook",
+                    "host mismatch",
+                    "ryk hook: host mismatch; ryk blocked it before evaluation.",
+                );
+            }
+            try stderr.print("ryk hook: host mismatch. Expected '{s}', got '{s}'.\n", .{ @tagName(host), request_host });
+            return exit_codes.general;
+        }
     }
 
     // Validate event matches (for OpenCode/OpenClaw, compare against original event name)
-    const request_event = extractString(parsed.value, "event") orelse "";
+    const request_event = if (host == .grok)
+        extractString(parsed.value, "hook_event_name") orelse ""
+    else
+        extractString(parsed.value, "event") orelse "";
     const expected_event = if (host == .opencode or host == .openclaw or host == .hermes) original_event_name else @tagName(event);
     if (!std.mem.eql(u8, request_event, expected_event)) {
         if (shouldFailClosedOnPreEval(host, event)) {
@@ -359,10 +433,10 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
                 stderr,
                 "hook",
                 "event mismatch",
-                "orca hook: event mismatch; Orca blocked it before evaluation.",
+                "ryk hook: event mismatch; ryk blocked it before evaluation.",
             );
         }
-        try stderr.print("orca hook: event mismatch. Expected '{s}', got '{s}'.\n", .{ expected_event, request_event });
+        try stderr.print("ryk hook: event mismatch. Expected '{s}', got '{s}'.\n", .{ expected_event, request_event });
         return exit_codes.general;
     }
 
@@ -373,7 +447,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
         try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
         try limitations.append(allocator, try allocator.dupe(u8, "OpenCode informational event: no policy evaluation needed."));
 
-        var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "OpenCode event acknowledged by Orca.", &redactions, &limitations);
+        var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "OpenCode event acknowledged by ryk.", &redactions, &limitations);
         defer result.deinit(allocator);
         try writeHookResponse(stdout, result);
         return exit_codes.success;
@@ -386,7 +460,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
         try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
         try limitations.append(allocator, try allocator.dupe(u8, "OpenClaw informational event: no policy evaluation needed."));
 
-        var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "OpenClaw event acknowledged by Orca.", &redactions, &limitations);
+        var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "OpenClaw event acknowledged by ryk.", &redactions, &limitations);
         defer result.deinit(allocator);
         try writeHookResponse(stdout, result);
         return exit_codes.success;
@@ -398,7 +472,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
     // Extract payload object
     var empty_payload: std.json.ObjectMap = .empty;
     defer empty_payload.deinit(allocator);
-    const hook_payload = parsed.value.object.get("payload") orelse std.json.Value{ .object = empty_payload };
+    const hook_payload = raw_grok_payload orelse parsed.value.object.get("payload") orelse std.json.Value{ .object = empty_payload };
 
     if (host == .hermes and isHermesInformationalEvent(request_event)) {
         var redactions: std.ArrayList(RedactionEntry) = .empty;
@@ -406,7 +480,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
         try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
         try limitations.append(allocator, try allocator.dupe(u8, "Hermes informational event: no policy evaluation needed."));
 
-        var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "Hermes event acknowledged by Orca.", &redactions, &limitations);
+        var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "Hermes event acknowledged by ryk.", &redactions, &limitations);
         defer result.deinit(allocator);
         if (std.mem.eql(u8, request_event, "subagent_stop"))
             recordHermesHookActivity(io, allocator, root, request_event, hook_payload, result);
@@ -424,10 +498,10 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
                 stderr,
                 "hook",
                 "policy load failed",
-                "orca hook: failed to load policy; Orca blocked it before evaluation.",
+                "ryk hook: failed to load policy; ryk blocked it before evaluation.",
             );
         }
-        try stderr.print("orca hook: failed to load policy: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk hook: failed to load policy: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer loaded.deinit();
@@ -442,18 +516,18 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
                 stderr,
                 "hook",
                 "evaluation failed",
-                "orca hook: evaluation failed; Orca blocked it before evaluation.",
+                "ryk hook: evaluation failed; ryk blocked it before evaluation.",
             );
         }
-        try stderr.print("orca hook: evaluation failed: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk hook: evaluation failed: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer result.deinit(allocator);
 
     if (host == .hermes) recordHermesHookActivity(io, allocator, root, request_event, hook_payload, result);
 
-    if (isCodexDenyOutput(host, result.decision)) {
-        // Codex 0.125.0+ ignores stdout JSON on deny; exit 2 + stderr is the enforced block path.
+    if (usesExitTwoDenyOutput(host, result.decision)) {
+        // Codex ignores stdout JSON on deny and Grok defines exit 2 as its block path.
         // Sentinel-first so agents scraping stderr can distinguish a guard block from a
         // program error: provenance (guard) + consequence (no side effects) + recourse.
         // Keep agent-visible Codex stderr thin (no full explain tree / regex dump).
@@ -476,17 +550,17 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
 /// Machine-readable sentinel prepended to the *agent-audience* deny stderr so an agent
 /// scraping stderr can distinguish a guard block from a program error. Provenance +
 /// consequence + recourse, parse-friendly, stable. Never shown to humans — it is emitted
-/// only on the Codex stderr block path (see `isCodexDenyOutput`), not the JSON host path.
-/// Primary emit stays `[[ORCA-GUARD]]` for one major (hosts already parse it).
-/// Do not dual-emit `[[RYK-GUARD]]` until a consumer+emit phase exists.
+/// only on an exit-two deny path, not the JSON host path.
 const guard_sentinel_prefix: []const u8 =
-    "[[ORCA-GUARD]] blocked. Command did not execute; no side effects. " ++
+    "[[RYK-GUARD]] blocked. Command did not execute; no side effects. " ++
     "Recourse: ryk explain \"<command>\"; ryk allow-once <code>; ryk allowlist list\n";
-const guard_sentinel_tag = "[[ORCA-GUARD]]";
+const guard_sentinel_tag = "[[RYK-GUARD]]";
+const legacy_guard_sentinel_tag = "[[ORCA-GUARD]]";
 
 /// True when stderr/agent text contains the guard sentinel.
 pub fn containsGuardSentinel(text: []const u8) bool {
-    return std.mem.indexOf(u8, text, guard_sentinel_tag) != null;
+    return std.mem.indexOf(u8, text, guard_sentinel_tag) != null or
+        std.mem.indexOf(u8, text, legacy_guard_sentinel_tag) != null;
 }
 
 /// Codex hook deny exit code (documented Codex CLI contract; distinct from usage errors).
@@ -548,10 +622,21 @@ fn isCodexDenyOutput(host: Host, decision: PluginDecision) bool {
     return host == .codex and decision == .block;
 }
 
+fn usesExitTwoDenyOutput(host: Host, decision: PluginDecision) bool {
+    if (host == .codex) return decision == .block;
+    // Grok has no native approval UI for an `ask`/`stage` result. Its only
+    // enforceable non-allow contract is exit 2, so escalation and evaluator
+    // errors must block just like an explicit deny.
+    if (host == .grok) {
+        return decision == .block or decision == .ask or decision == .err;
+    }
+    return false;
+}
+
 /// Host-aware hook process exit code after evaluation completes.
 fn hookExitCode(host: Host, decision: PluginDecision, ci_mode: bool) u8 {
     _ = ci_mode;
-    if (isCodexDenyOutput(host, decision)) return codex_deny_exit_code;
+    if (usesExitTwoDenyOutput(host, decision)) return codex_deny_exit_code;
     return exit_codes.success;
 }
 
@@ -580,7 +665,7 @@ fn emitPreEvalFailClosed(
     var result = try makeFailClosedHookResponse(allocator, category, reason, message, &redactions, &limitations);
     defer result.deinit(allocator);
 
-    if (isCodexDenyOutput(host, result.decision)) {
+    if (usesExitTwoDenyOutput(host, result.decision)) {
         try writeCodexGuardBlock(allocator, stderr, result.message, result.reason);
         return codex_deny_exit_code;
     }
@@ -777,13 +862,13 @@ fn evaluateHook(
 
     switch (event) {
         .SessionStart => {
-            return try makeInformationalResponse(allocator, .allow, .low, "session", "session started", "Session start acknowledged by Orca.", &redactions, &limitations);
+            return try makeInformationalResponse(allocator, .allow, .low, "session", "session started", "Session start acknowledged by ryk.", &redactions, &limitations);
         },
         .Stop, .SessionEnd => {
-            return try makeInformationalResponse(allocator, .allow, .low, "session", "session ended", "Session end acknowledged by Orca.", &redactions, &limitations);
+            return try makeInformationalResponse(allocator, .allow, .low, "session", "session ended", "Session end acknowledged by ryk.", &redactions, &limitations);
         },
         .PostToolUse => {
-            return try makeInformationalResponse(allocator, .allow, .low, "tool", "tool use completed", "Post-tool-use acknowledged by Orca.", &redactions, &limitations);
+            return try makeInformationalResponse(allocator, .allow, .low, "tool", "tool use completed", "Post-tool-use acknowledged by ryk.", &redactions, &limitations);
         },
         .UserPromptSubmit => {
             const prompt_text = extractString(payload, "prompt") orelse
@@ -994,7 +1079,7 @@ fn evaluatePreToolUse(
             allocator,
             "command",
             reason,
-            "Shell command hook payload is malformed. Orca blocked it before evaluation.",
+            "Shell command hook payload is malformed. ryk blocked it before evaluation.",
             redactions,
             limitations,
         ),
@@ -1029,7 +1114,7 @@ fn evaluateShellCommandRoute(
             allocator,
             "command",
             daemonUnavailableReason(err),
-            "Shell command blocked: Orca shell evaluation unavailable.",
+            "Shell command blocked: ryk shell evaluation unavailable.",
             redactions,
             limitations,
         );
@@ -1741,7 +1826,7 @@ fn hookResponseFromDaemonEvaluate(
                 allocator,
                 "command",
                 safe_error,
-                "Shell command blocked: Orca daemon returned an evaluation error.",
+                "Shell command blocked: ryk evaluation error.",
                 redactions,
                 limitations,
             );
@@ -1750,7 +1835,7 @@ fn hookResponseFromDaemonEvaluate(
             allocator,
             "command",
             "unexpected daemon response for shell command evaluation",
-            "Shell command blocked: Orca daemon returned an unexpected response.",
+            "Shell command blocked: ryk evaluation returned an unexpected response.",
             redactions,
             limitations,
         ),
@@ -1821,7 +1906,7 @@ fn evaluateNativePreToolUseRoute(
                     allocator,
                     "tool",
                     "invalid effect pack",
-                    "Tool blocked: Orca could not load effect packs (fail closed).",
+                    "Tool blocked: ryk could not load effect packs (fail closed).",
                     redactions,
                     limitations,
                 );
@@ -2363,6 +2448,67 @@ test "hook command help and invalid host" {
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "unknown host") != null);
 }
 
+test "hook recognizes Grok as a PreToolUse host with exit-two deny semantics" {
+    try std.testing.expectEqual(Host.grok, Host.parse("grok").?);
+    try std.testing.expect(shouldFailClosedOnPreEval(.grok, .PreToolUse));
+    try std.testing.expectEqual(codex_deny_exit_code, hookExitCode(.grok, .block, false));
+    try std.testing.expectEqual(codex_deny_exit_code, hookExitCode(.grok, .ask, false));
+    try std.testing.expectEqual(codex_deny_exit_code, hookExitCode(.grok, .err, false));
+    try std.testing.expectEqual(exit_codes.success, hookExitCode(.grok, .allow, false));
+    try std.testing.expectEqual(exit_codes.success, hookExitCode(.grok, .context_only, false));
+}
+
+test "hook adapts raw Grok PreToolUse input to the Claude-compatible payload" {
+    const allocator = std.testing.allocator;
+    var parsed = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"hook_event_name":"PreToolUse","session_id":"grok-session","cwd":"/tmp/project","tool_name":"bash","tool_input":{"command":"git status"}}
+    ,
+        .{},
+    );
+    defer parsed.deinit();
+
+    const payload = try grokHookPayload(parsed.value, .PreToolUse);
+    try std.testing.expectEqualStrings("bash", extractToolName(payload).?);
+    try std.testing.expectEqualStrings("git status", extractShellCommand(payload).found.command);
+    try std.testing.expectEqualStrings("/tmp/project", extractCwd(payload).?);
+    try std.testing.expectEqualStrings("grok-session", extractHookSessionId(payload).?);
+}
+
+test "hook rejects malformed or mismatched raw Grok PreToolUse input" {
+    const allocator = std.testing.allocator;
+    var missing_tool_input = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"hook_event_name":"PreToolUse","cwd":"/tmp/project","tool_name":"bash"}
+    ,
+        .{},
+    );
+    defer missing_tool_input.deinit();
+    try std.testing.expectError(error.InvalidGrokHookPayload, grokHookPayload(missing_tool_input.value, .PreToolUse));
+
+    var wrong_event = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"hook_event_name":"PostToolUse","cwd":"/tmp/project","tool_name":"bash","tool_input":{"command":"git status"}}
+    ,
+        .{},
+    );
+    defer wrong_event.deinit();
+    try std.testing.expectError(error.GrokHookEventMismatch, grokHookPayload(wrong_event.value, .PreToolUse));
+
+    var unsupported_tool = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"hook_event_name":"PreToolUse","cwd":"/tmp/project","tool_name":"future_tool","tool_input":{}}
+    ,
+        .{},
+    );
+    defer unsupported_tool.deinit();
+    try std.testing.expectError(error.UnsupportedGrokPreToolUse, grokHookPayload(unsupported_tool.value, .PreToolUse));
+}
+
 test "hook codex SessionStart returns allow" {
     // Note: Testing stdin-based commands in Zig inline tests is limited.
     // We test the evaluation logic directly instead.
@@ -2635,7 +2781,7 @@ test "hook opencode informational events are allowed" {
     try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
     try limitations.append(allocator, try allocator.dupe(u8, "OpenCode informational event: no policy evaluation needed."));
 
-    var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "OpenCode event acknowledged by Orca.", &redactions, &limitations);
+    var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "OpenCode event acknowledged by ryk.", &redactions, &limitations);
     defer result.deinit(allocator);
 
     try std.testing.expectEqual(PluginDecision.allow, result.decision);
@@ -2691,7 +2837,7 @@ test "hook openclaw informational events are allowed" {
     try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
     try limitations.append(allocator, try allocator.dupe(u8, "OpenClaw informational event: no policy evaluation needed."));
 
-    var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "OpenClaw event acknowledged by Orca.", &redactions, &limitations);
+    var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "OpenClaw event acknowledged by ryk.", &redactions, &limitations);
     defer result.deinit(allocator);
 
     try std.testing.expectEqual(PluginDecision.allow, result.decision);
@@ -2857,7 +3003,7 @@ test "hermes tool veto persists once with session and redacted reason" {
         .high,
         "tool",
         "approval required for OPENAI_API_KEY=sk-fakeSyntheticOpenAIKey1234567890",
-        "Approval required by Orca.",
+        "Approval required by ryk.",
         &redactions,
         &limitations,
     );
@@ -3149,7 +3295,7 @@ test "hook codex deny output skips stdout JSON" {
 test "hook guard sentinel format is machine-parseable and stable" {
     // The sentinel is the single recognisable signal an agent scraping stderr can branch on.
     // Provenance + consequence + recourse, newline-terminated, starts with the parse tag.
-    try std.testing.expect(std.mem.startsWith(u8, guard_sentinel_prefix, "[[ORCA-GUARD]]"));
+    try std.testing.expect(std.mem.startsWith(u8, guard_sentinel_prefix, "[[RYK-GUARD]]"));
     try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "did not execute") != null);
     try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "no side effects") != null);
     try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "Recourse") != null);
@@ -3222,6 +3368,10 @@ test "hook codex shell deny uses exit code 2" {
     try std.testing.expectEqual(exit_codes.success, hookExitCode(.codex, .allow, false));
     try std.testing.expectEqual(exit_codes.success, hookExitCode(.claude, .block, false));
     try std.testing.expectEqual(@as(u8, 2), hookExitCode(.codex, .block, true));
+    try std.testing.expectEqual(@as(u8, 2), hookExitCode(.grok, .block, false));
+    try std.testing.expectEqual(@as(u8, 2), hookExitCode(.grok, .ask, false));
+    try std.testing.expectEqual(@as(u8, 2), hookExitCode(.grok, .err, false));
+    try std.testing.expectEqual(exit_codes.success, hookExitCode(.grok, .allow, false));
 }
 
 test "hook pre-eval fail-closed gate covers PreToolUse PermissionRequest and Codex" {
@@ -3247,12 +3397,34 @@ test "hook pre-eval fail-closed Codex emits sentinel and exit 2" {
         &stderr_writer,
         "hook",
         "invalid JSON",
-        "orca hook: invalid JSON; Orca blocked it before evaluation.",
+        "ryk hook: invalid JSON; ryk blocked it before evaluation.",
     );
     try std.testing.expectEqual(codex_deny_exit_code, code);
     try std.testing.expectEqual(@as(usize, 0), stdout_writer.buffered().len);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), guard_sentinel_prefix) != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "invalid JSON") != null);
+}
+
+test "hook pre-eval fail-closed Grok emits sentinel and exit 2" {
+    const allocator = std.testing.allocator;
+    var stdout_buf: [2048]u8 = undefined;
+    var stderr_buf: [2048]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try emitPreEvalFailClosed(
+        allocator,
+        .grok,
+        &stdout_writer,
+        &stderr_writer,
+        "hook",
+        "empty payload",
+        "ryk hook: no JSON payload received; ryk blocked it before evaluation.",
+    );
+    try std.testing.expectEqual(codex_deny_exit_code, code);
+    try std.testing.expectEqual(@as(usize, 0), stdout_writer.buffered().len);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), guard_sentinel_prefix) != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "no JSON payload") != null);
 }
 
 test "hook pre-eval fail-closed Claude emits block JSON on stdout" {
@@ -3269,7 +3441,7 @@ test "hook pre-eval fail-closed Claude emits block JSON on stdout" {
         &stderr_writer,
         "hook",
         "policy load failed",
-        "orca hook: failed to load policy; Orca blocked it before evaluation.",
+        "ryk hook: failed to load policy; ryk blocked it before evaluation.",
     );
     try std.testing.expectEqual(exit_codes.success, code);
     try std.testing.expectEqual(@as(usize, 0), stderr_writer.buffered().len);
@@ -4084,7 +4256,7 @@ test "hook Codex deny protocol unchanged for block after FM soft path" {
     try std.testing.expect(!isCodexDenyOutput(.codex, .allow));
     try std.testing.expectEqual(codex_deny_exit_code, hookExitCode(.codex, .block, false));
     try std.testing.expectEqual(exit_codes.success, hookExitCode(.codex, .ask, false));
-    try std.testing.expect(std.mem.startsWith(u8, guard_sentinel_prefix, "[[ORCA-GUARD]]"));
+    try std.testing.expect(std.mem.startsWith(u8, guard_sentinel_prefix, "[[RYK-GUARD]]"));
 }
 
 test "hook PreToolUse denies send_email when effects.deny includes comms.message" {

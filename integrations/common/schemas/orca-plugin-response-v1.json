@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "OrcaPluginResponseV1",
-  "description": "Response schema for Orca plugin interactions. Returned by doctor, manifest, install, and MCP tool calls.",
+  "title": "ryk Plugin Response v1",
+  "description": "Response schema for ryk plugin interactions. Returned by doctor, manifest, install, and MCP tool calls.",
   "type": "object",
   "properties": {
     "version": {
@@ -30,11 +30,11 @@
     },
     "orca_version": {
       "type": "string",
-      "description": "Orca version."
+      "description": "ryk version."
     },
     "orca_binary_path": {
       "type": ["string", "null"],
-      "description": "Path to the Orca binary, if detectable."
+      "description": "Path to the ryk binary, if detectable."
     },
     "cwd": {
       "type": "string",

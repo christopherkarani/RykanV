@@ -581,14 +581,13 @@ fn writeHermesFailOpenWarning(io: std.Io, stdout: anytype, context: IntegrationC
         stdout,
         .warn,
         "Hermes effective fail-open",
-        "Hermes allows tools when Orca is missing/old. Not silent (warning each degraded allow). New installs write fail-closed stance; existing stay open until you set ORCA_HERMES_FAIL_OPEN=0 or use `ryk run -- hermes`. Gateway chats may omit the block reason — check agent tool errors.",
+        "Hermes allows tools when ryk is missing/old. Not silent (warning each degraded allow). New installs write fail-closed stance; existing stay open until you set ORCA_HERMES_FAIL_OPEN=0 or use `ryk run -- hermes`. Gateway chats may omit the block reason — check agent tool errors.",
     );
 }
 
 fn writePiNote(stdout: anytype) !void {
-    try stdout.writeAll("\nPi: not managed by `orca plugin install`; extension coverage is unknown until live smoke.\n");
-    try stdout.writeAll("  Install: pi install npm:@orca-sec/pi-orca · process env/network: ryk run -- pi · bypass: /orca-stop\n");
-    try stdout.writeAll("  Live: ./scripts/host-live-e2e.sh pi\n");
+    try stdout.writeAll("\nPi: bundled extension setup is managed by `ryk start` (no npm step).\n");
+    try stdout.writeAll("  Process env/network isolation: ryk run -- pi · verify: ryk doctor\n");
 }
 
 fn writePacksSection(io: std.Io, stdout: anytype, context: IntegrationContext) !void {
@@ -624,14 +623,14 @@ fn writeRecommendations(stdout: anytype, context: IntegrationContext) !void {
     if (context.daemon_health != .compatible) {
         try writeDynamicLine(stdout, "  Daemon health issue: ", context.daemon_detail, "\n");
         if (context.daemon_binary_untrusted) {
-            try stdout.writeAll("  Unset `ORCA_DAEMON` or point it at a non-world-writable `orca-daemon` binary, then re-run `orca doctor`.\n");
+            try stdout.writeAll("  Remove the untrusted legacy companion override, then re-run `ryk doctor`.\n");
         } else if (context.daemon_binary_exists and !context.daemon_binary_executable) {
-            try stdout.writeAll("  Restore execute permission on `orca-daemon` or reinstall the matching release, then re-run `orca doctor`.\n");
+            try stdout.writeAll("  Restore companion-service execute permission or reinstall ryk, then re-run `ryk doctor`.\n");
         } else if (!context.daemon_binary_exists) {
-            try stdout.writeAll("  Ensure `orca-daemon` is installed beside `orca` (or set `ORCA_DAEMON`), then re-run `orca doctor`.\n");
-            try stdout.writeAll("  For source builds, rebuild both binaries with `./scripts/build-all.sh`.\n");
+            try stdout.writeAll("  Reinstall the complete ryk release, then re-run `ryk doctor`.\n");
+            try stdout.writeAll("  For source builds, rebuild with `./scripts/build-all.sh`.\n");
         } else {
-            try stdout.writeAll("  Ensure a compatible `orca-daemon` is installed and startable. Rebuild both binaries with `./scripts/build-all.sh`, then re-run `orca doctor`.\n");
+            try stdout.writeAll("  Reinstall ryk or rebuild with `./scripts/build-all.sh`, then re-run `ryk doctor`.\n");
         }
         if (!context.policy_present) {
             try stdout.writeAll("  Then run `ryk init --preset generic-agent` and review .orca/policy.yaml.\n");
@@ -647,9 +646,9 @@ fn writeRecommendations(stdout: anytype, context: IntegrationContext) !void {
     } else if (!context.redteam_fixtures_present) {
         try stdout.writeAll("  Runtime assets (fixtures, integrations) not found.\n");
         try stdout.writeAll("  This is common after a fresh packaged install (curl|sh, Homebrew, npm).\n\n");
-        try stdout.writeAll("  Paste these two lines in your current terminal (then re-run `orca doctor`):\n\n");
+        try stdout.writeAll("  Paste these two lines in your current terminal (then re-run `ryk doctor`):\n\n");
         try stdout.writeAll("      export PATH=\"$HOME/.local/bin:$PATH\"\n");
-        try stdout.writeAll("      export ORCA_RESOURCE_ROOT=\"$HOME/.local/share/orca/current\"\n\n");
+        try stdout.writeAll("      export RYK_RESOURCE_ROOT=\"$HOME/.local/share/orca/current\"\n\n");
         try stdout.writeAll("  (Use the exact paths printed by your installer if they differ.)\n");
     } else {
         try stdout.writeAll("  Run `ryk run -- <command>` or `ryk redteam --ci` for a local smoke test.\n");
@@ -759,7 +758,7 @@ const HostDoctorSnapshot = struct {
 };
 
 fn collectHostDoctorRows(io: std.Io, allocator: std.mem.Allocator) !HostDoctorSnapshot {
-    // Skip live hook smoke here — plugin install / `orca plugin doctor <host>` own latency.
+    // Skip live hook smoke here — plugin install / `ryk plugin doctor <host>` own latency.
     var doctor_report = try plugin.collectPluginDoctorReportWithHermesSmoke(io, allocator, true);
     defer plugin.deinitPluginDoctorReport(&doctor_report, allocator);
 
@@ -1465,7 +1464,7 @@ fn testHostRows(allocator: std.mem.Allocator) ![]HostDoctorRow {
         const fix = if (std.mem.eql(u8, h.name, "hermes"))
             try allocator.dupe(u8, "export ORCA_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes")
         else if (std.mem.eql(u8, h.name, "pi"))
-            try allocator.dupe(u8, "pi install npm:@orca-sec/pi-orca")
+            try allocator.dupe(u8, "run ryk start to install the bundled extension")
         else
             try allocator.dupe(u8, "—");
         try list.append(allocator, .{

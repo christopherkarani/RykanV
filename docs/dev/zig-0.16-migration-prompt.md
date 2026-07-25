@@ -6,7 +6,7 @@ Copy this entire file into a new agent session, or run: `pbcopy < docs/dev/zig-0
 
 ---
 
-You are a senior Zig systems engineer porting the **Orca** repository (`christopherkarani/Orca`) from **Zig 0.15.2 → Zig 0.16.0**.
+You are a senior Zig systems engineer porting the **Orca** repository (`christopherkarani/rykan`) from **Zig 0.15.2 → Zig 0.16.0**.
 
 This is an **explicit, approved** 0.16 migration. Override any prior repo guidance that says “stay on 0.15.2 only” for this task.
 

@@ -73,7 +73,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         const stdin = std.Io.File.stdin();
         const host_label = if (target == .all) "all" else @tagName(target);
         var prompt_buf: [128]u8 = undefined;
-        const prompt = std.fmt.bufPrint(&prompt_buf, "Stop Orca for {s}? This removes plugin registrations from host agents.", .{host_label}) catch "Stop Orca?";
+        const prompt = std.fmt.bufPrint(&prompt_buf, "Stop ryk for {s}? This removes plugin registrations from host agents.", .{host_label}) catch "Stop ryk?";
         const decision = danger_confirmation.decide(io, stdout, prompt, false, try stdin.isTty(io), null) catch |err| {
             try stderr.print("ryk stop: confirmation failed: {s}\n", .{@errorName(err)});
             return exit_codes.general;
@@ -91,7 +91,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         }
     }
 
-    try stdout.writeAll("Orca Stop\n\n");
+    try stdout.writeAll("ryk Stop\n\n");
 
     const targets = switch (target) {
         .codex => &[_]DisableTarget{.codex},
@@ -128,13 +128,13 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
 
     try stdout.writeAll("\n");
     if (success_count == 0 and fail_count == 0) {
-        try stdout.writeAll("No Orca plugins were found to disable.\n");
+        try stdout.writeAll("No ryk plugins were found to disable.\n");
     } else if (fail_count == 0) {
-        try stdout.writeAll("✅ All Orca plugins have been disabled.\n");
+        try stdout.writeAll("✅ All ryk plugins have been disabled.\n");
     } else {
         try stdout.print("⚠️  Disabled {d} plugin(s), {d} failed.\n", .{ success_count, fail_count });
     }
-    try stdout.writeAll("Orca binary and policy files remain in place.\n");
+    try stdout.writeAll("ryk binary and policy files remain in place.\n");
     try stdout.writeAll("Restart protection with: ryk start\n");
     return exit_codes.success;
 }
@@ -193,7 +193,7 @@ pub fn disableOpenClaw(io: std.Io, allocator: std.mem.Allocator, stdout: anytype
             return true;
         } else {
             try stdout.print("  host uninstall: openclaw exited with code {d} (or timed out)\n", .{status});
-            try stdout.writeAll("    → Attempting direct cleanup of known Orca plugin files for OpenClaw...\n");
+            try stdout.writeAll("    → Attempting direct cleanup of known ryk plugin files for OpenClaw...\n");
             return false;
         }
     }
@@ -293,7 +293,7 @@ fn disableCursorHooksJsonIfOrcaOnly(io: std.Io, allocator: std.mem.Allocator, st
     if (!is_orca_hook) return false;
 
     if (countOccurrences(content, "\"command\"") != 1) {
-        try stdout.print("  cursor hooks: {s} references Orca alongside other hooks; remove the Orca beforeShellExecution entry manually\n", .{path});
+        try stdout.print("  cursor hooks: {s} references ryk alongside other hooks; remove the ryk beforeShellExecution entry manually\n", .{path});
         return false;
     }
 
@@ -307,7 +307,7 @@ fn disableCursorHooksJsonIfOrcaOnly(io: std.Io, allocator: std.mem.Allocator, st
         \\
     ;
     try overwriteTextFile(io, path, disabled_hooks);
-    try stdout.print("  cursor hooks: disabled Orca beforeShellExecution in {s}\n", .{path});
+    try stdout.print("  cursor hooks: disabled ryk beforeShellExecution in {s}\n", .{path});
     return true;
 }
 
@@ -338,7 +338,7 @@ pub fn runOpenClawUninstall(allocator: std.mem.Allocator) !u8 {
     const argv = [_][]const u8{ "openclaw", "plugins", "uninstall", "orca-openclaw-plugin" };
 
     // Use the robust timed runner (10s) so a stuck/broken/misbehaving openclaw
-    // cannot hang `orca uninstall` or `ryk stop` forever.
+    // cannot hang `ryk uninstall` or `ryk stop` forever.
     const res = try child_process.runHostCommandTimed(allocator, &argv, 10_000, null, null);
     defer child_process.deinitHostCommandResult(res, allocator);
 

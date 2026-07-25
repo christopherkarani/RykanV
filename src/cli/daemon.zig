@@ -27,7 +27,7 @@ const daemon_socket_name = "daemon.sock";
 /// PID file written by the Rust daemon on startup.
 const daemon_pid_name = "daemon.pid";
 
-/// Directory under $HOME where Orca runtime state lives.
+/// Directory under $HOME where ryk runtime state lives.
 const orca_state_dir = ".orca";
 
 /// Environment variable override for the daemon binary path.
@@ -990,7 +990,7 @@ fn waitForDaemonArtifactsGone(io: std.Io, paths: RuntimePaths, timeout_ms: u64) 
     return error.DaemonStartTimeout;
 }
 
-/// Stop the current user's Orca daemon when reachable, or clean stale artifacts.
+/// Stop the current user's ryk daemon when reachable, or clean stale artifacts.
 ///
 /// Repeated calls are safe: a second shutdown after a successful stop reports
 /// `not_running`; stale artifact cleanup is idempotent.
@@ -1170,23 +1170,23 @@ test "responseDenyRule prefers pattern_name over pack_id" {
 }
 
 test "parseCliExecution reads stdout stderr and exit code" {
-    const line = "{\"id\":7,\"result\":{\"status\":\"CliExecution\",\"stdout\":\"orca 1.2.3\\n\",\"stderr\":\"warn\\n\",\"exit_code\":5}}";
+    const line = "{\"id\":7,\"result\":{\"status\":\"CliExecution\",\"stdout\":\"ryk 1.2.3\\n\",\"stderr\":\"warn\\n\",\"exit_code\":5}}";
     var parsed = try parseResponse(std.testing.allocator, line);
     defer parsed.deinit();
 
     const execution = try parseCliExecution(parsed.value.result);
-    try std.testing.expectEqualStrings("orca 1.2.3\n", execution.stdout);
+    try std.testing.expectEqualStrings("ryk 1.2.3\n", execution.stdout);
     try std.testing.expectEqualStrings("warn\n", execution.stderr);
     try std.testing.expectEqual(@as(u8, 5), execution.exit_code);
 }
 
 test "parseCliExecution accepts missing stderr as empty" {
-    const line = "{\"id\":8,\"result\":{\"status\":\"CliExecution\",\"stdout\":\"orca 1.2.3\\n\",\"exit_code\":0}}";
+    const line = "{\"id\":8,\"result\":{\"status\":\"CliExecution\",\"stdout\":\"ryk 1.2.3\\n\",\"exit_code\":0}}";
     var parsed = try parseResponse(std.testing.allocator, line);
     defer parsed.deinit();
 
     const execution = try parseCliExecution(parsed.value.result);
-    try std.testing.expectEqualStrings("orca 1.2.3\n", execution.stdout);
+    try std.testing.expectEqualStrings("ryk 1.2.3\n", execution.stdout);
     try std.testing.expectEqualStrings("", execution.stderr);
     try std.testing.expectEqual(@as(u8, 0), execution.exit_code);
 }

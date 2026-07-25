@@ -1,6 +1,6 @@
 ---
 name: Codex plugin bug
-about: Report a bug in the Orca Codex plugin
+about: Report a bug in the ryk Codex plugin
 title: "[Codex Plugin Bug] "
 ---
 
@@ -8,7 +8,7 @@ Remove secrets, tokens, credentials, private keys, and private paths from logs a
 
 ## Environment
 
-- Orca version:
+- ryk version:
 - Plugin version:
 - OS:
 - Codex version:

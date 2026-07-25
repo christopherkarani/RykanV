@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://orca.local/schemas/hook-request-v1.json",
-  "title": "Orca Hook Request v1",
-  "description": "JSON payload sent by host plugins to the orca hook command via stdin.",
+  "title": "ryk Hook Request v1",
+  "description": "JSON payload sent by host plugins to the ryk hook command via stdin.",
   "type": "object",
   "required": ["version", "host", "event", "payload"],
   "properties": {

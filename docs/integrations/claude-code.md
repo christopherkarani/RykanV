@@ -63,18 +63,18 @@ zig build
 If your Claude Code version supports repo marketplace sources, add this repository:
 
 ```bash
-claude plugin marketplace add chriskarani/orca
+claude plugin marketplace add christopherkarani/rykan
 claude plugin install orca@orca --scope user
 ```
 
 Or inside Claude Code:
 ```text
-/plugin marketplace add chriskarani/orca
+/plugin marketplace add christopherkarani/rykan
 /plugin install orca@orca
 /reload-plugins
 ```
 
-These commands add the Orca repository as a plugin marketplace source. This is not the same as being listed in the official Claude marketplace.
+These commands add the ryk repository as a plugin marketplace source. This is not the same as being listed in the official Claude marketplace.
 
 ### Local marketplace example
 

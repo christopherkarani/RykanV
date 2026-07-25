@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/christopherkarani/Orca/macos/fm-steward/Schemas/classify-response-v1.json",
+  "$id": "https://github.com/christopherkarani/rykan/macos/fm-steward/Schemas/classify-response-v1.json",
   "title": "Orca FM Steward Classify Response v1",
   "description": "Classifier verdict returned by the Mac FM steward (Phase 3). Normative contract: planning handoff §6.2. Verdict enum is exact: continue | ask | ask_sticky_candidate.",
   "type": "object",

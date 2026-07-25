@@ -90,8 +90,8 @@ pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: an
             "\n" ++
             "Next steps:\n" ++
             "  ryk policy check .orca/policy.yaml\n" ++
-            "  orca status\n" ++
-            "  orca doctor\n" ++
+            "  ryk status\n" ++
+            "  ryk doctor\n" ++
             "  ryk run -- <command>\n" ++
             "\n");
     }

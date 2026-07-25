@@ -3,10 +3,10 @@
   "version": "1.2.9",
   "description": "npm launcher for the Zig-built ryk binary (orca PATH alias included). Scope remains @orca-sec; do not publish until release checksums are injected.",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/christopherkarani/Orca",
+  "homepage": "https://github.com/christopherkarani/rykan",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/christopherkarani/Orca.git"
+    "url": "git+https://github.com/christopherkarani/rykan.git"
   },
   "bin": {
     "ryk": "bin/ryk.js",
@@ -29,7 +29,7 @@
     "README.md"
   ],
   "ryk": {
-    "artifactBaseUrl": "https://github.com/christopherkarani/Orca/releases/download/v1.2.9",
+    "artifactBaseUrl": "https://github.com/christopherkarani/rykan/releases/download/v1.2.9",
     "supportedTargets": [
       "darwin-amd64",
       "darwin-arm64",
@@ -44,7 +44,7 @@
     }
   },
   "orca": {
-    "artifactBaseUrl": "https://github.com/christopherkarani/Orca/releases/download/v1.2.9",
+    "artifactBaseUrl": "https://github.com/christopherkarani/rykan/releases/download/v1.2.9",
     "supportedTargets": [
       "darwin-amd64",
       "darwin-arm64",

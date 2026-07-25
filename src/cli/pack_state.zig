@@ -1,8 +1,8 @@
-//! Shared pack enablement + summary helpers for Orca CLI (P2a power baseline).
+//! Shared pack enablement + summary helpers for the ryk CLI (P2a power baseline).
 //!
 //! Pack *definitions* stay in the Rust registry (daemon). This module:
 //! - maps policy presets → opt-in pack IDs
-//! - summarizes enabled packs for `orca doctor` / `orca status`
+//! - summarizes enabled packs for `ryk doctor` / `ryk status`
 //! - re-exports config path + enable/disable mutation from `pack_config.zig`
 //!
 //! Config path rule (documented in help + status):
@@ -145,7 +145,7 @@ pub fn formatSummaryLine(allocator: std.mem.Allocator, summary: PacksSummary) ![
         return try allocator.dupe(u8, "unknown (daemon unavailable; shell evaluation fails closed)");
     }
     if (summary.opt_in_ids.len == 0) {
-        return try allocator.dupe(u8, "baseline only — enable more with `orca packs enable …`");
+        return try allocator.dupe(u8, "baseline only — enable more with `ryk packs enable …`");
     }
     var list_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer list_buf.deinit(allocator);
@@ -182,13 +182,13 @@ pub fn writeDoctorPacksSectionWithConfig(
     try stdout.writeAll("\nPacks\n");
     if (!summary.known) {
         try stdout.writeAll("  unknown (daemon unavailable; shell evaluation fails closed)\n");
-        try stdout.writeAll("  Next: orca doctor · orca packs  (retry once the daemon is healthy)\n");
+        try stdout.writeAll("  Next: ryk doctor · ryk packs  (retry once the daemon is healthy)\n");
         return;
     }
     try stdout.writeAll("  baseline: core.*, system.disk (always on)\n");
     if (summary.opt_in_ids.len == 0) {
         try stdout.writeAll("  opt-in: none enabled (baseline only)\n");
-        try stdout.writeAll("  Next: orca packs enable <id>  ·  orca packs --enabled  ·  orca packs show <id>\n");
+        try stdout.writeAll("  Next: ryk packs enable <id>  ·  ryk packs --enabled  ·  ryk packs show <id>\n");
     } else {
         try stdout.print("  opt-in: {d} enabled", .{summary.opt_in_ids.len});
         const show = @min(summary.opt_in_ids.len, summary_list_limit);
@@ -205,7 +205,7 @@ pub fn writeDoctorPacksSectionWithConfig(
             try stdout.writeAll(")");
         }
         try stdout.writeAll("\n");
-        try stdout.writeAll("  Next: orca packs --enabled  ·  orca packs show <id>  ·  orca packs enable <id>\n");
+        try stdout.writeAll("  Next: ryk packs --enabled  ·  ryk packs show <id>  ·  ryk packs enable <id>\n");
     }
     if (config_path) |path| {
         if (scope) |s| {

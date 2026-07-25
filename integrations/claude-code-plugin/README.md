@@ -1,22 +1,22 @@
-# Orca Claude Code Plugin
+# ryk Claude Code Plugin
 
-Orca safety hooks and skills for Claude Code.
+ryk safety hooks and skills for Claude Code.
 
 ## What this plugin does
 
-This plugin adds Orca-native skills and lifecycle hooks to Claude Code. It lets Claude Code call the Orca CLI for policy checks, red-team fixtures, session replay, and runtime safety decisions without duplicating policy logic.
+This plugin adds ryk-native skills and lifecycle hooks to Claude Code. It lets Claude Code call the ryk CLI for policy checks, red-team fixtures, session replay, and runtime safety decisions without duplicating policy logic.
 
-The plugin is a thin integration layer. The Orca CLI remains the source of truth for all policy decisions.
+The plugin is a thin integration layer. The ryk CLI remains the source of truth for all policy decisions.
 
 ## Prerequisites
 
-- Orca CLI built and available in PATH (or use `./zig-out/bin/orca` from the repo)
-- Zig 0.15.2 to build Orca from source
+- ryk CLI built and available in PATH (or use `./zig-out/bin/ryk` from the repo)
+- Zig 0.15.2 to build ryk from source
 - Claude Code host binary installed
 
 ## Install from local path
 
-1. Build Orca:
+1. Build ryk:
    ```bash
    zig build
    ```
@@ -25,7 +25,7 @@ The plugin is a thin integration layer. The Orca CLI remains the source of truth
 
 3. Verify the plugin is recognized:
    ```bash
-   orca plugin doctor claude
+   ryk plugin doctor claude
    ```
 
 ## Install through local marketplace
@@ -34,14 +34,14 @@ If your Claude Code version supports repo-local marketplace files, see `integrat
 
 ## Verify install
 
-Run the Orca plugin doctor:
+Run the ryk plugin doctor:
 
 ```bash
-orca plugin doctor claude
+ryk plugin doctor claude
 ```
 
 Expected output sections:
-- Orca version
+- ryk version
 - Policy status (present/valid)
 - Plugin directories (claude: found)
 - Host binaries (claude: detected or not detected)
@@ -50,17 +50,17 @@ Expected output sections:
 
 | Skill | Purpose |
 |-------|---------|
-| `doctor` | Check Orca installation, policy, and plugin readiness |
-| `init` | Create or repair an Orca policy for the current repo |
-| `protect` | Explain how to run Claude Code under Orca protection |
+| `doctor` | Check ryk installation, policy, and plugin readiness |
+| `init` | Create or repair an ryk policy for the current repo |
+| `protect` | Explain how to run Claude Code under ryk protection |
 | `redteam` | Run deterministic red-team fixtures |
-| `replay` | Show and explain the latest Orca session replay |
+| `replay` | Show and explain the latest ryk session replay |
 
 Skills are invoked as `/orca:doctor`, `/orca:init`, `/orca:protect`, `/orca:redteam`, `/orca:replay` depending on the Claude Code plugin namespace configuration.
 
 ## Hooks included
 
-The plugin registers lifecycle hooks that call `orca hook claude <event>`:
+The plugin registers lifecycle hooks that call `ryk hook claude <event>`:
 
 | Event | When it fires |
 |-------|---------------|
@@ -71,27 +71,27 @@ The plugin registers lifecycle hooks that call `orca hook claude <event>`:
 | `PostToolUse` | After Claude Code finishes using a tool |
 | `SessionEnd` | When the session ends |
 
-## How hooks call Orca
+## How hooks call ryk
 
-Each hook sends a JSON payload to `orca hook claude <event>` via stdin and reads a JSON decision from stdout. The hook stdout remains valid for Claude Code parsing. Human-readable logs go to stderr.
+Each hook sends a JSON payload to `ryk hook claude <event>` via stdin and reads a JSON decision from stdout. The hook stdout remains valid for Claude Code parsing. Human-readable logs go to stderr.
 
 Example:
 
 ```bash
 echo '{"version":1,"host":"claude","event":"PreToolUse","payload":{"tool":"shell","command":"git status"}}' \
-  | orca hook claude PreToolUse
+  | ryk hook claude PreToolUse
 ```
 
 ## Run redteam
 
 ```bash
-orca redteam --ci
+ryk redteam --ci
 ```
 
 ## Replay sessions
 
 ```bash
-orca replay --session last --verify
+ryk replay --session last --verify
 ```
 
 ## Uninstall
@@ -101,14 +101,14 @@ Remove the plugin from Claude Code using your Claude Code plugin management comm
 ## Known limitations
 
 - Hooks are advisory; they do not enforce policy independently of the host.
-- The strongest protection remains `orca run -- <claude-code-command>`.
+- The strongest protection remains `ryk run -- <claude-code-command>`.
 - Plugin installation preview only; actual host plugin loading depends on Claude Code version.
 - No telemetry is collected.
 - Official marketplace availability is not yet implemented.
 
 ## Security model
 
-- This plugin calls the Orca CLI; it does not reimplement policy logic.
+- This plugin calls the ryk CLI; it does not reimplement policy logic.
 - No raw secrets are persisted in plugin files.
 - Hook stdout is host-valid JSON.
 - Human logs go to stderr.
@@ -121,17 +121,17 @@ This plugin does not add MCP server behavior or drone-specific plugin features.
 
 ## Decision mapping (honest)
 
-Orca returns host-actionable decisions on hook stdout. Claude Code interprets them:
+ryk returns host-actionable decisions on hook stdout. Claude Code interprets them:
 
-| Orca | Expected host behavior |
+| ryk | Expected host behavior |
 |---|---|
 | `allow` | Proceed |
 | `block` | Deny the tool / permission |
 | `ask` | Prefer Claude’s native permission / approval UI when the event supports it (`PermissionRequest` / gated tools). If the host surface cannot prompt, fail closed to deny — do not treat a model-visible note as approval. |
 | `warn` | Advisory; do not silently equate to hard deny unless policy/CI requires it |
 
-CI / noninteractive (`orca hook ... --ci` or env) hardens `ask` → `block` in Orca before the host sees it.
+CI / noninteractive (`ryk hook ... --ci` or env) hardens `ask` → `block` in ryk before the host sees it.
 
 ## Strongest protection warning
 
-> The Orca Claude Code plugin adds native skills and lifecycle hooks for Claude Code. For the strongest local protection, run the Claude Code process itself through Orca with `orca run -- <claude-code-command>`.
+> The ryk Claude Code plugin adds native skills and lifecycle hooks for Claude Code. For the strongest local protection, run the Claude Code process itself through ryk with `ryk run -- <claude-code-command>`.

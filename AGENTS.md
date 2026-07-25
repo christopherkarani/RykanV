@@ -135,7 +135,7 @@ Mandatory control loop for non-trivial code work. Details: [`docs/agents/work-an
 
 ### Issue tracker
 
-Issues live in GitHub Issues for `christopherkarani/Orca` (via `gh`). See `docs/agents/issue-tracker.md`.
+Issues live in GitHub Issues for `christopherkarani/rykan` (via `gh`). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

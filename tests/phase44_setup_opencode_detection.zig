@@ -71,11 +71,16 @@ test "phase 44 hostPluginInstalledFromDoctorJson ignores claude marketplace-only
     try std.testing.expect(!plugin.hostPluginInstalledFromDoctorJson("claude", parsed.value));
 }
 
-test "phase 44 doctor state accepts OpenClaw and Hermes after child failure" {
+test "phase 44 doctor state only accepts complete Hermes install after child failure" {
     const json =
         \\{
         \\  "openclaw_paths": { "host_plugin_installed": true },
-        \\  "hermes_paths": { "user_manifest_exists": true }
+        \\  "hermes_paths": {
+        \\    "user_manifest_exists": true,
+        \\    "user_source_exists": true,
+        \\    "user_mapping_exists": true,
+        \\    "config_references_plugin": true
+        \\  }
         \\}
     ;
     var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, json, .{});
@@ -102,7 +107,7 @@ test "phase 44 hostPluginInstalledFromReport matches doctor JSON semantics" {
         .host_binaries = .{ .codex = true, .claude = true, .opencode = true, .openclaw = true, .hermes = true },
         .opencode_paths = .{ .project_plugin_exists = false, .global_plugin_exists = false, .config_references_plugin = false },
         .openclaw_paths = .{ .host_plugin_installed = true, .plugin_manifest_exists = false, .package_json_exists = false, .source_exists = false, .detection_note = "" },
-        .hermes_paths = .{ .repo_manifest_exists = false, .repo_source_exists = false, .user_manifest_exists = true, .user_source_exists = false, .config_references_plugin = false },
+        .hermes_paths = .{ .repo_manifest_exists = false, .repo_source_exists = false, .repo_mapping_exists = false, .user_manifest_exists = true, .user_source_exists = true, .user_mapping_exists = true, .config_references_plugin = true },
         .hermes_hook_smoke_passed = false,
         .marketplace = .{
             .codex_marketplace = true,

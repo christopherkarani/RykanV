@@ -37,11 +37,11 @@ fn exec(io: std.Io, environ_map: *const std.process.Environ.Map, command_argv: [
 
 fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const []const u8, env_map: *const std.process.Environ.Map, stderr: anytype, shell_evaluator: ?shell_eval.ShellCommandEvaluatorFn) !u8 {
     const session_id = env_map.get("ORCA_SESSION_ID") orelse {
-        try stderr.writeAll("ryk shim exec: missing ORCA_SESSION_ID; shims only work inside an Orca session.\n");
+        try stderr.writeAll("ryk shim exec: missing ORCA_SESSION_ID; shims only work inside a ryk session.\n");
         return exit_codes.general;
     };
     const workspace_root = env_map.get("ORCA_WORKSPACE_ROOT") orelse {
-        try stderr.writeAll("ryk shim exec: missing ORCA_WORKSPACE_ROOT; shims only work inside an Orca session.\n");
+        try stderr.writeAll("ryk shim exec: missing ORCA_WORKSPACE_ROOT; shims only work inside a ryk session.\n");
         return exit_codes.general;
     };
     const shim_dir = env_map.get("ORCA_SHIM_DIR") orelse {
@@ -214,7 +214,7 @@ fn loadRecordedPolicySource(io: std.Io, allocator: std.mem.Allocator, source: []
     return policy.load.discover(io, allocator, source, workspace_root);
 }
 
-/// Session-recorded mode file written by `orca run` before shims are active.
+/// Session-recorded mode file written by `ryk run` before shims are active.
 /// Child processes can rewrite env; they must not rewrite enforcement mode via `ORCA_MODE`.
 pub const session_mode_filename = "shim_mode";
 
@@ -267,7 +267,7 @@ fn shimMode(
     selected: *const policy.schema.Policy,
     env_map: *const std.process.Environ.Map,
 ) !policy.schema.Mode {
-    // Parent `orca run` writes shim_mode before PATH shims are active. Prefer it
+    // Parent `ryk run` writes shim_mode before PATH shims are active. Prefer it
     // over ORCA_MODE so agents cannot ORCA_MODE=observe their way past strict.
     if (try readSessionShimMode(io, allocator, workspace_root, session_id)) |recorded| {
         return recorded;
@@ -348,7 +348,7 @@ fn appendCommandEvent(io: std.Io, writer: *core_api.AuditWriter, session_id_text
         .event_id = try core.event.generateEventId(ts),
         .timestamp = ts,
         .event_type = event_type,
-        .actor = .{ .kind = .orca, .display = "orca-shim" },
+        .actor = .{ .kind = .orca, .display = "ryk-shim" },
         .target = .{ .kind = .command, .value = display },
         .decision = decision,
     };
@@ -821,7 +821,7 @@ fn recordShimPolicyLoaded(allocator: std.mem.Allocator, root: []const u8, sessio
         .event_id = try core.event.generateEventId(ts),
         .timestamp = ts,
         .event_type = .policy_loaded,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .orca, .display = "ryk" },
         .target = .{ .kind = .file_path, .value = policy_source },
     };
     try core_api.appendAuditEvent(&writer, ev);

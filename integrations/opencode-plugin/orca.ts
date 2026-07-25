@@ -153,14 +153,14 @@ function normalizeBlockingDecision(
         base.message ||
         base.reason ||
         (decision === 'error'
-          ? 'Orca returned error; blocking as a precaution.'
-          : 'Orca blocked this command.'),
+          ? 'ryk returned error; blocking as a precaution.'
+          : 'ryk blocked this command.'),
     };
   }
   if (!ALLOW_DECISIONS.has(decision)) {
     return failClosedBlock(
       'orca_unrecognized_decision',
-      `Orca returned unrecognized decision "${decision}"; blocking as a precaution.`
+      `ryk returned unrecognized decision "${decision}"; blocking as a precaution.`
     );
   }
   return {
@@ -177,7 +177,7 @@ function normalizeBlockingDecision(
 }
 
 /**
- * Parse Orca hook stdout into a decision.
+ * Parse ryk hook stdout into a decision.
  * Non-blocking: soft-allow on empty/malformed.
  * Blocking: fail closed on empty/whitespace, parse errors, missing/non-string decision,
  * `error`, and unrecognized decisions. `ask` is preserved for OpenCode permission.ask UX;
@@ -190,8 +190,8 @@ export function parseHookResponse(stdout: string, blocking: boolean): OrcaRespon
   if (!stdout.trim()) {
     return fail(
       'orca_empty_response',
-      'Orca returned empty output; blocking as a precaution.',
-      'Orca returned empty output; allowing non-blocking event.'
+      'ryk returned empty output; blocking as a precaution.',
+      'ryk returned empty output; allowing non-blocking event.'
     );
   }
 
@@ -201,16 +201,16 @@ export function parseHookResponse(stdout: string, blocking: boolean): OrcaRespon
   } catch {
     return fail(
       'orca_parse_error',
-      'Orca returned unreadable JSON; blocking as a precaution.',
-      'Orca returned unreadable JSON; allowing non-blocking event.'
+      'ryk returned unreadable JSON; blocking as a precaution.',
+      'ryk returned unreadable JSON; allowing non-blocking event.'
     );
   }
 
   if (!parsed || typeof parsed !== 'object') {
     return fail(
       'orca_missing_decision',
-      'Orca response missing decision; blocking as a precaution.',
-      'Orca response missing decision; allowing non-blocking event.'
+      'ryk response missing decision; blocking as a precaution.',
+      'ryk response missing decision; allowing non-blocking event.'
     );
   }
 
@@ -219,8 +219,8 @@ export function parseHookResponse(stdout: string, blocking: boolean): OrcaRespon
   if (typeof decisionRaw !== 'string') {
     return fail(
       'orca_missing_decision',
-      'Orca response missing decision; blocking as a precaution.',
-      'Orca response missing decision; allowing non-blocking event.'
+      'ryk response missing decision; blocking as a precaution.',
+      'ryk response missing decision; allowing non-blocking event.'
     );
   }
 
@@ -330,16 +330,16 @@ function callOrca(
     return parseHookResponse(stdout, blocking);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[orca] Hook ${event} failed: ${message}`);
+    console.error(`[ryk] Hook ${event} failed: ${message}`);
 
     return blocking
       ? failClosedBlock(
           'orca_hook_error',
-          'Orca hook failed; blocking as a precaution.'
+          'ryk hook failed; blocking as a precaution.'
         )
       : softAllow(
           'orca_hook_error',
-          'Orca hook failed; allowing because this event is non-blocking.'
+          'ryk hook failed; allowing because this event is non-blocking.'
         );
   }
 }
@@ -359,7 +359,7 @@ function buildToolBeforePayload(
 
 function applyBlockingDecision(response: OrcaResponse, context: string): void {
   if (response.decision === 'warn') {
-    console.warn(`[orca] Warning: ${response.message || response.reason}`);
+    console.warn(`[ryk] Warning: ${response.message || response.reason}`);
     return;
   }
 
@@ -368,12 +368,12 @@ function applyBlockingDecision(response: OrcaResponse, context: string): void {
   }
 
   // block, ask, error, unrecognized → veto tool execution
-  const msg = response.message || response.reason || 'Orca blocked this command.';
-  console.error(`[orca] Blocked ${context}: ${msg}`);
-  throw new Error(`Orca blocked ${context}: ${msg}`);
+  const msg = response.message || response.reason || 'ryk blocked this command.';
+  console.error(`[ryk] Blocked ${context}: ${msg}`);
+  throw new Error(`ryk blocked ${context}: ${msg}`);
 }
 
-/** Orca decision → OpenCode permission.ask status. Unknown decisions fail closed to deny. */
+/** ryk decision → OpenCode permission.ask status. Unknown decisions fail closed to deny. */
 const PERMISSION_STATUS: Record<string, PermissionAskOutput['status']> = {
   block: 'deny',
   error: 'deny',
@@ -387,17 +387,17 @@ const PERMISSION_STATUS: Record<string, PermissionAskOutput['status']> = {
 function applyPermissionDecision(response: OrcaResponse, output: PermissionAskOutput): void {
   const status = PERMISSION_STATUS[response.decision];
   if (!status) {
-    const msg = response.message || response.reason || 'Orca returned an invalid permission decision';
-    console.error(`[orca] Blocked permission (fail-closed): ${msg}`);
+    const msg = response.message || response.reason || 'ryk returned an invalid permission decision';
+    console.error(`[ryk] Blocked permission (fail-closed): ${msg}`);
     output.status = 'deny';
     return;
   }
   if (status === 'deny') {
-    const msg = response.message || response.reason || 'Orca blocked this command.';
-    console.error(`[orca] Blocked permission: ${msg}`);
+    const msg = response.message || response.reason || 'ryk blocked this command.';
+    console.error(`[ryk] Blocked permission: ${msg}`);
   }
   if (response.decision === 'warn') {
-    console.warn(`[orca] Permission warning: ${response.message || response.reason}`);
+    console.warn(`[ryk] Permission warning: ${response.message || response.reason}`);
   }
   output.status = status;
 }
@@ -425,7 +425,7 @@ function sessionIdFromRecord(value: Record<string, unknown>): string | undefined
   return undefined;
 }
 
-const MISSING_BINARY_MSG = 'Orca binary not found; blocking as a precaution.';
+const MISSING_BINARY_MSG = 'ryk binary not found; blocking as a precaution.';
 
 export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHooks> {
   const cwd = ctx.worktree || ctx.directory || process.cwd();
@@ -435,29 +435,29 @@ export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHook
     orcaBin = findOrca(cwd);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[orca] Binary resolve failed (fail-closed): ${message}`);
+    console.error(`[ryk] Binary resolve failed (fail-closed): ${message}`);
     orcaBin = null;
   }
 
   if (!orcaBin) {
     console.warn(
-      '[orca] Binary not found in PATH or typical build paths. ' +
+      '[ryk] Binary not found in PATH or typical build paths. ' +
         'Registering fail-closed veto hooks. ' +
-        'Run: ./scripts/install-orca-plugin.sh opencode project (or .\\scripts\\install-orca-plugin.ps1 opencode project on Windows).'
+        'Install ryk, then run: ryk plugin install opencode --yes.'
     );
     return {
       'tool.execute.before': async () => {
-        console.error(`[orca] Blocked tool execution: ${MISSING_BINARY_MSG}`);
+        console.error(`[ryk] Blocked tool execution: ${MISSING_BINARY_MSG}`);
         throw new Error(MISSING_BINARY_MSG);
       },
       'permission.ask': async (_input, output) => {
-        console.error(`[orca] Blocked permission: ${MISSING_BINARY_MSG}`);
+        console.error(`[ryk] Blocked permission: ${MISSING_BINARY_MSG}`);
         output.status = 'deny';
       },
     };
   }
 
-  console.log(`[orca] Plugin loaded. Binary: ${orcaBin}`);
+  console.log(`[ryk] Plugin loaded. Binary: ${orcaBin}`);
 
   return {
     event: async ({ event }) => {
@@ -465,7 +465,7 @@ export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHook
       if (!AUDIT_EVENT_TYPES.has(eventType)) return;
 
       if (eventType === 'session.created') {
-        console.log('[orca] Plugin ready for session.');
+        console.log('[ryk] Plugin ready for session.');
       }
 
       await callOrca(

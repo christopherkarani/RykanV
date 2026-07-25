@@ -1,22 +1,22 @@
-# Orca Codex Plugin
+# ryk Codex Plugin
 
-Orca safety hooks and skills for Codex.
+ryk safety hooks and skills for Codex.
 
 ## What this plugin does
 
-This plugin adds Orca-native skills and lifecycle hooks to Codex. It lets Codex call the Orca CLI for policy checks, red-team fixtures, session replay, and runtime safety decisions without duplicating policy logic.
+This plugin adds ryk-native skills and lifecycle hooks to Codex. It lets Codex call the ryk CLI for policy checks, red-team fixtures, session replay, and runtime safety decisions without duplicating policy logic.
 
-The plugin is a thin integration layer. The Orca CLI remains the source of truth for all policy decisions.
+The plugin is a thin integration layer. The ryk CLI remains the source of truth for all policy decisions.
 
 ## Prerequisites
 
-- Orca CLI built and available in PATH (or use `./zig-out/bin/orca` from the repo)
-- Zig 0.15.2 to build Orca from source
+- ryk CLI built and available in PATH (or use `./zig-out/bin/ryk` from the repo)
+- Zig 0.15.2 to build ryk from source
 - Codex host binary installed
 
 ## Install from local path
 
-1. Build Orca:
+1. Build ryk:
    ```bash
    zig build
    ```
@@ -25,7 +25,7 @@ The plugin is a thin integration layer. The Orca CLI remains the source of truth
 
 3. Verify the plugin is recognized:
    ```bash
-   orca plugin doctor codex
+   ryk plugin doctor codex
    ```
 
 ## Install through repo marketplace
@@ -34,14 +34,14 @@ If your Codex version supports repo-local marketplace files, see `integrations/c
 
 ## Verify install
 
-Run the Orca plugin doctor:
+Run the ryk plugin doctor:
 
 ```bash
-orca plugin doctor codex
+ryk plugin doctor codex
 ```
 
 Expected output sections:
-- Orca version
+- ryk version
 - Policy status (present/valid)
 - Plugin directories (codex: found)
 - Host binaries (codex: detected or not detected)
@@ -50,16 +50,16 @@ Expected output sections:
 
 | Skill | Purpose |
 |-------|---------|
-| `orca-doctor` | Check Orca installation, policy, and plugin readiness |
-| `orca-init` | Create or repair an Orca policy for the current repo |
-| `orca-release` | Cut, verify, and publish an Orca release locally |
-| `orca-protect` | Explain how to run Codex under Orca protection |
+| `orca-doctor` | Check ryk installation, policy, and plugin readiness |
+| `orca-init` | Create or repair an ryk policy for the current repo |
+| `orca-release` | Cut, verify, and publish an ryk release locally |
+| `orca-protect` | Explain how to run Codex under ryk protection |
 | `orca-redteam` | Run deterministic red-team fixtures |
-| `orca-replay` | Show and explain the latest Orca session replay |
+| `orca-replay` | Show and explain the latest ryk session replay |
 
 ## Hooks included
 
-The plugin registers lifecycle hooks that call `orca hook codex <event>`:
+The plugin registers lifecycle hooks that call `ryk hook codex <event>`:
 
 | Event | When it fires |
 |-------|---------------|
@@ -70,27 +70,27 @@ The plugin registers lifecycle hooks that call `orca hook codex <event>`:
 | `PostToolUse` | After Codex finishes using a tool |
 | `Stop` | When the session stops |
 
-## How hooks call Orca
+## How hooks call ryk
 
-Each hook sends a JSON payload to `orca hook codex <event>` via stdin and reads a JSON decision from stdout. The hook stdout remains valid for Codex parsing. Human-readable logs go to stderr.
+Each hook sends a JSON payload to `ryk hook codex <event>` via stdin and reads a JSON decision from stdout. The hook stdout remains valid for Codex parsing. Human-readable logs go to stderr.
 
 Example:
 
 ```bash
 echo '{"version":1,"host":"codex","event":"PreToolUse","payload":{"tool":"shell","command":"git status"}}' \
-  | orca hook codex PreToolUse
+  | ryk hook codex PreToolUse
 ```
 
 ## Run redteam
 
 ```bash
-orca redteam --ci
+ryk redteam --ci
 ```
 
 ## Replay sessions
 
 ```bash
-orca replay --session last --verify
+ryk replay --session last --verify
 ```
 
 ## Uninstall
@@ -100,13 +100,13 @@ Remove the plugin from Codex using your Codex plugin management commands. This p
 ## Known limitations
 
 - Hooks are advisory; they do not enforce policy independently of the host.
-- The strongest protection remains `orca run -- <codex-command>`.
+- The strongest protection remains `ryk run -- <codex-command>`.
 - Plugin installation preview only; actual host plugin loading depends on Codex version.
 - No telemetry is collected.
 
 ## Security model
 
-- This plugin calls the Orca CLI; it does not reimplement policy logic.
+- This plugin calls the ryk CLI; it does not reimplement policy logic.
 - No raw secrets are persisted in plugin files.
 - Hook stdout is host-valid JSON.
 - Human logs go to stderr.
@@ -119,17 +119,17 @@ This plugin does not add MCP server behavior or drone-specific plugin features.
 
 ## Decision mapping (honest)
 
-Orca returns host-actionable decisions on hook stdout. Codex interprets them:
+ryk returns host-actionable decisions on hook stdout. Codex interprets them:
 
-| Orca | Expected host behavior |
+| ryk | Expected host behavior |
 |---|---|
 | `allow` | Proceed |
 | `block` | Deny the tool / permission |
 | `ask` | Prefer Codex’s native permission / approval UI when the event supports it (`PermissionRequest` / gated tools). If the host surface cannot prompt, fail closed to deny — do not treat a model-visible note as approval. |
 | `warn` | Advisory; do not silently equate to hard deny unless policy/CI requires it |
 
-CI / noninteractive (`orca hook ... --ci` or env) hardens `ask` → `block` in Orca before the host sees it.
+CI / noninteractive (`ryk hook ... --ci` or env) hardens `ask` → `block` in ryk before the host sees it.
 
 ## Strongest protection warning
 
-> The Orca Codex plugin adds native skills and lifecycle hooks for Codex. For the strongest local protection, run the Codex process itself through Orca with `orca run -- <codex-command>`.
+> The ryk Codex plugin adds native skills and lifecycle hooks for Codex. For the strongest local protection, run the Codex process itself through ryk with `ryk run -- <codex-command>`.

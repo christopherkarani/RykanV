@@ -108,7 +108,7 @@ fn writeZshCases(writer: anytype) !void {
 
 fn writeBash(writer: anytype) !void {
     try writer.writeAll(
-        \\_orca_completions() {
+        \\_ryk_completions() {
         \\  local cur commands command flags has_command word
         \\  COMPREPLY=()
         \\  cur="${COMP_WORDS[COMP_CWORD]}"
@@ -141,15 +141,15 @@ fn writeBash(writer: anytype) !void {
         \\    COMPREPLY=( $(compgen -W "${flags}" -- "${cur}") )
         \\  fi
         \\}
-        \\complete -F _orca_completions orca
+        \\complete -F _ryk_completions ryk
         \\
     );
 }
 
 fn writeZsh(writer: anytype) !void {
     try writer.writeAll(
-        \\#compdef orca
-        \\_orca() {
+        \\#compdef ryk
+        \\_ryk() {
         \\  local -a commands flags
         \\  local command word
         \\  local has_command=false
@@ -183,30 +183,30 @@ fn writeZsh(writer: anytype) !void {
         \\    _describe 'flag' flags
         \\  fi
         \\}
-        \\_orca "$@"
+        \\_ryk "$@"
         \\
     );
 }
 
 fn writeFish(writer: anytype) !void {
     for (help.commands) |cmd| {
-        if (!cmd.hidden) try writer.print("complete -c orca -f -n '__fish_use_subcommand' -a '{s}'\n", .{cmd.name});
+        if (!cmd.hidden) try writer.print("complete -c ryk -f -n '__fish_use_subcommand' -a '{s}'\n", .{cmd.name});
     }
     for (global_flags) |flag| {
-        try writer.print("complete -c orca -f -l {s}\n", .{flag[2..]});
+        try writer.print("complete -c ryk -f -l {s}\n", .{flag[2..]});
     }
     for (help.commands) |cmd| {
         if (cmd.hidden) continue;
         var flag_buffer: [max_command_flags][]const u8 = undefined;
         for (commandFlags(cmd, &flag_buffer)) |flag| {
-            try writer.print("complete -c orca -f -n '__fish_seen_subcommand_from {s}' -l {s}\n", .{ cmd.name, flag[2..] });
+            try writer.print("complete -c ryk -f -n '__fish_seen_subcommand_from {s}' -l {s}\n", .{ cmd.name, flag[2..] });
         }
     }
 }
 
 fn writePowerShell(writer: anytype) !void {
     try writer.writeAll(
-        \\Register-ArgumentCompleter -Native -CommandName orca -ScriptBlock {
+        \\Register-ArgumentCompleter -Native -CommandName ryk -ScriptBlock {
         \\  param($wordToComplete, $commandAst, $cursorPosition)
         \\  $commands = @(
     );
@@ -481,7 +481,7 @@ fn completionRegistersCommand(output: []const u8, shell: []const u8, name: []con
 
 test "P0 honesty: completions omit hide-list ports but include live P0 + shutdown" {
     const hidden = [_][]const u8{
-        "scan",    "precommit",      "simulate",   "classify", "suggest-allowlist",
+        "scan",    "precommit",      "simulate", "classify", "suggest-allowlist",
         "history", "rebase-recover", "config",
     };
     const live_p0 = [_][]const u8{
@@ -508,10 +508,25 @@ test "P0 honesty: completions omit hide-list ports but include live P0 + shutdow
     }
 }
 
-test "GitHub Actions documentation includes Orca run and redteam commands" {
+test "GitHub Actions documentation includes ryk run and redteam commands" {
     const doc = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "docs/ci/github-actions.md", std.testing.allocator, .limited(32 * 1024));
     defer std.testing.allocator.free(doc);
     try std.testing.expect(std.mem.indexOf(u8, doc, "ryk run --mode ci -- ./scripts/agent-task.sh") != null);
     try std.testing.expect(std.mem.indexOf(u8, doc, "ryk redteam --ci") != null);
     try std.testing.expect(std.mem.indexOf(u8, doc, "actions/upload-artifact@v4") != null);
+}
+
+test "generated completions expose only the ryk command brand" {
+    const shells = [_][]const u8{ "bash", "zsh", "fish", "powershell" };
+    for (shells) |shell| {
+        var stdout_buf: [32 * 1024]u8 = undefined;
+        var stderr_buf: [512]u8 = undefined;
+        var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+        var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+        const code = try command(std.testing.io, &.{shell}, &stdout_writer, &stderr_writer);
+        try std.testing.expectEqual(exit_codes.success, code);
+        try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "orca") == null);
+        try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "ryk") != null);
+    }
 }

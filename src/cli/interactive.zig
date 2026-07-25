@@ -373,7 +373,7 @@ test "askConfirm rejects garbage and re-prompts" {
     const input = "what\nn\n";
     var in_reader = std.Io.Reader.fixed(input);
 
-    const result = try askConfirm(&out, &in_reader, "Fully uninstall Orca?", false);
+    const result = try askConfirm(&out, &in_reader, "Fully uninstall ryk?", false);
     try std.testing.expectEqual(false, result);
 
     const written = out_buf[0..out.end];

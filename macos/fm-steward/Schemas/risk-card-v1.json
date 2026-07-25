@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/christopherkarani/Orca/macos/fm-steward/Schemas/risk-card-v1.json",
+  "$id": "https://github.com/christopherkarani/rykan/macos/fm-steward/Schemas/risk-card-v1.json",
   "title": "Orca FM Steward Risk Card v1",
   "description": "Structured risk-card request for the Mac FM steward classifier (Phase 3). Normative contract: planning handoff §6.1.",
   "type": "object",

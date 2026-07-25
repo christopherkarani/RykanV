@@ -1,28 +1,28 @@
-# Orca OpenCode Plugin
+# ryk OpenCode Plugin
 
-OpenCode plugin wrapper for Orca runtime guardrails.
+OpenCode plugin wrapper for ryk runtime guardrails.
 
 ## What this plugin does
 
-This plugin adds Orca-native lifecycle hooks to OpenCode. It lets OpenCode call the Orca CLI for policy checks, audit logging, and runtime safety decisions without duplicating policy logic.
+This plugin adds ryk-native lifecycle hooks to OpenCode. It lets OpenCode call the ryk CLI for policy checks, audit logging, and runtime safety decisions without duplicating policy logic.
 
-The plugin is a thin integration layer. The Orca CLI remains the source of truth for all policy decisions.
+The plugin is a thin integration layer. The ryk CLI remains the source of truth for all policy decisions.
 
 ## Prerequisites
 
-- Orca CLI built and available in PATH (run `orca doctor` to verify)
+- ryk CLI built and available in PATH (run `ryk doctor` to verify)
 - OpenCode host installed
 
-Orca is not bundled into this plugin package. Fast setup:
+ryk is not bundled into this plugin package. Fast setup:
 
 ```bash
-./scripts/install-orca-plugin.sh opencode project
+ryk plugin install opencode --yes
 ```
 
 Windows:
 
 ```powershell
-.\scripts\install-orca-plugin.ps1 opencode project
+ryk plugin install opencode --yes
 ```
 
 ## Install from npm
@@ -42,18 +42,18 @@ Then install dependencies:
 npm install orca-opencode-plugin
 ```
 
-The strongest local protection remains running OpenCode through `orca run -- opencode`; the OpenCode plugin provides native hooks and guardrails inside OpenCode.
+The strongest local protection remains running OpenCode through `ryk run -- opencode`; the OpenCode plugin provides native hooks and guardrails inside OpenCode.
 
 ## Install from local path
 
-If you prefer to use the plugin directly from the Orca repository:
+If you prefer to use the plugin directly from the ryk repository:
 
 ### Project-local install
 
 Copy or symlink this directory into your project:
 
 ```bash
-# From the Orca repo root
+# From the ryk repo root
 mkdir -p .opencode/plugins
 cp integrations/opencode-plugin/orca.ts .opencode/plugins/orca.ts
 ```
@@ -74,33 +74,33 @@ See `examples/global-plugin-path.md` for details.
 ### Verify the plugin is recognized
 
 ```bash
-orca plugin doctor opencode
+ryk plugin doctor opencode
 ```
 
 ## Verify install
 
-Run the Orca plugin doctor:
+Run the ryk plugin doctor:
 
 ```bash
-orca plugin doctor opencode
+ryk plugin doctor opencode
 ```
 
 Expected output sections:
-- Orca version
+- ryk version
 - Policy status (present/valid)
 - Plugin directories (opencode: found)
 - Host binaries (opencode: detected or not detected)
 
 ## Hooks included
 
-The plugin registers lifecycle hooks that call `orca hook opencode <event>`:
+The plugin registers lifecycle hooks that call `ryk hook opencode <event>`:
 
 | Event | When it fires | Behavior |
 |-------|---------------|----------|
 | `session.created` | At the start of an OpenCode session | Informational (readiness log) |
-| `tool.execute.before` | Before OpenCode invokes a tool | **Blocking** — Orca can prevent the tool call |
+| `tool.execute.before` | Before OpenCode invokes a tool | **Blocking** — ryk can prevent the tool call |
 | `tool.execute.after` | After OpenCode finishes using a tool | Informational (audit only) |
-| `permission.asked` | When OpenCode requests user permission | **Native permission path** — Orca `block`/`error` → deny; Orca `ask` leaves host `ask` (approve-and-resume); `allow` can auto-allow |
+| `permission.asked` | When OpenCode requests user permission | **Native permission path** — ryk `block`/`error` → deny; ryk `ask` leaves host `ask` (approve-and-resume); `allow` can auto-allow |
 | `file.edited` | When a file is edited by OpenCode | Informational (audit only) |
 | `command.executed` | When a shell command is executed | Informational (audit only) |
 | `session.updated` | When the session state changes | Informational (audit only) |
@@ -108,9 +108,9 @@ The plugin registers lifecycle hooks that call `orca hook opencode <event>`:
 | `session.error` | When a session error occurs | Informational (audit only) |
 | `shell.env` | When the shell environment is read | Informational (secrets redacted) |
 
-## How hooks call Orca
+## How hooks call ryk
 
-Each hook sends a JSON payload to `orca hook opencode <event>` via stdin and reads a JSON decision from stdout. The plugin preserves OpenCode's expected return values. Human-readable logs go to stderr.
+Each hook sends a JSON payload to `ryk hook opencode <event>` via stdin and reads a JSON decision from stdout. The plugin preserves OpenCode's expected return values. Human-readable logs go to stderr.
 
 Example payload for `tool.execute.before`:
 
@@ -146,13 +146,13 @@ If the decision is `block`, the plugin throws an error that prevents the tool fr
 ## Run redteam
 
 ```bash
-orca redteam --ci
+ryk redteam --ci
 ```
 
 ## Replay sessions
 
 ```bash
-orca replay --session last --verify
+ryk replay --session last --verify
 ```
 
 ## Uninstall
@@ -175,16 +175,16 @@ This plugin does not mutate host configuration, so uninstalling is safe.
 ## Known limitations
 
 - Hooks are advisory for informational events; blocking hooks depend on OpenCode honoring thrown errors.
-- The strongest protection remains `orca run -- opencode`.
+- The strongest protection remains `ryk run -- opencode`.
 - Plugin installation depends on OpenCode version and plugin loading mechanism.
 - No telemetry is collected.
 - Official npm publication is in progress; the package structure is ready for publication.
 
 ## Security model
 
-- This plugin calls the Orca CLI; it does not reimplement policy logic.
+- This plugin calls the ryk CLI; it does not reimplement policy logic.
 - No raw secrets are persisted in plugin files.
-- Secrets are redacted from payloads before sending to Orca (keys matching `password`, `token`, `secret`, `api_key`, etc. are replaced with `[REDACTED]`).
+- Secrets are redacted from payloads before sending to ryk (keys matching `password`, `token`, `secret`, `api_key`, etc. are replaced with `[REDACTED]`).
 - Hook return values remain valid for OpenCode parsing.
 - Human logs go to stderr.
 - CI mode never prompts.
@@ -196,4 +196,4 @@ The OpenCode plugin does not add MCP server behavior or drone-specific plugin fe
 
 ## Strongest protection warning
 
-> The Orca OpenCode plugin adds lifecycle hooks for OpenCode. For the strongest local protection, run the OpenCode process itself through Orca with `orca run -- opencode`.
+> The ryk OpenCode plugin adds lifecycle hooks for OpenCode. For the strongest local protection, run the OpenCode process itself through ryk with `ryk run -- opencode`.

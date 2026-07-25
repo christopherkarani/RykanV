@@ -211,7 +211,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                         .event_id = try core.event.generateEventId(ts),
                         .timestamp = ts,
                         .event_type = .session_exit,
-                        .actor = .{ .kind = .orca, .display = "orca" },
+                        .actor = .{ .kind = .orca, .display = "ryk" },
                         .target = .{ .kind = .session, .value = ended.id.slice() },
                     };
                     try core_api.appendAuditEvent(writer, ev);
@@ -462,7 +462,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 .event_id = try core.event.generateEventId(ts),
                 .timestamp = ts,
                 .event_type = .backend_capability,
-                .actor = .{ .kind = .orca, .display = "orca" },
+                .actor = .{ .kind = .orca, .display = "ryk" },
                 .target = .{ .kind = .unknown, .value = target },
                 .decision = decision,
             };
@@ -486,7 +486,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 .event_id = try core.event.generateEventId(ts),
                 .timestamp = ts,
                 .event_type = .backend_capability,
-                .actor = .{ .kind = .orca, .display = "orca" },
+                .actor = .{ .kind = .orca, .display = "ryk" },
                 .target = .{ .kind = .unknown, .value = target },
                 .decision = decision,
             };
@@ -554,7 +554,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 .event_id = try core.event.generateEventId(ts),
                 .timestamp = ts,
                 .event_type = event_type,
-                .actor = .{ .kind = .orca, .display = "orca" },
+                .actor = .{ .kind = .orca, .display = "ryk" },
                 .target = .{ .kind = .command, .value = target },
                 .decision = maybe_decision,
                 .metadata = metadata,
@@ -570,7 +570,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 .event_id = try core.event.generateEventId(ts),
                 .timestamp = ts,
                 .event_type = event_type,
-                .actor = .{ .kind = .orca, .display = "orca" },
+                .actor = .{ .kind = .orca, .display = "ryk" },
                 .target = .{ .kind = .network_endpoint, .value = target },
                 .decision = maybe_decision,
             };
@@ -780,7 +780,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                         .event_id = try core.event.generateEventId(event_ts),
                         .timestamp = event_ts,
                         .event_type = proxy_event.event_type,
-                        .actor = .{ .kind = .orca, .display = "orca" },
+                        .actor = .{ .kind = .orca, .display = "ryk" },
                         .target = .{ .kind = .network_endpoint, .value = proxy_event.target },
                         .decision = if (proxy_event.result) |decision_result| .{
                             .result = decision_result,
@@ -796,7 +796,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                     .event_id = try core.event.generateEventId(ts),
                     .timestamp = ts,
                     .event_type = .network_proxy_stop,
-                    .actor = .{ .kind = .orca, .display = "orca" },
+                    .actor = .{ .kind = .orca, .display = "ryk" },
                     .target = .{ .kind = .network_endpoint, .value = runtime.bindUrl() },
                     .decision = .{ .result = if (required_proxy_failed) .deny else .observe, .reason = if (required_proxy_failed) "required proxy backend failed during child run" else "proxy-mediated network backend stopped", .ci_may_proceed = !required_proxy_failed },
                 };
@@ -1138,13 +1138,13 @@ fn printSessionEnd(io: std.Io, stdout: anytype, result: supervisor.SessionResult
         try stdout.writeAll("\n");
         try tui.render.banner(io, stdout, build_options.version, "first protected session complete");
         try stdout.writeAll("\n");
-        try tui.theme.paintBold(io, stdout, .success, "  Welcome to Orca!");
+        try tui.theme.paintBold(io, stdout, .success, "  Welcome to ryk!");
         try stdout.writeAll(" Your first protected session completed successfully.\n");
         try stdout.writeAll("\n");
         try tui.theme.paintBold(io, stdout, .info, "  Next steps");
         try stdout.writeAll("\n");
         try stdout.writeAll("  → ");
-        try tui.theme.paint(io, stdout, .text_bright, "orca replay --session last");
+        try tui.theme.paint(io, stdout, .text_bright, "ryk replay --session last");
         try stdout.writeAll("  (review what happened)\n");
         try stdout.writeAll("  → ");
         try tui.theme.paint(io, stdout, .text_bright, "ryk policy explain command \"<your-command>\"");
@@ -1971,7 +1971,7 @@ test "run shell evaluation forwards command and cwd to daemon Evaluate" {
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
     // Keep this forwarding test independent of the child/shim lifecycle. `git`
-    // is one of Orca's generated shims, so launching `git status` here also
+    // is one of ryk's generated shims, so launching `git status` here also
     // exercised a nested test-binary process and intermittently surfaced its
     // signal termination as exit code 5. `true` is not shimmed and keeps this
     // test focused on the Evaluate command/cwd boundary.
@@ -2135,7 +2135,7 @@ test "first successful run prints celebration" {
     const out = stdout_writer.buffered();
     // Phase 7: elevated branded moment — brand shield + warm welcome + next-step hints.
     try std.testing.expect(std.mem.indexOf(u8, out, "\u{1F6E1}") != null); // 🛡 brand shield glyph
-    try std.testing.expect(std.mem.indexOf(u8, out, "Welcome to Orca!") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "Welcome to ryk!") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "replay --session last") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Next steps") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "policy explain") != null);
@@ -2163,7 +2163,7 @@ test "subsequent runs do not print celebration" {
     // Celebration-specific strings must be absent. (The session-start banner's
     // shield may still appear, so we key on the celebration's welcome line and
     // its dedicated 'Next steps' section rather than the shield glyph.)
-    try std.testing.expect(std.mem.indexOf(u8, out, "Welcome to Orca!") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "Welcome to ryk!") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Next steps") == null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
@@ -2415,7 +2415,7 @@ fn skipUnlessOsSandboxBackend() !void {
     } else return error.SkipZigTest;
 }
 
-// Full production `orca run` attach when OS backend is available.
+// Full production `ryk run` attach when OS backend is available.
 // Full multi-agent / long-running agent smoke remains manual.
 test "ryk run --os-sandbox on attaches and banners active when backend available" {
     try skipUnlessOsSandboxBackend();

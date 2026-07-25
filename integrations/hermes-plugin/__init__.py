@@ -1,4 +1,4 @@
-"""Hermes Agent plugin bridge for Orca runtime guardrails."""
+"""Hermes Agent plugin bridge for ryk runtime guardrails."""
 
 from __future__ import annotations
 
@@ -103,7 +103,7 @@ def _parse_fail_open_token(raw: str) -> bool | None:
 
 
 def _stance_file_fail_open() -> bool | None:
-    """Read install-time stance next to this plugin (written for *new* orca plugin install hermes)."""
+    """Read install-time stance next to this plugin (written for *new* ryk plugin install hermes)."""
     base = Path(__file__).resolve().parent
     for name in _FAIL_STANCE_FILENAMES:
         path = base / name
@@ -124,10 +124,10 @@ def _stance_file_fail_open() -> bool | None:
 
 
 def _fail_open_enabled() -> bool:
-    """Allow Hermes to proceed without Orca when degraded.
+    """Allow Hermes to proceed without ryk when degraded.
 
     Precedence: ORCA_HERMES_FAIL_OPEN env (when set) → install stance file → product default fail-open.
-    New installs via `orca plugin install hermes` write `.orca_fail_stance` = fail-closed.
+    New installs via `ryk plugin install hermes` write `.orca_fail_stance` = fail-closed.
     """
     if "ORCA_HERMES_FAIL_OPEN" in os.environ:
         value = os.environ.get("ORCA_HERMES_FAIL_OPEN", "").strip().lower()
@@ -270,7 +270,7 @@ def _find_orca() -> str | None:
 
 def _warn_degraded(ctx: Any, event: str, message: str) -> None:
     """Always surface degraded-path warnings — never silent fail-open."""
-    full = f"[orca-hermes] {message}"
+    full = f"[ryk-hermes] {message}"
     logger = getattr(ctx, "logger", None)
     if logger and hasattr(logger, "warning"):
         logger.warning(full)
@@ -284,36 +284,36 @@ def _handle_hook_error(ctx: Any, event: str, exc: BaseException) -> Any:
             return {
                 "action": "block",
                 "message": (
-                    f"Orca unavailable for Hermes pre_tool_call: {exc} "
+                    f"ryk unavailable for Hermes pre_tool_call: {exc} "
                     "(set ORCA_HERMES_FAIL_OPEN=1 to allow without guardrails)"
                 ),
             }
         _warn_degraded(
             ctx,
             event,
-            "FAIL-OPEN: Orca is missing or too old for Hermes hooks; upgrade Orca or set ORCA_BIN. "
-            "Allowing tool call WITHOUT Orca guardrails. "
-            "Set ORCA_HERMES_FAIL_OPEN=0 to block, or use `orca run -- hermes`.",
+            "FAIL-OPEN: ryk is missing or too old for Hermes hooks; upgrade ryk or set RYK_BIN. "
+            "Allowing tool call WITHOUT ryk guardrails. "
+            "Set ORCA_HERMES_FAIL_OPEN=0 to block, or use `ryk run -- hermes`.",
         )
         return None
     if event == "pre_tool_call":
         return {
             "action": "block",
-            "message": f"Orca unavailable for Hermes pre_tool_call: {exc}",
+            "message": f"ryk unavailable for Hermes pre_tool_call: {exc}",
         }
     if _error_has_marker(exc, _HERMES_HOST_MISMATCH_MARKERS):
         _warn_degraded(
             ctx,
             event,
-            "FAIL-OPEN: Orca is too old for Hermes hooks; upgrade Orca or set ORCA_BIN. "
-            "Continuing without Orca guardrails for this event.",
+            "FAIL-OPEN: ryk is too old for Hermes hooks; upgrade ryk or set RYK_BIN. "
+            "Continuing without ryk guardrails for this event.",
         )
         return None
     logger = getattr(ctx, "logger", None)
     if logger and hasattr(logger, "warning"):
-        logger.warning("Orca Hermes hook failed for %s: %s", event, exc)
+        logger.warning("ryk Hermes hook failed for %s: %s", event, exc)
     else:
-        print(f"warning: [orca-hermes] hook failed for {event}: {exc}", flush=True)
+        print(f"warning: [ryk-hermes] hook failed for {event}: {exc}", flush=True)
     return None
 
 
@@ -365,8 +365,8 @@ def _call_orca(event: str, data: Any) -> dict[str, Any]:
     orca = _find_orca()
     if not orca:
         raise RuntimeError(
-            "Orca binary not found or too old for Hermes hooks. "
-            "Run ./scripts/install-orca-plugin.sh hermes project or set ORCA_BIN."
+            "ryk binary not found or too old for Hermes hooks. "
+            "Install ryk or set RYK_BIN to an absolute executable path."
         )
 
     try:
@@ -380,9 +380,9 @@ def _call_orca(event: str, data: Any) -> dict[str, Any]:
             check=False,
         )
     except OSError as exc:
-        raise RuntimeError(f"failed to run Orca at {orca}: {exc}") from exc
+        raise RuntimeError(f"failed to run ryk at {orca}: {exc}") from exc
     if completed.returncode != 0:
-        raise RuntimeError(completed.stderr.strip() or f"orca exited {completed.returncode}")
+        raise RuntimeError(completed.stderr.strip() or f"ryk exited {completed.returncode}")
     if not completed.stdout.strip():
         return {"decision": "allow"}
     return json.loads(completed.stdout)
@@ -390,7 +390,7 @@ def _call_orca(event: str, data: Any) -> dict[str, Any]:
 
 def _log_policy_warn(ctx: Any, message: str) -> None:
     """Surface an advisory policy warn — not a degraded/fail-open path."""
-    full = f"[orca-hermes] {message}"
+    full = f"[ryk-hermes] {message}"
     logger = getattr(ctx, "logger", None)
     if logger and hasattr(logger, "warning"):
         logger.warning(full)

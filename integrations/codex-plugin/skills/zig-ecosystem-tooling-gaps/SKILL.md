@@ -16,7 +16,7 @@ test -f .zigversion && cat .zigversion
 command -v zls >/dev/null && zls --version || true
 ```
 
-As of 2026-05-13, Zig `0.16.0` is the latest tagged release and `0.17.0-dev` builds are available. Orca-style repos may still pin `0.15.2`; treat the repo pin as binding unless the task is an upgrade.
+As of 2026-05-13, Zig `0.16.0` is the latest tagged release and `0.17.0-dev` builds are available. ryk-style repos may still pin `0.15.2`; treat the repo pin as binding unless the task is an upgrade.
 
 ## Risk Model
 

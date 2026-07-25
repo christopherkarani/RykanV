@@ -12,10 +12,10 @@ pub const ProbeContext = enum {
 pub fn shellUnavailableReason(err: anyerror) []const u8 {
     return switch (err) {
         error.HomeDirectoryNotFound => "daemon unavailable: HOME not set",
-        error.DaemonBinaryNotFound => "daemon unavailable: orca-daemon binary not found",
-        error.DaemonBinaryNotExecutable => "daemon unavailable: orca-daemon is not executable",
-        error.DaemonBinaryUntrusted => "daemon unavailable: ORCA_DAEMON points at an untrusted path (group/world-writable, wrong owner, or unstatable)",
-        error.DaemonSpawnFailed => "daemon unavailable: failed to spawn orca-daemon",
+        error.DaemonBinaryNotFound => "companion service unavailable: executable not found",
+        error.DaemonBinaryNotExecutable => "companion service unavailable: executable is not runnable",
+        error.DaemonBinaryUntrusted => "companion service unavailable: legacy override points at an untrusted path",
+        error.DaemonSpawnFailed => "companion service unavailable: failed to start",
         error.DaemonStartTimeout => "daemon unavailable: startup timed out",
         error.DaemonNotReady => "daemon unavailable: daemon not ready",
         error.StaleSocket => "daemon unavailable: stale socket artifact",
@@ -91,33 +91,33 @@ fn detail(err: anyerror, audience: Audience, probe: ProbeContext) []const u8 {
             .version => "HOME is not set; daemon runtime path is unavailable.",
         },
         error.DaemonBinaryNotFound => switch (audience) {
-            .doctor => "orca-daemon binary not found; build or install the companion daemon.",
-            .onboarding => "orca-daemon binary was not found.",
-            .version => "orca-daemon binary not found beside orca or via ORCA_DAEMON.",
+            .doctor => "companion service executable not found; reinstall the complete ryk release.",
+            .onboarding => "The ryk companion service was not found.",
+            .version => "ryk companion service executable not found.",
         },
         error.DaemonBinaryNotExecutable => switch (audience) {
-            .doctor => "orca-daemon exists but is not executable; restore execute permission or reinstall the matching release.",
-            .onboarding => "orca-daemon is not executable.",
-            .version => "orca-daemon was found but is not executable.",
+            .doctor => "companion service is not executable; restore execute permission or reinstall ryk.",
+            .onboarding => "The ryk companion service is not executable.",
+            .version => "ryk companion service is not executable.",
         },
         error.DaemonBinaryUntrusted => switch (audience) {
-            .doctor => "ORCA_DAEMON points at an untrusted path (group/world-writable binary or ancestor, owner not euid/root, or unstatable); unset it or choose a trusted orca-daemon binary. Safe symlinks (e.g. Homebrew) are allowed when the target is trusted.",
-            .onboarding => "ORCA_DAEMON points at an untrusted path.",
-            .version => "ORCA_DAEMON points at an untrusted path.",
+            .doctor => "legacy companion override points at an untrusted path; unset it or choose a trusted executable.",
+            .onboarding => "A legacy companion override points at an untrusted path.",
+            .version => "A legacy companion override points at an untrusted path.",
         },
         error.DaemonSpawnFailed => switch (audience) {
-            .doctor => "orca-daemon failed to start; inspect local build/install state.",
-            .onboarding => "Failed to start orca-daemon.",
-            .version => "orca-daemon failed to start; verify the installed daemon matches this OS/architecture.",
+            .doctor => "companion service failed to start; inspect local build/install state.",
+            .onboarding => "Failed to start the ryk companion service.",
+            .version => "ryk companion service failed to start; verify the installed release matches this OS/architecture.",
         },
         error.DaemonStartTimeout => switch (audience) {
-            .doctor => "orca-daemon startup timed out; verify socket cleanup and local process health.",
-            .onboarding => "Timed out waiting for orca-daemon.",
-            .version => "orca-daemon startup timed out while waiting for the socket handshake.",
+            .doctor => "companion service startup timed out; verify local process health.",
+            .onboarding => "Timed out waiting for the ryk companion service.",
+            .version => "ryk companion service startup timed out while waiting for its handshake.",
         },
         error.DaemonNotReady => switch (audience) {
             .doctor => "daemon runtime exists but is not ready to answer requests.",
-            .onboarding => "orca-daemon is not ready.",
+            .onboarding => "The ryk companion service is not ready.",
             .version => "daemon runtime exists but is not ready to answer requests.",
         },
         error.StaleSocket => switch (audience) {
@@ -127,17 +127,17 @@ fn detail(err: anyerror, audience: Audience, probe: ProbeContext) []const u8 {
         },
         error.SocketConnectFailed => switch (audience) {
             .doctor => "no running daemon answered on the expected socket.",
-            .onboarding => "Could not connect to orca-daemon socket.",
+            .onboarding => "Could not connect to the ryk companion service.",
             .version => "no running daemon answered on the expected socket.",
         },
         error.SocketWriteFailed => switch (audience) {
             .doctor => "daemon socket accepted a connection but did not accept the request cleanly.",
-            .onboarding => "Could not verify orca-daemon health.",
+            .onboarding => "Could not verify the ryk companion service.",
             .version => "daemon socket accepted a connection but did not accept the request cleanly.",
         },
         error.SocketReadFailed => switch (audience) {
             .doctor => "daemon socket accepted a connection but did not return a response in time.",
-            .onboarding => "Could not verify orca-daemon health.",
+            .onboarding => "Could not verify the ryk companion service.",
             .version => "daemon socket accepted a connection but did not return a response in time.",
         },
         error.RequestSerializationFailed => switch (probe) {
@@ -167,17 +167,17 @@ fn detail(err: anyerror, audience: Audience, probe: ProbeContext) []const u8 {
         },
         error.ProtocolMismatch => switch (audience) {
             .doctor => "daemon protocol version or capability set does not match this ryk CLI.",
-            .onboarding => "Protocol version mismatch between orca and orca-daemon.",
+            .onboarding => "Protocol version mismatch inside the ryk installation.",
             .version => "daemon protocol version or capability set does not match this ryk CLI.",
         },
         error.OutOfMemory => switch (audience) {
             .doctor => "out of memory while probing daemon compatibility.",
-            .onboarding => "Could not verify orca-daemon health.",
+            .onboarding => "Could not verify the ryk companion service.",
             .version => "out of memory while probing daemon version.",
         },
         else => switch (audience) {
             .doctor => "unexpected daemon health error",
-            .onboarding => "Could not verify orca-daemon health.",
+            .onboarding => "Could not verify the ryk companion service.",
             .version => "unexpected daemon version error",
         },
     };

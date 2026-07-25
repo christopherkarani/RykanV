@@ -76,7 +76,7 @@ fi
 
 sed \
   -e "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" \
-  -e "s|https://github.com/christopherkarani/Orca/releases/download/v[^\"]*|https://github.com/christopherkarani/Orca/releases/download/v${VERSION}|" \
+  -e "s|https://github.com/christopherkarani/rykan/releases/download/v[^\"]*|https://github.com/christopherkarani/rykan/releases/download/v${VERSION}|" \
   -e "s/PLACEHOLDER_DARWIN_AMD64_SHA256/${darwin_amd64}/g" \
   -e "s/PLACEHOLDER_DARWIN_ARM64_SHA256/${darwin_arm64}/g" \
   -e "s/PLACEHOLDER_LINUX_AMD64_SHA256/${linux_amd64}/g" \

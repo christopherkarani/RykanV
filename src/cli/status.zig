@@ -1,4 +1,4 @@
-//! `orca status` — one-glance protection snapshot (P2a).
+//! `ryk status` — one-glance protection snapshot (P2a).
 //! Doctor remains the deep diagnostic; status is the summary.
 
 const std = @import("std");
@@ -269,20 +269,20 @@ fn chooseNextStep(
     packs_known: bool,
 ) ![]u8 {
     return switch (daemon_status) {
-        .unavailable => try allocator.dupe(u8, "Start or install orca-daemon, then re-run `orca status` (shell eval fails closed)."),
-        .incompatible => try allocator.dupe(u8, "Upgrade orca and orca-daemon together, then re-run `orca status`."),
-        .degraded => try allocator.dupe(u8, "Restart the daemon: `orca shutdown --daemon` then `orca status`."),
+        .unavailable => try allocator.dupe(u8, "Repair the local companion service, then re-run `ryk status` (shell eval fails closed)."),
+        .incompatible => try allocator.dupe(u8, "Upgrade the complete ryk installation, then re-run `ryk status`."),
+        .degraded => try allocator.dupe(u8, "Restart the daemon: `ryk shutdown --daemon` then `ryk status`."),
         .compatible => blk: {
             if (!policy_present) {
                 break :blk try allocator.dupe(u8, "Run `ryk start` to create a policy and get protected.");
             }
             if (!policy_valid) {
-                break :blk try allocator.dupe(u8, "Fix invalid policy (parse/load failed), then re-run `orca status --check` or `orca doctor --check`.");
+                break :blk try allocator.dupe(u8, "Fix invalid policy (parse/load failed), then re-run `ryk status --check` or `ryk doctor --check`.");
             }
             if (!packs_known) {
-                break :blk try allocator.dupe(u8, "Daemon is up but packs could not be listed; run `orca doctor`.");
+                break :blk try allocator.dupe(u8, "Daemon is up but packs could not be listed; run `ryk doctor`.");
             }
-            break :blk try allocator.dupe(u8, "Protected path looks healthy. Try `ryk claude` (or another host), then `orca replay`.");
+            break :blk try allocator.dupe(u8, "Protected path looks healthy. Try `ryk claude` (or another host), then `ryk replay`.");
         },
     };
 }

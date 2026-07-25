@@ -1,4 +1,4 @@
-//! Shared shell command evaluation for `orca hook`, `orca run`, and shims.
+//! Shared shell command evaluation for `ryk hook`, `ryk run`, and shims.
 //!
 //! Security decisions are owned exclusively by the in-process Zig shell_engine
 //! (default / `ORCA_SHELL_EVAL=zig`). `ORCA_SHELL_EVAL=rust` is rejected — the
@@ -442,7 +442,7 @@ pub const RiskLevel = enum {
 
 /// Mode × severity matrix for shell denials returned by the Zig shell evaluator.
 ///
-/// Daemon Evaluate returns Allow/Deny with optional pack severity. Orca modes
+/// Daemon Evaluate returns Allow/Deny with optional pack severity. ryk modes
 /// map those engine hits into product outcomes in one place so run/hook/shim
 /// stay aligned.
 ///

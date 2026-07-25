@@ -724,8 +724,8 @@ fn renderNewPackConfigWithDisabled(
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     errdefer buf.deinit(allocator);
     try buf.appendSlice(allocator,
-        \\# Orca pack configuration
-        \\# Written by `ryk init` / `orca setup` / `ryk start` / `orca packs enable|disable`.
+        \\# ryk pack configuration
+        \\# Written by `ryk init` / `ryk start` / `ryk packs enable|disable`.
         \\# Prefer project `.orca.toml` in a git repo; otherwise user config.
         \\# Baseline packs (core.*, system.disk) are always on and need not be listed.
         \\# Additive: re-running setup merges packs and does not wipe customizations.

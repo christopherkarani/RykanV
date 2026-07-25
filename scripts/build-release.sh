@@ -67,9 +67,20 @@ target_platforms_json() {
 
 copy_cli_payload() {
   root="$1"
+  [ -f "orca-pi/extensions/orca.ts" ] || {
+    printf 'error: bundled Pi extension is missing orca-pi/extensions/orca.ts\n' >&2
+    exit 1
+  }
+  [ -f "orca-pi/extensions/secret_capture.ts" ] || {
+    printf 'error: bundled Pi extension is missing orca-pi/extensions/secret_capture.ts\n' >&2
+    exit 1
+  }
   mkdir -p "$root"
   cp README.md LICENSE SECURITY.md CONTRIBUTING.md "$root/"
   cp -R docs policies schemas fixtures examples packages packaging scripts integrations "$root/"
+  # Runtime onboarding copies these TypeScript files directly into Pi. Keep the
+  # package source in the archive so curl and Homebrew never need npm.
+  cp -R orca-pi "$root/"
   if [ -d "orca-dashboard-ui/dist" ]; then
     mkdir -p "$root/orca-dashboard-ui"
     cp -R orca-dashboard-ui/dist "$root/orca-dashboard-ui/dist"
@@ -105,7 +116,7 @@ copy_cli_payload() {
 write_release_readme() {
   root="$1"
   title="ryk ${VERSION} Release Artifact"
-  boundary="This archive contains the ryk CLI (primary binary) plus an orca compat alias, and Core policy, audit, replay, redaction, schema, integration, and packaging resources. Edge runtime, drone, SITL, and customer-pilot materials are intentionally excluded."
+  boundary="This archive contains the ryk CLI (primary binary) plus an orca compat alias, the bundled Pi extension, and Core policy, audit, replay, redaction, schema, integration, and packaging resources. Edge runtime, drone, SITL, and customer-pilot materials are intentionally excluded."
   cat >"$root/README-release.md" <<EOF
 # ${title}
 
@@ -258,7 +269,7 @@ write_release_manifest() {
   done
 
   products_json="[\"ryk\", \"orca\", \"core\"]"
-  runtime_assets_json="[\"schemas\", \"policies\", \"fixtures\", \"examples\", \"integrations\", \"packaging\"]"
+  runtime_assets_json="[\"schemas\", \"policies\", \"fixtures\", \"examples\", \"integrations\", \"packaging\", \"orca-pi/extensions\"]"
   schemas_json="[\"schemas/policy-v1.json\", \"schemas/event-v1.json\", \"schemas/mcp-manifest-v1.json\"]"
   fixtures_json="[\"fixtures/shell-abuse/curl-pipe-sh\", \"examples/mcp\", \"examples/network\", \"examples/policies\"]"
   docs_json="[\"README.md\", \"docs/install.md\", \"README-release.md\"]"

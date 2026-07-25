@@ -1,4 +1,4 @@
-"""Unit tests for Hermes plugin Orca discovery and degraded-mode handling."""
+"""Unit tests for Hermes plugin ryk discovery and degraded-mode handling."""
 
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
 
     def test_pre_tool_call_fail_closed_when_disabled(self) -> None:
         ctx = mock.Mock()
-        exc = RuntimeError("Orca binary not found or too old for Hermes hooks")
+        exc = RuntimeError("ryk binary not found or too old for Hermes hooks")
         with mock.patch.dict(os.environ, {"ORCA_HERMES_FAIL_OPEN": "0"}):
             result = _PLUGIN._handle_hook_error(ctx, "pre_tool_call", exc)
         self.assertIsInstance(result, dict)
@@ -70,7 +70,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
 
     def test_pre_tool_call_fail_open_when_enabled(self) -> None:
         ctx = mock.Mock()
-        exc = RuntimeError("Orca binary not found or too old for Hermes hooks")
+        exc = RuntimeError("ryk binary not found or too old for Hermes hooks")
         with mock.patch.dict(os.environ, {"ORCA_HERMES_FAIL_OPEN": "1"}):
             with mock.patch("builtins.print") as printed:
                 result = _PLUGIN._handle_hook_error(ctx, "pre_tool_call", exc)
@@ -88,13 +88,13 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         with mock.patch.object(
             _PLUGIN,
             "_call_orca",
-            return_value={"decision": "block", "message": "block by Orca"},
+            return_value={"decision": "block", "message": "block by ryk"},
         ):
             result = handler(tool_name="terminal", args={"command": "rm -rf /"})
-        self.assertEqual(result, {"action": "block", "message": "block by Orca"})
+        self.assertEqual(result, {"action": "block", "message": "block by ryk"})
 
     def test_pre_tool_call_ask_uses_native_approve_path(self) -> None:
-        """Orca ask must escalate to Hermes human gate, not permanent block-without-resume."""
+        """ryk ask must escalate to Hermes human gate, not permanent block-without-resume."""
         ctx = mock.Mock()
         _PLUGIN._register(ctx, "pre_tool_call")
         handler = ctx.register_hook.call_args.args[1]
@@ -106,7 +106,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
                 "_call_orca",
                 return_value={
                     "decision": "ask",
-                    "message": "approval required by Orca",
+                    "message": "approval required by ryk",
                     "rule_id": "core.filesystem:destructive_rm",
                 },
             ):
@@ -114,7 +114,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         self.assertIsInstance(result, dict)
         assert result is not None
         self.assertEqual(result.get("action"), "approve")
-        self.assertIn("approval required by Orca", result.get("message", ""))
+        self.assertIn("approval required by ryk", result.get("message", ""))
         rule_key = result.get("rule_key", "")
         self.assertTrue(rule_key.startswith("orca|"), rule_key)
         self.assertIn("core.filesystem:destructive_rm", rule_key)
@@ -128,7 +128,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
             with mock.patch.object(
                 _PLUGIN,
                 "_call_orca",
-                return_value={"decision": "ask", "message": "approval required by Orca"},
+                return_value={"decision": "ask", "message": "approval required by ryk"},
             ):
                 result = handler(tool_name="terminal", args={"command": "rm -rf /tmp/x"})
         self.assertEqual(result.get("action"), "block")
@@ -142,13 +142,13 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         with mock.patch.object(
             _PLUGIN,
             "_call_orca",
-            return_value={"decision": "warn", "message": "warn by Orca"},
+            return_value={"decision": "warn", "message": "warn by ryk"},
         ):
             with mock.patch("builtins.print") as printed:
                 result = handler(tool_name="terminal", args={"command": "curl example.com"})
         self.assertIsNone(result)
         warn_text = " ".join(str(c) for c in printed.call_args_list)
-        self.assertIn("warn by Orca", warn_text)
+        self.assertIn("warn by ryk", warn_text)
 
     def test_pre_tool_call_rule_key_does_not_over_approve(self) -> None:
         """Distinct tool args under the same rule get distinct rule_keys for [a]lways grain."""
@@ -181,13 +181,13 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         with mock.patch.object(
             _PLUGIN,
             "_call_orca",
-            return_value={"decision": "warn", "message": "warn by Orca"},
+            return_value={"decision": "warn", "message": "warn by ryk"},
         ):
             with mock.patch("builtins.print") as printed:
                 result = handler(tool_name="terminal", args={"command": "curl example.com"})
         self.assertIsNone(result)
         warn_text = " ".join(str(c) for c in printed.call_args_list)
-        self.assertIn("warn by Orca", warn_text)
+        self.assertIn("warn by ryk", warn_text)
         self.assertNotIn("FAIL-OPEN", warn_text)
 
     def test_host_decision_mapping_example_matches_tool_modes(self) -> None:
@@ -237,15 +237,15 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
             "_call_orca",
             return_value={
                 "decision": "block",
-                "message": "blocked by Orca",
+                "message": "blocked by ryk",
                 "rule_id": "core.filesystem:destructive_rm",
-                "remediation_commands": ["orca explain \"rm -rf /\"", "orca allowlist list"],
+                "remediation_commands": ["ryk explain \"rm -rf /\"", "ryk allowlist list"],
             },
         ):
             result = handler(tool_name="terminal", args={"command": "rm -rf /"})
         self.assertEqual(result.get("action"), "block")
         message = result.get("message", "")
-        self.assertIn("orca explain", message)
+        self.assertIn("ryk explain", message)
         self.assertIn("rule: core.filesystem:destructive_rm", message)
 
     def test_pre_tool_call_allows_only_explicit_allow(self) -> None:
@@ -268,13 +268,13 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         with mock.patch.object(
             _PLUGIN,
             "_call_orca",
-            return_value={"decision": "warn", "message": "warn by Orca"},
+            return_value={"decision": "warn", "message": "warn by ryk"},
         ):
             result = handler(session_id="session-1", user_message="review me")
         self.assertIsInstance(result, dict)
         assert result is not None
         self.assertIn("context", result)
-        self.assertIn("warn by Orca", result["context"])
+        self.assertIn("warn by ryk", result["context"])
         self.assertIn("advisory", result["context"].lower())
 
     def test_pre_llm_call_ask_does_not_claim_enforcement(self) -> None:
@@ -285,20 +285,20 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         with mock.patch.object(
             _PLUGIN,
             "_call_orca",
-            return_value={"decision": "ask", "message": "ask by Orca"},
+            return_value={"decision": "ask", "message": "ask by ryk"},
         ):
             result = handler(session_id="session-1", user_message="review me")
         self.assertIsInstance(result, dict)
         assert result is not None
         context = result.get("context", "")
-        self.assertIn("ask by Orca", context)
+        self.assertIn("ask by ryk", context)
         self.assertNotIn("requires user approval", context.lower())
         # Must be honest that this is not an approval gate.
         self.assertTrue(
             "does not enforce" in context.lower() or "cannot gate" in context.lower(),
             context,
         )
-        self.assertIn("orca run", context.lower())
+        self.assertIn("ryk run", context.lower())
 
     def test_pre_llm_call_block_is_honest_about_host_limit(self) -> None:
         ctx = mock.Mock()
@@ -307,13 +307,13 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         with mock.patch.object(
             _PLUGIN,
             "_call_orca",
-            return_value={"decision": "block", "message": "block by Orca"},
+            return_value={"decision": "block", "message": "block by ryk"},
         ):
             result = handler(session_id="session-1", user_message="review me")
         self.assertIsInstance(result, dict)
         assert result is not None
         context = result.get("context", "")
-        self.assertIn("block by Orca", context)
+        self.assertIn("block by ryk", context)
         self.assertTrue(
             "does not enforce" in context.lower() or "cannot" in context.lower(),
             context,

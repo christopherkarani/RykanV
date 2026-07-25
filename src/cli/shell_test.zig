@@ -1,4 +1,4 @@
-//! `orca test` — evaluate a shell command via the Zig shell engine.
+//! `ryk test` — evaluate a shell command via the Zig shell engine.
 const std = @import("std");
 const shell_engine = @import("../shell_engine/mod.zig");
 const shell_eval = @import("shell_eval.zig");
@@ -8,7 +8,7 @@ const core = @import("orca_core").core;
 pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     if (argv.len == 0 or std.mem.eql(u8, argv[0], "--help") or std.mem.eql(u8, argv[0], "-h")) {
         try stderr.writeAll(
-            \\Usage: orca test [--format json] <command>
+            \\Usage: ryk test [--format json] <command>
             \\
             \\Evaluate a shell command with the in-process Zig shell engine.
             \\Exit 0 = allow, 2 = deny.

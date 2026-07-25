@@ -1,6 +1,6 @@
 ---
 name: Plugin compatibility issue
-about: Report a host or policy compatibility regression in an Orca plugin
+about: Report a host or policy compatibility regression in a ryk plugin
 title: "[Plugin Compatibility] "
 ---
 
@@ -8,7 +8,7 @@ Remove secrets, tokens, credentials, private keys, and private paths from logs a
 
 ## Environment
 
-- Orca version:
+- ryk version:
 - OS:
 - Host tool and version:
 - Plugin version or install source:

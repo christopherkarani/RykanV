@@ -24,7 +24,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     const allocator = gpa_state.allocator();
     var current = license.status(io, allocator) catch |err| switch (err) {
         error.InvalidLicense, error.InvalidLicenseSignature, error.UnsupportedLicenseIssuer, error.UnsupportedLicenseTier => {
-            try stderr.print("orca report: stored license is invalid: {s}\n", .{@errorName(err)});
+            try stderr.print("ryk report: stored license is invalid: {s}\n", .{@errorName(err)});
             return exit_codes.general;
         },
         else => return err,
@@ -36,13 +36,13 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
             stderr,
             .info,
             "Report export requires a license",
-            "Activate a local development license with: orca license activate dev-pro",
+            "Activate a local development license with: ryk license activate dev-pro",
         );
         return exit_codes.unsupported;
     }
 
     const workspace_root = supervisor.resolveWorkspaceRoot(io, allocator, null, ".") catch |err| {
-        try stderr.print("orca report: failed to resolve workspace: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk report: failed to resolve workspace: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer allocator.free(workspace_root);
@@ -54,16 +54,16 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
                 stderr,
                 .info,
                 "No reportable session found",
-                "Run a protected command first: ryk run -- echo hello. Then retry: orca report --session last",
+                "Run a protected command first: ryk run -- echo hello. Then retry: ryk report --session last",
             );
             return exit_codes.general;
         },
         error.HashVerificationFailed => {
-            try stderr.writeAll("orca report: hash verification failed; refusing to export report from tampered evidence.\n");
+            try stderr.writeAll("ryk report: hash verification failed; refusing to export report from tampered evidence.\n");
             return exit_codes.general;
         },
         else => {
-            try stderr.print("orca report: failed: {s}\n", .{@errorName(err)});
+            try stderr.print("ryk report: failed: {s}\n", .{@errorName(err)});
             return exit_codes.general;
         },
     };
@@ -79,7 +79,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
 fn mapReportExportError(stderr: anytype, err: anyerror) !u8 {
     switch (err) {
         error.ParseIntegrityFailed => {
-            try stderr.writeAll("orca report: event parse integrity failed; refusing to export report from incomplete evidence.\n");
+            try stderr.writeAll("ryk report: event parse integrity failed; refusing to export report from incomplete evidence.\n");
             return exit_codes.general;
         },
         else => return err,
@@ -97,22 +97,22 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
         } else if (std.mem.eql(u8, arg, "--session")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca report: --session requires a session id or 'last'.\n");
+                try stderr.writeAll("ryk report: --session requires a session id or 'last'.\n");
                 return error.Usage;
             }
             options.session = argv[index];
         } else if (std.mem.eql(u8, arg, "--format")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca report: --format requires markdown or json.\n");
+                try stderr.writeAll("ryk report: --format requires markdown or json.\n");
                 return error.Usage;
             }
             if (std.mem.eql(u8, argv[index], "markdown")) options.format = .markdown else if (std.mem.eql(u8, argv[index], "json")) options.format = .json else {
-                try stderr.writeAll("orca report: --format supports markdown or json.\n");
+                try stderr.writeAll("ryk report: --format supports markdown or json.\n");
                 return error.Usage;
             }
         } else {
-            try suggestions.writeUnknownOption(stderr, "orca report", arg, &.{ "--session", "--format", "--help", "-h" }, "report");
+            try suggestions.writeUnknownOption(stderr, "ryk report", arg, &.{ "--session", "--format", "--help", "-h" }, "report");
             return error.Usage;
         }
     }

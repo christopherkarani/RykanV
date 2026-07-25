@@ -14,11 +14,11 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         return exit_codes.success;
     }
     if (!std.mem.eql(u8, argv[0], "check")) {
-        try suggestions.writeUnknownSubcommand(stderr, "orca credentials", argv[0], &.{"check"}, "credentials");
+        try suggestions.writeUnknownSubcommand(stderr, "ryk credentials", argv[0], &.{"check"}, "credentials");
         return exit_codes.usage;
     }
     if (argv.len > 2) {
-        try stderr.writeAll("orca credentials check: expected at most one credential ref.\n");
+        try stderr.writeAll("ryk credentials check: expected at most one credential ref.\n");
         return exit_codes.usage;
     }
     return checkCommand(io, argv[1..], stdout, stderr);
@@ -32,7 +32,7 @@ fn checkCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
     const workspace_root = supervisor.resolveWorkspaceRoot(io, allocator, null, ".") catch try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
     defer allocator.free(workspace_root);
     var loaded_policy = core_api.discoverPolicy(io, allocator, null, workspace_root) catch |err| {
-        try stderr.print("orca credentials check: invalid policy: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk credentials check: invalid policy: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer loaded_policy.deinit();
@@ -40,11 +40,11 @@ fn checkCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
     const ref_name = if (argv.len == 1) argv[0] else null;
     var report = credentials.check(io, allocator, loaded_policy.innerPtr(), workspace_root, ref_name) catch |err| switch (err) {
         error.UnknownCredentialRef => {
-            try stderr.writeAll("orca credentials check: unknown credential ref.\n");
+            try stderr.writeAll("ryk credentials check: unknown credential ref.\n");
             return exit_codes.general;
         },
         else => {
-            try stderr.print("orca credentials check: failed: {s}\n", .{@errorName(err)});
+            try stderr.print("ryk credentials check: failed: {s}\n", .{@errorName(err)});
             return exit_codes.general;
         },
     };

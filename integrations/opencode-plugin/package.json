@@ -1,7 +1,7 @@
 {
   "name": "orca-opencode-plugin",
   "version": "1.2.9",
-  "description": "OpenCode plugin wrapper for Orca runtime guardrails.",
+  "description": "OpenCode plugin wrapper for ryk runtime guardrails.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -13,7 +13,7 @@
   "keywords": [
     "opencode",
     "plugin",
-    "orca",
+    "ryk",
     "ai-agents",
     "security",
     "guardrails"
@@ -29,11 +29,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/chriskarani/orca.git"
+    "url": "git+https://github.com/christopherkarani/rykan.git"
   },
-  "homepage": "https://github.com/chriskarani/orca#readme",
+  "homepage": "https://github.com/christopherkarani/rykan#readme",
   "bugs": {
-    "url": "https://github.com/chriskarani/orca/issues"
+    "url": "https://github.com/christopherkarani/rykan/issues"
   },
   "devDependencies": {
     "@types/node": "^25.6.2",

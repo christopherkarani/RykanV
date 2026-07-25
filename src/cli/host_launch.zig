@@ -62,7 +62,7 @@ test "isHostLaunchAlias exact allowlist only" {
     try std.testing.expect(!isHostLaunchAlias("pi2"));
 }
 
-test "buildRunArgv is equivalent to bare run -- host rest without Orca flags" {
+test "buildRunArgv is equivalent to bare run -- host rest without ryk flags" {
     const allocator = std.testing.allocator;
 
     {
@@ -105,7 +105,7 @@ test "buildRunArgv is equivalent to bare run -- host rest without Orca flags" {
     }
 
     {
-        // v1: agent argv only — --network is for the agent, not Orca run flags.
+        // v1: agent argv only — --network is for the agent, not ryk run flags.
         const rest = [_][]const u8{"--network"};
         const argv = try buildRunArgv(allocator, "pi", &rest);
         defer allocator.free(argv);

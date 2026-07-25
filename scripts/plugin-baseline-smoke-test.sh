@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Orca Plugin Baseline Smoke Test
+# ryk Plugin Baseline Smoke Test
 # Safe checks only. No drone hardware. No network. No secrets.
 
 set -euo pipefail
@@ -16,7 +16,7 @@ log_fail() { echo "[FAIL]  $1"; ERRORS=$((ERRORS + 1)); }
 
 cd "${REPO_ROOT}"
 
-log_info "=== Orca Plugin Baseline Smoke Test ==="
+log_info "=== ryk Plugin Baseline Smoke Test ==="
 log_info "Repo: ${REPO_ROOT}"
 log_info "Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo ""

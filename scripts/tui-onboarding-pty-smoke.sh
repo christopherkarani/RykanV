@@ -19,7 +19,7 @@ fail() {
 command -v tmux >/dev/null 2>&1 || fail "tmux is required"
 
 ORCA="$ROOT/zig-out/bin/orca"
-[[ -x "$ORCA" ]] || fail "build Orca first with ./scripts/zig build"
+[[ -x "$ORCA" ]] || fail "build ryk first with ./scripts/zig build"
 
 capture_pane() {
     tmux -L "$TMUX_SOCKET" capture-pane -p -S -200 2>/dev/null
@@ -45,48 +45,69 @@ tmux -L "$TMUX_SOCKET" new-session -d -x 100 -y 30 \
     "before=\$(stty -g); env HOME='$SMOKE_ROOT/home' PATH='/usr/bin:/bin' ORCA_RESOURCE_ROOT='$ROOT' '$ORCA' start --skip-verify; code=\$?; after=\$(stty -g); if [ \"\$before\" = \"\$after\" ]; then echo __ORCA_TERMIOS_RESTORED__; else echo __ORCA_TERMIOS_CHANGED__; fi; exit \$code"
 tmux -L "$TMUX_SOCKET" set-option remain-on-exit on
 
-wait_for "Choose your protection mode"
-# The original failure appears after the 100 ms raw-input timeout.
+# Scenario 1 (no hosts on PATH): start skips the multi-select and reports skipped verification.
+wait_for "No supported agent hosts detected in PATH."
 sleep 0.3
 
 start_screen="$(capture_pane)"
-prompt_count="$(grep -Fc "Choose your protection mode" <<<"$start_screen")"
-[[ "$prompt_count" == "1" ]] || fail "expected one protection prompt, found $prompt_count"
+notice_count="$(grep -Fc "No supported agent hosts detected in PATH." <<<"$start_screen")"
+[[ "$notice_count" == "1" ]] || fail "expected one no-hosts notice, found $notice_count"
 
-if grep -Eq '^ {12,}(🛡  )?Orca' <<<"$start_screen"; then
+if grep -Eq '^ {12,}(🛡  )?ryk' <<<"$start_screen"; then
     fail "banner drifted horizontally after buffered output flushed in raw mode"
 fi
 
-tmux -L "$TMUX_SOCKET" send-keys Up
-tmux -L "$TMUX_SOCKET" send-keys Enter
-wait_for "Protection mode: Firewall"
+wait_for "Setup complete — verification skipped"
 wait_for "__ORCA_TERMIOS_RESTORED__"
 
-echo "orca start PTY smoke passed"
+echo "ryk start (no hosts) PTY smoke passed"
 
 tmux -L "$TMUX_SOCKET" kill-server 2>/dev/null || true
-mkdir -p "$SMOKE_ROOT/quickstart-workspace" "$SMOKE_ROOT/quickstart-home" "$SMOKE_ROOT/bin"
+mkdir -p "$SMOKE_ROOT/hosts-workspace" "$SMOKE_ROOT/hosts-home" "$SMOKE_ROOT/bin"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$SMOKE_ROOT/bin/codex"
 chmod +x "$SMOKE_ROOT/bin/codex"
 
+# Scenario 2 (fake codex on PATH): multi-select shows once and reports skipped verification.
 tmux -L "$TMUX_SOCKET" new-session -d -x 100 -y 40 \
-    -c "$SMOKE_ROOT/quickstart-workspace" \
-    "before=\$(stty -g); env HOME='$SMOKE_ROOT/quickstart-home' PATH='$SMOKE_ROOT/bin:/usr/bin:/bin' ORCA_RESOURCE_ROOT='$ROOT' '$ORCA' quickstart; code=\$?; after=\$(stty -g); if [ \"\$before\" = \"\$after\" ]; then echo __ORCA_TERMIOS_RESTORED__; else echo __ORCA_TERMIOS_CHANGED__; fi; exit \$code"
+    -c "$SMOKE_ROOT/hosts-workspace" \
+    "before=\$(stty -g); env HOME='$SMOKE_ROOT/hosts-home' PATH='$SMOKE_ROOT/bin:/usr/bin:/bin' ORCA_RESOURCE_ROOT='$ROOT' '$ORCA' start --skip-verify; code=\$?; after=\$(stty -g); if [ \"\$before\" = \"\$after\" ]; then echo __ORCA_TERMIOS_RESTORED__; else echo __ORCA_TERMIOS_CHANGED__; fi; exit \$code"
 tmux -L "$TMUX_SOCKET" set-option remain-on-exit on
 
 wait_for "Select agent hosts to integrate"
 sleep 0.3
 
-quickstart_screen="$(capture_pane)"
-host_prompt_count="$(grep -Fc "Select agent hosts to integrate" <<<"$quickstart_screen")"
+hosts_screen="$(capture_pane)"
+host_prompt_count="$(grep -Fc "Select agent hosts to integrate" <<<"$hosts_screen")"
 [[ "$host_prompt_count" == "1" ]] || fail "expected one host prompt, found $host_prompt_count"
 
-if grep -Eq '^ {12,}(Orca Doctor|Summary:|Select agent hosts)' <<<"$quickstart_screen"; then
-    fail "quickstart output drifted horizontally at the raw prompt boundary"
+if grep -Eq '^ {12,}(🛡  )?(ryk|Select agent hosts)' <<<"$hosts_screen"; then
+    fail "start output drifted horizontally at the raw prompt boundary"
 fi
 
 tmux -L "$TMUX_SOCKET" send-keys Enter
-wait_for "Core protection is ready"
+wait_for "Setup complete — verification skipped"
 wait_for "__ORCA_TERMIOS_RESTORED__"
 
-echo "orca quickstart PTY smoke passed"
+echo "ryk start (host multi-select) PTY smoke passed"
+
+# Scenario 3: exercise the real verified auto path rather than a fixture binary.
+mkdir -p "$SMOKE_ROOT/verified-workspace" "$SMOKE_ROOT/verified-home"
+verified_output="$SMOKE_ROOT/verified.out"
+(
+    cd "$SMOKE_ROOT/verified-workspace"
+    env HOME="$SMOKE_ROOT/verified-home" \
+        PATH="$SMOKE_ROOT/bin:/usr/bin:/bin" \
+        RYK_RESOURCE_ROOT="$ROOT" \
+        "$ORCA" start --auto
+) >"$verified_output"
+
+[[ "$(grep -Fc "🛡  ryk" "$verified_output")" == "1" ]] ||
+    fail "verified auto onboarding did not render exactly one banner"
+grep -Fq "codex  ✓ fail-closed chain verified" "$verified_output" ||
+    fail "verified auto onboarding did not verify the Codex integration chain"
+[[ "$(grep -Fc "You're now protected by ryk" "$verified_output")" == "1" ]] ||
+    fail "verified auto onboarding did not render exactly one protected end card"
+[[ -f "$SMOKE_ROOT/verified-workspace/.agents/plugins/orca/.codex-plugin/plugin.json" ]] ||
+    fail "verified auto onboarding did not install the managed Codex plugin"
+
+echo "ryk start --auto (verified Codex chain) smoke passed"

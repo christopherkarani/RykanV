@@ -26,6 +26,8 @@ pub const shim = @import("shim.zig");
 pub const version_command = @import("version.zig");
 pub const plugin = @import("plugin.zig");
 pub const host_status = @import("host_status.zig");
+pub const pi_install = @import("pi_install.zig");
+pub const grok_install = @import("grok_install.zig");
 pub const plugin_install = @import("plugin_install.zig");
 pub const setup = @import("setup.zig");
 pub const start = @import("start.zig");
@@ -77,6 +79,9 @@ test {
     _ = style;
     _ = onboarding;
     _ = host_status;
+    _ = pi_install;
+    _ = grok_install;
+    _ = plugin_install;
     _ = @import("openclaw_status.zig");
     _ = start;
     _ = setup;
@@ -132,7 +137,7 @@ fn suggestCommand(unknown: []const u8) ?[]const u8 {
 
 /// Commands that render their own branded header internally and so must NOT
 /// receive the shared entry banner (would double-print).
-const self_banner_commands = [_][]const u8{ "version", "--version", "help", "run" };
+const self_banner_commands = [_][]const u8{ "version", "--version", "help", "run", "start" };
 
 /// Commands whose output is always machine/raw (JSON, generated scripts, export
 /// lines, long-running servers) — never receive the human brand banner.
@@ -327,7 +332,9 @@ fn runWithCwdUsing(
     const global_args = try parseGlobalArgs(allocator, argv_input);
     defer if (global_args.owned) allocator.free(global_args.argv);
     const argv = global_args.argv;
-    const no_rich_env = tui.output_policy.envDisablesRich(environ_map.get("ORCA_NO_RICH"));
+    const no_rich_env = tui.output_policy.envDisablesRich(
+        environ_map.get("RYK_NO_RICH") orelse environ_map.get("ORCA_NO_RICH"),
+    );
     const machine_output = if (argv.len == 0) false else !shouldShowBanner(argv[0], argv) and
         (isMachineArgv(argv) or isAlwaysMachineCommand(argv[0]) or isRawGeneratedInvocation(argv[0], argv));
     const output = tui.output_policy.resolve(no_rich_env, global_args.no_rich, machine_output);
@@ -455,7 +462,7 @@ fn runWithCwdUsing(
 
     // Highest-value DX helper for installers, Homebrew post-install hooks, npm wrapper,
     // power users, and immediate shell activation. Now layout-aware (selfExePath) and
-    // platform-correct. `orca env` is the discoverable alias; the flag is kept for
+    // platform-correct. `ryk env` is the discoverable alias; the flag is kept for
     // backward compat with any scripts that invoke it directly.
     if (std.mem.eql(u8, command, "--print-install-env")) {
         try writeInstallEnv(io, stdout);
@@ -909,7 +916,7 @@ fn fakeSimulateProxySuccess(_: std.Io, argv: []const []const u8, stdout: anytype
 fn fakeSuggestAllowlistProxySuccess(_: std.Io, argv: []const []const u8, stdout: anytype, _: anytype) !u8 {
     try std.testing.expectEqual(@as(usize, 1), argv.len);
     try std.testing.expectEqualStrings("suggest-allowlist", argv[0]);
-    try stdout.writeAll("Allowlist Suggestions\nNext steps (high confidence)\n  orca suggest-allowlist --apply 1\n");
+    try stdout.writeAll("Allowlist Suggestions\nNext steps (high confidence)\n  ryk suggest-allowlist --apply 1\n");
     return exit_codes.success;
 }
 
@@ -1305,6 +1312,11 @@ test "banner renders on a human command (doctor)" {
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 
+test "start owns its onboarding banner" {
+    try std.testing.expect(!shouldShowBanner("start", &.{"start"}));
+    try std.testing.expect(!shouldShowBanner("start", &.{ "start", "--auto" }));
+}
+
 test "banner suppressed for raw env output" {
     var stdout_buf: [4096]u8 = undefined;
     var stderr_buf: [256]u8 = undefined;
@@ -1659,7 +1671,7 @@ fn writeTopLevelReportFixture(io: std.Io, allocator: std.mem.Allocator, workspac
         .id = session_id,
         .started_at = now,
         .ended_at = now,
-        .command = "orca",
+        .command = "ryk",
         .args = &.{ "run", "--", "rm", "-rf", "./fixture" },
         .workspace_root = workspace_root,
         .session_name = "report-output-test",
@@ -1676,7 +1688,7 @@ fn writeTopLevelReportFixture(io: std.Io, allocator: std.mem.Allocator, workspac
         .event_id = event_id,
         .timestamp = now,
         .event_type = .command_denied,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .orca, .display = "ryk" },
         .target = .{ .kind = .command, .value = "rm -rf ./fixture" },
         .decision = core_api.makeDecision(.{ .result = .deny, .reason = "blocked by fixture policy", .rule_id = "commands.deny" }),
         .redactions = .{ .count = 1, .labels = &.{"fixture-label"} },
@@ -1869,12 +1881,12 @@ test "global flag parser consumes no-rich before or after the command" {
     try std.testing.expect(!value.no_rich);
 }
 
-test "ORCA_NO_RICH truthy variants suppress presentation without changing machine JSON" {
+test "RYK_NO_RICH truthy variants suppress presentation without changing machine JSON" {
     const variants = [_][]const u8{ "1", "true", "yes" };
     for (variants) |variant| {
         var env_map = try std.process.Environ.createMap(std.process.Environ.empty, std.testing.allocator);
         defer env_map.deinit();
-        try env_map.put("ORCA_NO_RICH", variant);
+        try env_map.put("RYK_NO_RICH", variant);
         var stdout_buf: [4096]u8 = undefined;
         var stderr_buf: [256]u8 = undefined;
         var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
@@ -2161,7 +2173,7 @@ test "plugin help and disable re-enable messaging de-emphasize --yes in favor of
     try std.testing.expectEqual(exit_codes.success, code);
 
     const output = stdout_writer.buffered();
-    // Primary path is `ryk start` (guided on TTY); demoted `orca setup` must not be re-taught.
+    // Primary path is `ryk start` (guided on TTY); removed setup must not be re-taught.
     try std.testing.expect(std.mem.indexOf(u8, output, "ryk start") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "guided") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "orca setup") == null);
@@ -2169,7 +2181,7 @@ test "plugin help and disable re-enable messaging de-emphasize --yes in favor of
 }
 
 // writeInstallEnv — the trustworthy, layout-aware activation printer for installers,
-// Homebrew post-install, npm wrappers, power users, and `eval "$(orca env)"`.
+// Homebrew post-install, npm wrappers, power users, and `eval "$(ryk env)"`.
 // Uses the running binary's actual location (selfExePath) so custom prefixes
 // (Homebrew, containers, non-~ installs) produce correct exports. Falls back to
 // documented platform defaults. Windows uses cmd.exe set syntax; Unix uses sh export.
@@ -2180,10 +2192,10 @@ fn writeInstallEnv(io: std.Io, stdout: anytype) !void {
         // Fallback (static or exotic exe path): documented defaults per platform.
         if (builtin.os.tag == .windows) {
             try stdout.writeAll("set \"PATH=%USERPROFILE%\\.orca\\bin;%PATH%\"\n");
-            try stdout.writeAll("set \"ORCA_RESOURCE_ROOT=%USERPROFILE%\\.orca\\share\\current\"\n");
+            try stdout.writeAll("set \"RYK_RESOURCE_ROOT=%USERPROFILE%\\.orca\\share\\current\"\n");
         } else {
             try stdout.writeAll("export PATH=\"$HOME/.local/bin:$PATH\"\n");
-            try stdout.writeAll("export ORCA_RESOURCE_ROOT=\"$HOME/.local/share/orca/current\"\n");
+            try stdout.writeAll("export RYK_RESOURCE_ROOT=\"$HOME/.local/share/orca/current\"\n");
         }
         return;
     };
@@ -2193,10 +2205,10 @@ fn writeInstallEnv(io: std.Io, stdout: anytype) !void {
         // Same fallback as above.
         if (builtin.os.tag == .windows) {
             try stdout.writeAll("set \"PATH=%USERPROFILE%\\.orca\\bin;%PATH%\"\n");
-            try stdout.writeAll("set \"ORCA_RESOURCE_ROOT=%USERPROFILE%\\.orca\\share\\current\"\n");
+            try stdout.writeAll("set \"RYK_RESOURCE_ROOT=%USERPROFILE%\\.orca\\share\\current\"\n");
         } else {
             try stdout.writeAll("export PATH=\"$HOME/.local/bin:$PATH\"\n");
-            try stdout.writeAll("export ORCA_RESOURCE_ROOT=\"$HOME/.local/share/orca/current\"\n");
+            try stdout.writeAll("export RYK_RESOURCE_ROOT=\"$HOME/.local/share/orca/current\"\n");
         }
         return;
     };
@@ -2208,22 +2220,22 @@ fn writeInstallEnv(io: std.Io, stdout: anytype) !void {
         std.fs.path.join(allocator, &.{ prefix_dir, "share", "current" }) catch {
             // Fallback on join failure (extremely rare).
             try stdout.writeAll("set \"PATH=%USERPROFILE%\\.orca\\bin;%PATH%\"\n");
-            try stdout.writeAll("set \"ORCA_RESOURCE_ROOT=%USERPROFILE%\\.orca\\share\\current\"\n");
+            try stdout.writeAll("set \"RYK_RESOURCE_ROOT=%USERPROFILE%\\.orca\\share\\current\"\n");
             return;
         }
     else
         std.fs.path.join(allocator, &.{ prefix_dir, "share", "orca", "current" }) catch {
             try stdout.writeAll("export PATH=\"$HOME/.local/bin:$PATH\"\n");
-            try stdout.writeAll("export ORCA_RESOURCE_ROOT=\"$HOME/.local/share/orca/current\"\n");
+            try stdout.writeAll("export RYK_RESOURCE_ROOT=\"$HOME/.local/share/orca/current\"\n");
             return;
         };
     defer allocator.free(resource_root);
 
     if (is_win) {
         try stdout.print("set \"PATH={s};%PATH%\"\n", .{bin_dir});
-        try stdout.print("set \"ORCA_RESOURCE_ROOT={s}\"\n", .{resource_root});
+        try stdout.print("set \"RYK_RESOURCE_ROOT={s}\"\n", .{resource_root});
     } else {
         try stdout.print("export PATH=\"{s}:$PATH\"\n", .{bin_dir});
-        try stdout.print("export ORCA_RESOURCE_ROOT=\"{s}\"\n", .{resource_root});
+        try stdout.print("export RYK_RESOURCE_ROOT=\"{s}\"\n", .{resource_root});
     }
 }

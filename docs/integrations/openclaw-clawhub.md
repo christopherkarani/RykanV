@@ -187,6 +187,6 @@ Report vulnerabilities privately through [SECURITY.md](../../SECURITY.md).
 
 ## Support
 
-- Issues: [https://github.com/chriskarani/orca/issues](https://github.com/chriskarani/orca/issues)
+- Issues: [https://github.com/christopherkarani/rykan/issues](https://github.com/christopherkarani/rykan/issues)
 - Docs: [docs/integrations/openclaw.md](openclaw.md)
 - Security: [SECURITY.md](../../SECURITY.md)

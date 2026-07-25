@@ -171,7 +171,7 @@ describe('parseHookResponse (fail-closed blocking path)', () => {
 });
 
 describe('normalizeOpenClawToolEvent', () => {
-  it('maps toolName + params.command into Orca shell envelope', () => {
+  it('maps toolName + params.command into ryk shell envelope', () => {
     const n = normalizeOpenClawToolEvent({
       toolName: 'exec',
       params: { command: 'git status', cwd: '/tmp' },
@@ -203,7 +203,7 @@ describe('orcaPlugin', () => {
       'Warning must include unprotected grade label'
     );
     assert.ok(
-      String(noopWarning.arguments[0]).includes('orca run -- openclaw'),
+      String(noopWarning.arguments[0]).includes('ryk run -- openclaw'),
       'Warning must recommend wrapper path'
     );
   });

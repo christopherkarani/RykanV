@@ -15,7 +15,7 @@ const ReplayCliOptions = struct {
     only_denied: bool = false,
     verify: bool = false,
     list: bool = false,
-    /// Phase 7: opt-in alt-screen timeline view (`orca replay --tui`). Default
+    /// Phase 7: opt-in alt-screen timeline view (`ryk replay --tui`). Default
     /// stays linear (invariant #1: --json frozen). Rejected on non-TTY / --json.
     tui_view: bool = false,
     /// When true, a missing default `last` session lists sessions instead of erroring.
@@ -34,7 +34,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     const allocator = gpa_state.allocator();
 
     const workspace_root = supervisor.resolveWorkspaceRoot(io, allocator, null, ".") catch |err| {
-        try stderr.print("orca replay: failed to resolve workspace: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk replay: failed to resolve workspace: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer allocator.free(workspace_root);
@@ -61,11 +61,11 @@ fn replaySession(
     // conflict and we never load data we'll refuse to render.
     if (options.tui_view) {
         if (options.json) {
-            try stderr.writeAll("orca replay: --tui cannot be combined with --json (machine output is frozen).\n");
+            try stderr.writeAll("ryk replay: --tui cannot be combined with --json (machine output is frozen).\n");
             return exit_codes.usage;
         }
         if (!tui.theme.active(io, stdout).capability.hasColor()) {
-            try stderr.writeAll("orca replay: --tui needs an interactive colour terminal. Drop --tui, or unset NO_COLOR / --no-rich.\n");
+            try stderr.writeAll("ryk replay: --tui needs an interactive colour terminal. Drop --tui, or unset NO_COLOR / --no-rich.\n");
             return exit_codes.usage;
         }
     }
@@ -79,7 +79,7 @@ fn replaySession(
             if (options.fallback_to_list) {
                 return listSessions(io, allocator, workspace_root, stdout);
             }
-            try stderr.writeAll("orca replay: session not found.\n");
+            try stderr.writeAll("ryk replay: session not found.\n");
             return exit_codes.general;
         },
         error.HashVerificationFailed => {
@@ -88,14 +88,14 @@ fn replaySession(
             const verify_result = if (session_dir_path) |path| core_api.verifyReplay(io, allocator, path) catch null else null;
             if (verify_result) |result| {
                 defer result.deinit(allocator);
-                if (result.reason) |reason| try stderr.print("orca replay: hash verification failed: {s}\n", .{reason}) else try stderr.writeAll("orca replay: hash verification failed.\n");
+                if (result.reason) |reason| try stderr.print("ryk replay: hash verification failed: {s}\n", .{reason}) else try stderr.writeAll("ryk replay: hash verification failed.\n");
             } else {
-                try stderr.writeAll("orca replay: hash verification failed.\n");
+                try stderr.writeAll("ryk replay: hash verification failed.\n");
             }
             return exit_codes.general;
         },
         else => {
-            try stderr.print("orca replay: failed: {s}\n", .{@errorName(err)});
+            try stderr.print("ryk replay: failed: {s}\n", .{@errorName(err)});
             return exit_codes.general;
         },
     };
@@ -140,7 +140,7 @@ fn writeReplayHuman(
     });
     try stdout.writeByte('\n');
 
-    // Dominant summary when denials are present (demo gold: bare `orca replay`).
+    // Dominant summary when denials are present (demo gold: bare `ryk replay`).
     var denied_count: usize = 0;
     for (session.events) |event| {
         if (isDeniedEvent(event)) denied_count += 1;
@@ -306,7 +306,7 @@ fn freeTimelineLines(allocator: std.mem.Allocator, lines: [][]const u8) void {
     allocator.free(lines);
 }
 
-/// Friendly empty-state copy for bare `orca replay` / `--list` when nothing is recorded.
+/// Friendly empty-state copy for bare `ryk replay` / `--list` when nothing is recorded.
 /// Points operators at Safe Launch (`start` + agent), never a raw FileNotFound dump.
 const empty_sessions_hint =
     \\No sessions yet. Run `ryk start` then `ryk <agent>` (for example `ryk claude`) to create a protected session.
@@ -341,7 +341,7 @@ fn listSessions(io: std.Io, allocator: std.mem.Allocator, workspace_root: []cons
         try stdout.writeAll(empty_sessions_hint);
     } else {
         try stdout.print("\n{d} session(s) found.\n", .{count});
-        try stdout.writeAll("Run `orca replay --session <id>` to view a session.\n");
+        try stdout.writeAll("Run `ryk replay --session <id>` to view a session.\n");
     }
 
     return exit_codes.success;
@@ -362,7 +362,7 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
         } else if (std.mem.eql(u8, arg, "--session")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("orca replay: --session requires a session id or 'last'.\n");
+                try stderr.writeAll("ryk replay: --session requires a session id or 'last'.\n");
                 return error.Usage;
             }
             options.session = argv[index];
@@ -376,7 +376,7 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
         } else if (std.mem.eql(u8, arg, "--only")) {
             index += 1;
             if (index >= argv.len or !std.mem.eql(u8, argv[index], "denied")) {
-                try stderr.writeAll("orca replay: --only currently supports only 'denied'.\n");
+                try stderr.writeAll("ryk replay: --only currently supports only 'denied'.\n");
                 return error.Usage;
             }
             options.only_denied = true;
@@ -503,7 +503,7 @@ test "replay with no args loads last session timeline" {
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
-    // Bare `orca replay` — no --session required; defaults to last.
+    // Bare `ryk replay` — no --session required; defaults to last.
     const code = try command(std.testing.io, &.{}, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, code);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());

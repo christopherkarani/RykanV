@@ -1,6 +1,6 @@
 # Project-Local Plugin Path
 
-This example shows how to install the Orca plugin locally within a single project.
+This example shows how to install the ryk plugin locally within a single project.
 
 ## Steps
 
@@ -10,10 +10,10 @@ This example shows how to install the Orca plugin locally within a single projec
    mkdir -p .opencode/plugins
    ```
 
-2. Copy the Orca plugin file into the project-local plugins directory:
+2. Copy the ryk plugin file into the project-local plugins directory:
 
    ```bash
-   # Adjust the source path to point to the Orca repository
+   # Adjust the source path to point to the ryk repository
    cp /path/to/orca-repo/integrations/opencode-plugin/orca.ts .opencode/plugins/orca.ts
    ```
 
@@ -27,18 +27,18 @@ This example shows how to install the Orca plugin locally within a single projec
 
 ## Verify
 
-Run the Orca plugin doctor from the project root:
+Run the ryk plugin doctor from the project root:
 
 ```bash
-orca plugin doctor opencode
+ryk plugin doctor opencode
 ```
 
 Expected output includes:
 - `opencode: found` in the plugin directories section.
-- Orca binary detected in PATH or at a known build path.
+- ryk binary detected in PATH or at a known build path.
 
 ## Notes
 
 - Project-local plugins are scoped to the current workspace.
 - They travel with the repo if committed (the plugin file is small and contains no secrets).
-- For stronger protection, also run OpenCode through Orca: `orca run -- opencode`.
+- For stronger protection, also run OpenCode through ryk: `ryk run -- opencode`.

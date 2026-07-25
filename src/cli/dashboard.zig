@@ -29,11 +29,11 @@ const installed_ui_dir = "orca-dashboard-ui/dist";
 const dashboard_ui_missing_html =
     \\<!doctype html>
     \\<html lang="en">
-    \\<head><meta charset="utf-8"><title>Orca Dashboard</title></head>
+    \\<head><meta charset="utf-8"><title>ryk Dashboard</title></head>
     \\<body>
     \\<h1>Dashboard UI not installed</h1>
-    \\<p>The Orca install on this machine is missing <code>orca-dashboard-ui/dist</code> under <code>ORCA_RESOURCE_ROOT</code>.</p>
-    \\<p>Reinstall from a current release artifact or export <code>ORCA_RESOURCE_ROOT</code> to a checkout that contains the dashboard bundle.</p>
+    \\<p>The ryk install on this machine is missing its dashboard bundle under <code>RYK_RESOURCE_ROOT</code>.</p>
+    \\<p>Reinstall from a current release artifact or export <code>RYK_RESOURCE_ROOT</code> to a checkout that contains the dashboard bundle.</p>
     \\</body>
     \\</html>
 ;
@@ -249,7 +249,7 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
             const suggestions = @import("suggestions.zig");
             suggestions.writeUnknownOption(
                 stderr,
-                "orca dashboard",
+                "ryk dashboard",
                 arg,
                 &.{ "--host", "--port", "--once", "--workspace", "--machine", "--help" },
                 "dashboard",

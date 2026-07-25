@@ -1,4 +1,4 @@
-# Orca Plugin Baseline Smoke Test
+# ryk Plugin Baseline Smoke Test
 # Safe checks only. No drone hardware. No network. No secrets.
 
 $ErrorActionPreference = "Stop"
@@ -16,7 +16,7 @@ function Log-Fail($msg) { Write-Host "[FAIL]  $msg"; $script:ERRORS++ }
 Push-Location $REPO_ROOT
 
 try {
-    Log-Info "=== Orca Plugin Baseline Smoke Test ==="
+    Log-Info "=== ryk Plugin Baseline Smoke Test ==="
     Log-Info "Repo: $REPO_ROOT"
     Log-Info "Date: $([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))"
     Write-Host ""

@@ -1,28 +1,28 @@
 # redteam
 
-Run Orca red-team fixtures and summarize results.
+Run ryk red-team fixtures and summarize results.
 
 ## When to use
 
-Use this skill to run deterministic, local-only red-team tests that verify Orca policy behavior without requiring external network access or a real LLM.
+Use this skill to run deterministic, local-only red-team tests that verify ryk policy behavior without requiring external network access or a real LLM.
 
 ## Commands
 
 Run the red-team suite in CI mode:
 
 ```bash
-orca redteam --ci
+ryk redteam --ci
 ```
 
 For JSON output:
 
 ```bash
-orca redteam --json --ci
+ryk redteam --json --ci
 ```
 
 ## What it does
 
-The red-team suite runs synthetic fixtures against Orca policy to check:
+The red-team suite runs synthetic fixtures against ryk policy to check:
 
 - Command guard behavior (dangerous commands should be blocked)
 - File access controls (protected paths should be denied)
@@ -37,7 +37,7 @@ The red-team suite runs synthetic fixtures against Orca policy to check:
 
 ## Interpreting results
 
-- `PASS` — Orca handled the fixture as expected.
+- `PASS` — ryk handled the fixture as expected.
 - `FAIL` — The fixture behavior differed from expectation. Review the policy or file an issue.
 - `SKIP` — The fixture was skipped due to platform limitations or missing optional dependencies.
 

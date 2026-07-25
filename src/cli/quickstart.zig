@@ -1,5 +1,5 @@
 //! Legacy quickstart flow retained as a library for tests/internal composition.
-//! Public CLI door is `ryk start` — top-level `orca quickstart` is hard-removed from the dispatcher.
+//! Public CLI door is `ryk start` — top-level `ryk quickstart` is hard-removed from the dispatcher.
 
 const std = @import("std");
 
@@ -50,7 +50,7 @@ fn commandWithDaemonChecker(
         }
     }
 
-    const flags = onboarding.parseFlags(filtered_args.items, stderr, "orca quickstart", false) catch |err| switch (err) {
+    const flags = onboarding.parseFlags(filtered_args.items, stderr, "ryk quickstart", false) catch |err| switch (err) {
         error.Usage => return exit_codes.usage,
         else => return err,
     };
@@ -100,7 +100,7 @@ fn commandWithDaemonChecker(
         try stdout.print("{s}\n", .{daemon_check.remediation});
         // Cached assessment — do not re-probe daemon/policy for the receipt.
         try writeReceipt(stdout, readiness.assess(daemon_check.status, false, false), false);
-        try stdout.writeAll("Fix the daemon, then re-run `ryk start` (or `orca doctor --check`).\n");
+        try stdout.writeAll("Fix the daemon, then re-run `ryk start` (or `ryk doctor --check`).\n");
         return exit_codes.general;
     }
     try tui.render.stepLine(io, stdout, .done, "Step 1 — System check", "daemon compatible", 0);
@@ -129,7 +129,7 @@ fn commandWithDaemonChecker(
     if (!core.ready) {
         try stdout.writeAll("\n");
         try writeReceipt(stdout, core, false);
-        try stdout.writeAll("Policy missing or invalid. Fix with `ryk init` / policy edits, then re-run `orca status --check`.\n");
+        try stdout.writeAll("Policy missing or invalid. Fix with `ryk init` / policy edits, then re-run `ryk status --check`.\n");
         return exit_codes.general;
     }
     try stdout.writeAll("\n");
@@ -146,7 +146,7 @@ fn commandWithDaemonChecker(
         // Core ready (cached); hosts failed — do not claim global success.
         try writeReceipt(stdout, core, true);
         try stdout.writeAll("Host integrations need attention; do not treat hosts as fully protected.\n");
-        try stdout.writeAll("Re-check with: orca status --check\n");
+        try stdout.writeAll("Re-check with: ryk status --check\n");
         return setup_code;
     }
     try tui.render.stepLine(io, stdout, .done, "Step 3 — Host integrations", "complete", 0);
@@ -158,8 +158,8 @@ fn commandWithDaemonChecker(
     try stdout.writeAll("\nStart protecting your sessions:\n");
     try stdout.writeAll("  ryk claude   # or codex / pi / opencode / …\n");
     try stdout.writeAll("\nUseful next steps:\n");
-    try stdout.writeAll("  orca status\n");
-    try stdout.writeAll("  orca replay\n");
+    try stdout.writeAll("  ryk status\n");
+    try stdout.writeAll("  ryk replay\n");
     try stdout.writeAll("  ryk start    Re-run Safe Launch if hosts need repair\n");
 
     return exit_codes.success;

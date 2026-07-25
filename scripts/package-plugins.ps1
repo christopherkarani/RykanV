@@ -14,7 +14,7 @@ $DIST_DIR = if ($env:ORCA_DIST_DIR) { $env:ORCA_DIST_DIR } else { "dist/plugins"
 $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
 $REPO_ROOT = Resolve-Path (Join-Path $SCRIPT_DIR "..")
 
-Write-Host "Packaging Orca plugins v${VERSION}..."
+Write-Host "Packaging ryk plugins v${VERSION}..."
 
 if (Test-Path $DIST_DIR) {
   Remove-Item -Recurse -Force $DIST_DIR

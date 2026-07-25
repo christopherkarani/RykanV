@@ -47,11 +47,11 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     if (!yes) {
         const stdin = std.Io.File.stdin();
         const prompt = if (plugins_only)
-            "Remove all Orca plugins from host agents?"
+            "Remove all ryk plugins from host agents?"
         else if (keep_config)
             "Uninstall ryk (keep config files)? This removes plugins and the binary."
         else
-            "Fully uninstall Orca (plugins, binary, and config)?";
+            "Fully uninstall ryk (plugins, binary, and config)?";
         const decision = danger_confirmation.decide(io, stdout, prompt, false, try stdin.isTty(io), null) catch |err| {
             try stderr.print("ryk uninstall: confirmation failed: {s}\n", .{@errorName(err)});
             return exit_codes.general;
@@ -149,7 +149,7 @@ fn removeBinary(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) !bool
     const removed_any = try removeInstalledBinariesAt(io, allocator, self_exe, stdout);
 
     if (!removed_any) {
-        try stdout.writeAll("  no Orca binary found in known locations\n");
+        try stdout.writeAll("  no ryk binary found in known locations\n");
     }
     return removed_any;
 }

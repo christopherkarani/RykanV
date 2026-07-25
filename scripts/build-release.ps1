@@ -98,6 +98,6 @@ $sbom | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $sbomPath -Encoding A
 Write-Host "Wrote $sbomPath"
 
 if (-not $ArchiveOnly) {
-    Write-Error "scripts/build-release.ps1 builds Orca archive fixtures only and does not produce release-manifest.json/package-manifests. Use scripts/build-release.sh for production release verification, or pass -ArchiveOnly for local archive smoke tests."
+    Write-Error "scripts/build-release.ps1 builds ryk archive fixtures only and does not produce release-manifest.json/package-manifests. Use scripts/build-release.sh for production release verification, or pass -ArchiveOnly for local archive smoke tests."
     exit 1
 }

@@ -14,7 +14,7 @@ zig version
 test -f build.zig.zon && sed -n '1,120p' build.zig.zon
 ```
 
-Default to the repo-pinned Zig version. As of 2026-05-13, upstream stable is Zig `0.16.0`, but Orca-style repos may still target `0.15.2`; mark 0.16-only patterns as migration notes.
+Default to the repo-pinned Zig version. As of 2026-05-13, upstream stable is Zig `0.16.0`, but ryk-style repos may still target `0.15.2`; mark 0.16-only patterns as migration notes.
 
 ## Decision Rule
 

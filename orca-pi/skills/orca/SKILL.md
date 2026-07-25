@@ -1,61 +1,39 @@
 ---
-name: orca
-description: Use when Pi bash/write/edit/read/discovery tool calls are protected by Orca runtime guardrails, or when secrets were captured from a Pi prompt.
+name: ryk
+description: Use when Pi tool calls are protected by ryk runtime guardrails or when a secret was captured from a Pi prompt.
 ---
 
-# Orca Guardrails For Pi
+# ryk Guardrails for Pi
 
-Orca evaluates Pi tools before they run:
+ryk evaluates Pi actions before they run:
 
-| Tool | Path |
-|------|------|
-| `bash` | daemon Evaluate (`orca evaluate --json --stdin`, `source.host=pi`) |
-| `write` / `edit` | Zig `orca decide file` with `operation: write` |
-| `read` | Zig `orca decide file` with `operation: read` |
-| `grep` / `find` / `ls` | Root preflight plus explicit approval; descendants are not individually evaluated |
-| Any other tool name (custom / MCP-shaped) | Zig `orca decide tool` with `{"name":"<toolName>"}` (name only) |
+| Tool | Enforcement |
+|------|-------------|
+| `bash` | `ryk evaluate --json --stdin` |
+| `write` / `edit` | `ryk decide file` with `operation: write` |
+| `read` | `ryk decide file` with `operation: read` |
+| `grep` / `find` / `ls` | Root preflight plus explicit approval |
+| Other tool names | `ryk decide tool` name gate |
 
-Custom/MCP-shaped tools are **name-gated** via `decide tool` — this is **not** full MCP protocol mediation or an MCP proxy. Treat an Orca block as a security decision, not as a formatting problem to route around.
+A block is a security decision. Explain its redacted reason and rule id when
+available; never bypass it by rewriting, splitting, encoding, or indirectly
+executing the same action.
 
-`grep`, `find`, and `ls` remain approval-gated even when the root preflight allows them. Do not describe a broad root check as proof that every traversed file is safe.
-
-**Process-level env/network/secretless** are **not** provided by the extension alone. Launch Pi under Orca:
+Use `/ryk-doctor` for integration health. Prefer repair over session bypass.
+For process-level environment, network, and secretless controls, launch Pi with:
 
 ```bash
-orca run -- pi
-orca run --secretless --network ask -- pi
+ryk run -- pi
+ryk run --secretless --network ask -- pi
 ```
 
-Install: `pi install npm:@orca-sec/pi-orca`. Do not mix that with `pi install ./orca-pi`.
+## Secret capture
 
-When Orca blocks a command or file action:
+Interactive Pi may ask for consent to store a pasted credential in the
+compatibility broker path `.orca/dev-secrets.env` and replace the raw value with
+`$ENV_NAME` before the model sees it. Never ask the user to paste the raw secret
+again, and never print or log the value. Noninteractive capture fails closed.
 
-- Explain the block reason to the user without restating sensitive command or path contents.
-- Surface the **rule id** when present (decision cards include `rule …`).
-- Ask the user how they want to proceed.
-- Do not bypass Orca by obfuscating, splitting, encoding, rewriting, or indirectly executing the same dangerous action.
-- Use `/orca-doctor` for setup or daemon issues (output includes coverage).
-- Use Orca allowlist or allow-once workflows when they are available and explicitly approved by the user.
-- Never advise disabling Orca casually. Session bypass is only for informed, user-approved exceptions.
-
-## Defaults
-
-- Default unavailable mode: `ORCA_PI_MODE=auto` (interactive ask; noninteractive block). Does not silently fail open.
-- Production: prefer `ORCA_PI_MODE=strict` or `/orca-mode strict` (strict also disables "Run once anyway" unless `ORCA_PI_ALLOW_ONCE=true`).
-- Once-bypass is auditable: every successful use emits a redacted `orca.audit` event (`event: orca_once_bypass`); if the host cannot record it, Orca keeps the action blocked. Set `ORCA_PI_ALLOW_ONCE=false` to remove the option entirely.
-- `allow-with-warning` is never the default.
-
-## Credential capture from prompt (Pi only)
-
-If the user pastes an API key or other secret into chat, the Orca Pi extension may intercept the input, ask for consent, store the value under `.orca/dev-secrets.env`, and rewrite the prompt to reference `$ENV_NAME` instead of the raw secret.
-
-When you see a rewritten prompt that mentions `$OPENAI_API_KEY`, `$ANTHROPIC_API_KEY`, `$GITHUB_TOKEN`, or similar:
-
-- Use the environment variable name. Do **not** ask the user to re-paste the raw secret.
-- Do **not** print, log, or echo secret values.
-- Prefer tools and workflows that already load workspace/dev secrets or Orca secretless execution when available (`orca run --secretless -- pi …`).
-- This behavior is **Pi only**. Do not assume the same capture exists on Claude, Codex, OpenCode, Hermes, or OpenClaw.
-
-If capture is blocked in noninteractive mode, tell the user to re-run in interactive Pi or to set the env var outside chat.
-
-If Orca is unavailable, prefer repair first: run `/orca-setup`, then `/orca-doctor`. `/orca-setup` only ensures the workspace policy and probes health; it never installs plugins for other hosts. The daemon starts automatically on the first protected shell evaluation.
+Primary settings use the `RYK_PI_` prefix. Legacy environment variables and
+slash-command aliases remain accepted internally for migration but must not be
+shown as the product identity.

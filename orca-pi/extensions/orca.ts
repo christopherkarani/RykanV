@@ -280,24 +280,31 @@ const BLOCK_WIDGET_KEY = "orca-block";
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_CHILD_OUTPUT_BYTES = 1024 * 1024;
 const REQUIRED_ORCA_VERSION = (() => {
-	const deps = (
-		createRequire(import.meta.url)("../package.json") as {
-			dependencies: Record<string, string>;
-		}
-	).dependencies;
-	// Prefer @orca-sec/ryk when present; keep @orca-sec/orca during dual-name window.
-	return deps["@orca-sec/ryk"] ?? deps["@orca-sec/orca"];
+	try {
+		const deps = (
+			createRequire(import.meta.url)("../package.json") as {
+				dependencies: Record<string, string>;
+			}
+		).dependencies;
+		// Compatibility package ids remain readable for legacy npm installs.
+		return deps["@orca-sec/ryk"] ?? deps["@orca-sec/orca"] ?? "1.2.9";
+	} catch {
+		// The bundled installer deliberately ships only the extension runtime.
+		// Its generated wrapper injects the exact ryk binary, so this fallback is
+		// used solely by the opt-in legacy PATH compatibility check.
+		return "1.2.9";
+	}
 })();
 const ASK_OPTIONS = [
 	"Block",
 	"Run once anyway",
-	"Disable Orca for this Pi session",
+	"Disable ryk for this Pi session",
 	"Show repair instructions / run doctor",
 ] as const;
 const POLICY_ASK_OPTIONS = [
 	"Block",
 	"Run once anyway",
-	"Disable Orca for this Pi session",
+	"Disable ryk for this Pi session",
 	"Show policy reason",
 ] as const;
 const ONCE_OPTION = "Run once anyway";
@@ -312,7 +319,9 @@ export function allowOnceBypassEnabled(
 	env: NodeJS.ProcessEnv = process.env,
 	unavailableMode?: UnavailableMode,
 ): boolean {
-	const raw = env.ORCA_PI_ALLOW_ONCE?.trim().toLowerCase();
+	const raw = (env.RYK_PI_ALLOW_ONCE ?? env.ORCA_PI_ALLOW_ONCE)
+		?.trim()
+		.toLowerCase();
 	if (raw === "false" || raw === "0" || raw === "no") return false;
 	if (raw === "true" || raw === "1" || raw === "yes") return true;
 	if (unavailableMode === "strict") return false;
@@ -452,14 +461,14 @@ export async function runOrcaEvaluate(
 	);
 
 	if (result.timedOut) {
-		return { kind: "error", reason: "Orca evaluation timed out." };
+		return { kind: "error", reason: "ryk evaluation timed out." };
 	}
 
 	if (result.error) {
 		const reason =
-			result.error.message === "Orca output exceeded maximum size"
-				? "Orca output exceeded maximum size."
-				: "Orca is unavailable.";
+			result.error.message === "ryk output exceeded maximum size"
+				? "ryk output exceeded maximum size."
+				: "ryk is unavailable.";
 		return { kind: "error", reason, error: result.error };
 	}
 
@@ -467,7 +476,7 @@ export async function runOrcaEvaluate(
 	try {
 		parsed = JSON.parse(result.stdout);
 	} catch {
-		return { kind: "error", reason: "Orca returned malformed JSON." };
+		return { kind: "error", reason: "ryk returned malformed JSON." };
 	}
 
 	const decision = getStringField(parsed, "decision");
@@ -495,7 +504,7 @@ export async function runOrcaEvaluate(
 
 	return {
 		kind: "error",
-		reason: `Orca returned an unexpected evaluation result (exit ${result.code ?? "unknown"}).`,
+		reason: `ryk returned an unexpected evaluation result (exit ${result.code ?? "unknown"}).`,
 		response: parsed,
 	};
 }
@@ -529,13 +538,13 @@ async function runOrcaDecide(
 	);
 
 	if (result.timedOut) {
-		return { kind: "error", reason: "Orca decide timed out." };
+		return { kind: "error", reason: "ryk decide timed out." };
 	}
 	if (result.error) {
 		const reason =
-			result.error.message === "Orca output exceeded maximum size"
-				? "Orca output exceeded maximum size."
-				: "Orca is unavailable.";
+			result.error.message === "ryk output exceeded maximum size"
+				? "ryk output exceeded maximum size."
+				: "ryk is unavailable.";
 		return { kind: "error", reason, error: result.error };
 	}
 
@@ -543,7 +552,7 @@ async function runOrcaDecide(
 	try {
 		parsed = JSON.parse(result.stdout);
 	} catch {
-		return { kind: "error", reason: "Orca decide returned malformed JSON." };
+		return { kind: "error", reason: "ryk decide returned malformed JSON." };
 	}
 
 	const decision = getStringField(parsed, "decision");
@@ -559,7 +568,7 @@ async function runOrcaDecide(
 	) {
 		return {
 			kind: "error",
-			reason: `Orca decide returned an inconsistent result (decision ${decision ?? "missing"}, exit ${result.code ?? "signal"}).`,
+			reason: `ryk decide returned an inconsistent result (decision ${decision ?? "missing"}, exit ${result.code ?? "signal"}).`,
 			response: parsed,
 		};
 	}
@@ -569,7 +578,7 @@ async function runOrcaDecide(
 		const response = {
 			...(parsed as Record<string, unknown>),
 			decision: "deny",
-			reason: "Orca allowed context only; write side effects are not permitted.",
+			reason: "ryk allowed context only; write side effects are not permitted.",
 		};
 		return { kind: "deny", reason: safeOrcaReason(response), response };
 	}
@@ -596,7 +605,7 @@ async function runOrcaDecide(
 
 	return {
 		kind: "error",
-		reason: `Orca decide returned an unexpected result (exit ${result.code ?? "unknown"}).`,
+		reason: `ryk decide returned an unexpected result (exit ${result.code ?? "unknown"}).`,
 		response: parsed,
 	};
 }
@@ -607,7 +616,7 @@ export async function runOrcaDecideFile(
 	options: DecideRuntimeOptions,
 ): Promise<OrcaDecision> {
 	return runOrcaDecide("file", payload, options, {
-		defaultReason: "Orca blocked this file action.",
+		defaultReason: "ryk blocked this file action.",
 		denyContextOnly: payload.operation === "write",
 	});
 }
@@ -621,7 +630,7 @@ export async function runOrcaDecideTool(
 	options: DecideRuntimeOptions,
 ): Promise<OrcaDecision> {
 	return runOrcaDecide("tool", payload, options, {
-		defaultReason: "Orca blocked this tool action.",
+		defaultReason: "ryk blocked this tool action.",
 	});
 }
 
@@ -643,7 +652,7 @@ function blockMalformedToolCall(
 ): ToolCallResult {
 	const details = {
 		variant: "block" as const,
-		title: "ORCA BLOCKED",
+		title: "RYK BLOCKED",
 		summary,
 	};
 	showOrcaDecision(pi, ctx, details);
@@ -703,14 +712,18 @@ export function installOrcaExtension(
 		spawn: extensionOptions.spawn ?? (nodeSpawn as unknown as SpawnLike),
 		timeoutMs:
 			extensionOptions.timeoutMs ??
-			Number(process.env.ORCA_PI_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS),
+			Number(
+				process.env.RYK_PI_TIMEOUT_MS ??
+					process.env.ORCA_PI_TIMEOUT_MS ??
+					DEFAULT_TIMEOUT_MS,
+			),
 		env: resolvedBin.daemonBin
 			? { ...process.env, ORCA_DAEMON: resolvedBin.daemonBin }
 			: process.env,
 	};
 
 	let unavailableMode: UnavailableMode =
-		parseMode(process.env.ORCA_PI_MODE) ?? "auto";
+		parseMode(process.env.RYK_PI_MODE ?? process.env.ORCA_PI_MODE) ?? "auto";
 	const sessionState = new Map<string, SessionState>();
 
 	const stateFor = (ctx: PiContext): SessionState => {
@@ -724,10 +737,10 @@ export function installOrcaExtension(
 
 	const updateStatus = (ctx: PiContext): void => {
 		if (stateFor(ctx).bypass) {
-			ctx.ui?.setStatus?.(STATUS_KEY, "orca bypass");
+			ctx.ui?.setStatus?.(STATUS_KEY, "ryk bypass");
 			return;
 		}
-		ctx.ui?.setStatus?.(STATUS_KEY, `orca ${stateFor(ctx).status}`);
+		ctx.ui?.setStatus?.(STATUS_KEY, `ryk ${stateFor(ctx).status}`);
 	};
 
 	pi.on("session_start", (_event, ctx) => {
@@ -735,7 +748,10 @@ export function installOrcaExtension(
 		state.bypass = false;
 		state.status = "degraded";
 		updateStatus(ctx);
-		if (process.env.ORCA_PI_AUTO_SETUP === "false") {
+		if (
+			(process.env.RYK_PI_AUTO_SETUP ?? process.env.ORCA_PI_AUTO_SETUP) ===
+			"false"
+		) {
 			state.status = "ready";
 			updateStatus(ctx);
 			return;
@@ -787,7 +803,7 @@ export function installOrcaExtension(
 			if (stateFor(ctx).bypass) {
 				clearOrcaWidget(ctx);
 				ctx.ui?.notify?.(
-					`Orca protection is disabled for this Pi session; ${event.toolName} allowed without Orca evaluation.`,
+					`ryk protection is disabled for this Pi session; ${event.toolName} allowed without ryk evaluation.`,
 					"warning",
 				);
 				updateStatus(ctx);
@@ -854,7 +870,7 @@ export function installOrcaExtension(
 					BROAD_DISCOVERY_TOOLS.has(event.toolName)
 				) {
 					return handlePolicyAsk(
-						`Orca allowed the ${toolLabel} root, but this broad discovery action may traverse descendant files that were not individually evaluated. Explicit approval is required.`,
+						`ryk allowed the ${toolLabel} root, but this broad discovery action may traverse descendant files that were not individually evaluated. Explicit approval is required.`,
 						pi,
 						ctx,
 						toolLabel,
@@ -940,7 +956,7 @@ export function installOrcaExtension(
 		updateStatus(ctx);
 		notify(
 			ctx,
-			`ryk disabled for this Pi session only. Protected tools (${piCoverageLabel()}) run without ryk until /ryk-start (or /orca-start).`,
+			`ryk disabled for this Pi session only. Protected tools (${piCoverageLabel()}) run without ryk until /ryk-start.`,
 			"warning",
 		);
 	};
@@ -1022,7 +1038,7 @@ export function installOrcaExtension(
 		if (!nextMode) {
 			notify(
 				ctx,
-				"Usage: /ryk-mode (or /orca-mode) [auto|ask|noninteractive-block|strict|allow-with-warning|bypass on|bypass off]",
+				"Usage: /ryk-mode [auto|ask|noninteractive-block|strict|allow-with-warning|bypass on|bypass off]",
 				"warning",
 			);
 			return;
@@ -1062,7 +1078,7 @@ async function applyToolDecision(
 		clearOrcaWidget(ctx);
 		notify(
 			ctx,
-			`Orca flagged this ${toolLabel} action: ${decision.reason}. Proceeding with warning.`,
+			`ryk flagged this ${toolLabel} action: ${decision.reason}. Proceeding with warning.`,
 			"warning",
 		);
 		return undefined;
@@ -1095,7 +1111,7 @@ function recordOnceBypass(
 	source: "policy" | "unavailable",
 ): boolean {
 	if (!pi.sendMessage) {
-		notify(ctx, "Orca blocked the once-bypass because transcript auditing is unavailable.", "error");
+		notify(ctx, "ryk blocked the once-bypass because transcript auditing is unavailable.", "error");
 		return false;
 	}
 	const details = {
@@ -1107,17 +1123,17 @@ function recordOnceBypass(
 		pi.sendMessage(
 			{
 				customType: "orca.audit",
-				content: `orca once-bypass: ${details.tool} (${source})`,
+				content: `ryk once-bypass: ${details.tool} (${source})`,
 				display: false,
 				details,
 			},
 			{ triggerTurn: false },
 		);
 	} catch {
-		notify(ctx, "Orca blocked the once-bypass because transcript auditing failed.", "error");
+		notify(ctx, "ryk blocked the once-bypass because transcript auditing failed.", "error");
 		return false;
 	}
-	notify(ctx, `Orca audit: once-bypass used for ${details.tool} (${source}).`, "warning");
+	notify(ctx, `ryk audit: once-bypass used for ${details.tool} (${source}).`, "warning");
 	return true;
 }
 
@@ -1133,7 +1149,7 @@ async function handlePolicyAsk(
 	const card = buildOrcaAskCard(summary);
 	showOrcaWidget(ctx, card);
 	const choice = await ctx.ui?.select?.(
-		"ORCA needs your decision",
+		"ryk needs your decision",
 		askOptionsFor("policy", allowOnce),
 		{ timeout: 60_000, signal: ctx.signal },
 	);
@@ -1145,7 +1161,7 @@ async function handlePolicyAsk(
 					formatOrcaDecisionSummary(
 						{
 							variant: "block",
-							title: "ORCA BLOCKED",
+							title: "RYK BLOCKED",
 							summary,
 						},
 						toolLabel,
@@ -1154,20 +1170,20 @@ async function handlePolicyAsk(
 			}
 			clearOrcaWidget(ctx);
 			if (!recordOnceBypass(pi, ctx, toolLabel, "policy")) {
-				return block("Orca blocked this once-bypass because a required transcript audit event could not be recorded.");
+				return block("ryk blocked this once-bypass because a required transcript audit event could not be recorded.");
 			}
 			notify(
 				ctx,
-				`Allowed this ${toolLabel} action once without Orca evaluation.`,
+				`Allowed this ${toolLabel} action once without ryk evaluation.`,
 				"warning",
 			);
 			return undefined;
-		case "Disable Orca for this Pi session":
+		case "Disable ryk for this Pi session":
 			clearOrcaWidget(ctx);
 			actions.disableSession();
 			notify(
 				ctx,
-				"Orca disabled for this Pi session only. Use /orca-start to re-enable.",
+				"ryk disabled for this Pi session only. Use /ryk-start to re-enable.",
 				"warning",
 			);
 			return undefined;
@@ -1178,7 +1194,7 @@ async function handlePolicyAsk(
 				formatOrcaDecisionSummary(
 					{
 						variant: "block",
-						title: "ORCA BLOCKED",
+						title: "RYK BLOCKED",
 						summary,
 					},
 					toolLabel,
@@ -1191,7 +1207,7 @@ async function handlePolicyAsk(
 				formatOrcaDecisionSummary(
 					{
 						variant: "block",
-						title: "ORCA BLOCKED",
+						title: "RYK BLOCKED",
 						summary,
 					},
 					toolLabel,
@@ -1214,7 +1230,7 @@ async function handleUnavailable(
 		clearOrcaWidget(ctx);
 		notify(
 			ctx,
-			`Orca unavailable; allowing ${toolLabel} with warning.\n\n${repair}`,
+			`ryk unavailable; allowing ${toolLabel} with warning.\n\n${repair}`,
 			"warning",
 		);
 		return undefined;
@@ -1222,7 +1238,7 @@ async function handleUnavailable(
 	if (mode === "strict" || mode === "noninteractive-block") {
 		const card = {
 			variant: "block" as const,
-			title: "ORCA BLOCKED",
+			title: "RYK BLOCKED",
 			summary: repair,
 		};
 		showOrcaDecision(pi, ctx, card);
@@ -1234,7 +1250,7 @@ async function handleUnavailable(
 	// widget keeps ask context readable until the blocking select() resolves.
 	showOrcaWidget(ctx, card);
 	const choice = await ctx.ui?.select?.(
-		"ORCA needs your decision",
+		"ryk needs your decision",
 		askOptionsFor("unavailable", allowOnce),
 		{ timeout: 60_000, signal: ctx.signal },
 	);
@@ -1246,7 +1262,7 @@ async function handleUnavailable(
 					formatOrcaDecisionSummary(
 						{
 							variant: "block",
-							title: "ORCA BLOCKED",
+							title: "RYK BLOCKED",
 							summary: repair,
 						},
 						toolLabel,
@@ -1255,20 +1271,20 @@ async function handleUnavailable(
 			}
 			clearOrcaWidget(ctx);
 			if (!recordOnceBypass(pi, ctx, toolLabel, "unavailable")) {
-				return block("Orca blocked this once-bypass because a required transcript audit event could not be recorded.");
+				return block("ryk blocked this once-bypass because a required transcript audit event could not be recorded.");
 			}
 			notify(
 				ctx,
-				`Allowed this ${toolLabel} action once without Orca evaluation.`,
+				`Allowed this ${toolLabel} action once without ryk evaluation.`,
 				"warning",
 			);
 			return undefined;
-		case "Disable Orca for this Pi session":
+		case "Disable ryk for this Pi session":
 			clearOrcaWidget(ctx);
 			actions.disableSession();
 			notify(
 				ctx,
-				"Orca disabled for this Pi session only. Use /orca-start to re-enable.",
+				"ryk disabled for this Pi session only. Use /ryk-start to re-enable.",
 				"warning",
 			);
 			return undefined;
@@ -1279,7 +1295,7 @@ async function handleUnavailable(
 				formatOrcaDecisionSummary(
 					{
 						variant: "block",
-						title: "ORCA BLOCKED",
+						title: "RYK BLOCKED",
 						summary: repair,
 					},
 					toolLabel,
@@ -1292,7 +1308,7 @@ async function handleUnavailable(
 				formatOrcaDecisionSummary(
 					{
 						variant: "block",
-						title: "ORCA BLOCKED",
+						title: "RYK BLOCKED",
 						summary: repair,
 					},
 					toolLabel,
@@ -1319,7 +1335,7 @@ async function setupOrca(
 		if (init.code !== 0 || !existsSync(policyPath)) {
 			return {
 				status: "degraded",
-				message: `Orca policy setup failed (exit ${init.code ?? "unknown"}). ${summarizeCommandOutput(init)}`,
+				message: `ryk policy setup failed (exit ${init.code ?? "unknown"}). ${summarizeCommandOutput(init)}`,
 			};
 		}
 	}
@@ -1329,12 +1345,12 @@ async function setupOrca(
 	if (doctor.code !== 0) {
 		return {
 			status: "degraded",
-			message: `Orca policy is ready, but the health probe exited with ${doctor.code ?? "unknown"}. ${summarizeCommandOutput(doctor)}`,
+			message: `ryk policy is ready, but the health probe exited with ${doctor.code ?? "unknown"}. ${summarizeCommandOutput(doctor)}`,
 		};
 	}
 	return {
 		status: "ready",
-		message: "Orca policy is ready and daemon health checks passed.",
+		message: "ryk policy is ready and health checks passed.",
 	};
 }
 
@@ -1393,7 +1409,7 @@ function runProcess(
 					code: null,
 					stdout,
 					stderr,
-					error: new Error("Orca output exceeded maximum size"),
+					error: new Error("ryk output exceeded maximum size"),
 					timedOut,
 				});
 				controller.abort();
@@ -1412,7 +1428,7 @@ function runProcess(
 					code: null,
 					stdout,
 					stderr,
-					error: new Error("Orca output exceeded maximum size"),
+					error: new Error("ryk output exceeded maximum size"),
 					timedOut,
 				});
 				controller.abort();
@@ -1565,10 +1581,10 @@ function buildOrcaWidget(card: OrcaDecisionCard): string[] {
 	const frame = isBlock
 		? { topLeft: "┏", topRight: "┓", side: "┃", teeLeft: "┣", teeRight: "┫", bottomLeft: "┗", bottomRight: "┛", rule: "━" }
 		: { topLeft: "┌", topRight: "┐", side: "│", teeLeft: "├", teeRight: "┤", bottomLeft: "└", bottomRight: "┘", rule: "─" };
-	const masthead = isBlock ? " ORCA // BLOCKED " : " ORCA // YOUR CALL ";
+	const masthead = isBlock ? " RYK // BLOCKED " : " RYK // YOUR CALL ";
 	const stateLine = isBlock
 		? "COMMAND STOPPED BEFORE EXECUTION"
-		: "ORCA PAUSED THIS COMMAND";
+		: "RYK PAUSED THIS COMMAND";
 	const lines = [
 		buildLabeledBorder(frame.topLeft, frame.topRight, frame.rule, masthead, contentWidth),
 		`${frame.side} ${stateLine.padEnd(contentWidth - 2)} ${frame.side}`,
@@ -1596,7 +1612,7 @@ function buildOrcaWidget(card: OrcaDecisionCard): string[] {
 		lines.push(
 			...formatWidgetRow(
 				"Choose",
-				"Run once, repair Orca, or keep it blocked.",
+				"Run once, repair ryk, or keep it blocked.",
 				contentWidth,
 				frame.side,
 			),
@@ -1630,7 +1646,7 @@ function buildOrcaDecisionCard(
 	const nextStep = getNextStep(response);
 	return {
 		variant,
-		title: variant === "ask" ? "ORCA NEEDS YOUR DECISION" : "ORCA BLOCKED",
+		title: variant === "ask" ? "RYK NEEDS YOUR DECISION" : "RYK BLOCKED",
 		summary: sanitizeVisibleText(reason),
 		rule,
 		pack,
@@ -1642,7 +1658,7 @@ function buildOrcaDecisionCard(
 function buildOrcaAskCard(reason: string): OrcaDecisionCard {
 	return {
 		variant: "ask",
-		title: "ORCA NEEDS YOUR DECISION",
+		title: "RYK NEEDS YOUR DECISION",
 		summary: sanitizeVisibleText(reason),
 	};
 }
@@ -1658,7 +1674,7 @@ function formatOrcaDecisionSummary(
 	const action =
 		toolLabel === "bash" ? "bash command" : `${toolLabel} action`;
 	return sanitizeVisibleText(
-		`Orca ${card.variant === "ask" ? "needs your decision" : `blocked this ${action}`}: ${parts.join(" • ")}`,
+		`ryk ${card.variant === "ask" ? "needs your decision" : `blocked this ${action}`}: ${parts.join(" • ")}`,
 	);
 }
 
@@ -1666,7 +1682,7 @@ function getDecisionReason(response: unknown): string {
 	return (
 		getStringFieldAny(response, ["reason", "message"]) ??
 		getNestedStringField(response, ["error", "message"]) ??
-		"Orca blocked this action."
+		"ryk blocked this action."
 	);
 }
 
@@ -1752,23 +1768,23 @@ function notify(
 }
 
 function repairMessage(reason: string, toolLabel = "bash"): string {
-	return `Orca could not evaluate this ${toolLabel} action: ${sanitizeVisibleText(reason)}\n\nRun /orca-setup, then /orca-doctor. Coverage: ${piCoverageLabel()}. The daemon starts automatically on shell evaluate.`;
+	return `ryk could not evaluate this ${toolLabel} action: ${sanitizeVisibleText(reason)}\n\nRun /ryk-setup, then /ryk-doctor. Coverage: ${piCoverageLabel()}.`;
 }
 
 function modeSummary(mode: UnavailableMode, sessionBypass: boolean): string {
 	return [
-		`Orca Pi mode: ${mode}`,
+		`ryk Pi mode: ${mode}`,
 		`Session bypass: ${sessionBypass ? "on" : "off"}`,
 		`Coverage: ${piCoverageLabel()}`,
-		`Once-bypass: ${allowOnceBypassEnabled(process.env, mode) ? "allowed" : "disabled"} (ORCA_PI_ALLOW_ONCE; strict disables by default)`,
-		"Default ORCA_PI_MODE=auto (interactive ask; noninteractive block). Production: prefer strict. allow-with-warning is never the default.",
+		`Once-bypass: ${allowOnceBypassEnabled(process.env, mode) ? "allowed" : "disabled"} (RYK_PI_ALLOW_ONCE; strict disables by default)`,
+		"Default RYK_PI_MODE=auto (interactive ask; noninteractive block). Production: prefer strict. allow-with-warning is never the default.",
 		"Modes: auto, ask, noninteractive-block, strict, allow-with-warning.",
-		"Process-level env/network/secretless requires: orca run [--secretless] [--network …] -- pi …",
+		"Process-level env/network/secretless requires: ryk run [--secretless] [--network …] -- pi …",
 	].join("\n");
 }
 
 function orcaInstallMessage(): string {
-	return "ryk CLI was not found. Reinstall npm:@orca-sec/pi-orca (or @orca-sec/ryk), set RYK_BIN/ORCA_BIN to an executable path, then run /ryk-setup (or /orca-setup).";
+	return "ryk bundled Pi protection was not found. Re-run the ryk installer, then run /ryk-setup.";
 }
 
 function summarizeCommandOutput(result: RunProcessResult): string {
@@ -1791,6 +1807,11 @@ function parseMode(value: string | undefined): UnavailableMode | undefined {
 
 function sanitizeVisibleText(value: string): string {
 	return value
+		// Compatibility runtimes and policies may still emit the former display
+		// name. Normalize only at the user-visible boundary; protocol ids,
+		// environment variables, and on-disk compatibility paths stay intact.
+		.replace(/\bORCA\b/g, "RYK")
+		.replace(/\bOrca\b/g, "ryk")
 		.replace(/\bsk-ant-[A-Za-z0-9_-]{20,}\b/g, "[redacted-token]")
 		.replace(/\bsk-(?!ant-)[A-Za-z0-9_-]{20,}\b/g, "[redacted-token]")
 		.replace(

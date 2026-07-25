@@ -5,7 +5,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ORCA_BIN="$ROOT/zig-out/bin/orca"
 
 if [ ! -x "$ORCA_BIN" ]; then
-  echo "missing Orca binary at $ORCA_BIN; run zig build first" >&2
+  echo "missing ryk binary at $ORCA_BIN; run zig build first" >&2
   exit 1
 fi
 

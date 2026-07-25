@@ -1,6 +1,6 @@
 ---
-name: Orca CLI plugin bug
-about: Report a bug in the Orca CLI plugin surface
+name: ryk CLI plugin bug
+about: Report a bug in the ryk CLI plugin surface
 title: "[CLI Plugin Bug] "
 ---
 
@@ -10,7 +10,7 @@ Remove secrets, tokens, credentials, private keys, and private paths from logs a
 
 ## Environment
 
-- Orca version:
+- ryk version:
 - OS:
 - Zig version:
 

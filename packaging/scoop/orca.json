@@ -1,11 +1,11 @@
 {
   "version": "1.2.8",
   "description": "Local runtime firewall for AI agents (compat manifest; prefer ryk).",
-  "homepage": "https://github.com/christopherkarani/Orca",
+  "homepage": "https://github.com/christopherkarani/rykan",
   "license": "Apache-2.0",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/christopherkarani/Orca/releases/download/v1.2.8/ryk-v1.2.8-windows-amd64.zip",
+      "url": "https://github.com/christopherkarani/rykan/releases/download/v1.2.8/ryk-v1.2.8-windows-amd64.zip",
       "hash": "PLACEHOLDER_WINDOWS_AMD64_SHA256"
     }
   },
@@ -17,12 +17,12 @@
     ]
   ],
   "checkver": {
-    "github": "https://github.com/christopherkarani/Orca"
+    "github": "https://github.com/christopherkarani/rykan"
   },
   "autoupdate": {
     "architecture": {
       "64bit": {
-        "url": "https://github.com/christopherkarani/Orca/releases/download/v$version/ryk-v$version-windows-amd64.zip",
+        "url": "https://github.com/christopherkarani/rykan/releases/download/v$version/ryk-v$version-windows-amd64.zip",
         "hash": {
           "url": "$baseurl/checksums.txt"
         }

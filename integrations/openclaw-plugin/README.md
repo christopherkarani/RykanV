@@ -1,50 +1,50 @@
-# Orca OpenClaw Plugin
+# ryk OpenClaw Plugin
 
-OpenClaw plugin wrapper for Orca runtime guardrails.
+OpenClaw plugin wrapper for ryk runtime guardrails.
 
 ## Protection first (read this)
 
 | Path | Grade | Blocks tools? |
 |------|-------|---------------|
-| `orca run -- openclaw` | **`wrapper`** (supported) | Yes — process launched under Orca |
+| `ryk run -- openclaw` | **`wrapper`** (supported) | Yes — process launched under ryk |
 | npm / ClawHub / CLI-metadata plugin install | **`unprotected`** | **No** — OpenClaw wires `api.on` to a no-op; hooks never fire |
 | Local / bundled plugin path | **unverified `hook`** | Only if the host actually registers and honors hooks (not proven by install alone) |
 
 **Never treat “plugin installed” as protection.** For mediation you can rely on today, use:
 
 ```bash
-orca run -- openclaw
+ryk run -- openclaw
 ```
 
 Grades: see the main README [protection grades](../../README.md#protection-grades) and `docs/compatibility.md`.
 
 ## What this plugin does
 
-This plugin adds Orca-native lifecycle hooks to OpenClaw when the host exposes real `api.on` registration. It calls the Orca CLI for policy checks, audit logging, and runtime safety decisions without duplicating policy logic.
+This plugin adds ryk-native lifecycle hooks to OpenClaw when the host exposes real `api.on` registration. It calls the ryk CLI for policy checks, audit logging, and runtime safety decisions without duplicating policy logic.
 
-The Orca CLI remains the source of truth for all policy decisions. When hooks do not fire (npm/ClawHub), this package cannot enforce anything.
+The ryk CLI remains the source of truth for all policy decisions. When hooks do not fire (npm/ClawHub), this package cannot enforce anything.
 
 ## Prerequisites
 
-- Orca CLI built and available in PATH (run `orca doctor` to verify)
+- ryk CLI built and available in PATH (run `ryk doctor` to verify)
 - OpenClaw host installed
 
-Orca is not bundled into this plugin package. Fast setup (install plumbing, not enforcement proof):
+ryk is not bundled into this plugin package. Fast setup (install plumbing, not enforcement proof):
 
 ```bash
-./scripts/install-orca-plugin.sh openclaw project
+ryk plugin install openclaw --yes
 ```
 
 Windows:
 
 ```powershell
-.\scripts\install-orca-plugin.ps1 openclaw project
+ryk plugin install openclaw --yes
 ```
 
 ## Supported protection path
 
 ```bash
-orca run -- openclaw
+ryk run -- openclaw
 ```
 
 This is the primary recommended path (grade **`wrapper`**). It does not depend on OpenClaw plugin hooks firing.
@@ -60,10 +60,10 @@ openclaw plugins install ./integrations/openclaw-plugin
 Or:
 
 ```bash
-orca plugin install openclaw
+ryk plugin install openclaw
 ```
 
-Local install is still **not** a claim of live **`hook`** enforcement. Prefer `orca run -- openclaw`. Confirm with `orca plugin doctor openclaw` (installed ≠ protected).
+Local install is still **not** a claim of live **`hook`** enforcement. Prefer `ryk run -- openclaw`. Confirm with `ryk plugin doctor openclaw` (installed ≠ protected).
 
 ## Install from npm / ClawHub — unprotected
 
@@ -82,14 +82,14 @@ For submission details (packaging only), see `docs/integrations/openclaw-clawhub
 ## Verify install (honest doctor)
 
 ```bash
-orca plugin doctor openclaw
+ryk plugin doctor openclaw
 ```
 
-Doctor reports host binary, extension paths, and whether a host plugin appears installed. **Installed does not mean protected.** Expect an enforcement note that npm/ClawHub is **`unprotected`** and that the preferred path is `orca run -- openclaw`.
+Doctor reports host binary, extension paths, and whether a host plugin appears installed. **Installed does not mean protected.** Expect an enforcement note that npm/ClawHub is **`unprotected`** and that the preferred path is `ryk run -- openclaw`.
 
 ## Hooks included
 
-When hooks actually register (not npm CLI-metadata), the plugin calls `orca hook openclaw <event>`:
+When hooks actually register (not npm CLI-metadata), the plugin calls `ryk hook openclaw <event>`:
 
 | Event | When it fires | Behavior |
 |-------|---------------|----------|
@@ -102,9 +102,9 @@ OpenClaw does not currently expose dedicated permission lifecycle hooks to this 
 
 **Do not claim `tool.before` is blocking for npm/ClawHub installs** — those installs are **`unprotected`**.
 
-## How hooks call Orca
+## How hooks call ryk
 
-Each hook sends a JSON payload to `orca hook openclaw <event>` via stdin and reads a JSON decision from stdout. On the blocking path (`tool.before`):
+Each hook sends a JSON payload to `ryk hook openclaw <event>` via stdin and reads a JSON decision from stdout. On the blocking path (`tool.before`):
 
 - empty or whitespace-only stdout → **block**
 - JSON parse failure or missing `decision` → **block**
@@ -148,13 +148,13 @@ If the decision is `block` (including fail-closed cases), the plugin returns a b
 ## Run redteam
 
 ```bash
-orca redteam --ci
+ryk redteam --ci
 ```
 
 ## Replay sessions
 
 ```bash
-orca replay --session last --verify
+ryk replay --session last --verify
 ```
 
 ## Uninstall
@@ -169,7 +169,7 @@ This plugin does not mutate host configuration, so uninstalling is safe.
 
 ## Known limitations
 
-- **npm/ClawHub/global installs are `unprotected`.** OpenClaw loads them with `registrationMode: "cli-metadata"`, where `api.on` is a no-op. Hooks never fire; the plugin cannot block tools. Supported protection: `orca run -- openclaw` (**`wrapper`**).
+- **npm/ClawHub/global installs are `unprotected`.** OpenClaw loads them with `registrationMode: "cli-metadata"`, where `api.on` is a no-op. Hooks never fire; the plugin cannot block tools. Supported protection: `ryk run -- openclaw` (**`wrapper`**).
 - Local/bundled install does not by itself prove **`hook`** grade without live-host E2E.
 - Hooks are advisory for informational events; blocking depends on OpenClaw honoring hook return values.
 - Plugin installation depends on OpenClaw version and plugin loading mechanism.
@@ -178,9 +178,9 @@ This plugin does not mutate host configuration, so uninstalling is safe.
 
 ## Security model
 
-- This plugin calls the Orca CLI; it does not reimplement policy logic.
+- This plugin calls the ryk CLI; it does not reimplement policy logic.
 - No raw secrets are persisted in plugin files.
-- Secrets are redacted from payloads before sending to Orca (keys matching `password`, `token`, `secret`, `api_key`, etc. are replaced with `[REDACTED]`).
+- Secrets are redacted from payloads before sending to ryk (keys matching `password`, `token`, `secret`, `api_key`, etc. are replaced with `[REDACTED]`).
 - Blocking hooks fail closed on empty/malformed/`ask` responses.
 - Human logs go to stderr.
 - CI mode never prompts.
@@ -193,6 +193,6 @@ The OpenClaw plugin does not add MCP server behavior or drone-specific plugin fe
 
 ## OpenClaw Security Scan Notice
 
-OpenClaw’s plugin security scanner may block packages that use `child_process`. The Orca plugin needs that only to call the local `orca` binary.
+OpenClaw’s plugin security scanner may block packages that use `child_process`. The ryk plugin needs that only to call the local `ryk` binary.
 
-Bypassing the scanner (for example with `--dangerously-force-unsafe-install`) is **not** a security recommendation and does **not** turn an npm install into an enforcing install. Prefer `orca run -- openclaw`.
+Bypassing the scanner (for example with `--dangerously-force-unsafe-install`) is **not** a security recommendation and does **not** turn an npm install into an enforcing install. Prefer `ryk run -- openclaw`.

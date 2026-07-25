@@ -52,7 +52,7 @@ pub fn commandWithExecutor(comptime execute_cli: anytype, io: std.Io, argv: []co
     }
 
     var parsed = contracts.parseHistoryStats(allocator, daemon_stdout.written()) catch |err| {
-        try stderr.print("ryk history: daemon returned invalid structured data ({s}). Run 'orca doctor'.\n", .{@errorName(err)});
+        try stderr.print("ryk history: daemon returned invalid structured data ({s}). Run 'ryk doctor'.\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer parsed.deinit();
@@ -106,7 +106,7 @@ fn renderLiveStats(comptime execute_cli: anytype, io: std.Io, argv: []const []co
     }
 
     var parsed = contracts.parseHistoryStats(allocator, daemon_stdout.written()) catch |err| {
-        try stderr.print("ryk history: daemon returned invalid structured data ({s}). Run 'orca doctor'.\n", .{@errorName(err)});
+        try stderr.print("ryk history: daemon returned invalid structured data ({s}). Run 'ryk doctor'.\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer parsed.deinit();
@@ -191,7 +191,7 @@ fn isHumanStats(argv: []const []const u8) bool {
 
 fn writeHelp(stdout: anytype) !void {
     try stdout.writeAll(
-        \\Query command history tracked by Orca.
+        \\Query command history tracked by ryk.
         \\
         \\Usage: ryk history <action> [options] [--live]
         \\
@@ -207,8 +207,8 @@ fn writeHelp(stdout: anytype) !void {
         \\
         \\Day-2 policy loop:
         \\  ryk history stats
-        \\  ryk history suggest          # or: orca suggest-allowlist
-        \\  orca suggest-allowlist --apply N
+        \\  ryk history suggest          # or: ryk suggest-allowlist
+        \\  ryk suggest-allowlist --apply N
         \\  ryk allowlist add-command …  # from high-confidence examples
         \\
         \\Examples:
@@ -244,7 +244,7 @@ fn fakeSuggestAllowlist(_: std.Io, argv: []const []const u8, stdout: anytype, _:
 
 fn renderHumanAlloc(allocator: std.mem.Allocator, io: std.Io, stats: contracts.HistoryStats, stdout: anytype) !u8 {
     if (stats.total_commands == 0) {
-        const body = try std.fmt.allocPrint(allocator, "Orca hasn't seen any shell commands in the last {d} days.\n\n" ++
+        const body = try std.fmt.allocPrint(allocator, "ryk hasn't seen any shell commands in the last {d} days.\n\n" ++
             "Run your first protected session to start building history:\n" ++
             "  → ryk run -- echo \"hello world\"\n" ++
             "  → ryk run -- npm install\n\n" ++
@@ -283,7 +283,7 @@ fn renderHumanAlloc(allocator: std.mem.Allocator, io: std.Io, stats: contracts.H
     try renderProjects(allocator, io, stats.top_projects, stdout);
 
     if (stats.outcomes.denied > 0) {
-        try tui.render.callout(io, stdout, .info, "Next", "Turn denials into policy:\n  → ryk history suggest\n  → orca suggest-allowlist --confidence high\n  → ryk allowlist add-command \"…\" -r \"reason\"");
+        try tui.render.callout(io, stdout, .info, "Next", "Turn denials into policy:\n  → ryk history suggest\n  → ryk suggest-allowlist --confidence high\n  → ryk allowlist add-command \"…\" -r \"reason\"");
     }
     return exit_codes.success;
 }

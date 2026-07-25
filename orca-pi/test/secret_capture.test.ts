@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import {
 	existsSync,
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	renameSync,
 	rmSync,
+	symlinkSync,
+	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -16,6 +20,7 @@ import {
 	isSecretCaptureDisabled,
 	scrubContextMessages,
 	scrubSecrets,
+	_storeSecretToEnvFileWithHooksForTest,
 	storeSecretToEnvFile,
 } from "../extensions/secret_capture.ts";
 import { installOrcaExtension } from "../extensions/orca.ts";
@@ -128,6 +133,62 @@ test("storeSecretToEnvFile writes under .orca/dev-secrets.env", () => {
 		assert.match(updated, /sk-fakeSyntheticOpenAIKeyUPDATED0001/);
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("storeSecretToEnvFile refuses symlinked credential directories and files", () => {
+	const cwd = mkdtempSync(resolve(tmpdir(), "ryk-pi-secret-link-"));
+	const outside = mkdtempSync(resolve(tmpdir(), "ryk-pi-secret-outside-"));
+	try {
+		symlinkSync(outside, resolve(cwd, ".orca"), "dir");
+		assert.throws(
+			() => storeSecretToEnvFile(cwd, "OPENAI_API_KEY", SYNTH_OPENAI),
+			/Symlinked credential path/,
+		);
+		assert.equal(existsSync(resolve(outside, "dev-secrets.env")), false);
+
+		rmSync(resolve(cwd, ".orca"));
+		mkdirSync(resolve(cwd, ".orca"));
+		const outsideFile = resolve(outside, "secret.env");
+		writeFileSync(outsideFile, "UNCHANGED=true\n");
+		symlinkSync(outsideFile, resolve(cwd, ".orca/dev-secrets.env"), "file");
+		assert.throws(
+			() => storeSecretToEnvFile(cwd, "OPENAI_API_KEY", SYNTH_OPENAI),
+			/Symlinked credential path/,
+		);
+		assert.equal(readFileSync(outsideFile, "utf8"), "UNCHANGED=true\n");
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+		rmSync(outside, { recursive: true, force: true });
+	}
+});
+
+test("storeSecretToEnvFile fails closed if the credential directory is swapped before rename", () => {
+	const cwd = mkdtempSync(resolve(tmpdir(), "ryk-pi-secret-swap-"));
+	const outside = mkdtempSync(resolve(tmpdir(), "ryk-pi-secret-swap-outside-"));
+	const moved = resolve(cwd, ".orca-moved");
+	try {
+		mkdirSync(resolve(cwd, ".orca"));
+		assert.throws(
+			() =>
+				_storeSecretToEnvFileWithHooksForTest(
+					cwd,
+					"OPENAI_API_KEY",
+					SYNTH_OPENAI,
+					".orca/dev-secrets.env",
+					{
+						beforeRename() {
+							renameSync(resolve(cwd, ".orca"), moved);
+							symlinkSync(outside, resolve(cwd, ".orca"), "dir");
+						},
+					},
+				),
+			/Credential directory changed during write/,
+		);
+		assert.equal(existsSync(resolve(outside, "dev-secrets.env")), false);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+		rmSync(outside, { recursive: true, force: true });
 	}
 });
 

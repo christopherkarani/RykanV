@@ -9,8 +9,12 @@ const style = @import("style.zig");
 const onboarding = @import("onboarding.zig");
 const pack_state = @import("pack_state.zig");
 const plugin = @import("plugin.zig");
+const child_process = @import("child_process.zig");
+const pi_install = @import("pi_install.zig");
+const grok_install = @import("grok_install.zig");
 const shell_eval = @import("shell_eval.zig");
 const build_options = @import("build_options");
+const env_util = @import("../env_util.zig");
 const tui = @import("../tui/mod.zig");
 
 pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
@@ -56,7 +60,7 @@ pub fn runStart(
 
     try tui.render.banner(io, stdout, build_options.version, null);
     try stdout.writeAll(
-        \\Orca will configure protection for your workspace, verify shell evaluation when needed,
+        \\ryk will configure protection for your workspace, verify shell evaluation when needed,
         \\install host integrations you choose, and run safe verification checks.
         \\Existing policy files are kept unless you run `ryk init --force`.
         \\
@@ -147,7 +151,7 @@ pub fn runStart(
         if (host_failures == 0) {
             try tui.render.stepLine(io, stdout, .done, "Hosts", "Integrations configured", 80);
         } else {
-            try tui.render.stepLine(io, stdout, .failed, "Hosts", "Integration failed. Run `orca plugin doctor`", 80);
+            try tui.render.stepLine(io, stdout, .failed, "Hosts", "Integration failed. Run `ryk plugin doctor`", 80);
         }
     } else {
         try tui.render.stepLine(io, stdout, .done, "Hosts", "Skipped for this setup path", 80);
@@ -168,6 +172,7 @@ pub fn runStart(
                 protection,
                 selected_hosts.items,
                 eval_fn,
+                null,
             );
             const verify_ok = verification.?.passed();
             protection_active = protection_active and verify_ok;
@@ -176,7 +181,8 @@ pub fn runStart(
                 try stdout.print("  Safe command ({s}): {s}\n", .{ onboarding.safe_verification_command, if (verification.?.safe_allowed) "allowed" else "FAILED" });
                 try stdout.print("  Dangerous command ({s}): {s}\n", .{ onboarding.dangerous_verification_command, if (verification.?.dangerous_denied) "denied" else "FAILED" });
                 if (verification.?.hook_verified) |hook_ok| {
-                    try stdout.print("  Hook path: {s}\n", .{if (hook_ok) "verified" else "FAILED"});
+                    try stdout.print("  Hook contract: {s}\n", .{if (hook_ok) "verified" else "FAILED"});
+                    if (hook_ok) try stdout.print("  Host activation: {s}\n", .{verification.?.host_evidence.label()});
                 }
                 if (verification.?.firewall_ready) |firewall_ok| {
                     try stdout.print("  Firewall policy: {s}\n", .{if (firewall_ok) "ready" else "missing"});
@@ -326,12 +332,48 @@ fn installSelectedHosts(
 ) !usize {
     const self_exe = try std.process.executablePathAlloc(io, allocator);
     defer allocator.free(self_exe);
+    const home = try processHome(allocator);
+    defer allocator.free(home);
 
     var failures: usize = 0;
     for (hosts) |host_name| {
         try stdout.print("  → {s}: ", .{host_name});
+        if (std.mem.eql(u8, host_name, "pi")) {
+            const result = pi_install.install(io, allocator, .{
+                .home = home,
+                .ryk_binary = self_exe,
+            }) catch |err| {
+                try stdout.print("failed ({s})\n", .{@errorName(err)});
+                failures += 1;
+                continue;
+            };
+            if (result == .assets_unavailable) {
+                try stdout.writeAll("failed (bundled extension assets unavailable)\n");
+                failures += 1;
+                continue;
+            }
+            try stdout.writeAll(switch (result) {
+                .installed => "installed (bundled extension)\n",
+                .upgraded => "upgraded (bundled extension)\n",
+                .already_installed => "already installed (verified)\n",
+                .assets_unavailable => unreachable,
+            });
+            try configured_out.append(allocator, try allocator.dupe(u8, host_name));
+            continue;
+        }
+        if (std.mem.eql(u8, host_name, "grok")) {
+            const result = grok_install.installAtHome(io, allocator, home, self_exe) catch |err| {
+                try stdout.print("failed ({s})\n", .{@errorName(err)});
+                failures += 1;
+                continue;
+            };
+            defer result.deinit(allocator);
+            try stdout.writeAll(if (result.changed) "installed (PreToolUse hook)\n" else "already installed (verified)\n");
+            try configured_out.append(allocator, try allocator.dupe(u8, host_name));
+            continue;
+        }
         const install_argv = &[_][]const u8{ self_exe, "plugin", "install", host_name, "--yes" };
-        const code = runChild(io, install_argv) catch |err| {
+        const code = runChild(allocator, install_argv) catch |err| {
             try stdout.print("failed ({s})\n", .{@errorName(err)});
             failures += 1;
             continue;
@@ -351,18 +393,22 @@ fn installSelectedHosts(
     return failures;
 }
 
-fn runChild(io: std.Io, argv: []const []const u8) !u8 {
-    var child = try std.process.spawn(io, .{
-        .argv = argv,
-        .stdin = .ignore,
-        .stdout = .ignore,
-        .stderr = .ignore,
-    });
-    const term = try child.wait(io);
-    return switch (term) {
-        .exited => |code| @as(u8, @intCast(@min(code, 255))),
-        else => 255,
-    };
+fn processHome(allocator: std.mem.Allocator) ![]u8 {
+    var env_map = try env_util.createProcessMap(allocator);
+    defer env_map.deinit();
+    return (try env_util.getOwned(&env_map, allocator, "HOME")) orelse error.HomeNotSet;
+}
+
+fn runChild(allocator: std.mem.Allocator, argv: []const []const u8) !u8 {
+    const result = try child_process.runHostCommandTimed(
+        allocator,
+        argv,
+        15_000,
+        .{},
+        .{},
+    );
+    defer child_process.deinitHostCommandResult(result, allocator);
+    return if (result.timed_out) 255 else result.exit_code;
 }
 
 /// Stable first-run end-card after successful `ryk start`.
@@ -382,9 +428,10 @@ fn writeSuccessEndCard(
 ) !void {
     const mode = policy_mode orelse "unknown";
     const ask_equivalent = policyModeIsAskEquivalent(mode);
-    if (ask_equivalent) {
-        try tui.render.callout(io, stdout, .success, "You are protected", "Orca is configured for this workspace.");
-    } else {
+    const claim_ready = protectionClaimReady(protection, selected_hosts, verification, ask_equivalent);
+    if (claim_ready) {
+        try tui.render.callout(io, stdout, .success, "You're now protected by ryk", "The installed fail-closed integration chain passed verification.");
+    } else if (!ask_equivalent) {
         // Prefer honest residual over silent overclaim when existing observe/trusted policy was kept.
         const residual_body = try std.fmt.allocPrint(
             allocator,
@@ -393,6 +440,10 @@ fn writeSuccessEndCard(
         );
         defer allocator.free(residual_body);
         try tui.render.callout(io, stdout, .warn, "Setup complete — residual policy mode", residual_body);
+    } else if (verification) |outcome| {
+        try tui.render.callout(io, stdout, .warn, "Setup complete — activation evidence pending", outcome.host_evidence.label());
+    } else {
+        try tui.render.callout(io, stdout, .warn, "Setup complete — verification skipped", "Configuration was written, but ryk did not claim active protection without verification.");
     }
     try stdout.writeAll("\n");
 
@@ -403,7 +454,12 @@ fn writeSuccessEndCard(
     const daemon_line = try std.fmt.allocPrint(allocator, "{s}", .{daemon_check.status.label()});
     defer allocator.free(daemon_line);
     const verify_line: []const u8 = if (verification) |v|
-        if (v.passed()) "passed" else "failed"
+        if (!v.passed())
+            "failed"
+        else if (v.host_evidence == .native or v.host_evidence == .not_applicable)
+            "passed"
+        else
+            v.host_evidence.label()
     else
         "skipped";
 
@@ -441,7 +497,19 @@ fn writeSuccessEndCard(
     } else {
         for (selected_hosts) |host| {
             const ok = hostInList(host, configured_hosts);
-            const mark: []const u8 = if (ok) "✓" else "failed";
+            const mark: []const u8 = if (!ok)
+                "failed"
+            else if (std.mem.eql(u8, host, "openclaw"))
+                "configured; wrapper required: ryk run -- openclaw"
+            else if (verification) |v|
+                if (v.host_evidence == .native or
+                    v.host_evidence == .installed_fail_closed or
+                    v.host_evidence == .configuration_only)
+                    "✓ fail-closed chain verified"
+                else
+                    "configured; activation unverified"
+            else
+                "configured; verification skipped";
             try host_lines.append(allocator, try std.fmt.allocPrint(allocator, "  {s}  {s}", .{ host, mark }));
         }
     }
@@ -451,13 +519,27 @@ fn writeSuccessEndCard(
     try tui.theme.paintBold(io, stdout, .brand, "Try next");
     try stdout.writeAll("\n");
     try stdout.writeAll("  ryk claude          # or codex / pi / opencode / …\n");
-    try stdout.writeAll("  orca status\n");
-    try stdout.writeAll("  orca replay\n");
-    try stdout.writeAll("\n");
-    try tui.theme.paint(io, stdout, .muted, "Pi: pi install npm:@orca-sec/pi-orca");
+    try stdout.writeAll("  ryk status\n");
+    try stdout.writeAll("  ryk replay\n");
     try stdout.writeAll("\n");
     try tui.theme.paint(io, stdout, .muted, "Re-run safely: ryk start · off-ramp: ryk stop");
     try stdout.writeAll("\n");
+}
+
+fn protectionClaimReady(
+    protection: onboarding.ProtectionMode,
+    selected_hosts: []const []const u8,
+    verification: ?onboarding.VerificationOutcome,
+    ask_equivalent: bool,
+) bool {
+    if (!ask_equivalent) return false;
+    const outcome = verification orelse return false;
+    if (!outcome.passed()) return false;
+    if (selected_hosts.len == 0) return false;
+    if (!protection.needsCommandGuard()) return outcome.firewall_ready == true;
+    return outcome.host_evidence == .native or
+        outcome.host_evidence == .installed_fail_closed or
+        outcome.host_evidence == .configuration_only;
 }
 
 fn hostInList(name: []const u8, list: []const []const u8) bool {
@@ -510,8 +592,8 @@ fn writeFailureSummary(
     }
     try stdout.writeAll("\nRecommended repair steps:\n");
     try stdout.print("  {s}\n", .{daemon_check.remediation});
-    try stdout.writeAll("  orca plugin doctor\n");
-    try stdout.writeAll("  orca doctor --verbose\n");
+    try stdout.writeAll("  ryk plugin doctor\n");
+    try stdout.writeAll("  ryk doctor --verbose\n");
     try stdout.writeAll("  ryk start --auto\n");
 }
 
@@ -560,7 +642,8 @@ test "start auto mode with mock daemon completes in temp workspace" {
     const output = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "\u{1F6E1}  ryk") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Ask on risk") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "You are protected") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "You're now protected by ryk") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "verification skipped") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Daemon") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Policy") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Hosts") != null);
@@ -569,6 +652,85 @@ test "start auto mode with mock daemon completes in temp workspace" {
     // No interactive grade menu on the Safe Launch path.
     try std.testing.expect(std.mem.indexOf(u8, output, "Choose your protection mode") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "command-guard") == null);
+}
+
+test "start protection claim requires a verified installed host chain" {
+    const verified_firewall = onboarding.VerificationOutcome{
+        .safe_allowed = true,
+        .dangerous_denied = true,
+        .firewall_ready = true,
+        .detail = "ready",
+    };
+    try std.testing.expect(!protectionClaimReady(.firewall, &.{}, verified_firewall, true));
+    try std.testing.expect(!protectionClaimReady(.firewall, &.{}, null, true));
+
+    const contract_only = onboarding.VerificationOutcome{
+        .safe_allowed = true,
+        .dangerous_denied = true,
+        .hook_verified = true,
+        .host_evidence = .contract_only,
+        .detail = "contract",
+    };
+    try std.testing.expect(!protectionClaimReady(.command_guard, &.{"codex"}, contract_only, true));
+
+    const installed = onboarding.VerificationOutcome{
+        .safe_allowed = true,
+        .dangerous_denied = true,
+        .hook_verified = true,
+        .host_evidence = .installed_fail_closed,
+        .detail = "installed",
+    };
+    try std.testing.expect(protectionClaimReady(.command_guard, &.{"codex"}, installed, true));
+
+    const native = onboarding.VerificationOutcome{
+        .safe_allowed = true,
+        .dangerous_denied = true,
+        .hook_verified = true,
+        .host_evidence = .native,
+        .detail = "native",
+    };
+    try std.testing.expect(protectionClaimReady(.command_guard, &.{"codex"}, native, true));
+    try std.testing.expect(!protectionClaimReady(.command_guard, &.{"codex"}, native, false));
+}
+
+test "start OpenClaw completion is explicit about wrapper-required evidence" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    const verification = onboarding.VerificationOutcome{
+        .safe_allowed = true,
+        .dangerous_denied = true,
+        .hook_verified = true,
+        .host_evidence = .wrapper_required,
+        .detail = onboarding.HostEvidence.wrapper_required.label(),
+    };
+    const daemon_check = onboarding.DaemonCheck{
+        .status = .compatible,
+        .detail = "in-process",
+        .remediation = "none",
+    };
+    var output_buffer: [16 * 1024]u8 = undefined;
+    var output: std.Io.Writer = .fixed(&output_buffer);
+    try writeSuccessEndCard(
+        std.testing.io,
+        std.testing.allocator,
+        &output,
+        root,
+        "strict-local",
+        .command_guard,
+        &.{"openclaw"},
+        &.{"openclaw"},
+        daemon_check,
+        verification,
+        "ask",
+    );
+
+    const written = output.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, written, "You're now protected by ryk") == null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "activation evidence pending") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "ryk run -- openclaw") != null);
 }
 
 test "start reports failure when daemon required but unavailable" {
@@ -687,7 +849,7 @@ test "start with existing observe policy does not claim Ask protection" {
     const output = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "policy mode=observe") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "not Ask") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "You are protected") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "You're now protected by ryk") == null);
     // Residual callout, not full Ask protection claim.
     try std.testing.expect(std.mem.indexOf(u8, output, "residual policy mode") != null or std.mem.indexOf(u8, output, "Setup complete") != null);
     // Policy file still observe.

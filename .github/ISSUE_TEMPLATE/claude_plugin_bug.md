@@ -1,6 +1,6 @@
 ---
 name: Claude Code plugin bug
-about: Report a bug in the Orca Claude Code plugin
+about: Report a bug in the ryk Claude Code plugin
 title: "[Claude Plugin Bug] "
 ---
 
@@ -8,7 +8,7 @@ Remove secrets, tokens, credentials, private keys, and private paths from logs a
 
 ## Environment
 
-- Orca version:
+- ryk version:
 - Plugin version:
 - OS:
 - Claude Code version:

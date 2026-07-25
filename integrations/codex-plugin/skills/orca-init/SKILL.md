@@ -1,6 +1,6 @@
 # orca-init
 
-Create or repair an Orca policy for the current repository.
+Create or repair an ryk policy for the current repository.
 
 ## When to use
 
@@ -8,30 +8,30 @@ Use this skill when starting a new project, when `.orca/policy.yaml` is missing,
 
 ## Commands
 
-Initialize an Orca policy with the Codex preset:
+Initialize an ryk policy with the Codex preset:
 
 ```bash
-orca init --preset codex
+ryk init --preset codex
 ```
 
 Validate the resulting policy:
 
 ```bash
-orca policy check .orca/policy.yaml
+ryk policy check .orca/policy.yaml
 ```
 
 ## Preset fallback
 
-If the `codex` preset is not available in your Orca build, use the closest plugin-safe preset:
+If the `codex` preset is not available in your ryk build, use the closest plugin-safe preset:
 
 ```bash
-orca init --preset generic-agent
+ryk init --preset generic-agent
 ```
 
 Or, for stricter defaults:
 
 ```bash
-orca init --preset strict-local
+ryk init --preset strict-local
 ```
 
 The `generic-agent` preset is a conservative starting point for local coding agents. Review the generated `.orca/policy.yaml` before trusting it.
@@ -43,7 +43,7 @@ The `generic-agent` preset is a conservative starting point for local coding age
   ```bash
   cp .orca/policy.yaml .orca/policy.yaml.bak
   ```
-- Always run `orca policy check` after creating or editing a policy.
+- Always run `ryk policy check` after creating or editing a policy.
 
 ## Notes
 

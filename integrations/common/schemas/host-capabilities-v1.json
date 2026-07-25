@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://orca.local/schemas/host-capabilities-v1.json",
-  "title": "Orca Host Capabilities v1",
-  "description": "Capability report exposed to host plugins so they know what Orca can and cannot enforce.",
+  "title": "ryk Host Capabilities v1",
+  "description": "Capability report exposed to host plugins so they know what ryk can and cannot enforce.",
   "type": "object",
   "required": ["version", "orca_version", "decisions", "limitations", "ci_mode"],
   "properties": {
@@ -20,7 +20,7 @@
         "type": "string",
         "enum": ["command", "file", "prompt", "tool", "network", "mcp"]
       },
-      "description": "Decision kinds supported by this Orca build."
+      "description": "Decision kinds supported by this ryk build."
     },
     "limitations": {
       "type": "array",
@@ -29,7 +29,7 @@
     },
     "ci_mode": {
       "type": "boolean",
-      "description": "Whether Orca is running in CI mode (never prompts)."
+      "description": "Whether ryk is running in CI mode (never prompts)."
     },
     "sandbox_level": {
       "type": "string",
@@ -44,7 +44,7 @@
         "advisory_only",
         "none"
       ],
-      "description": "How this host enforces Orca ask on tool events. native_approve_and_resume is the preferred long-term path."
+      "description": "How this host enforces ryk ask on tool events. native_approve_and_resume is the preferred long-term path."
     },
     "prompt_ask_enforcement": {
       "type": "string",
@@ -55,7 +55,7 @@
         "outer_wrapper_only",
         "none"
       ],
-      "description": "How this host enforces Orca ask on prompt/pre-LLM events. advisory_context_only must not be advertised as approval."
+      "description": "How this host enforces ryk ask on prompt/pre-LLM events. advisory_context_only must not be advertised as approval."
     },
     "warn_collapses_to_block": {
       "type": "boolean",

@@ -24,7 +24,7 @@ if (-not $Version) {
     }
 }
 if (-not $BaseUrl) {
-    $BaseUrl = "https://github.com/christopherkarani/Orca/releases/download/v$Version"
+    $BaseUrl = "https://github.com/christopherkarani/rykan/releases/download/v$Version"
 }
 
 $ResourceRoot = if ($env:ORCA_RESOURCE_ROOT) { $env:ORCA_RESOURCE_ROOT } else { Join-Path $ShareDir $Version }
@@ -79,7 +79,7 @@ function Fail($Message, $Remediation = $null) {
         }
     }
     Write-Host ""
-    Write-HostColor "  Docs  https://github.com/christopherkarani/Orca/blob/main/docs/install.md" DarkGray
+    Write-HostColor "  Help  Run 'ryk help' after resolving the install error." DarkGray
     exit 1
 }
 

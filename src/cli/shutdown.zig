@@ -39,7 +39,7 @@ fn commandWithShutdownImpl(comptime shutdown_fn: anytype, io: std.Io, argv: []co
         if (std.mem.eql(u8, arg, "--daemon")) {
             continue;
         }
-        try suggestions.writeUnknownOption(stderr, "orca shutdown", arg, &.{ "--daemon", "--help" }, "shutdown");
+        try suggestions.writeUnknownOption(stderr, "ryk shutdown", arg, &.{ "--daemon", "--help" }, "shutdown");
         return exit_codes.usage;
     }
 
@@ -48,14 +48,14 @@ fn commandWithShutdownImpl(comptime shutdown_fn: anytype, io: std.Io, argv: []co
     const allocator = gpa_state.allocator();
 
     const result = shutdown_fn(allocator) catch |err| {
-        try stderr.print("orca shutdown --daemon: {s}: {s}\n", .{ shutdownErrorLabel(err), @errorName(err) });
+        try stderr.print("ryk shutdown --daemon: {s}: {s}\n", .{ shutdownErrorLabel(err), @errorName(err) });
         return exit_codes.general;
     };
 
     switch (result) {
         .stopped => try stdout.writeAll("ryk daemon stopped\n"),
-        .not_running => try stdout.writeAll("orca daemon not running\n"),
-        .stale_cleaned => try stdout.writeAll("orca daemon stale artifacts cleaned\n"),
+        .not_running => try stdout.writeAll("ryk daemon not running\n"),
+        .stale_cleaned => try stdout.writeAll("ryk daemon stale artifacts cleaned\n"),
     }
     return exit_codes.success;
 }

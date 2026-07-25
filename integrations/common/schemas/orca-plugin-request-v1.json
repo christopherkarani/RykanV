@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "OrcaPluginRequestV1",
-  "description": "Request schema for Orca plugin interactions. Supports doctor, manifest, install, and MCP tool requests.",
+  "title": "ryk Plugin Request v1",
+  "description": "Request schema for ryk plugin interactions. Supports doctor, manifest, install, and MCP tool requests.",
   "type": "object",
   "required": ["version", "request_type"],
   "properties": {
@@ -61,7 +61,7 @@
         },
         "policy_path": {
           "type": "string",
-          "description": "Path to Orca policy file."
+          "description": "Path to ryk policy file."
         }
       }
     }

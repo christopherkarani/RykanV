@@ -29,7 +29,7 @@
       "context_only": { "mode": "advisory_context" },
       "ask": {
         "mode": "outer_wrapper_required",
-        "notes": "Context note must not claim enforcement; prefer orca run -- hermes"
+        "notes": "Context note must not claim enforcement; prefer ryk run -- hermes"
       },
       "block": {
         "mode": "outer_wrapper_required",
@@ -38,7 +38,7 @@
     }
   },
   "limitations": [
-    "Hook enforcement is additive; does not replace orca run supervision.",
+    "Hook enforcement is additive; does not replace ryk run supervision.",
     "pre_llm_call cannot open approve-and-resume or veto the turn.",
     "Gateway approval UX depends on Hermes platform adapters."
   ]

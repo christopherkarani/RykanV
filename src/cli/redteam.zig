@@ -38,12 +38,12 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
             error.ResourceNotFound => {
                 // Improved for packaged installs in non-interactive / CI / docker sh -c contexts
                 // where the login-time ORCA_RESOURCE_ROOT export from install.sh is not active.
-                // Points users at the reliable `orca env` activation primitive (post-audit DX win)
+                // Points users at the reliable `ryk env` activation primitive (post-audit DX win)
                 // while still offering the previous escape hatches.
                 try stderr.writeAll(
                     "ryk redteam: no fixtures directory found.\n\n" ++
-                        "Fixtures are part of the Orca runtime assets. After a normal install, activate them in the current shell with:\n" ++
-                        "    eval \"$(orca env 2>/dev/null || orca --print-install-env)\"\n\n" ++
+                        "Fixtures are part of the ryk runtime assets. After a normal install, activate them in the current shell with:\n" ++
+                        "    eval \"$(ryk env 2>/dev/null || ryk --print-install-env)\"\n\n" ++
                         "Then retry. Or set ORCA_RESOURCE_ROOT explicitly to the installed share/orca/current directory, pass an explicit fixture path, or run from a source checkout.\n",
                 );
                 return exit_codes.general;

@@ -152,8 +152,8 @@ pub const commands =
             .usage = "ryk env",
             .category = .getting_started,
             .details = &.{
-                "Prints export statements for PATH and ORCA_RESOURCE_ROOT.",
-                "Use with eval: eval \"$(orca env)\"",
+                "Prints export statements for PATH and RYK_RESOURCE_ROOT.",
+                "Use with eval: eval \"$(ryk env)\"",
             },
         },
         .{
@@ -226,7 +226,7 @@ pub const commands =
             },
             .details = &.{
                 "Proxies to the Rust daemon for CI and pre-commit scanning.",
-                "Use 'orca scan --help' for the full Rust-backed option set.",
+                "Use 'ryk scan --help' for the full Rust-backed option set.",
             },
         },
         .{
@@ -293,7 +293,7 @@ pub const commands =
             },
             .details = &.{
                 "Proxies to the Rust daemon risk classifier (read-only; does not block).",
-                "Use 'orca classify --help' for the full Rust-backed option set.",
+                "Use 'ryk classify --help' for the full Rust-backed option set.",
             },
         },
         .{
@@ -380,7 +380,7 @@ pub const commands =
                 "Proxies to the Rust daemon; requires history to be enabled.",
                 "Human output includes copy-pasteable next commands (`suggest-allowlist --apply N` / `allowlist add-command`) for high-confidence items.",
                 "Alias: `ryk history suggest` (same as suggest-allowlist).",
-                "Use 'orca suggest-allowlist --help' for filters and confidence options.",
+                "Use 'ryk suggest-allowlist --help' for filters and confidence options.",
             },
         },
         .{
@@ -427,7 +427,7 @@ pub const commands =
             },
             .details = &.{
                 "Proxies to the Rust daemon config show path (read-only).",
-                "Use 'orca config --help' for daemon-backed details.",
+                "Use 'ryk config --help' for daemon-backed details.",
             },
         },
         .{
@@ -494,7 +494,7 @@ pub const commands =
                 "ryk tools packs",
             },
             .details = &.{
-                "Discovery helpers for effect-class policy (not shell `orca classify`).",
+                "Discovery helpers for effect-class policy (not shell `ryk classify`).",
                 "  ryk tools classify <name> [--args '<json-object>'] [--policy <path>]",
                 "  ryk tools packs",
                 "Prints effect ids, confidence, and matcher labels only (never raw arg values).",
@@ -513,8 +513,8 @@ pub const commands =
         } },
         .{ .name = "license", .summary = "Manage local offline licenses", .usage = "ryk license <status|activate> [...]", .category = .advanced, .additional_completion_flags = &.{"--json"}, .details = &.{
             "Subcommands:",
-            "  orca license status [--json]",
-            "  orca license activate <key-or-file>",
+            "  ryk license status [--json]",
+            "  ryk license activate <key-or-file>",
             "Development keys: dev-free, dev-pro, dev-team.",
             "Licenses are verified offline and stored under the user config directory.",
         } },
@@ -575,7 +575,7 @@ pub const commands =
             .category = .staged_changes,
             .details = &.{
                 "Shows unified diffs for ryk-mediated pending file changes.",
-                "Use 'orca apply' to commit changes or 'orca discard' to cancel them.",
+                "Use 'ryk apply' to commit changes or 'ryk discard' to cancel them.",
             },
         },
         .{
@@ -588,7 +588,7 @@ pub const commands =
                 "Applies reviewed pending file changes after original-state checks where feasible.",
                 "--dry-run prints a summary without mutating; non-interactive mutation requires --yes.",
                 "Interactive confirm defaults to No (empty Enter cancels).",
-                "See 'orca diff' to review changes and 'orca discard' to cancel them.",
+                "See 'ryk diff' to review changes and 'ryk discard' to cancel them.",
             },
         },
         .{
@@ -601,7 +601,7 @@ pub const commands =
                 "Destroys proposed staged changes without changing workspace files.",
                 "--dry-run prints a summary without mutating; non-interactive mutation requires --yes.",
                 "Interactive confirm defaults to No and warns that discard destroys proposed staged changes.",
-                "See 'orca diff' to review changes and 'orca apply' to commit them.",
+                "See 'ryk diff' to review changes and 'ryk apply' to commit them.",
             },
         },
         .{ .name = "mcp", .summary = "Inspect and proxy MCP servers", .usage = "ryk mcp <inspect|proxy|list|trust|manifest> [options]", .category = .advanced, .additional_completion_flags = &.{ "--command", "--name", "--policy", "--manifest", "--mode", "--tool", "--server" }, .details = &.{
@@ -637,12 +637,12 @@ pub const commands =
         } },
         .{ .name = "plugin", .summary = "Plugin management and diagnostics", .usage = "ryk plugin <list|host|doctor|manifest|install> [options]", .category = .integrations, .additional_completion_flags = &.{ "--dry-run", "--yes", "--json", "--path" }, .details = &.{
             "Subcommands:",
-            "  orca plugin list",
-            "  orca plugin <codex|claude|opencode|openclaw|hermes> [--dry-run|--yes]",
-            "  orca plugin doctor [codex|claude|opencode|openclaw|hermes] [--json]",
-            "  orca plugin manifest [codex|claude|opencode|openclaw|hermes|all] [--json]",
-            "  orca plugin install                                 # dry-run preview of all hosts (no mutation)",
-            "  orca plugin install <codex|claude|opencode|openclaw|hermes|all> [--dry-run|--yes] [--path <path>]",
+            "  ryk plugin list",
+            "  ryk plugin <codex|claude|opencode|openclaw|hermes> [--dry-run|--yes]",
+            "  ryk plugin doctor [codex|claude|opencode|openclaw|hermes] [--json]",
+            "  ryk plugin manifest [codex|claude|opencode|openclaw|hermes|all] [--json]",
+            "  ryk plugin install                                 # dry-run preview of all hosts (no mutation)",
+            "  ryk plugin install <codex|claude|opencode|openclaw|hermes|all> [--dry-run|--yes] [--path <path>]",
             "Primary onboarding path: run `ryk start` (guided interactive selection on TTY terminals).",
             "Bare install never mutates; mutation requires an explicit host or `all` plus --yes (confirm default No on TTY).",
             "Plugin doctor does not print secrets.",
@@ -660,7 +660,7 @@ pub const commands =
             "Debug logs go to stderr only.",
         } },
         .{ .name = "evaluate", .summary = "Stable machine API for shell-command evaluation", .usage = "ryk evaluate --json --stdin", .category = .integrations, .details = &.{
-            "Reads a versioned JSON request from stdin and evaluates shell_command events via the Zig shell_engine (ORCA_SHELL_EVAL=rust is rejected).",
+            "Reads a versioned JSON request from stdin and evaluates shell_command events via the Zig shell_engine; legacy Rust evaluator selection is rejected.",
             "Requires schema_version=1, kind=shell_command, command string, and an absolute existing cwd.",
             "Always writes the stable integration JSON response to stdout for invalid input and expected evaluator outcomes.",
             "Exit codes: 0 allow, 2 deny, 3 evaluator failure, 64 invalid input, 1 unexpected internal error.",
@@ -669,49 +669,49 @@ pub const commands =
         .{ .name = "hook", .summary = "Receive events from AI agent hosts", .usage = "ryk hook <codex|claude|opencode|openclaw|hermes> <event> [--ci]", .category = .advanced, .details = &.{
             "Reads a JSON payload from stdin, normalizes host-specific events to ryk decisions,",
             "and emits a host-valid JSON response to stdout. Debug logs go to stderr only.",
-            "Shell PreToolUse / PermissionRequest (and equivalent host tool-before events) evaluate commands via the in-process Zig shell_engine (ORCA_SHELL_EVAL=rust is rejected).",
+            "Shell PreToolUse / PermissionRequest (and equivalent host tool-before events) evaluate commands via the in-process Zig shell_engine; legacy Rust evaluator selection is rejected.",
             "Events:",
-            "  orca hook codex SessionStart",
-            "  orca hook codex UserPromptSubmit",
-            "  orca hook codex PreToolUse",
-            "  orca hook codex PermissionRequest",
-            "  orca hook codex PostToolUse",
-            "  orca hook codex Stop",
-            "  orca hook claude SessionStart",
-            "  orca hook claude UserPromptSubmit",
-            "  orca hook claude PreToolUse",
-            "  orca hook claude PermissionRequest",
-            "  orca hook claude PostToolUse",
-            "  orca hook claude SessionEnd",
-            "  orca hook opencode session.created",
-            "  orca hook opencode tool.execute.before",
-            "  orca hook opencode tool.execute.after",
-            "  orca hook opencode permission.asked",
-            "  orca hook opencode permission.replied",
-            "  orca hook opencode file.edited",
-            "  orca hook opencode command.executed",
-            "  orca hook opencode session.updated",
-            "  orca hook opencode session.idle",
-            "  orca hook opencode session.error",
-            "  orca hook opencode shell.env",
-            "  orca hook openclaw session.start",
-            "  orca hook openclaw tool.before",
-            "  orca hook openclaw tool.after",
-            "  orca hook openclaw permission.before",
-            "  orca hook openclaw permission.after",
-            "  orca hook openclaw session.end",
-            "  orca hook hermes on_session_start",
-            "  orca hook hermes pre_tool_call",
-            "  orca hook hermes post_tool_call",
-            "  orca hook hermes pre_llm_call",
-            "  orca hook hermes post_llm_call",
-            "  orca hook hermes subagent_stop",
-            "  orca hook hermes on_session_end",
+            "  ryk hook codex SessionStart",
+            "  ryk hook codex UserPromptSubmit",
+            "  ryk hook codex PreToolUse",
+            "  ryk hook codex PermissionRequest",
+            "  ryk hook codex PostToolUse",
+            "  ryk hook codex Stop",
+            "  ryk hook claude SessionStart",
+            "  ryk hook claude UserPromptSubmit",
+            "  ryk hook claude PreToolUse",
+            "  ryk hook claude PermissionRequest",
+            "  ryk hook claude PostToolUse",
+            "  ryk hook claude SessionEnd",
+            "  ryk hook opencode session.created",
+            "  ryk hook opencode tool.execute.before",
+            "  ryk hook opencode tool.execute.after",
+            "  ryk hook opencode permission.asked",
+            "  ryk hook opencode permission.replied",
+            "  ryk hook opencode file.edited",
+            "  ryk hook opencode command.executed",
+            "  ryk hook opencode session.updated",
+            "  ryk hook opencode session.idle",
+            "  ryk hook opencode session.error",
+            "  ryk hook opencode shell.env",
+            "  ryk hook openclaw session.start",
+            "  ryk hook openclaw tool.before",
+            "  ryk hook openclaw tool.after",
+            "  ryk hook openclaw permission.before",
+            "  ryk hook openclaw permission.after",
+            "  ryk hook openclaw session.end",
+            "  ryk hook hermes on_session_start",
+            "  ryk hook hermes pre_tool_call",
+            "  ryk hook hermes post_tool_call",
+            "  ryk hook hermes pre_llm_call",
+            "  ryk hook hermes post_llm_call",
+            "  ryk hook hermes subagent_stop",
+            "  ryk hook hermes on_session_end",
             "Hook responses include host_limitations to honestly report enforcement limits.",
         } },
         .{ .name = "dashboard", .summary = "Start the local ryk dashboard", .usage = "ryk dashboard [--machine | --workspace PATH] [--host 127.0.0.1] [--port 7742] [--once]", .category = .diagnostics, .details = &.{
             "Starts a localhost-only machine-wide dashboard by default; the view is not tied to shell cwd.",
-            "Use --workspace PATH or ORCA_DASHBOARD_WORKSPACE for policy, integrations, and workspace-scoped actions.",
+            "Use --workspace PATH or RYK_DASHBOARD_WORKSPACE for policy, integrations, and workspace-scoped actions.",
             "The dashboard calls existing ryk CLI/Core paths and does not replace policy evaluation.",
             "Mutation routes use a per-run browser token and only expose fixed ryk actions; arbitrary shell commands are not accepted.",
             "Defaults to http://127.0.0.1:7742.",
@@ -857,13 +857,13 @@ pub fn writeWithMode(io: std.Io, writer: anytype, mode: WriteMode) !void {
     }
 
     // Global options (Phase 7 discoverability): surface the --no-rich /
-    // ORCA_NO_RICH escape hatch at the top level so users can find it without
+    // RYK_NO_RICH escape hatch at the top level so users can find it without
     // reading the source. --json/--robot are per-command machine flags.
     try writer.writeAll("  ");
     try tui.theme.paintBold(io, writer, .brand, "Global options");
     try writer.writeAll("\n");
     try writer.writeAll("    --no-rich   Plain text output (no colour, no animation). ");
-    try tui.theme.paint(io, writer, .muted, "Also ORCA_NO_RICH=1.");
+    try tui.theme.paint(io, writer, .muted, "Also RYK_NO_RICH=1.");
     try writer.writeAll("\n");
     try writer.writeAll("                 Use this for piping, scripting, or terminals that mis-render colour.\n");
     try writer.writeAll("    --json      Per-command machine output (byte-stable). See `ryk help <command>`.\n");

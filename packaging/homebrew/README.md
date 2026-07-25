@@ -34,8 +34,10 @@ brew test packaging/homebrew/Formula/ryk.rb
 ## User install
 
 ```sh
-brew tap christopherkarani/orca
-brew install --formula orca
-orca version
-orca doctor
+brew install christopherkarani/orca/ryk
+ryk version
+ryk doctor
 ```
+
+The tap namespace is retained because it is the currently published Homebrew
+endpoint; the installed formula and all user commands are `ryk`.

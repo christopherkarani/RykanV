@@ -56,13 +56,13 @@ for (const [command, message] of [
           { tool: 'bash', sessionID: 'session-1', callID: 'call-1' },
           { args: { command } }
         ),
-        new RegExp(`Orca blocked tool execution: ${message}`)
+        new RegExp(`ryk blocked tool execution: ${message}`)
       );
     });
   });
 }
 
-test('permission.ask keeps host ask for Orca ask (approve-and-resume)', async () => {
+test('permission.ask keeps host ask for ryk ask (approve-and-resume)', async () => {
   await withFakeOrca(async (plugin) => {
     const permissionAsk = plugin['permission.ask'];
     assert.ok(permissionAsk);
@@ -70,12 +70,12 @@ test('permission.ask keeps host ask for Orca ask (approve-and-resume)', async ()
 
     await permissionAsk({ sessionID: 'session-1', command: 'rm file.txt' }, output);
 
-    // Native permission UI: Orca ask must not hard-deny without resume.
+    // Native permission UI: ryk ask must not hard-deny without resume.
     assert.equal(output.status, 'ask');
   });
 });
 
-test('permission.ask denies Orca block', async () => {
+test('permission.ask denies ryk block', async () => {
   await withFakeOrca(async (plugin) => {
     const permissionAsk = plugin['permission.ask'];
     assert.ok(permissionAsk);
@@ -112,7 +112,7 @@ printf '%s\\n' '{"decision":"unexpected","message":"bad decision"}'
   }
 });
 
-test('tool.execute.before still hard-blocks Orca ask (no resume on that path)', async () => {
+test('tool.execute.before still hard-blocks ryk ask (no resume on that path)', async () => {
   await withFakeOrca(async (plugin) => {
     const before = plugin['tool.execute.before'];
     assert.ok(before);
@@ -121,7 +121,7 @@ test('tool.execute.before still hard-blocks Orca ask (no resume on that path)', 
         { tool: 'bash', sessionID: 'session-1', callID: 'call-1' },
         { args: { command: 'rm file.txt' } }
       ),
-      /Orca blocked tool execution: approval required/
+      /ryk blocked tool execution: approval required/
     );
   });
 });
@@ -155,7 +155,7 @@ test('missing binary registers fail-closed veto hooks', async () => {
         { tool: 'bash', sessionID: 'session-1', callID: 'call-1' },
         { args: { command: 'echo hi' } }
       ),
-      /Orca binary not found/
+      /ryk binary not found/
     );
 
     const output = { status: 'ask' };
@@ -179,7 +179,7 @@ test('tool.execute.before blocks empty stdout', async () => {
           { tool: 'bash', sessionID: 'session-1', callID: 'call-1' },
           { args: { command: 'echo hi' } }
         ),
-        /Orca blocked tool execution/
+        /ryk blocked tool execution/
       );
     },
     `#!/bin/sh
@@ -198,7 +198,7 @@ test('tool.execute.before blocks decision error', async () => {
           { tool: 'bash', sessionID: 'session-1', callID: 'call-1' },
           { args: { command: 'echo hi' } }
         ),
-        /Orca blocked tool execution/
+        /ryk blocked tool execution/
       );
     },
     `#!/bin/sh
@@ -217,7 +217,7 @@ test('tool.execute.before blocks unknown decision', async () => {
           { tool: 'bash', sessionID: 'session-1', callID: 'call-1' },
           { args: { command: 'echo hi' } }
         ),
-        /Orca blocked tool execution/
+        /ryk blocked tool execution/
       );
     },
     `#!/bin/sh

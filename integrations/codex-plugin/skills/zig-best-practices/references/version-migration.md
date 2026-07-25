@@ -15,7 +15,7 @@ As of 2026-05-13:
 
 - Latest tagged Zig release: `0.16.0` from 2026-04-13.
 - Current development downloads: `0.17.0-dev.*`.
-- Orca is pinned in `build.zig.zon` to `minimum_zig_version = "0.15.2"`.
+- ryk is pinned in `build.zig.zon` to `minimum_zig_version = "0.15.2"`.
 
 Project pins win. Do not update code to 0.16 APIs unless the user asked for migration or the repo already targets 0.16.
 
@@ -25,7 +25,7 @@ Project pins win. Do not update code to 0.16 APIs unless the user asked for migr
 - Keep existing `build.zig` idioms unless the compiler rejects them.
 - Update `build.zig.zon.fingerprint` only from Zig's compiler-provided suggested value.
 - When `zig build run -- ...` wraps exit codes, run `./zig-out/bin/<tool>` directly for exact CLI behavior.
-- Remember that local Orca history uses `zig build`, `zig build test`, and often `zig build test --summary all` where available.
+- Remember that local ryk history uses `zig build`, `zig build test`, and often `zig build test --summary all` where available.
 
 ## 0.16 Changes To Check Before Migrating
 

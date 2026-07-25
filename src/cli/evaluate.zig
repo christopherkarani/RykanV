@@ -147,7 +147,7 @@ fn commandWithEvaluator(io: std.Io, argv: []const []const u8, stdout: anytype, s
             if (saw_json) {
                 try writeInvalidInput(stdout, null, "unsupported option for evaluate");
             }
-            try stderr.print("orca evaluate: unsupported option '{s}'. Expected --json --stdin.\n", .{arg});
+            try stderr.print("ryk evaluate: unsupported option '{s}'. Expected --json --stdin.\n", .{arg});
             return if (saw_json) exit_invalid_input else exit_codes.usage;
         }
     }
@@ -157,7 +157,7 @@ fn commandWithEvaluator(io: std.Io, argv: []const []const u8, stdout: anytype, s
             try writeInvalidInput(stdout, null, "expected --json --stdin");
             return exit_invalid_input;
         }
-        try stderr.writeAll("orca evaluate: expected --json --stdin. Run 'ryk help evaluate' for usage.\n");
+        try stderr.writeAll("ryk evaluate: expected --json --stdin. Run 'ryk help evaluate' for usage.\n");
         return exit_codes.usage;
     }
 

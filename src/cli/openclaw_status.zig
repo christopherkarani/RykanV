@@ -18,11 +18,11 @@ pub const npm_path_label = "unprotected";
 /// Preferred protection path (grade wrapper).
 pub const preferred_wrapper = "ryk run -- openclaw";
 
-/// Plain-text honesty lines for `orca plugin doctor openclaw`.
+/// Plain-text honesty lines for `ryk plugin doctor openclaw`.
 pub fn writeDoctorHonesty(stdout: anytype) !void {
     try stdout.print("  enforcement: {s}\n", .{enforcement_note});
     try stdout.writeAll("  hook grade: unverified (no live host E2E); installed != protected\n");
-    try stdout.writeAll("  install: use 'orca plugin install openclaw --dry-run' to preview (plumbing only)\n");
+    try stdout.writeAll("  install: use 'ryk plugin install openclaw --dry-run' to preview (plumbing only)\n");
     try stdout.writeAll("  note: npm/ClawHub package orca-openclaw-plugin is published for distribution; not an enforcement install\n");
 }
 

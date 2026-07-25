@@ -1,14 +1,14 @@
 {
   "plugins": [
     {
-      "name": "orca",
+      "name": "ryk",
       "path": "./.opencode/plugins/orca.ts",
       "enabled": true
     }
   ],
   "settings": {
-    "orca": {
-      "binary": "orca",
+    "ryk": {
+      "binary": "ryk",
       "timeout": 15000,
       "blocking_hooks": [
         "tool.execute.before",

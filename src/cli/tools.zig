@@ -1,5 +1,5 @@
 //! Discovery CLI for effect-class classification (Phase C).
-//! `ryk tools classify` and `ryk tools packs` — not shell `orca classify`.
+//! `ryk tools classify` and `ryk tools packs` — not shell `ryk classify`.
 
 const std = @import("std");
 const orca_policy = @import("orca_core").policy;

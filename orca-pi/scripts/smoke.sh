@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ORCA_BIN="${ORCA_BIN:-orca}"
+RYK_BIN="${RYK_BIN:-ryk}"
 
 request() {
   local command="$1"
@@ -15,7 +15,7 @@ cd "$ROOT_DIR"
 npm test
 npm pack --dry-run
 
-request "git status" | "$ORCA_BIN" evaluate --json --stdin >/tmp/orca-pi-safe.json
+request "git status" | "$RYK_BIN" evaluate --json --stdin >/tmp/ryk-pi-safe.json
 safe_code=$?
 if [[ "$safe_code" -ne 0 ]]; then
   echo "Expected safe command to exit 0, got $safe_code" >&2
@@ -23,7 +23,7 @@ if [[ "$safe_code" -ne 0 ]]; then
 fi
 
 set +e
-request "rm -rf /" | "$ORCA_BIN" evaluate --json --stdin >/tmp/orca-pi-danger.json
+request "rm -rf /" | "$RYK_BIN" evaluate --json --stdin >/tmp/ryk-pi-danger.json
 danger_code=$?
 set -e
 if [[ "$danger_code" -ne 2 ]]; then
@@ -31,4 +31,4 @@ if [[ "$danger_code" -ne 2 ]]; then
   exit 1
 fi
 
-echo "orca-pi smoke checks passed"
+echo "ryk Pi smoke checks passed"

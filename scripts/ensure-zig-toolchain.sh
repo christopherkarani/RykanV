@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pin the Orca build to the Zig version in .zigversion (currently 0.16.0).
+# Pin the ryk build to the Zig version in .zigversion (currently 0.16.0).
 # Usage:
 #   ./scripts/ensure-zig-toolchain.sh          # print export instructions
 #   eval "$(./scripts/ensure-zig-toolchain.sh --export)"
@@ -85,7 +85,7 @@ case "${mode}" in
   "")
     install_zig
     cat <<EOF
-Orca requires Zig ${WANTED} (see .zigversion).
+ryk requires Zig ${WANTED} (see .zigversion).
 
 Pinned binary:
   ${ZIG_BIN}

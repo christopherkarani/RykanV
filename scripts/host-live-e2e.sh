@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Live host E2E: exercise each host's real Orca veto path when the host (or evaluate) is available.
+# Live host E2E: exercise each host's real ryk veto path when the host (or evaluate) is available.
 #
 # Fixture/install smoke (`orca hook …`) proves the CLI entrypoint offline.
 # This script is the optional live path: skip honestly when host/ORCA_BIN missing.
@@ -180,7 +180,7 @@ if [[ -z "$ORCA_BIN" || ! -x "$ORCA_BIN" ]]; then
   exit 0
 fi
 
-log "Orca live host E2E"
+log "ryk live host E2E"
 log "  orca: $ORCA_BIN"
 log "  note: fixture path via orca hook/evaluate; host CLI presence gates skip vs run"
 log ""

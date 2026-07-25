@@ -5,7 +5,7 @@ PackageName: ryk (orca compat)
 Publisher: Chris Karani
 License: Apache-2.0
 ShortDescription: Local runtime firewall for AI agents (compat package id; prefer ryk).
-PackageUrl: https://github.com/christopherkarani/Orca
+PackageUrl: https://github.com/christopherkarani/rykan
 ManifestType: singleton
 ManifestVersion: 1.6.0
 Installers:
@@ -17,6 +17,6 @@ Installers:
         PortableCommandAlias: ryk
       - RelativeFilePath: ryk-v1.2.8-windows-amd64\bin\orca.exe
         PortableCommandAlias: orca
-    InstallerUrl: https://github.com/christopherkarani/Orca/releases/download/v1.2.8/ryk-v1.2.8-windows-amd64.zip
+    InstallerUrl: https://github.com/christopherkarani/rykan/releases/download/v1.2.8/ryk-v1.2.8-windows-amd64.zip
     InstallerSha256: PLACEHOLDER_WINDOWS_AMD64_SHA256
 ReleaseNotes: Dual-name window — prefer PackageIdentifier ChrisKarani.Ryk. Verify checksums.txt before publishing.

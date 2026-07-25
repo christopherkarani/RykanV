@@ -12,17 +12,31 @@
  * - Even with session bash bypass (/orca-stop), secrets are still scrubbed/blocked.
  *
  * Storage: append/update NAME=value under workspace `.orca/dev-secrets.env`
- * (matches Orca env-file-dev broker path validation: under .orca, contains "dev", ends with .env).
+ * (matches the legacy env-file-dev broker path contract: under .orca, contains "dev", ends with .env).
  */
 
 import {
-	chmodSync,
+	closeSync,
+	constants,
 	existsSync,
+	fchmodSync,
+	fsyncSync,
+	lstatSync,
 	mkdirSync,
+	openSync,
 	readFileSync,
+	realpathSync,
+	renameSync,
+	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, relative as pathRelative, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import {
+	dirname,
+	relative as pathRelative,
+	resolve,
+	sep,
+} from "node:path";
 
 export type SecretKind =
 	| "openai"
@@ -202,7 +216,7 @@ export function scrubSecrets(
 
 	const uniqueNames = [...new Set(usedNames.reverse())];
 	const guide = buildReplacementGuide(uniqueNames);
-	if (!result.includes("[Orca]")) {
+	if (!result.includes("[ryk]")) {
 		result = `${result.trimEnd()}\n\n${guide}`;
 	}
 	return result;
@@ -220,7 +234,9 @@ export function inferEnvName(match: SecretMatch, index = 0): string {
 export function isSecretCaptureDisabled(
 	env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-	const raw = env.ORCA_PI_SECRET_CAPTURE?.trim().toLowerCase();
+	const raw = (env.RYK_PI_SECRET_CAPTURE ?? env.ORCA_PI_SECRET_CAPTURE)
+		?.trim()
+		.toLowerCase();
 	return raw === "false" || raw === "0" || raw === "off" || raw === "no";
 }
 
@@ -242,6 +258,32 @@ export function storeSecretToEnvFile(
 	name: string,
 	value: string,
 	envFileRelativePath: string = DEFAULT_ENV_FILE,
+): void {
+	storeSecretToEnvFileImpl(cwd, name, value, envFileRelativePath);
+}
+
+type StoreSecretTestHooks = {
+	beforeTempOpen?: () => void;
+	beforeRename?: () => void;
+};
+
+/** Deterministic filesystem-race injection for adversarial tests only. */
+export function _storeSecretToEnvFileWithHooksForTest(
+	cwd: string,
+	name: string,
+	value: string,
+	envFileRelativePath: string,
+	hooks: StoreSecretTestHooks,
+): void {
+	storeSecretToEnvFileImpl(cwd, name, value, envFileRelativePath, hooks);
+}
+
+function storeSecretToEnvFileImpl(
+	cwd: string,
+	name: string,
+	value: string,
+	envFileRelativePath: string,
+	hooks: StoreSecretTestHooks = {},
 ): void {
 	if (!isValidEnvName(name)) {
 		throw new Error("Invalid credential environment variable name.");
@@ -272,12 +314,12 @@ export function storeSecretToEnvFile(
 	}
 
 	const dir = dirname(filePath);
-	if (!existsSync(dir)) {
-		mkdirSync(dir, { recursive: true, mode: 0o700 });
-	}
+	ensureSafeDirectoryChain(root, dir);
+	const directoryIdentity = captureDirectoryIdentity(root, dir);
 
 	let existing = "";
 	if (existsSync(filePath)) {
+		rejectSymlinkOrNonFile(filePath);
 		existing = readFileSync(filePath, "utf8");
 	}
 
@@ -306,15 +348,136 @@ export function storeSecretToEnvFile(
 
 	const body = nextLines.join("\n");
 	const ended = body.endsWith("\n") ? body : `${body}\n`;
-	writeFileSync(filePath, ended, { encoding: "utf8", mode: 0o600 });
+	// Write beside the destination and atomically rename only after fsync. This
+	// prevents truncated credential files on interruption and never follows a
+	// destination symlink.
+	const tempPath = resolve(dir, `.ryk-secrets-${process.pid}-${randomUUID()}.tmp`);
+	let fd: number | undefined;
 	try {
-		chmodSync(filePath, 0o600);
-	} catch {
-		// Best-effort on platforms without full chmod support.
+		hooks.beforeTempOpen?.();
+		validateDirectoryIdentity(directoryIdentity);
+		fd = openSync(
+			tempPath,
+			constants.O_WRONLY |
+				constants.O_CREAT |
+				constants.O_EXCL |
+				constants.O_NOFOLLOW,
+			0o600,
+		);
+		fchmodSync(fd, 0o600);
+		writeFileSync(fd, ended, { encoding: "utf8" });
+		fsyncSync(fd);
+		closeSync(fd);
+		fd = undefined;
+		hooks.beforeRename?.();
+		validateDirectoryIdentity(directoryIdentity);
+		if (existsSync(filePath)) rejectSymlinkOrNonFile(filePath);
+		renameSync(tempPath, filePath);
+	} catch (error) {
+		if (fd !== undefined) {
+			try {
+				closeSync(fd);
+			} catch {
+				// Preserve the original storage error.
+			}
+		}
+		// Delete by pathname only while it still resolves to the directory that
+		// created the temp file. On a detected swap, fail closed and avoid
+		// deleting an attacker-selected path.
+		try {
+			validateDirectoryIdentity(directoryIdentity);
+			rmSync(tempPath, { force: true });
+		} catch {
+			// Preserve the original storage error and never cross a swapped path.
+		}
+		throw error;
 	}
 
 	// Current extension process only — Pi tool child envs are not automatically updated.
 	process.env[name] = value;
+}
+
+type DirectoryIdentity = {
+	root: string;
+	target: string;
+	rootReal: string;
+	targetReal: string;
+	rootDevice: number;
+	rootInode: number;
+	targetDevice: number;
+	targetInode: number;
+};
+
+function captureDirectoryIdentity(root: string, target: string): DirectoryIdentity {
+	const rootStat = lstatSync(root);
+	const targetStat = lstatSync(target);
+	return {
+		root,
+		target,
+		rootReal: realpathSync.native(root),
+		targetReal: realpathSync.native(target),
+		rootDevice: rootStat.dev,
+		rootInode: rootStat.ino,
+		targetDevice: targetStat.dev,
+		targetInode: targetStat.ino,
+	};
+}
+
+function validateDirectoryIdentity(identity: DirectoryIdentity): void {
+	try {
+		ensureSafeDirectoryChain(identity.root, identity.target);
+		const rootStat = lstatSync(identity.root);
+		const targetStat = lstatSync(identity.target);
+		if (
+			realpathSync.native(identity.root) !== identity.rootReal ||
+			realpathSync.native(identity.target) !== identity.targetReal ||
+			rootStat.dev !== identity.rootDevice ||
+			rootStat.ino !== identity.rootInode ||
+			targetStat.dev !== identity.targetDevice ||
+			targetStat.ino !== identity.targetInode
+		) {
+			throw new Error("identity mismatch");
+		}
+	} catch {
+		throw new Error("Credential directory changed during write.");
+	}
+}
+
+function ensureSafeDirectoryChain(root: string, target: string): void {
+	const relative = pathRelative(root, target);
+	if (relative.startsWith("..") || resolve(root, relative) !== target) {
+		throw new Error("Credential path escaped workspace.");
+	}
+
+	rejectSymlinkOrNonDirectory(root);
+	let current = root;
+	for (const component of relative.split(sep).filter(Boolean)) {
+		current = resolve(current, component);
+		if (!existsSync(current)) {
+			mkdirSync(current, { mode: 0o700 });
+		}
+		rejectSymlinkOrNonDirectory(current);
+	}
+}
+
+function rejectSymlinkOrNonDirectory(path: string): void {
+	const stat = lstatSync(path);
+	if (stat.isSymbolicLink()) {
+		throw new Error("Symlinked credential path is not allowed.");
+	}
+	if (!stat.isDirectory()) {
+		throw new Error("Credential directory path is not a directory.");
+	}
+}
+
+function rejectSymlinkOrNonFile(path: string): void {
+	const stat = lstatSync(path);
+	if (stat.isSymbolicLink()) {
+		throw new Error("Symlinked credential path is not allowed.");
+	}
+	if (!stat.isFile()) {
+		throw new Error("Credential env path is not a regular file.");
+	}
 }
 
 /**
@@ -344,7 +507,7 @@ export async function handleSecretCaptureInput(
 
 	if (!isInteractiveCaptureSession(ctx)) {
 		const message =
-			`Orca detected secret-like input but cannot capture credentials in noninteractive Pi mode. ` +
+			`ryk detected secret-like input but cannot capture credentials in noninteractive Pi mode. ` +
 			`Re-run interactively to store as ${namesLabel}, or remove the secret from the prompt.`;
 		// Never include raw secret values in notifications.
 		ctx.ui?.notify?.(message, "error");
@@ -362,7 +525,7 @@ export async function handleSecretCaptureInput(
 	];
 
 	const choice = await ctx.ui?.select?.(
-		"Orca credential capture",
+		"ryk credential capture",
 		optionsList,
 		{ timeout: CAPTURE_TIMEOUT_MS, signal: ctx.signal },
 	);
@@ -496,12 +659,12 @@ function assignEnvNames(matches: SecretMatch[]): Map<string, string> {
 function buildReplacementGuide(names: string[]): string {
 	if (names.length === 1) {
 		return (
-			`[Orca] Use the ${names[0]} environment variable. ` +
+			`[ryk] Use the ${names[0]} environment variable. ` +
 			`Do not print or request the raw secret.`
 		);
 	}
 	return (
-		`[Orca] Use environment variable(s) ${names.join(", ")}. ` +
+		`[ryk] Use environment variable(s) ${names.join(", ")}. ` +
 		`Do not print or request the raw secret.`
 	);
 }
