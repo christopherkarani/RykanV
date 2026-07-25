@@ -2,6 +2,7 @@
 const std = @import("std");
 const shell_engine = @import("../shell_engine/mod.zig");
 const shell_eval = @import("shell_eval.zig");
+const shell_test = @import("shell_test.zig");
 const pack_config = @import("pack_config.zig");
 const core = @import("orca_core").core;
 const help = @import("help.zig");
@@ -79,14 +80,26 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     };
     defer packs.deinit(std.heap.smp_allocator);
 
+    // Permanent + allow-once on product path (distinct API, not options.allowlists).
+    // consume_allow_once=false: dry-run never burns single-use entries.
+    var stores: shell_eval.ProductShellStores = .{};
+    try shell_eval.loadProductShellStores(io, std.heap.smp_allocator, workspace, &stores);
+    defer stores.deinit(std.heap.smp_allocator);
+
     // Opt-in TraceCollector only on explain path (hooks leave null).
     var collector = shell_engine.TraceCollector.init(std.heap.smp_allocator);
     defer collector.deinit();
 
     var eval = try shell_engine.evaluateCommand(std.heap.smp_allocator, command_text, .{
+        .cwd = workspace,
         .default_packs_only = true,
         .extra_enabled = packs.enabled,
         .disabled = packs.disabled,
+        .permanent_allowlist = stores.permanent,
+        .allow_once_path = stores.allow_once_path,
+        .io = io,
+        .now_iso = stores.now_iso,
+        .consume_allow_once = false,
         .trace = &collector,
     });
     defer eval.deinit(std.heap.smp_allocator);
@@ -108,4 +121,258 @@ fn joinArgs(allocator: std.mem.Allocator, args: []const []const u8) ![]u8 {
         try list.appendSlice(allocator, arg);
     }
     return try list.toOwnedSlice(allocator);
+}
+
+// ---------------------------------------------------------------------------
+// s-product-wire — ryk explain product loaders
+// Loads permanent + allow-once; consume_allow_once=false (dry-run never burns).
+// ---------------------------------------------------------------------------
+
+const s_product_wire_now_seed = "2099-01-01T12:00:00Z";
+
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+fn sProductWireDupEnvZ(name: [*:0]const u8) !?[:0]u8 {
+    if (std.c.getenv(name)) |value| {
+        return try std.testing.allocator.dupeZ(u8, std.mem.sliceTo(value, 0));
+    }
+    return null;
+}
+
+fn sProductWireRestoreEnv(name: [*:0]const u8, previous: ?[:0]u8) void {
+    if (previous) |value| {
+        _ = setenv(name, value.ptr, 1);
+        std.testing.allocator.free(value);
+    } else {
+        _ = unsetenv(name);
+    }
+}
+
+fn sProductWireJoin(parts: []const []const u8) ![]u8 {
+    return try std.fs.path.join(std.testing.allocator, parts);
+}
+
+fn sProductWireIsolateXdg() !struct {
+    config_tmp: std.testing.TmpDir,
+    data_tmp: std.testing.TmpDir,
+    config_root: []u8,
+    data_root: []u8,
+    prev_config: ?[:0]u8,
+    prev_data: ?[:0]u8,
+
+    fn deinit(self: *@This()) void {
+        sProductWireRestoreEnv("XDG_CONFIG_HOME", self.prev_config);
+        sProductWireRestoreEnv("XDG_DATA_HOME", self.prev_data);
+        std.testing.allocator.free(self.config_root);
+        std.testing.allocator.free(self.data_root);
+        self.config_tmp.cleanup();
+        self.data_tmp.cleanup();
+    }
+} {
+    var config_tmp = std.testing.tmpDir(.{});
+    errdefer config_tmp.cleanup();
+    var data_tmp = std.testing.tmpDir(.{});
+    errdefer data_tmp.cleanup();
+
+    const config_z = try config_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(config_z);
+    const data_z = try data_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(data_z);
+    const config_root = try std.testing.allocator.dupe(u8, config_z);
+    errdefer std.testing.allocator.free(config_root);
+    const data_root = try std.testing.allocator.dupe(u8, data_z);
+    errdefer std.testing.allocator.free(data_root);
+
+    const prev_config = try sProductWireDupEnvZ("XDG_CONFIG_HOME");
+    errdefer if (prev_config) |p| std.testing.allocator.free(p);
+    const prev_data = try sProductWireDupEnvZ("XDG_DATA_HOME");
+    errdefer if (prev_data) |p| std.testing.allocator.free(p);
+
+    const config_z0 = try std.testing.allocator.dupeZ(u8, config_root);
+    defer std.testing.allocator.free(config_z0);
+    const data_z0 = try std.testing.allocator.dupeZ(u8, data_root);
+    defer std.testing.allocator.free(data_z0);
+    try std.testing.expectEqual(@as(c_int, 0), setenv("XDG_CONFIG_HOME", config_z0.ptr, 1));
+    try std.testing.expectEqual(@as(c_int, 0), setenv("XDG_DATA_HOME", data_z0.ptr, 1));
+
+    return .{
+        .config_tmp = config_tmp,
+        .data_tmp = data_tmp,
+        .config_root = config_root,
+        .data_root = data_root,
+        .prev_config = prev_config,
+        .prev_data = prev_data,
+    };
+}
+
+fn sProductWireWriteProjectCommandAllow(root: []const u8, command_text: []const u8, reason: []const u8) !void {
+    const orca_dir = try sProductWireJoin(&.{ root, ".orca" });
+    defer std.testing.allocator.free(orca_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, orca_dir);
+    const path = try sProductWireJoin(&.{ root, ".orca", "allowlist.toml" });
+    defer std.testing.allocator.free(path);
+    try shell_engine.allowlist_store.addEntry(
+        std.testing.io,
+        std.testing.allocator,
+        path,
+        .project,
+        .{
+            .kind = .command,
+            .command = command_text,
+            .reason = reason,
+            .created_at = "2026-07-25T12:00:00Z",
+            .expires_at = "9999-01-01T00:00:00Z",
+        },
+        null,
+    );
+}
+
+fn sProductWireSeedAllowOnce(
+    xdg_data: []const u8,
+    command_text: []const u8,
+    cwd: []const u8,
+    reason: []const u8,
+) !void {
+    const orca_dir = try sProductWireJoin(&.{ xdg_data, "orca" });
+    defer std.testing.allocator.free(orca_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, orca_dir);
+    const pending_path = try sProductWireJoin(&.{ xdg_data, "orca", shell_engine.allow_once.pending_file_name });
+    defer std.testing.allocator.free(pending_path);
+    const once_path = try sProductWireJoin(&.{ xdg_data, "orca", shell_engine.allow_once.allow_once_file_name });
+    defer std.testing.allocator.free(once_path);
+
+    var issued = try shell_engine.allow_once.issuePending(
+        std.testing.io,
+        std.testing.allocator,
+        pending_path,
+        command_text,
+        cwd,
+        reason,
+        s_product_wire_now_seed,
+        true,
+    );
+    defer issued.deinit(std.testing.allocator);
+    const entry = try shell_engine.allow_once.redeem(
+        std.testing.io,
+        std.testing.allocator,
+        pending_path,
+        once_path,
+        issued.record.short_code,
+        s_product_wire_now_seed,
+        .cwd,
+        cwd,
+    );
+    shell_engine.allow_once.freeAllowOnceEntry(std.testing.allocator, entry);
+}
+
+test "s-product-wire: shell_explain loads permanent allowlist (attribution, exit success)" {
+    var xdg = try sProductWireIsolateXdg();
+    defer xdg.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, ".git");
+    const root_z = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root_z);
+    const root = try std.testing.allocator.dupe(u8, root_z);
+    defer std.testing.allocator.free(root);
+
+    const cmd = "git reset --hard HEAD";
+    const reason = "s-product-wire shell_explain permanent command marker";
+    try sProductWireWriteProjectCommandAllow(root, cmd, reason);
+
+    const previous_cwd = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(previous_cwd);
+    try std.process.setCurrentDir(std.testing.io, tmp.dir);
+    defer std.process.setCurrentPath(std.testing.io, previous_cwd) catch {};
+
+    var stdout_buf: [16384]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try command(std.testing.io, &.{cmd}, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, code);
+    const out = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "ALLOW") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, reason) != null);
+}
+
+test "s-product-wire: shell_explain sets consume_allow_once false (does not burn single-use)" {
+    var xdg = try sProductWireIsolateXdg();
+    defer xdg.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, ".git");
+    const root_z = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root_z);
+    const root = try std.testing.allocator.dupe(u8, root_z);
+    defer std.testing.allocator.free(root);
+
+    const cmd = "git reset --hard HEAD";
+    const reason = "s-product-wire shell_explain allow-once non-consume marker";
+    try sProductWireSeedAllowOnce(xdg.data_root, cmd, root, reason);
+
+    const previous_cwd = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(previous_cwd);
+    try std.process.setCurrentDir(std.testing.io, tmp.dir);
+    defer std.process.setCurrentPath(std.testing.io, previous_cwd) catch {};
+
+    // Explain (dry-run): allow + attribute; leave store intact.
+    {
+        var stdout_buf: [16384]u8 = undefined;
+        var stderr_buf: [1024]u8 = undefined;
+        var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+        var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+        const code = try command(std.testing.io, &.{cmd}, &stdout_writer, &stderr_writer);
+        try std.testing.expectEqual(exit_codes.success, code);
+        const out = stdout_writer.buffered();
+        try std.testing.expect(std.mem.indexOf(u8, out, "ALLOW") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, reason) != null);
+    }
+
+    // Still available after explain: ryk test consumes once.
+    {
+        var stdout_buf: [4096]u8 = undefined;
+        var stderr_buf: [1024]u8 = undefined;
+        var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+        var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+        const code = try shell_test.command(std.testing.io, &.{cmd}, &stdout_writer, &stderr_writer);
+        try std.testing.expectEqual(@as(u8, 0), code);
+        const out = stdout_writer.buffered();
+        try std.testing.expect(std.mem.indexOf(u8, out, reason) != null);
+    }
+
+    // Burned after real consume.
+    {
+        var stdout_buf: [4096]u8 = undefined;
+        var stderr_buf: [1024]u8 = undefined;
+        var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+        var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+        const code = try shell_test.command(std.testing.io, &.{cmd}, &stdout_writer, &stderr_writer);
+        try std.testing.expectEqual(@as(u8, 2), code);
+    }
+}
+
+test "s-product-wire: shell_explain without stores still reports DENY for destructive" {
+    var xdg = try sProductWireIsolateXdg();
+    defer xdg.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, ".git");
+
+    const previous_cwd = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(previous_cwd);
+    try std.process.setCurrentDir(std.testing.io, tmp.dir);
+    defer std.process.setCurrentPath(std.testing.io, previous_cwd) catch {};
+
+    var stdout_buf: [16384]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try command(std.testing.io, &.{"git reset --hard HEAD"}, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, code);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "DENY") != null);
 }

@@ -140,6 +140,88 @@ pub fn synthesizeDaemonResponseFromZig(
     }) catch return error.ResponseParseFailed;
 }
 
+/// Product-path permanent allowlist + allow-once path resolution.
+/// Distinct from `EvaluateOptions.allowlists` (policy Layered / tests only).
+pub const ProductShellStores = struct {
+    permanent: shell_engine.allowlist_store.Store = .{},
+    /// Absolute path to `allow_once.jsonl` when XDG/home resolves; null disables allow-once.
+    allow_once_path: ?[]const u8 = null,
+    now_iso_buf: [32]u8 = undefined,
+    now_iso: []const u8 = "",
+
+    pub fn deinit(self: *ProductShellStores, allocator: std.mem.Allocator) void {
+        self.permanent.deinit(allocator);
+        if (self.allow_once_path) |p| allocator.free(p);
+        self.allow_once_path = null;
+        self.now_iso = "";
+    }
+};
+
+fn resolveUserAllowlistPath(allocator: std.mem.Allocator) !?[]u8 {
+    if (std.c.getenv("XDG_CONFIG_HOME")) |xdg| {
+        return try std.fs.path.join(allocator, &.{ std.mem.span(xdg), "orca", "allowlist.toml" });
+    }
+    const home = std.c.getenv("HOME") orelse return null;
+    return try std.fs.path.join(allocator, &.{ std.mem.span(home), ".config", "orca", "allowlist.toml" });
+}
+
+fn resolveAllowOnceJsonlPath(allocator: std.mem.Allocator) !?[]u8 {
+    if (std.c.getenv("XDG_DATA_HOME")) |xdg| {
+        return try std.fs.path.join(allocator, &.{
+            std.mem.span(xdg),
+            "orca",
+            shell_engine.allow_once.allow_once_file_name,
+        });
+    }
+    const home = std.c.getenv("HOME") orelse return null;
+    return try std.fs.path.join(allocator, &.{
+        std.mem.span(home),
+        ".local",
+        "share",
+        "orca",
+        shell_engine.allow_once.allow_once_file_name,
+    });
+}
+
+/// Load permanent allowlist (user + project) and resolve allow-once path for product
+/// evaluate paths (hook/run/shim, `ryk test`, `ryk explain`).
+///
+/// - Project file: `<workspace>/.orca/allowlist.toml`
+/// - User file: `$XDG_CONFIG_HOME/orca/allowlist.toml` or `~/.config/orca/allowlist.toml`
+/// - Allow-once: `$XDG_DATA_HOME/orca/allow_once.jsonl` or `~/.local/share/orca/allow_once.jsonl`
+///
+/// Missing files → empty layer / match miss. Corrupt permanent file → empty + no panic.
+/// Does **not** set `EvaluateOptions.allowlists` (Layered pre-pack banned on product path).
+pub fn loadProductShellStores(
+    runtime_io: std.Io,
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    out: *ProductShellStores,
+) !void {
+    out.* = .{};
+    errdefer out.deinit(allocator);
+
+    const iso = try core.time.Timestamp.now(runtime_io).formatIso(&out.now_iso_buf);
+    out.now_iso = out.now_iso_buf[0..iso.len];
+
+    const user_path = try resolveUserAllowlistPath(allocator);
+    defer if (user_path) |p| allocator.free(p);
+
+    const project_path = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "allowlist.toml" });
+    defer allocator.free(project_path);
+
+    // loadMerged only fails on OOM; corrupt/missing → empty store (fail closed, no unlock).
+    const outcome = try shell_engine.allowlist_store.loadMerged(
+        runtime_io,
+        allocator,
+        user_path,
+        project_path,
+    );
+    out.permanent = outcome.store;
+
+    out.allow_once_path = try resolveAllowOnceJsonlPath(allocator);
+}
+
 fn zigEvaluator(
     allocator: std.mem.Allocator,
     shell_event: ShellCommandEvent,
@@ -173,11 +255,22 @@ fn zigEvaluator(
     };
     defer packs.deinit(allocator);
 
+    // Permanent pack exceptions + allow-once via distinct API (not options.allowlists).
+    // consume_allow_once defaults true for hook/run/shim (burns single-use).
+    var stores: ProductShellStores = .{};
+    loadProductShellStores(io, allocator, workspace, &stores) catch return error.OutOfMemory;
+    defer stores.deinit(allocator);
+
     var eval = shell_engine.evaluateCommand(allocator, shell_event.command, .{
         .cwd = shell_event.cwd,
         .default_packs_only = true,
         .extra_enabled = packs.enabled,
         .disabled = packs.disabled,
+        .permanent_allowlist = stores.permanent,
+        .allow_once_path = stores.allow_once_path,
+        .io = io,
+        .now_iso = stores.now_iso,
+        // consume_allow_once: default true (product hook/run/shim)
     }) catch return error.OutOfMemory;
     defer eval.deinit(allocator);
     return synthesizeDaemonResponseFromZig(allocator, eval);
@@ -327,8 +420,12 @@ pub fn modeSoftenedReason(mode: policy.schema.Mode, severity: RiskLevel, plugin:
 //   engine allow still applies strict refuse (off-list block); sticky N/A on allow.
 //
 // CRITICAL: do **not** use shell_engine.evaluateCommand options.allowlists —
-// that path allows *before* packs and can unlock catastrophe. Permit matching
-// here reuses shell_engine.allowlist.Layered as a pure matcher only.
+// that Layered pre-pack short-circuit is for engine unit tests / legacy only
+// and can unlock catastrophe if used as a stand-in for policy permit.
+// Permit matching here reuses shell_engine.allowlist.Layered as a pure matcher
+// only (post hard-fence). Permanent pack-exception allowlist is intentional on
+// the product path via EvaluateOptions.permanent_allowlist (distinct store API)
+// — never via options.allowlists.
 // Sticky/policy live in this CLI layer so Mode A corpus evaluate stays pure.
 // ---------------------------------------------------------------------------
 
@@ -3254,4 +3351,377 @@ test "Fm decisionFromDaemonResultWithPolicy timeout keeps allow" {
 
     try std.testing.expectEqual(core.decision.DecisionResult.allow, decision.decision.result);
     try std.testing.expectEqual(@as(u32, 1), state.call_count);
+}
+
+// ---------------------------------------------------------------------------
+// s-product-wire — product loaders on zigEvaluator (hook/run/shim)
+// Locked INITIAL tests: RED until permanent + allow-once stores are wired into
+// EvaluateOptions (permanent_allowlist / allow_once_path / io / now_iso /
+// consume_allow_once) — never via options.allowlists / policy Layered.
+// ---------------------------------------------------------------------------
+
+const s_product_wire_now_seed = "2099-01-01T12:00:00Z";
+
+fn sProductWireDupEnvZ(name: [*:0]const u8) !?[:0]u8 {
+    if (std.c.getenv(name)) |value| {
+        return try std.testing.allocator.dupeZ(u8, std.mem.sliceTo(value, 0));
+    }
+    return null;
+}
+
+fn sProductWireRestoreEnv(name: [*:0]const u8, previous: ?[:0]u8) void {
+    if (previous) |value| {
+        _ = setenv(name, value.ptr, 1);
+        std.testing.allocator.free(value);
+    } else {
+        _ = unsetenv(name);
+    }
+}
+
+fn sProductWireJoin(parts: []const []const u8) ![]u8 {
+    return try std.fs.path.join(std.testing.allocator, parts);
+}
+
+fn sProductWireWriteProjectCommandAllow(
+    root: []const u8,
+    cmd_text: []const u8,
+    reason: []const u8,
+) !void {
+    const orca_dir = try sProductWireJoin(&.{ root, ".orca" });
+    defer std.testing.allocator.free(orca_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, orca_dir);
+    const path = try sProductWireJoin(&.{ root, ".orca", "allowlist.toml" });
+    defer std.testing.allocator.free(path);
+    try shell_engine.allowlist_store.addEntry(
+        std.testing.io,
+        std.testing.allocator,
+        path,
+        .project,
+        .{
+            .kind = .command,
+            .command = cmd_text,
+            .reason = reason,
+            .created_at = "2026-07-25T12:00:00Z",
+            .expires_at = "9999-01-01T00:00:00Z",
+        },
+        null,
+    );
+}
+
+fn sProductWireWriteProjectRuleAllow(
+    root: []const u8,
+    rule_id: []const u8,
+    reason: []const u8,
+) !void {
+    const orca_dir = try sProductWireJoin(&.{ root, ".orca" });
+    defer std.testing.allocator.free(orca_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, orca_dir);
+    const path = try sProductWireJoin(&.{ root, ".orca", "allowlist.toml" });
+    defer std.testing.allocator.free(path);
+    try shell_engine.allowlist_store.addEntry(
+        std.testing.io,
+        std.testing.allocator,
+        path,
+        .project,
+        .{
+            .kind = .rule,
+            .id = rule_id,
+            .reason = reason,
+            .created_at = "2026-07-25T12:00:00Z",
+            .expires_at = "9999-01-01T00:00:00Z",
+        },
+        null,
+    );
+}
+
+fn sProductWireWriteUserCommandAllow(
+    xdg_config: []const u8,
+    cmd_text: []const u8,
+    reason: []const u8,
+) !void {
+    const orca_dir = try sProductWireJoin(&.{ xdg_config, "orca" });
+    defer std.testing.allocator.free(orca_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, orca_dir);
+    const path = try sProductWireJoin(&.{ xdg_config, "orca", "allowlist.toml" });
+    defer std.testing.allocator.free(path);
+    try shell_engine.allowlist_store.addEntry(
+        std.testing.io,
+        std.testing.allocator,
+        path,
+        .user,
+        .{
+            .kind = .command,
+            .command = cmd_text,
+            .reason = reason,
+            .created_at = "2026-07-25T12:00:00Z",
+            .expires_at = "9999-01-01T00:00:00Z",
+        },
+        null,
+    );
+}
+
+fn sProductWireSeedAllowOnce(
+    xdg_data: []const u8,
+    cmd_text: []const u8,
+    cwd: []const u8,
+    reason: []const u8,
+) !void {
+    const orca_dir = try sProductWireJoin(&.{ xdg_data, "orca" });
+    defer std.testing.allocator.free(orca_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, orca_dir);
+    const pending_path = try sProductWireJoin(&.{ xdg_data, "orca", shell_engine.allow_once.pending_file_name });
+    defer std.testing.allocator.free(pending_path);
+    const once_path = try sProductWireJoin(&.{ xdg_data, "orca", shell_engine.allow_once.allow_once_file_name });
+    defer std.testing.allocator.free(once_path);
+
+    var issued = try shell_engine.allow_once.issuePending(
+        std.testing.io,
+        std.testing.allocator,
+        pending_path,
+        cmd_text,
+        cwd,
+        reason,
+        s_product_wire_now_seed,
+        true,
+    );
+    defer issued.deinit(std.testing.allocator);
+    const entry = try shell_engine.allow_once.redeem(
+        std.testing.io,
+        std.testing.allocator,
+        pending_path,
+        once_path,
+        issued.record.short_code,
+        s_product_wire_now_seed,
+        .cwd,
+        cwd,
+    );
+    shell_engine.allow_once.freeAllowOnceEntry(std.testing.allocator, entry);
+}
+
+/// Isolate XDG config/data homes for product-path store resolution.
+fn sProductWireIsolateXdg() !struct {
+    config_tmp: std.testing.TmpDir,
+    data_tmp: std.testing.TmpDir,
+    config_root: []u8,
+    data_root: []u8,
+    prev_config: ?[:0]u8,
+    prev_data: ?[:0]u8,
+
+    fn deinit(self: *@This()) void {
+        sProductWireRestoreEnv("XDG_CONFIG_HOME", self.prev_config);
+        sProductWireRestoreEnv("XDG_DATA_HOME", self.prev_data);
+        std.testing.allocator.free(self.config_root);
+        std.testing.allocator.free(self.data_root);
+        self.config_tmp.cleanup();
+        self.data_tmp.cleanup();
+    }
+} {
+    var config_tmp = std.testing.tmpDir(.{});
+    errdefer config_tmp.cleanup();
+    var data_tmp = std.testing.tmpDir(.{});
+    errdefer data_tmp.cleanup();
+
+    const config_z = try config_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(config_z);
+    const data_z = try data_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(data_z);
+    const config_root = try std.testing.allocator.dupe(u8, config_z);
+    errdefer std.testing.allocator.free(config_root);
+    const data_root = try std.testing.allocator.dupe(u8, data_z);
+    errdefer std.testing.allocator.free(data_root);
+
+    const prev_config = try sProductWireDupEnvZ("XDG_CONFIG_HOME");
+    errdefer if (prev_config) |p| std.testing.allocator.free(p);
+    const prev_data = try sProductWireDupEnvZ("XDG_DATA_HOME");
+    errdefer if (prev_data) |p| std.testing.allocator.free(p);
+
+    const config_z0 = try std.testing.allocator.dupeZ(u8, config_root);
+    defer std.testing.allocator.free(config_z0);
+    const data_z0 = try std.testing.allocator.dupeZ(u8, data_root);
+    defer std.testing.allocator.free(data_z0);
+    try std.testing.expectEqual(@as(c_int, 0), setenv("XDG_CONFIG_HOME", config_z0.ptr, 1));
+    try std.testing.expectEqual(@as(c_int, 0), setenv("XDG_DATA_HOME", data_z0.ptr, 1));
+
+    return .{
+        .config_tmp = config_tmp,
+        .data_tmp = data_tmp,
+        .config_root = config_root,
+        .data_root = data_root,
+        .prev_config = prev_config,
+        .prev_data = prev_data,
+    };
+}
+
+fn sProductWireGitWorkspace() !struct {
+    tmp: std.testing.TmpDir,
+    root: []u8,
+
+    fn deinit(self: *@This()) void {
+        std.testing.allocator.free(self.root);
+        self.tmp.cleanup();
+    }
+} {
+    var tmp = std.testing.tmpDir(.{});
+    errdefer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, ".git");
+    const root_z = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root_z);
+    const root = try std.testing.allocator.dupe(u8, root_z);
+    return .{ .tmp = tmp, .root = root };
+}
+
+test "s-product-wire: zigEvaluator loads project permanent kind=command into permanent_allowlist (not options.allowlists)" {
+    const allocator = std.testing.allocator;
+    var xdg = try sProductWireIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sProductWireGitWorkspace();
+    defer ws.deinit();
+
+    const cmd = "git reset --hard HEAD";
+    const reason = "s-product-wire permanent command marker reason for zigEvaluator";
+    try sProductWireWriteProjectCommandAllow(ws.root, cmd, reason);
+
+    // Baseline without entry would deny; with permanent product load → Allow + reason.
+    {
+        var parsed = try zigEvaluator(allocator, .{
+            .command = cmd,
+            .cwd = ws.root,
+        });
+        defer parsed.deinit();
+        try std.testing.expectEqual(daemon.ResponseStatus.allow, daemon.responseStatus(parsed.value.result));
+        const got_reason = daemon.responseReason(parsed.value.result) orelse "";
+        try std.testing.expect(std.mem.indexOf(u8, got_reason, reason) != null);
+    }
+
+    // Exact-only: near-miss still denies (proves not Layered prefix via options.allowlists).
+    {
+        var parsed = try zigEvaluator(allocator, .{
+            .command = "git reset --hard HEAD~1",
+            .cwd = ws.root,
+        });
+        defer parsed.deinit();
+        try std.testing.expectEqual(daemon.ResponseStatus.deny, daemon.responseStatus(parsed.value.result));
+        const got_reason = daemon.responseReason(parsed.value.result) orelse "";
+        try std.testing.expect(std.mem.indexOf(u8, got_reason, reason) == null);
+    }
+}
+
+test "s-product-wire: zigEvaluator loads user permanent allowlist from XDG_CONFIG_HOME" {
+    const allocator = std.testing.allocator;
+    var xdg = try sProductWireIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sProductWireGitWorkspace();
+    defer ws.deinit();
+
+    const cmd = "git reset --hard HEAD";
+    const reason = "s-product-wire user-layer permanent command marker";
+    try sProductWireWriteUserCommandAllow(xdg.config_root, cmd, reason);
+
+    var parsed = try zigEvaluator(allocator, .{
+        .command = cmd,
+        .cwd = ws.root,
+    });
+    defer parsed.deinit();
+    try std.testing.expectEqual(daemon.ResponseStatus.allow, daemon.responseStatus(parsed.value.result));
+    const got_reason = daemon.responseReason(parsed.value.result) orelse "";
+    try std.testing.expect(std.mem.indexOf(u8, got_reason, reason) != null);
+}
+
+test "s-product-wire: zigEvaluator loads project permanent kind=rule (E8 skip-this-rule)" {
+    const allocator = std.testing.allocator;
+    var xdg = try sProductWireIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sProductWireGitWorkspace();
+    defer ws.deinit();
+
+    const reason = "s-product-wire permanent rule marker for zigEvaluator E8";
+    try sProductWireWriteProjectRuleAllow(ws.root, "core.git:reset-hard", reason);
+
+    {
+        var parsed = try zigEvaluator(allocator, .{
+            .command = "git reset --hard HEAD",
+            .cwd = ws.root,
+        });
+        defer parsed.deinit();
+        try std.testing.expectEqual(daemon.ResponseStatus.allow, daemon.responseStatus(parsed.value.result));
+        const got_reason = daemon.responseReason(parsed.value.result) orelse "";
+        try std.testing.expect(std.mem.indexOf(u8, got_reason, reason) != null);
+    }
+
+    // E8: compound still denies (filesystem / other pack).
+    {
+        var parsed = try zigEvaluator(allocator, .{
+            .command = "git reset --hard; rm -rf /",
+            .cwd = ws.root,
+        });
+        defer parsed.deinit();
+        try std.testing.expectEqual(daemon.ResponseStatus.deny, daemon.responseStatus(parsed.value.result));
+    }
+}
+
+test "s-product-wire: zigEvaluator loads allow-once from XDG data and consumes by default" {
+    const allocator = std.testing.allocator;
+    var xdg = try sProductWireIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sProductWireGitWorkspace();
+    defer ws.deinit();
+
+    const cmd = "git reset --hard HEAD";
+    const reason = "s-product-wire allow-once marker for zigEvaluator consume";
+    try sProductWireSeedAllowOnce(xdg.data_root, cmd, ws.root, reason);
+
+    {
+        var parsed = try zigEvaluator(allocator, .{
+            .command = cmd,
+            .cwd = ws.root,
+        });
+        defer parsed.deinit();
+        try std.testing.expectEqual(daemon.ResponseStatus.allow, daemon.responseStatus(parsed.value.result));
+        const got_reason = daemon.responseReason(parsed.value.result) orelse "";
+        try std.testing.expect(std.mem.indexOf(u8, got_reason, reason) != null);
+    }
+
+    // Default consume_allow_once=true burns single-use → second evaluate denies.
+    {
+        var parsed = try zigEvaluator(allocator, .{
+            .command = cmd,
+            .cwd = ws.root,
+        });
+        defer parsed.deinit();
+        try std.testing.expectEqual(daemon.ResponseStatus.deny, daemon.responseStatus(parsed.value.result));
+    }
+}
+
+test "s-product-wire: zigEvaluator without stores still denies destructive (baseline packs-only)" {
+    const allocator = std.testing.allocator;
+    var xdg = try sProductWireIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sProductWireGitWorkspace();
+    defer ws.deinit();
+
+    var parsed = try zigEvaluator(allocator, .{
+        .command = "git reset --hard HEAD",
+        .cwd = ws.root,
+    });
+    defer parsed.deinit();
+    try std.testing.expectEqual(daemon.ResponseStatus.deny, daemon.responseStatus(parsed.value.result));
+}
+
+test "s-product-wire: CRITICAL comment bans options.allowlists Layered pre-pack; permanent API intentional" {
+    // Source contract: ban stays on policy Layered / options.allowlists pre-pack short-circuit;
+    // permanent pack-exception API must be acknowledged as intentional product path.
+    const src = @embedFile("shell_eval.zig");
+    const crit = std.mem.indexOf(u8, src, "CRITICAL") orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    const end = @min(src.len, crit + 1200);
+    const window = src[crit..end];
+    try std.testing.expect(std.mem.indexOf(u8, window, "allowlists") != null);
+    try std.testing.expect(std.mem.indexOf(u8, window, "Layered") != null);
+    // Clarified comment must mention permanent pack exceptions (distinct API).
+    const has_permanent = std.mem.indexOf(u8, window, "permanent") != null;
+    const has_pack_exception = std.mem.indexOf(u8, window, "pack exception") != null or
+        std.mem.indexOf(u8, window, "pack-exception") != null;
+    try std.testing.expect(has_permanent or has_pack_exception);
 }
