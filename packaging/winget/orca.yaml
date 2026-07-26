@@ -1,6 +1,6 @@
 # Winget compat template (prefer ChrisKarani.Ryk). Release automation must replace checksums before publishing.
 PackageIdentifier: ChrisKarani.Orca
-PackageVersion: 1.2.8
+PackageVersion: 1.2.9
 PackageName: ryk (orca compat)
 Publisher: Chris Karani
 License: Apache-2.0
