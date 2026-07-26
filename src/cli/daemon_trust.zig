@@ -95,7 +95,7 @@ fn pathOwnerUid(io: std.Io, path: []const u8) !std.posix.uid_t {
         const linux = std.os.linux;
         var stx = std.mem.zeroes(linux.Statx);
         const rc = linux.statx(file.handle, "", linux.AT.EMPTY_PATH, .{ .UID = true }, &stx);
-        if (linux.E.init(rc) != .SUCCESS) return error.StatFailed;
+        if (std.posix.errno(@as(isize, @intCast(rc))) != .SUCCESS) return error.StatFailed;
         if (!stx.mask.UID) return error.StatFailed;
         return stx.uid;
     }
