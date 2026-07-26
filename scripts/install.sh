@@ -7,7 +7,7 @@ set -eu
 #   curl -fsSL https://raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh | sh
 #
 # Environment (prefer RYK_*; fall back ORCA_* for one major):
-#   RYK_VERSION / ORCA_VERSION         Pin release version (default: latest / local VERSION / 1.2.0)
+#   RYK_VERSION / ORCA_VERSION         Pin release version (default: latest / local VERSION / 1.2.9)
 #   RYK_INSTALL_DIR / ORCA_INSTALL_DIR Binary install dir (default: ~/.local/bin)
 #   RYK_SHARE_DIR / ORCA_SHARE_DIR     Runtime share root (default: ~/.local/share/orca — kept in 5a)
 #   RYK_BASE_URL / ORCA_BASE_URL       Override release base URL
@@ -20,7 +20,7 @@ set -eu
 # Robust VERSION resolution (piped-safe):
 # - File execution (dev, local checkout): read ../VERSION when present.
 # - Piped public install (curl | sh): $0 is not a regular file, so we skip the
-#   local read and fall through to the GitHub API (or ORCA_VERSION / 1.2.0).
+#   local read and fall through to the GitHub API (or ORCA_VERSION / 1.2.9).
 # - ORCA_VERSION always wins. Hardcoded value is only the final safety net.
 
 SCRIPT_DIR=""
@@ -155,7 +155,7 @@ if [ -n "$SCRIPT_DIR" ] && [ -r "${SCRIPT_DIR}/../VERSION" ]; then
   DEFAULT_VERSION="$(tr -d '[:space:]' < "${SCRIPT_DIR}/../VERSION" 2>/dev/null || true)"
 fi
 
-RESOLVED_FROM="fallback 1.2.0"
+RESOLVED_FROM="fallback 1.2.9"
 if [ -n "${RYK_VERSION:-${ORCA_VERSION:-}}" ]; then
   RESOLVED_FROM="version environment override"
 elif [ -n "${DEFAULT_VERSION}" ]; then
@@ -179,7 +179,7 @@ else
   fi
 fi
 
-VERSION="${RYK_VERSION:-${ORCA_VERSION:-${DEFAULT_VERSION:-1.2.0}}}"
+VERSION="${RYK_VERSION:-${ORCA_VERSION:-${DEFAULT_VERSION:-1.2.9}}}"
 BASE_URL="${RYK_BASE_URL:-${ORCA_BASE_URL:-https://github.com/christopherkarani/rykan/releases/download/v${VERSION}}}"
 INSTALL_DIR="${RYK_INSTALL_DIR:-${ORCA_INSTALL_DIR:-${HOME}/.local/bin}}"
 # Phase 5a: keep existing share layout under share/orca (path migrate is Phase 5b).
