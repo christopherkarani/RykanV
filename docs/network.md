@@ -73,7 +73,7 @@ The `credentials.use` value is a reference name for policy, audit, and external 
 - Orca does not perform HTTPS MITM.
 - Proxy startup alone is not route forcing. `ORCA_PROXY_ROUTE_FORCED=false` means the child received proxy env only.
 - With `network.backend: proxy` plus OS sandbox attach, Orca installs child OS network rules where supported and exports `ORCA_PROXY_ROUTE_FORCED=true`. Scope differs by mechanism:
-  - **macOS Seatbelt:** outbound TCP only to the Orca **loopback** proxy port (`localhost:port` SBPL). Stronger for non-TCP than Landlock for this path; residual mach-lookup / XPC isolation is still out of scope (see `docs/platform-macos.md` Seatbelt residual).
+  - **macOS Seatbelt:** outbound TCP only to the Orca **loopback** proxy port (`localhost:port` SBPL). Under default `--seatbelt-profile hardened` (and `compatible`), inbound/bind remain open (Landlock connect-only parity). Under `strict`, inbound/bind are denied. Residual mach-lookup / XPC isolation is still out of scope (see `docs/platform-macos.md` Seatbelt residual).
   - **Linux Landlock (ABI >= 4):** TCP **port-scoped only** (any remote IP on the proxy port; not address-scoped). **UDP/QUIC unrestricted.** Do **not** describe Landlock route force as loopback-only.
 - `--require-backend network-proxy` is satisfied only when the explicit proxy backend starts successfully. `--require-backend network_enforce` is satisfied only by a route-forced OS sandbox session, not by proxy startup alone.
 

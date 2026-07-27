@@ -43,6 +43,33 @@ pub const OsSandboxMode = enum {
     }
 };
 
+/// macOS Seatbelt residual grade (orthogonal to `--os-sandbox` attach mode).
+///
+/// - `compatible`: historical broad residuals (`process*`, broad `/private/var`, route-force
+///   keeps inbound/bind).
+/// - `hardened` (default): narrowed process ops + bootstrap FS; same network residual model.
+/// - `strict`: hardened FS/process plus no listeners under route-force; no broad `network*`
+///   when route forcing is absent (deny-default). Still not process/XPC isolation.
+pub const SeatbeltProfileGrade = enum {
+    compatible,
+    hardened,
+    strict,
+
+    /// Production default after residual harden work.
+    pub const default_grade: SeatbeltProfileGrade = .hardened;
+
+    pub fn parse(value: []const u8) ?SeatbeltProfileGrade {
+        if (std.mem.eql(u8, value, "compatible")) return .compatible;
+        if (std.mem.eql(u8, value, "hardened")) return .hardened;
+        if (std.mem.eql(u8, value, "strict")) return .strict;
+        return null;
+    }
+
+    pub fn toString(self: SeatbeltProfileGrade) []const u8 {
+        return @tagName(self);
+    }
+};
+
 /// Mechanism names are for verbose diagnostics only (S-GLO-03).
 pub const BackendMechanism = enum {
     none,
@@ -275,6 +302,12 @@ test "os-sandbox mode parse" {
     try std.testing.expectEqual(OsSandboxMode.on, OsSandboxMode.parse("on").?);
     try std.testing.expectEqual(OsSandboxMode.off, OsSandboxMode.parse("off").?);
     try std.testing.expect(OsSandboxMode.parse("seatbelt") == null);
+
+    try std.testing.expectEqual(SeatbeltProfileGrade.compatible, SeatbeltProfileGrade.parse("compatible").?);
+    try std.testing.expectEqual(SeatbeltProfileGrade.hardened, SeatbeltProfileGrade.parse("hardened").?);
+    try std.testing.expectEqual(SeatbeltProfileGrade.strict, SeatbeltProfileGrade.parse("strict").?);
+    try std.testing.expect(SeatbeltProfileGrade.parse("default") == null);
+    try std.testing.expectEqual(SeatbeltProfileGrade.hardened, SeatbeltProfileGrade.default_grade);
 }
 
 test "session banner is mechanism-neutral (S-GLO-03)" {

@@ -28,6 +28,7 @@ const profile = @import("profile.zig");
 const env_scrub = @import("env_scrub.zig");
 const landlock = @import("landlock.zig");
 const macos_seatbelt = @import("macos_seatbelt.zig");
+const macos_profile = @import("macos_profile.zig");
 const apply_posix = @import("apply_posix.zig");
 const session_tmp = @import("session_tmp.zig");
 
@@ -77,6 +78,8 @@ pub const ChildMaterials = union(enum) {
         /// Static string (not heap-owned). Used on activate so receipts cannot drift
         /// from a second hardcoded source of truth.
         fs_scope: []const u8,
+        /// Residual grade used when rendering SBPL (receipts/network_scope honesty).
+        profile_grade: macos_profile.SeatbeltProfileGrade = .hardened,
     },
 
     pub fn deinit(self: *ChildMaterials) void {
@@ -116,6 +119,8 @@ pub const ApplyBoundary = struct {
     /// child network rules that force outbound TCP through the loopback proxy.
     network_proxy_port: ?u16 = null,
     require_network_route_forcing: bool = false,
+    /// macOS Seatbelt residual grade (ignored on non-macOS). Default hardened.
+    seatbelt_profile: macos_profile.SeatbeltProfileGrade = macos_profile.SeatbeltProfileGrade.default_grade,
     /// When `error.RequireFailed` is returned, set to a static reason code if non-null.
     fail_reason_out: ?*[]const u8 = null,
 };
@@ -196,14 +201,14 @@ pub const ApplyResult = struct {
             .seatbelt => .seatbelt,
         };
         // Resolve network_scope once per mechanism (M-15: no duplicated receipt arms).
-        const network_scope: []const u8 = if (self.network_route_forced)
-            switch (mechanism) {
-                .landlock => "proxy route-forced (TCP connect port-scoped to proxy port; not address-scoped; UDP unrestricted)",
-                .seatbelt => "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind unrestricted)",
-                .none => unreachable,
-            }
-        else
-            "unrestricted";
+        const network_scope: []const u8 = switch (self.materials) {
+            .none => unreachable,
+            .landlock => if (self.network_route_forced)
+                "proxy route-forced (TCP connect port-scoped to proxy port; not address-scoped; UDP unrestricted)"
+            else
+                "unrestricted",
+            .seatbelt => |*s| macos_profile.networkScopeSummary(s.profile_grade, self.network_route_forced),
+        };
         const fs_scope: []const u8 = switch (self.materials) {
             .none => unreachable,
             .landlock => |*p| p.compiled.effectiveFsScopeSummary(.landlock),
@@ -303,6 +308,8 @@ const PlatformApplyOutcome = struct {
     seatbelt_sbpl_z: ?[:0]u8 = null,
     /// Allocator that owns `seatbelt_sbpl_z` when non-null.
     sbpl_allocator: ?std.mem.Allocator = null,
+    /// Seatbelt residual grade for receipt honesty (macOS only).
+    seatbelt_profile_grade: macos_profile.SeatbeltProfileGrade = .hardened,
 
     pub fn deinit(self: *PlatformApplyOutcome) void {
         if (self.seatbelt_sbpl_z) |p| {
@@ -737,7 +744,12 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
     // Platform OS prepare — Linux Landlock ABI probe; macOS Seatbelt prepare.
     // FD scrub / real attach run only in the forked agent child (`apply_posix`), never here.
     // OOM on Seatbelt prepare propagates as `error.OutOfMemory` (never soft .failed).
-    var platform = try tryPlatformApply(boundary.allocator, &compiled, boundary.network_proxy_port);
+    var platform = try tryPlatformApply(
+        boundary.allocator,
+        &compiled,
+        boundary.network_proxy_port,
+        boundary.seatbelt_profile,
+    );
     defer platform.deinit();
 
     if (boundary.require_network_route_forcing and !platform.network_route_forced) {
@@ -839,6 +851,7 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
                     .sbpl_z = sbpl_z,
                     .allocator = boundary.allocator,
                     .fs_scope = seatbelt_scope,
+                    .profile_grade = platform.seatbelt_profile_grade,
                 } },
                 .network_route_forced = platform.network_route_forced,
             };
@@ -878,10 +891,11 @@ fn tryPlatformApply(
     allocator: std.mem.Allocator,
     compiled: *const profile.CompiledProfile,
     network_proxy_port: ?u16,
+    seatbelt_profile: macos_profile.SeatbeltProfileGrade,
 ) ApplyError!PlatformApplyOutcome {
     return switch (builtin.os.tag) {
         .linux => tryPlatformApplyLinux(network_proxy_port),
-        .macos => try tryMacOsSeatbelt(allocator, compiled, network_proxy_port),
+        .macos => try tryMacOsSeatbelt(allocator, compiled, network_proxy_port, seatbelt_profile),
         else => .{
             .status = .unavailable,
             .mechanism = .none,
@@ -894,12 +908,16 @@ fn tryMacOsSeatbelt(
     allocator: std.mem.Allocator,
     compiled: *const profile.CompiledProfile,
     network_proxy_port: ?u16,
+    seatbelt_profile: macos_profile.SeatbeltProfileGrade,
 ) ApplyError!PlatformApplyOutcome {
     const prepared = macos_seatbelt.prepareForChildApplyWithOptions(
         allocator,
         compiled,
         macos_seatbelt.evaluateSupport(),
-        .{ .network_route_forcing = if (network_proxy_port) |port| .{ .proxy_port = port } else null },
+        .{
+            .network_route_forcing = if (network_proxy_port) |port| .{ .proxy_port = port } else null,
+            .profile_grade = seatbelt_profile,
+        },
     );
     return switch (prepared.status) {
         .unavailable => .{
@@ -908,6 +926,7 @@ fn tryMacOsSeatbelt(
             .reason_code = prepared.reason_code,
             .seatbelt_sbpl_z = null,
             .sbpl_allocator = null,
+            .seatbelt_profile_grade = seatbelt_profile,
         },
         // Single OOM/soft-fail path (M-9): never twin the reason-code match inline.
         .failed => try mapSeatbeltPrepareFailure(prepared.reason_code),
@@ -918,6 +937,7 @@ fn tryMacOsSeatbelt(
             .seatbelt_sbpl_z = prepared.sbpl_z,
             .sbpl_allocator = allocator,
             .network_route_forced = network_proxy_port != null,
+            .seatbelt_profile_grade = seatbelt_profile,
         },
     };
 }
@@ -1386,6 +1406,7 @@ test "activateAfterHandshake sets seatbelt loopback route-forced network_scope" 
             .sbpl_z = sbpl,
             .allocator = std.testing.allocator,
             .fs_scope = fs_scope,
+            .profile_grade = .hardened,
         } },
     };
     defer result.deinit();
@@ -1396,7 +1417,7 @@ test "activateAfterHandshake sets seatbelt loopback route-forced network_scope" 
         "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind unrestricted)",
         result.receipt.network_scope,
     );
-    // Unforced path stays unrestricted.
+    // Unforced path stays unrestricted under hardened.
     var unforced: ApplyResult = .{
         .receipt = posture.preparedReceipt(.seatbelt, "seatbelt_child_apply_required"),
         .profile_compiled = true,
@@ -1406,11 +1427,37 @@ test "activateAfterHandshake sets seatbelt loopback route-forced network_scope" 
             .sbpl_z = try std.testing.allocator.dupeZ(u8, "(version 1)\n"),
             .allocator = std.testing.allocator,
             .fs_scope = fs_scope,
+            .profile_grade = .hardened,
         } },
     };
     defer unforced.deinit();
     _ = try unforced.activateAfterHandshake();
     try std.testing.expectEqualStrings("unrestricted", unforced.receipt.network_scope);
+}
+
+test "activateAfterHandshake strict route-forced denies inbound/bind in network_scope" {
+    const hash: [64]u8 = .{'f'} ** 64;
+    const sbpl = try std.testing.allocator.dupeZ(u8, "(version 1)\n");
+    const fs_scope = "workspace RW, system RO, no home, control write-deny (readable), mach-lookup residual";
+    var result: ApplyResult = .{
+        .receipt = posture.preparedReceipt(.seatbelt, "seatbelt_child_apply_required"),
+        .profile_compiled = true,
+        .profile_hash_hex = hash,
+        .network_route_forced = true,
+        .materials = .{ .seatbelt = .{
+            .sbpl_z = sbpl,
+            .allocator = std.testing.allocator,
+            .fs_scope = fs_scope,
+            .profile_grade = .strict,
+        } },
+    };
+    defer result.deinit();
+
+    _ = try result.activateAfterHandshake();
+    try std.testing.expectEqualStrings(
+        "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind denied)",
+        result.receipt.network_scope,
+    );
 }
 
 test "require_network_route_forcing without proxy port fails closed" {

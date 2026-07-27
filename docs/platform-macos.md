@@ -35,9 +35,34 @@ Protected agent launches (`orca <agent>`) use the run engine and can attach a cu
 - **`on`** fails closed when attach cannot complete.
 - **`off`** disables OS apply.
 
+## Seatbelt profile grades
+
+`--os-sandbox` controls attach mode only. Residual surface is controlled separately with:
+
+```sh
+ryk run --seatbelt-profile compatible|hardened|strict -- ...
+# or: ORCA_SEATBELT_PROFILE=compatible|hardened|strict
+```
+
+| Grade | Default | Process | Bootstrap FS | Network without route-force | Network with route-force |
+|---|---|---|---|---|---|
+| `compatible` | no | `(allow process*)` | broad `/private/var` read | `(allow network*)` | outbound proxy TCP + inbound/bind open |
+| `hardened` | **yes** | `process-fork` / `process-exec` / `process-info*` | dyld + `/private/var/select` + tmp (no broad `/private/var`) | `(allow network*)` | outbound proxy TCP + inbound/bind open (Landlock parity) |
+| `strict` | opt-in | same as hardened | same as hardened | no broad `network*` (deny default) | outbound proxy TCP only; **inbound/bind denied** |
+
+All grades still allow unfiltered `(allow mach-lookup)` (dyld/system services residual — not an XPC allowlist) and do **not** provide process isolation. Use `compatible` if a tool regresses under `hardened`.
+
+Invalid `ORCA_SEATBELT_PROFILE` values are **ignored with a stderr warning** and keep the default `hardened` (never silently select a weaker grade). Invalid `--seatbelt-profile` fails usage.
+
 ## Network route forcing
 
-When the proxy backend is active and OS sandbox attach succeeds, Orca renders the child Seatbelt profile without broad `(allow network*)` and permits outbound TCP only to the Orca loopback proxy port. Inbound TCP and bind remain allowed so agents can still start listeners (dev servers, test databases, ephemeral binds); route forcing is outbound connect mediation, not a listener lockdown (same product intent as Landlock connect-only rules). The runtime banner reports `network: proxy route-forced...`, and the child env exports `ORCA_PROXY_ROUTE_FORCED=true` plus `ORCA_TRANSPARENT_NETWORK_ENFORCEMENT=tcp-port-route-forced` (TCP route-force honesty label; Seatbelt still does not claim full XPC/mach isolation).
+When the proxy backend is active and OS sandbox attach succeeds, Orca renders the child Seatbelt profile without broad `(allow network*)` and permits outbound TCP only to the Orca loopback proxy port.
+
+Under **`hardened` / `compatible`**, inbound TCP and bind remain allowed so agents can still start listeners (dev servers, test databases, ephemeral binds); route forcing is outbound connect mediation, not a listener lockdown (same product intent as Landlock connect-only rules).
+
+Under **`strict`**, inbound/bind are omitted (listener lockdown — intentional Landlock parity break). Without route force, `strict` also omits broad `network*` so deny-default blocks network.
+
+The runtime banner reports `network: proxy route-forced...`, and the child env exports `ORCA_PROXY_ROUTE_FORCED=true` plus `ORCA_TRANSPARENT_NETWORK_ENFORCEMENT=tcp-port-route-forced` (TCP route-force honesty label; Seatbelt still does not claim full XPC/mach isolation).
 
 Proxy startup alone is not enough: without a route-forced OS sandbox session, the child env reports `ORCA_PROXY_ROUTE_FORCED=false`, and `--require-backend network_enforce` fails closed.
 
@@ -55,16 +80,19 @@ Orca does not install an Endpoint Security extension, kernel extension, or admin
 
 Seatbelt session attach enforces filesystem path scope for the agent child and, when proxy route forcing is requested, child outbound TCP scope to the Orca proxy port. It does **not** provide general process isolation or IPC isolation.
 
-Baseline SBPL intentionally allows (product residual, not a claim of confinement):
+Baseline SBPL residuals (not a claim of full confinement). **Default grade is `hardened`:**
 
-| Grant | Role | Residual |
-|---|---|---|
-| `(allow process*)` / `(allow signal)` | Child lifecycle, exec, signals | Not process isolation between agent and host |
-| `(allow mach-lookup)` | dyld / system mach services (unfiltered) | Unrestricted mach service lookup; not a service allowlist |
-| `(allow network*)` | Agent network use when route forcing is not requested | Network is unconstrained by the FS-only profile |
+| Grant | Grade | Role | Residual |
+|---|---|---|---|
+| `(allow process*)` | `compatible` only | Unrestricted process ops | Historical residual |
+| `process-fork` / `process-exec` / `process-info*` + `(allow signal)` | `hardened` / `strict` | Child lifecycle | Still not process isolation between agent and host |
+| `(allow mach-lookup)` | all | dyld / system mach services (unfiltered) | Unrestricted mach service lookup; not a service allowlist |
+| `(allow network*)` | `compatible` / `hardened` when not route-forced | Agent network use | Network unconstrained by the FS-only profile |
+| inbound/bind open under route-force | `compatible` / `hardened` | Dev servers / listeners | Connect mediation only |
+| inbound/bind denied under route-force | `strict` | Listener lockdown | Stronger residual close; breaks Landlock parity intentionally |
 
-When route forcing is requested, the broad network grant is omitted and replaced with: unrestricted `(allow network-inbound)` / `(allow network-bind)`, plus a single `network-outbound` TCP rule for the local proxy port.
+**FS claims that remain accurate** when session-attach succeeds: workspace RW (minus control-root write carve-outs), system RO prefixes, no broad `$HOME` grant, and deny of the `/System/Volumes/Data` firmlink home surface (with workspace grants emitted as `/Users/…` form so Seatbelt path filters match live). Under `hardened`/`strict`, bootstrap reads no longer grant broad `/private/var` (only dyld, `/private/var/select`, and tmp).
 
-**FS claims that remain accurate** when session-attach succeeds: workspace RW (minus control-root write carve-outs), system RO prefixes, no broad `$HOME` grant, and deny of the `/System/Volumes/Data` firmlink home surface (with workspace grants emitted as `/Users/…` form so Seatbelt path filters match live).
+**Multi-thread / fork residual:** `sandbox_init` is not async-signal-safe; Orca may fork while the parent has (or will have) threads. SBPL is parent-pre-rendered and the child path is short; residual libsystem risk remains accepted. A multi-thread stress canary exists in unit tests; do not claim async-signal-safe attach.
 
 Do not treat Seatbelt attach as process confinement, XPC/mach isolation, or credential isolation.

@@ -31,6 +31,7 @@ pub fn applyForRun(
     env_map: *std.process.Environ.Map,
     network_proxy_port: ?u16,
     require_network_route_forcing: bool,
+    seatbelt_profile: sandbox.posture.SeatbeltProfileGrade,
     stderr: anytype,
     launch_argv0: ?[]const u8,
 ) !ApplyForRunOutcome {
@@ -51,6 +52,7 @@ pub fn applyForRun(
         .launch_exec_paths = launch_exec_paths,
         .network_proxy_port = network_proxy_port,
         .require_network_route_forcing = require_network_route_forcing,
+        .seatbelt_profile = seatbelt_profile,
         .fail_reason_out = &fail_reason,
     }) catch |err| switch (err) {
         error.RequireFailed => {

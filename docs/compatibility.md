@@ -57,6 +57,7 @@ Reserve marketing “firewall” / “maximum protection” for a **verified** m
 | Transparent filesystem enforcement | staged writes; Landlock attach when available | limited; Seatbelt attach when available | limited |
 | Strong sandbox (session-attach) | Landlock when ABI ≥ 1 (kernel 5.13+); else unavailable | Seatbelt capability majors 14–26; else unavailable | unavailable |
 | Advanced `--os-sandbox` flag | auto \| on \| off (default auto) | auto \| on \| off (default auto) | off / unavailable |
+| Advanced `--seatbelt-profile` / `ORCA_SEATBELT_PROFILE` | n/a (Landlock) | compatible \| hardened \| strict (default **hardened**) | n/a |
 | Process cleanup | active or partial | active | partial |
 | Red-team suite | active | active | active |
 
