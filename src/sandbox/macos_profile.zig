@@ -328,6 +328,27 @@ test "SBPL control roots deny write under workspace" {
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-write* (subpath \"/workspace/proj/.orca\"))") != null);
 }
 
+test "SBPL emits process-exec for launch .exec grants without HOME" {
+    const allocator = std.testing.allocator;
+    const home = "/Users/dev";
+    const agent_bin = "/Users/dev/.local/share/claude/versions/2.1.196";
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = "/Users/dev/projects/app",
+        .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
+        .exec_paths = &.{agent_bin},
+    });
+    defer compiled.deinit();
+
+    const sbpl = try renderSbpl(allocator, &compiled);
+    defer allocator.free(sbpl);
+
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow process-exec (subpath \"/Users/dev/.local/share/claude/versions/2.1.196\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/.local/share/claude/versions/2.1.196\"))") != null);
+    // Still no broad HOME.
+    try std.testing.expect(!sbplGrantsHome(sbpl, home));
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(subpath \"/Users/dev\")") == null);
+}
+
 test "SBPL never grants broad HOME" {
     const allocator = std.testing.allocator;
     const home = "/Users/dev";

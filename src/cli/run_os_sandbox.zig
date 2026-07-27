@@ -19,6 +19,11 @@ pub const ApplyForRunOutcome = union(enum) {
 };
 
 /// Apply OS sandbox for the production run path.
+///
+/// `launch_argv0` is the agent command (first argv of `ryk run -- <cmd>`). When set,
+/// resolved absolute file paths are granted as narrow `.exec` profile entries so
+/// agents installed outside workspace/system prefixes (typical `~/.local/...`) can
+/// pass child preflight after Seatbelt/Landlock attach.
 pub fn applyForRun(
     allocator: std.mem.Allocator,
     mode: sandbox.posture.OsSandboxMode,
@@ -27,13 +32,23 @@ pub fn applyForRun(
     network_proxy_port: ?u16,
     require_network_route_forcing: bool,
     stderr: anytype,
+    launch_argv0: ?[]const u8,
 ) !ApplyForRunOutcome {
     var fail_reason: []const u8 = "unknown";
+    var io_rt: std.Io.Threaded = .init_single_threaded;
+    const launch_io = io_rt.io();
+    const launch_exec_paths: []const []const u8 = if (launch_argv0) |argv0|
+        try sandbox.apply.collectLaunchExecPaths(launch_io, allocator, argv0, env_map)
+    else
+        &.{};
+    defer if (launch_argv0 != null) sandbox.apply.freeLaunchExecPaths(allocator, launch_exec_paths);
+
     const result = sandbox.apply.applyBeforeExec(.{
         .allocator = allocator,
         .mode = mode,
         .workspace_root = workspace_root,
         .env_map = env_map,
+        .launch_exec_paths = launch_exec_paths,
         .network_proxy_port = network_proxy_port,
         .require_network_route_forcing = require_network_route_forcing,
         .fail_reason_out = &fail_reason,

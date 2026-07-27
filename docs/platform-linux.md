@@ -27,6 +27,7 @@ Protected agent launches (`orca <agent>`) use the run engine and can attach a La
 - **Probe ≠ session-attach.** Doctor Landlock / strong-sandbox reports are capability evidence only. Doctor never reports a live session as `active` from a probe alone.
 - **Session-attach** is claimable only after apply-before-exec child attach succeeds for that run (with a profile hash). The pre-exec status handshake (`status_ok`) does not prove `execve`; an `active` session can still fail at exec (e.g. exit 127).
 - **FS scope (Landlock):** workspace child RW with workspace-root RO — create/write at the workspace root is denied; Seatbelt (macOS) allows full workspace subpath RW including create-at-root.
+- **Launch binary grant:** the resolved agent executable (and realpath target when a symlink), plus the launch file’s shebang interpreter when present, are granted as narrow read+exec **files** so installs outside the workspace (e.g. `~/.local/bin`) can pass child preflight/exec after attach. This is **not** a broad `$HOME` grant.
 - **`auto`** attaches when the host supports Landlock ABI ≥ 1 and degrades loudly when it does not.
 - **`on`** fails closed when attach cannot complete.
 - **`off`** disables OS apply.
