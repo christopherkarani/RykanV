@@ -109,16 +109,23 @@ pub fn renderSbplWithOptions(
     );
 
     // Path grants from the portable profile model (Users-form when under Data/Users).
+    // `.exec` uses `literal` (file-only) so a mistaken directory path cannot tree-open.
     try out.appendSlice(allocator, ";; compiled path grants\n");
     for (compiled.grants) |g| {
         // Metadata only under granted trees.
-        try appendAllowSubpath(&out, allocator, "file-read-metadata", g.path);
         switch (g.mode) {
-            .ro, .exec => {
+            .exec => {
+                try appendAllowLiteral(&out, allocator, "file-read-metadata", g.path);
+                try appendAllowLiteral(&out, allocator, "file-read*", g.path);
+                try appendAllowLiteral(&out, allocator, "process-exec", g.path);
+            },
+            .ro => {
+                try appendAllowSubpath(&out, allocator, "file-read-metadata", g.path);
                 try appendAllowSubpath(&out, allocator, "file-read*", g.path);
                 try appendAllowSubpath(&out, allocator, "process-exec", g.path);
             },
             .rw => {
+                try appendAllowSubpath(&out, allocator, "file-read-metadata", g.path);
                 try appendAllowSubpath(&out, allocator, "file-read*", g.path);
                 // RW with control-root write denies (require-not).
                 try appendAllowWriteMinusControls(&out, allocator, g.path, compiled.control_roots);
@@ -162,13 +169,19 @@ pub fn renderSbplWithOptions(
             try out.appendSlice(allocator, ";; re-allow non-Users grants under /System/Volumes/Data (last-match after Data deny)\n");
             reallowed = true;
         }
-        try appendAllowSubpath(&out, allocator, "file-read-metadata", g.path);
         switch (g.mode) {
-            .ro, .exec => {
+            .exec => {
+                try appendAllowLiteral(&out, allocator, "file-read-metadata", g.path);
+                try appendAllowLiteral(&out, allocator, "file-read*", g.path);
+                try appendAllowLiteral(&out, allocator, "process-exec", g.path);
+            },
+            .ro => {
+                try appendAllowSubpath(&out, allocator, "file-read-metadata", g.path);
                 try appendAllowSubpath(&out, allocator, "file-read*", g.path);
                 try appendAllowSubpath(&out, allocator, "process-exec", g.path);
             },
             .rw => {
+                try appendAllowSubpath(&out, allocator, "file-read-metadata", g.path);
                 try appendAllowSubpath(&out, allocator, "file-read*", g.path);
                 try appendAllowWriteMinusControls(&out, allocator, g.path, compiled.control_roots);
             },
@@ -217,6 +230,21 @@ fn appendAllowSubpath(
     try out.appendSlice(allocator, "(allow ");
     try out.appendSlice(allocator, op);
     try out.appendSlice(allocator, " (subpath \"");
+    try appendEscaped(out, allocator, emit);
+    try out.appendSlice(allocator, "\"))\n");
+}
+
+/// File-only allow (no tree open). Used for `.exec` launch-binary grants.
+fn appendAllowLiteral(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    op: []const u8,
+    path: []const u8,
+) !void {
+    const emit = sbplEmitPath(path);
+    try out.appendSlice(allocator, "(allow ");
+    try out.appendSlice(allocator, op);
+    try out.appendSlice(allocator, " (literal \"");
     try appendEscaped(out, allocator, emit);
     try out.appendSlice(allocator, "\"))\n");
 }
@@ -342,8 +370,10 @@ test "SBPL emits process-exec for launch .exec grants without HOME" {
     const sbpl = try renderSbpl(allocator, &compiled);
     defer allocator.free(sbpl);
 
-    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow process-exec (subpath \"/Users/dev/.local/share/claude/versions/2.1.196\"))") != null);
-    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/.local/share/claude/versions/2.1.196\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow process-exec (literal \"/Users/dev/.local/share/claude/versions/2.1.196\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/Users/dev/.local/share/claude/versions/2.1.196\"))") != null);
+    // Exec grants must not tree-open via subpath.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow process-exec (subpath \"/Users/dev/.local/share/claude/versions/2.1.196\"))") == null);
     // Still no broad HOME.
     try std.testing.expect(!sbplGrantsHome(sbpl, home));
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(subpath \"/Users/dev\")") == null);

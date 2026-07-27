@@ -56,8 +56,8 @@ pub const CompileOptions = struct {
     /// outside workspace/system prefixes (typical: `~/.local/share/...`).
     ///
     /// Callers must pass **narrow file paths only** — never `$HOME`, `/`, or other
-    /// directory trees. `compileProfile` still rejects filesystem-root and empty paths;
-    /// broad directory exec grants would subpath-open the whole tree under Seatbelt.
+    /// directory trees. `compileProfile` rejects filesystem-root exec (`InvalidExecPath`);
+    /// apply layers re-check file-ness (Seatbelt `literal`, Landlock regular-file gate).
     exec_paths: []const []const u8 = &.{},
 };
 
@@ -470,7 +470,8 @@ fn appendUniqueRwGrant(
 }
 
 /// Append a unique `.exec` grant. Fail closed on empty / non-absolute / filesystem root.
-/// Does not open the path (pure compile); callers must not pass directory trees.
+/// Does not open the path (pure compile); callers must pass regular files only.
+/// Apply layers re-check file-ness (Seatbelt `literal`, Landlock regular-file gate).
 fn appendUniqueExecGrant(
     grants_list: *std.ArrayList(PathGrant),
     allocator: std.mem.Allocator,
@@ -479,7 +480,7 @@ fn appendUniqueExecGrant(
     const canon = try canonicalizeAbsolute(allocator, raw_path);
     errdefer allocator.free(canon);
     // Never grant bare `/` as exec — covers every absolute path under isPathWithin.
-    if (canon.len == 1 and canon[0] == '/') return error.InvalidWorkspace;
+    if (canon.len == 1 and canon[0] == '/') return error.InvalidExecPath;
     for (grants_list.items) |g| {
         if (pathEqual(g.path, canon) and g.mode == .exec) {
             allocator.free(canon);
@@ -701,7 +702,7 @@ test "launch exec_paths compile as .exec grants without HOME or RW" {
 
 test "launch exec_paths reject filesystem root" {
     const allocator = std.testing.allocator;
-    try std.testing.expectError(error.InvalidWorkspace, compileProfile(allocator, .{
+    try std.testing.expectError(error.InvalidExecPath, compileProfile(allocator, .{
         .workspace_root = "/Users/dev/projects/app",
         .system_ro_prefixes = &[_][]const u8{"/usr"},
         .exec_paths = &.{"/"},

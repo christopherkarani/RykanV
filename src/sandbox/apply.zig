@@ -533,34 +533,98 @@ fn readShebangInterpreterToken(
 }
 
 /// Parse the body after `#!` into an interpreter path or bare name.
-/// Supports absolute paths and `env` / `env -S` with a minimal flag skip.
+/// Supports absolute paths and `env` with flags/assignments (`-S`, `-u NAME`, `VAR=val`).
 fn parseShebangInterpreterToken(line: []const u8) ?[]const u8 {
     if (line.len == 0) return null;
 
     var pos: usize = 0;
-    while (pos < line.len and (line[pos] == ' ' or line[pos] == '\t')) pos += 1;
-    if (pos >= line.len) return null;
-
-    const first_start = pos;
-    while (pos < line.len and line[pos] != ' ' and line[pos] != '\t') pos += 1;
-    const first = line[first_start..pos];
-    if (first.len == 0) return null;
-
+    const first = nextShebangToken(line, &pos) orelse return null;
     const base = std.fs.path.basename(first);
     if (!std.mem.eql(u8, base, "env")) return first;
 
-    // #!/usr/bin/env NAME  or  #!/usr/bin/env -S NAME ...
-    while (pos < line.len) {
-        while (pos < line.len and (line[pos] == ' ' or line[pos] == '\t')) pos += 1;
-        if (pos >= line.len) return null;
-        const tok_start = pos;
-        while (pos < line.len and line[pos] != ' ' and line[pos] != '\t') pos += 1;
-        const tok = line[tok_start..pos];
-        if (tok.len == 0) return null;
-        if (tok[0] == '-') continue;
-        return tok;
+    // #!/usr/bin/env [options|assignments…] NAME …
+    while (nextShebangToken(line, &pos)) |tok| {
+        if (tok[0] != '-') {
+            if (isEnvAssignmentToken(tok)) continue;
+            return tok;
+        }
+
+        // Long options: --unset=NAME / --unset NAME / --split-string=S / …
+        if (std.mem.startsWith(u8, tok, "--")) {
+            if (std.mem.indexOfScalar(u8, tok, '=')) |eq| {
+                if (std.mem.eql(u8, tok[0..eq], "--split-string")) {
+                    return firstShebangWord(tok[eq + 1 ..]);
+                }
+                continue;
+            }
+            if (!envLongOptionTakesArg(tok)) continue;
+            const arg = nextShebangToken(line, &pos) orelse return null;
+            if (std.mem.eql(u8, tok, "--split-string")) return firstShebangWord(arg);
+            continue;
+        }
+
+        // Short options: -i / -v / -0 / -u NAME / -uNAME / -S / -Snode / -P PATH …
+        if (tok.len < 2) continue;
+        const opt = tok[1];
+        if (!envShortOptionTakesArg(opt)) continue;
+
+        if (tok.len > 2) {
+            // Attached argument: -uFOO, -Snode --flag, -P/opt/bin
+            if (opt == 'S') return firstShebangWord(tok[2..]);
+            continue;
+        }
+
+        // Separate argument for -u/-C/-P/-S.
+        // Bare `-S` with no payload (`env -S -P /opt/bin node`) does not consume the next
+        // token as an -S string — subsequent flags must still be scanned.
+        if (opt == 'S') continue;
+
+        _ = nextShebangToken(line, &pos) orelse return null;
     }
     return null;
+}
+
+fn nextShebangToken(line: []const u8, pos: *usize) ?[]const u8 {
+    while (pos.* < line.len and (line[pos.*] == ' ' or line[pos.*] == '\t')) pos.* += 1;
+    if (pos.* >= line.len) return null;
+    const start = pos.*;
+    while (pos.* < line.len and line[pos.*] != ' ' and line[pos.*] != '\t') pos.* += 1;
+    if (pos.* == start) return null;
+    return line[start..pos.*];
+}
+
+fn firstShebangWord(s: []const u8) ?[]const u8 {
+    var i: usize = 0;
+    while (i < s.len and (s[i] == ' ' or s[i] == '\t')) i += 1;
+    if (i >= s.len) return null;
+    const start = i;
+    while (i < s.len and s[i] != ' ' and s[i] != '\t') i += 1;
+    const word = s[start..i];
+    if (word.len == 0 or word[0] == '-') return null;
+    if (isEnvAssignmentToken(word)) return null;
+    return word;
+}
+
+fn envShortOptionTakesArg(opt: u8) bool {
+    return switch (opt) {
+        'u', 'C', 'P', 'S' => true,
+        else => false,
+    };
+}
+
+fn envLongOptionTakesArg(tok: []const u8) bool {
+    return std.mem.eql(u8, tok, "--unset") or
+        std.mem.eql(u8, tok, "--chdir") or
+        std.mem.eql(u8, tok, "--path") or
+        std.mem.eql(u8, tok, "--split-string");
+}
+
+fn isEnvAssignmentToken(tok: []const u8) bool {
+    const eq = std.mem.indexOfScalar(u8, tok, '=') orelse return false;
+    if (eq == 0) return false;
+    // Paths can contain '=' rarely; treat slash before '=' as a path, not an assignment.
+    if (std.mem.indexOfScalar(u8, tok[0..eq], '/') != null) return false;
+    return true;
 }
 
 fn envHome(env_map: ?*const std.process.Environ.Map) ?[]const u8 {
@@ -613,7 +677,8 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
 
     // Compile pure profile (grants model only — no syscalls).
     // OOM is never a soft grade-drop: propagate so callers fail closed hard.
-    // InvalidWorkspace / other compile failures → profile_compile_failed (on→RequireFailed, auto→unavailable).
+    // InvalidWorkspace / InvalidExecPath / other compile failures → profile_compile_failed
+    // (on→RequireFailed, auto→unavailable).
     var compiled = profile.compileProfile(boundary.allocator, .{
         .workspace_root = boundary.workspace_root,
         .control_roots = boundary.control_roots,
@@ -1768,7 +1833,15 @@ test "parseShebangInterpreterToken handles env and absolute forms" {
     try std.testing.expectEqualStrings("/usr/bin/python3", parseShebangInterpreterToken("/usr/bin/python3").?);
     try std.testing.expectEqualStrings("node", parseShebangInterpreterToken("/usr/bin/env node").?);
     try std.testing.expectEqualStrings("node", parseShebangInterpreterToken("/usr/bin/env -S node --experimental").?);
+    try std.testing.expectEqualStrings("node", parseShebangInterpreterToken("/usr/bin/env -Snode --experimental").?);
+    try std.testing.expectEqualStrings("node", parseShebangInterpreterToken("/usr/bin/env -u FOO node").?);
+    try std.testing.expectEqualStrings("node", parseShebangInterpreterToken("/usr/bin/env -uFOO node").?);
+    try std.testing.expectEqualStrings("node", parseShebangInterpreterToken("/usr/bin/env -S -P /opt/bin node").?);
+    try std.testing.expectEqualStrings("node", parseShebangInterpreterToken("/usr/bin/env FOO=bar node").?);
+    try std.testing.expectEqualStrings("node", parseShebangInterpreterToken("/usr/bin/env --unset=FOO node").?);
+    try std.testing.expectEqualStrings("node", parseShebangInterpreterToken("/usr/bin/env --split-string=node --experimental").?);
     try std.testing.expect(parseShebangInterpreterToken("/usr/bin/env") == null);
+    try std.testing.expect(parseShebangInterpreterToken("/usr/bin/env -u") == null);
     try std.testing.expect(parseShebangInterpreterToken("") == null);
 }
 

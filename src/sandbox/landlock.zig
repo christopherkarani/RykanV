@@ -505,6 +505,27 @@ fn addPathBeneathRule(
     allowed: u64,
     required: bool,
 ) ApplyError!bool {
+    return addPathBeneathRuleInner(ruleset_fd, path, allowed, required, false);
+}
+
+/// Like `addPathBeneathRule`, but fail closed if the path is not a regular file.
+/// Used for `.exec` grants so a directory cannot PATH_BENEATH-open a tree.
+fn addPathBeneathRuleFileOnly(
+    ruleset_fd: i32,
+    path: []const u8,
+    allowed: u64,
+    required: bool,
+) ApplyError!bool {
+    return addPathBeneathRuleInner(ruleset_fd, path, allowed, required, true);
+}
+
+fn addPathBeneathRuleInner(
+    ruleset_fd: i32,
+    path: []const u8,
+    allowed: u64,
+    required: bool,
+    file_only: bool,
+) ApplyError!bool {
     if (builtin.os.tag != .linux) return error.Unsupported;
     const linux = std.os.linux;
     if (allowed == 0) return false;
@@ -526,6 +547,16 @@ fn addPathBeneathRule(
             return false;
         };
     defer _ = linux.close(path_fd);
+
+    if (file_only) {
+        var stx = std.mem.zeroes(linux.Statx);
+        const stx_rc = linux.statx(path_fd, "", linux.AT.EMPTY_PATH, .{ .TYPE = true }, &stx);
+        if (linux.errno(stx_rc) != .SUCCESS or !stx.mask.TYPE) {
+            // Cannot prove regular file — refuse exec tree widen.
+            return error.ApplyFailed;
+        }
+        if (!linux.S.ISREG(stx.mode)) return error.ApplyFailed;
+    }
 
     var beneath = PathBeneathAttr{
         .allowed_access = allowed,
@@ -661,7 +692,13 @@ fn applySelfLinux(
         }
 
         const required = grant.mode == .rw;
-        const installed = try addPathBeneathRule(ruleset_fd, grant.path, allowed, required);
+        // `.exec` is file-only: refuse directory PATH_BENEATH (tree exec/read widen).
+        // File PATH_BENEATH is sufficient for execve — Landlock does not mediate
+        // directory path-walk (see docs/platform-linux.md); do not grant ancestors.
+        const installed = if (grant.mode == .exec)
+            try addPathBeneathRuleFileOnly(ruleset_fd, grant.path, allowed, true)
+        else
+            try addPathBeneathRule(ruleset_fd, grant.path, allowed, required);
         if (installed and grant.mode == .rw and std.mem.eql(u8, grant.path, compiled.workspace_root)) {
             workspace_granted = true;
         }
