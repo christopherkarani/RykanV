@@ -139,6 +139,9 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     try installBackendEnvironment(&filtered_env.env_map, backend_report);
 
     // Production apply-before-exec (helpers in run_os_sandbox.zig).
+    // Pass argv0 so agents installed under $HOME (e.g. ~/.local/share/claude) get
+    // narrow .exec grants — without this, child preflight fails with child_apply_failed.
+    const launch_argv0: ?[]const u8 = if (options.command_argv.len > 0) options.command_argv[0] else null;
     var apply_result = switch (try run_os_sandbox.applyForRun(
         allocator,
         options.os_sandbox,
@@ -147,6 +150,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         if (proxy_runtime) |runtime| runtime.bindPort() else null,
         requiresBackend(options, .network_enforce),
         stderr,
+        launch_argv0,
     )) {
         .require_failed => |code| return code,
         .ok => |r| r,

@@ -51,6 +51,14 @@ pub const CompileOptions = struct {
     /// Override default system RO prefixes (tests / platforms). Null = use defaults.
     /// Null also opts production into Linux device RW nodes (`/dev/null`, urandom).
     system_ro_prefixes: ?[]const []const u8 = null,
+    /// Absolute paths for the agent launch binary (and realpath target when different).
+    /// Compiled as `.exec` grants so preflight/exec can read+execute agents that live
+    /// outside workspace/system prefixes (typical: `~/.local/share/...`).
+    ///
+    /// Callers must pass **narrow file paths only** — never `$HOME`, `/`, or other
+    /// directory trees. `compileProfile` rejects filesystem-root exec (`InvalidExecPath`);
+    /// apply layers re-check file-ness (Seatbelt `literal`, Landlock regular-file gate).
+    exec_paths: []const []const u8 = &.{},
 };
 
 pub const CompiledProfile = struct {
@@ -362,6 +370,12 @@ pub fn compileProfile(allocator: std.mem.Allocator, options: CompileOptions) !Co
         }
     }
 
+    // Launch-binary exec grants (agents installed under $HOME, nvm, etc.).
+    // Narrow file paths only — never ambient HOME or filesystem root.
+    for (options.exec_paths) |raw_exec| {
+        try appendUniqueExecGrant(&grants_list, allocator, raw_exec);
+    }
+
     // Control roots: always workspace/.orca plus any listed roots.
     var control_list: std.ArrayList([]const u8) = .empty;
     errdefer {
@@ -453,6 +467,27 @@ fn appendUniqueRwGrant(
         allocator.free(canon);
         return err;
     };
+}
+
+/// Append a unique `.exec` grant. Fail closed on empty / non-absolute / filesystem root.
+/// Does not open the path (pure compile); callers must pass regular files only.
+/// Apply layers re-check file-ness (Seatbelt `literal`, Landlock regular-file gate).
+fn appendUniqueExecGrant(
+    grants_list: *std.ArrayList(PathGrant),
+    allocator: std.mem.Allocator,
+    raw_path: []const u8,
+) !void {
+    const canon = try canonicalizeAbsolute(allocator, raw_path);
+    errdefer allocator.free(canon);
+    // Never grant bare `/` as exec — covers every absolute path under isPathWithin.
+    if (canon.len == 1 and canon[0] == '/') return error.InvalidExecPath;
+    for (grants_list.items) |g| {
+        if (pathEqual(g.path, canon) and g.mode == .exec) {
+            allocator.free(canon);
+            return;
+        }
+    }
+    try grants_list.append(allocator, .{ .path = canon, .mode = .exec });
 }
 
 fn pathLessThan(_: void, a: []const u8, b: []const u8) bool {
@@ -635,6 +670,43 @@ test "P1-U-03 no broad HOME grant" {
     try std.testing.expect(!profile.isAgentWritable("/Users/dev/.ssh/id_rsa"));
     // Workspace under home is still granted (narrower than HOME).
     try std.testing.expect(profile.isAgentWritable(ws));
+}
+
+test "launch exec_paths compile as .exec grants without HOME or RW" {
+    const allocator = std.testing.allocator;
+    const home = "/Users/dev";
+    const ws = "/Users/dev/projects/app";
+    const agent_bin = "/Users/dev/.local/share/claude/versions/2.1.196";
+    const agent_link = "/Users/dev/.local/bin/claude";
+    var compiled = try compileProfile(allocator, .{
+        .workspace_root = ws,
+        .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
+        .exec_paths = &.{ agent_bin, agent_link },
+    });
+    defer compiled.deinit();
+
+    try std.testing.expect(compiled.hasGrant(agent_bin, .exec));
+    try std.testing.expect(compiled.hasGrant(agent_link, .exec));
+    // Exec grants are not RW and do not open HOME.
+    try std.testing.expect(!compiled.hasGrant(agent_bin, .rw));
+    try std.testing.expect(!compiled.hasGrant(home, .exec));
+    try std.testing.expect(!compiled.hasGrant(home, .ro));
+    try std.testing.expect(!compiled.hasGrant(home, .rw));
+    try std.testing.expect(!compiled.grantsHome(home));
+    try std.testing.expect(!compiled.isAgentWritable(home));
+    try std.testing.expect(!compiled.isAgentWritable("/Users/dev/.ssh/id_rsa"));
+    // Content-readable under pure model for the binary path only.
+    try std.testing.expect(compiled.isGrantedReadable(agent_bin));
+    try std.testing.expect(!compiled.isGrantedReadable("/Users/dev/.ssh/id_rsa"));
+}
+
+test "launch exec_paths reject filesystem root" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(error.InvalidExecPath, compileProfile(allocator, .{
+        .workspace_root = "/Users/dev/projects/app",
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+        .exec_paths = &.{"/"},
+    }));
 }
 
 test "P1-U-06 empty and relative workspace fail closed" {

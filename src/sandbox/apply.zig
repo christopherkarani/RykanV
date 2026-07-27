@@ -108,6 +108,10 @@ pub const ApplyBoundary = struct {
     /// Extra profile options.
     include_tmp: bool = false,
     control_roots: []const []const u8 = &.{},
+    /// Absolute launch-binary paths for `.exec` profile grants (see `collectLaunchExecPaths`).
+    /// Agents installed outside workspace/system prefixes (e.g. `~/.local/...`) need these
+    /// so child preflight after Seatbelt/Landlock can still read+exec argv0.
+    launch_exec_paths: []const []const u8 = &.{},
     /// Optional per-launch proxy TCP port. When set, supported platforms install
     /// child network rules that force outbound TCP through the loopback proxy.
     network_proxy_port: ?u16 = null,
@@ -362,6 +366,289 @@ pub fn rewriteTempEnvForAttach(
     return env_map.get("TMPDIR") orelse error.SessionTmpPrepareFailed;
 }
 
+/// Resolve argv0 into narrow absolute **file** paths for `.exec` profile grants.
+///
+/// Returns an owned slice of owned path strings (caller frees each path, then the slice).
+/// Empty slice when argv0 cannot be resolved or is not a regular file — never invents grants.
+///
+/// Always includes the lexical absolute path used for exec and, when different, the
+/// realpath target (symlink → install tree). When the launch file is a shebang script,
+/// also grants the shebang interpreter (absolute path, or PATH-resolved name from
+/// `#!/usr/bin/env NAME` / minimal `env -S`) through the same file-only filters.
+/// Rejects filesystem root and `$HOME` itself so Seatbelt `subpath` cannot open the
+/// whole home tree. Does not recurse into nested scripts.
+pub fn collectLaunchExecPaths(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    argv0: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}![]const []const u8 {
+    if (argv0.len == 0) return try allocator.alloc([]const u8, 0);
+
+    const resolved = apply_posix.resolveArgv0(io, allocator, argv0, env_map) catch {
+        return try allocator.alloc([]const u8, 0);
+    };
+    defer if (resolved.owned) allocator.free(resolved.path);
+
+    const abs = try absolutePathForGrant(io, allocator, resolved.path);
+    defer allocator.free(abs);
+
+    var list: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (list.items) |p| allocator.free(p);
+        list.deinit(allocator);
+    }
+
+    try appendLaunchExecCandidate(io, allocator, &list, abs, env_map);
+
+    // Symlink target when different (e.g. ~/.local/bin/claude → versions/N).
+    var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (realpathInto(abs, &real_buf)) |real| {
+        if (!std.mem.eql(u8, real, abs)) {
+            try appendLaunchExecCandidate(io, allocator, &list, real, env_map);
+        }
+    }
+
+    // Shebang interpreter of the launch file only (not nested scripts).
+    try appendShebangInterpreterGrants(io, allocator, &list, abs, env_map);
+
+    return try list.toOwnedSlice(allocator);
+}
+
+/// Free the slice returned by `collectLaunchExecPaths`.
+pub fn freeLaunchExecPaths(allocator: std.mem.Allocator, paths: []const []const u8) void {
+    for (paths) |p| allocator.free(p);
+    allocator.free(paths);
+}
+
+/// Make `path` absolute (lexical). Relative paths join cwd.
+fn absolutePathForGrant(io: std.Io, allocator: std.mem.Allocator, path: []const u8) error{OutOfMemory}![]u8 {
+    if (std.fs.path.isAbsolute(path)) {
+        return allocator.dupe(u8, path) catch return error.OutOfMemory;
+    }
+    const cwd = std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator) catch {
+        // Fall back to lexical join with "."; compile still requires absolute later.
+        return std.fmt.allocPrint(allocator, "/{s}", .{path}) catch return error.OutOfMemory;
+    };
+    defer allocator.free(cwd);
+    return std.fs.path.join(allocator, &.{ cwd, path }) catch return error.OutOfMemory;
+}
+
+fn realpathInto(path: []const u8, out: *[std.fs.max_path_bytes]u8) ?[]const u8 {
+    if (path.len == 0 or path.len >= std.fs.max_path_bytes) return null;
+    var in_buf: [std.fs.max_path_bytes]u8 = undefined;
+    @memcpy(in_buf[0..path.len], path);
+    in_buf[path.len] = 0;
+    const resolved = std.c.realpath(in_buf[0..path.len :0].ptr, out) orelse return null;
+    return std.mem.span(resolved);
+}
+
+fn appendLaunchExecCandidate(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList([]const u8),
+    path: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!void {
+    if (path.len == 0) return;
+    if (path.len == 1 and path[0] == '/') return;
+    // Never grant bare $HOME (Seatbelt subpath would open the whole tree).
+    if (envHome(env_map)) |home| {
+        if (std.mem.eql(u8, path, home)) return;
+    }
+    // Regular files only — directory exec grants would subpath-open entire trees.
+    if (!isRegularFile(io, path)) return;
+
+    for (list.items) |existing| {
+        if (std.mem.eql(u8, existing, path)) return;
+    }
+    const owned = try allocator.dupe(u8, path);
+    errdefer allocator.free(owned);
+    try list.append(allocator, owned);
+}
+
+/// Max bytes scanned at the start of a launch file for a shebang line.
+const shebang_scan_max: usize = 512;
+
+/// If `script_path` begins with `#!`, resolve the interpreter and append file-only
+/// `.exec` candidates (lexical + realpath). Unreadable / non-script / unparseable → no-op.
+fn appendShebangInterpreterGrants(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList([]const u8),
+    script_path: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!void {
+    const interp_token = (try readShebangInterpreterToken(io, allocator, script_path)) orelse return;
+    defer allocator.free(interp_token);
+
+    const resolved = apply_posix.resolveArgv0(io, allocator, interp_token, env_map) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return,
+    };
+    defer if (resolved.owned) allocator.free(resolved.path);
+
+    const abs = try absolutePathForGrant(io, allocator, resolved.path);
+    defer allocator.free(abs);
+
+    try appendLaunchExecCandidate(io, allocator, list, abs, env_map);
+
+    var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (realpathInto(abs, &real_buf)) |real| {
+        if (!std.mem.eql(u8, real, abs)) {
+            try appendLaunchExecCandidate(io, allocator, list, real, env_map);
+        }
+    }
+}
+
+/// Read the first line of `path` when it is a shebang; return an owned interpreter
+/// path or bare name for PATH resolution. `null` when no usable shebang.
+fn readShebangInterpreterToken(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+) error{OutOfMemory}!?[]u8 {
+    if (path.len == 0 or !isRegularFile(io, path)) return null;
+
+    var buf: [shebang_scan_max]u8 = undefined;
+    const n: usize = blk: {
+        if (std.fs.path.isAbsolute(path)) {
+            const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch return null;
+            defer file.close(io);
+            break :blk std.Io.File.readStreaming(file, io, &.{buf[0..]}) catch return null;
+        }
+        const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return null;
+        defer file.close(io);
+        break :blk std.Io.File.readStreaming(file, io, &.{buf[0..]}) catch return null;
+    };
+    if (n < 2 or buf[0] != '#' or buf[1] != '!') return null;
+
+    const body = buf[2..n];
+    const line_end = std.mem.indexOfAny(u8, body, "\r\n") orelse body.len;
+    const line = std.mem.trim(u8, body[0..line_end], " \t");
+    if (line.len == 0) return null;
+
+    const token = parseShebangInterpreterToken(line) orelse return null;
+    return try allocator.dupe(u8, token);
+}
+
+/// Parse the body after `#!` into an interpreter path or bare name.
+/// Supports absolute paths and `env` with flags/assignments (`-S`, `-u NAME`, `VAR=val`).
+fn parseShebangInterpreterToken(line: []const u8) ?[]const u8 {
+    if (line.len == 0) return null;
+
+    var pos: usize = 0;
+    const first = nextShebangToken(line, &pos) orelse return null;
+    const base = std.fs.path.basename(first);
+    if (!std.mem.eql(u8, base, "env")) return first;
+
+    // #!/usr/bin/env [options|assignments…] NAME …
+    while (nextShebangToken(line, &pos)) |tok| {
+        if (tok[0] != '-') {
+            if (isEnvAssignmentToken(tok)) continue;
+            return tok;
+        }
+
+        // Long options: --unset=NAME / --unset NAME / --split-string=S / …
+        if (std.mem.startsWith(u8, tok, "--")) {
+            if (std.mem.indexOfScalar(u8, tok, '=')) |eq| {
+                if (std.mem.eql(u8, tok[0..eq], "--split-string")) {
+                    return firstShebangWord(tok[eq + 1 ..]);
+                }
+                continue;
+            }
+            if (!envLongOptionTakesArg(tok)) continue;
+            const arg = nextShebangToken(line, &pos) orelse return null;
+            if (std.mem.eql(u8, tok, "--split-string")) return firstShebangWord(arg);
+            continue;
+        }
+
+        // Short options: -i / -v / -0 / -u NAME / -uNAME / -S / -Snode / -P PATH …
+        if (tok.len < 2) continue;
+        const opt = tok[1];
+        if (!envShortOptionTakesArg(opt)) continue;
+
+        if (tok.len > 2) {
+            // Attached argument: -uFOO, -Snode --flag, -P/opt/bin
+            if (opt == 'S') return firstShebangWord(tok[2..]);
+            continue;
+        }
+
+        // Separate argument for -u/-C/-P/-S.
+        // Bare `-S` with no payload (`env -S -P /opt/bin node`) does not consume the next
+        // token as an -S string — subsequent flags must still be scanned.
+        if (opt == 'S') continue;
+
+        _ = nextShebangToken(line, &pos) orelse return null;
+    }
+    return null;
+}
+
+fn nextShebangToken(line: []const u8, pos: *usize) ?[]const u8 {
+    while (pos.* < line.len and (line[pos.*] == ' ' or line[pos.*] == '\t')) pos.* += 1;
+    if (pos.* >= line.len) return null;
+    const start = pos.*;
+    while (pos.* < line.len and line[pos.*] != ' ' and line[pos.*] != '\t') pos.* += 1;
+    if (pos.* == start) return null;
+    return line[start..pos.*];
+}
+
+fn firstShebangWord(s: []const u8) ?[]const u8 {
+    var i: usize = 0;
+    while (i < s.len and (s[i] == ' ' or s[i] == '\t')) i += 1;
+    if (i >= s.len) return null;
+    const start = i;
+    while (i < s.len and s[i] != ' ' and s[i] != '\t') i += 1;
+    const word = s[start..i];
+    if (word.len == 0 or word[0] == '-') return null;
+    if (isEnvAssignmentToken(word)) return null;
+    return word;
+}
+
+fn envShortOptionTakesArg(opt: u8) bool {
+    return switch (opt) {
+        'u', 'C', 'P', 'S' => true,
+        else => false,
+    };
+}
+
+fn envLongOptionTakesArg(tok: []const u8) bool {
+    return std.mem.eql(u8, tok, "--unset") or
+        std.mem.eql(u8, tok, "--chdir") or
+        std.mem.eql(u8, tok, "--path") or
+        std.mem.eql(u8, tok, "--split-string");
+}
+
+fn isEnvAssignmentToken(tok: []const u8) bool {
+    const eq = std.mem.indexOfScalar(u8, tok, '=') orelse return false;
+    if (eq == 0) return false;
+    // Paths can contain '=' rarely; treat slash before '=' as a path, not an assignment.
+    if (std.mem.indexOfScalar(u8, tok[0..eq], '/') != null) return false;
+    return true;
+}
+
+fn envHome(env_map: ?*const std.process.Environ.Map) ?[]const u8 {
+    if (env_map) |map| {
+        if (map.get("HOME")) |h| return h;
+    }
+    if (std.c.getenv("HOME")) |h| return std.mem.span(h);
+    return null;
+}
+
+fn isRegularFile(io: std.Io, path: []const u8) bool {
+    if (path.len == 0) return false;
+    if (std.fs.path.isAbsolute(path)) {
+        const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch return false;
+        defer file.close(io);
+        const st = file.stat(io) catch return false;
+        return st.kind == .file;
+    }
+    const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return false;
+    defer file.close(io);
+    const st = file.stat(io) catch return false;
+    return st.kind == .file;
+}
+
 /// Apply OS sandbox policy for the production launch path.
 ///
 /// - `off` → disabled receipt; no profile/platform apply; no env scrub at this seam
@@ -390,11 +677,13 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
 
     // Compile pure profile (grants model only — no syscalls).
     // OOM is never a soft grade-drop: propagate so callers fail closed hard.
-    // InvalidWorkspace / other compile failures → profile_compile_failed (on→RequireFailed, auto→unavailable).
+    // InvalidWorkspace / InvalidExecPath / other compile failures → profile_compile_failed
+    // (on→RequireFailed, auto→unavailable).
     var compiled = profile.compileProfile(boundary.allocator, .{
         .workspace_root = boundary.workspace_root,
         .control_roots = boundary.control_roots,
         .include_tmp = boundary.include_tmp,
+        .exec_paths = boundary.launch_exec_paths,
     }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => {
@@ -1242,6 +1531,318 @@ test "spawnAgent promotes with typed proof on macOS Seatbelt" {
     var status: c_int = 0;
     _ = std.c.waitpid(spawned.pid, &status, 0);
     try std.testing.expect((status & 0x7f) == 0);
+}
+
+// Regression: agents installed outside workspace/system (e.g. ~/.local/share/claude)
+// must receive narrow .exec grants or child preflight fails with ApplyFailed.
+test "spawnAgent attaches when launch binary is outside workspace with exec grant" {
+    if (builtin.os.tag != .macos and builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.os.tag == .macos) {
+        if (!macos_seatbelt.sandboxInitAvailable()) return error.SkipZigTest;
+        const ver = macos_seatbelt.detectProductVersion() catch return error.SkipZigTest;
+        if (!macos_seatbelt.isMatrixMajor(ver.major)) return error.SkipZigTest;
+    } else if (!landlock.isAbiAvailable()) return error.SkipZigTest;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(std.testing.io, ".orca");
+    const root = try ws_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    // Separate temp dir = "install tree" outside workspace (like ~/.local/...).
+    var bin_tmp = std.testing.tmpDir(.{});
+    defer bin_tmp.cleanup();
+    const bin_root = try bin_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(bin_root);
+
+    const true_src: []const u8 = blk: {
+        std.Io.Dir.cwd().access(std.testing.io, "/usr/bin/true", .{}) catch break :blk "/bin/true";
+        break :blk "/usr/bin/true";
+    };
+    const outside_bin = try std.fs.path.join(std.testing.allocator, &.{ bin_root, "agent-true" });
+    defer std.testing.allocator.free(outside_bin);
+    try std.Io.Dir.copyFileAbsolute(true_src, outside_bin, std.testing.io, .{});
+
+    // Without exec grant: outside binary fails child apply handshake.
+    {
+        var result = try applyBeforeExec(.{
+            .allocator = std.testing.allocator,
+            .mode = .on,
+            .workspace_root = root,
+            .env_map = null,
+        });
+        defer result.deinit();
+        try std.testing.expect(result.requiresChildApply());
+        try std.testing.expectError(error.ApplyFailed, result.spawnAgent(
+            std.testing.io,
+            std.testing.allocator,
+            &[_][]const u8{outside_bin},
+            null,
+            root,
+            .ignore,
+        ));
+        try std.testing.expect(!result.receipt.isActive());
+    }
+
+    // With launch_exec_paths: attach succeeds and agent runs.
+    {
+        const exec_paths = try collectLaunchExecPaths(std.testing.io, std.testing.allocator, outside_bin, null);
+        defer freeLaunchExecPaths(std.testing.allocator, exec_paths);
+        try std.testing.expect(exec_paths.len >= 1);
+
+        var result = try applyBeforeExec(.{
+            .allocator = std.testing.allocator,
+            .mode = .on,
+            .workspace_root = root,
+            .env_map = null,
+            .launch_exec_paths = exec_paths,
+        });
+        defer result.deinit();
+        try std.testing.expect(result.requiresChildApply());
+
+        const spawned = try result.spawnAgent(
+            std.testing.io,
+            std.testing.allocator,
+            &[_][]const u8{outside_bin},
+            null,
+            root,
+            .ignore,
+        );
+        try std.testing.expect(spawned.proof.isValid());
+        try std.testing.expect(result.receipt.isActive());
+
+        var status: c_int = 0;
+        _ = std.c.waitpid(spawned.pid, &status, 0);
+        try std.testing.expect((status & 0x7f) == 0);
+    }
+}
+
+test "collectLaunchExecPaths resolves regular file and rejects HOME" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const true_src: []const u8 = blk: {
+        std.Io.Dir.cwd().access(io, "/usr/bin/true", .{}) catch break :blk "/bin/true";
+        break :blk "/usr/bin/true";
+    };
+    const paths = try collectLaunchExecPaths(io, allocator, true_src, null);
+    defer freeLaunchExecPaths(allocator, paths);
+    try std.testing.expect(paths.len >= 1);
+    try std.testing.expect(std.mem.eql(u8, paths[0], true_src) or std.mem.endsWith(u8, paths[0], "true"));
+
+    // Directories are never granted (Seatbelt subpath would open the whole tree).
+    // Bare HOME is also rejected when equal to a candidate path (defense in depth).
+    var dir_tmp = std.testing.tmpDir(.{});
+    defer dir_tmp.cleanup();
+    const dir_path = try dir_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(dir_path);
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", dir_path);
+    const home_paths = try collectLaunchExecPaths(io, allocator, dir_path, &env_map);
+    defer freeLaunchExecPaths(allocator, home_paths);
+    try std.testing.expectEqual(@as(usize, 0), home_paths.len);
+}
+
+fn pathsContain(paths: []const []const u8, want: []const u8) bool {
+    for (paths) |p| {
+        if (std.mem.eql(u8, p, want)) return true;
+    }
+    return false;
+}
+
+fn pathsContainHomeOrDir(paths: []const []const u8, home: []const u8) bool {
+    for (paths) |p| {
+        if (std.mem.eql(u8, p, home)) return true;
+        if (std.mem.eql(u8, p, "/")) return true;
+    }
+    return false;
+}
+
+test "collectLaunchExecPaths grants env shebang interpreter outside workspace" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var bin_tmp = std.testing.tmpDir(.{});
+    defer bin_tmp.cleanup();
+    const bin_root = try bin_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(bin_root);
+
+    const true_src: []const u8 = blk: {
+        std.Io.Dir.cwd().access(io, "/usr/bin/true", .{}) catch break :blk "/bin/true";
+        break :blk "/usr/bin/true";
+    };
+    const node_bin = try std.fs.path.join(allocator, &.{ bin_root, "fake-node" });
+    defer allocator.free(node_bin);
+    try std.Io.Dir.copyFileAbsolute(true_src, node_bin, io, .{});
+    try bin_tmp.dir.setFilePermissions(io, "fake-node", std.Io.File.Permissions.fromMode(0o755), .{});
+
+    const script_body = "#!/usr/bin/env fake-node\n";
+    try bin_tmp.dir.writeFile(io, .{ .sub_path = "agent-script", .data = script_body });
+    try bin_tmp.dir.setFilePermissions(io, "agent-script", std.Io.File.Permissions.fromMode(0o755), .{});
+    const script_path = try std.fs.path.join(allocator, &.{ bin_root, "agent-script" });
+    defer allocator.free(script_path);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("PATH", bin_root);
+    try env_map.put("HOME", bin_root);
+
+    const paths = try collectLaunchExecPaths(io, allocator, script_path, &env_map);
+    defer freeLaunchExecPaths(allocator, paths);
+
+    try std.testing.expect(pathsContain(paths, script_path));
+    try std.testing.expect(pathsContain(paths, node_bin));
+    try std.testing.expect(!pathsContainHomeOrDir(paths, bin_root));
+    for (paths) |p| {
+        try std.testing.expect(isRegularFile(io, p));
+    }
+}
+
+test "collectLaunchExecPaths grants absolute shebang interpreter" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var bin_tmp = std.testing.tmpDir(.{});
+    defer bin_tmp.cleanup();
+    const bin_root = try bin_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(bin_root);
+
+    const true_src: []const u8 = blk: {
+        std.Io.Dir.cwd().access(io, "/usr/bin/true", .{}) catch break :blk "/bin/true";
+        break :blk "/usr/bin/true";
+    };
+    const interp = try std.fs.path.join(allocator, &.{ bin_root, "interp-true" });
+    defer allocator.free(interp);
+    try std.Io.Dir.copyFileAbsolute(true_src, interp, io, .{});
+    try bin_tmp.dir.setFilePermissions(io, "interp-true", std.Io.File.Permissions.fromMode(0o755), .{});
+
+    const script_body = try std.fmt.allocPrint(allocator, "#!{s}\n", .{interp});
+    defer allocator.free(script_body);
+    try bin_tmp.dir.writeFile(io, .{ .sub_path = "abs-script", .data = script_body });
+    try bin_tmp.dir.setFilePermissions(io, "abs-script", std.Io.File.Permissions.fromMode(0o755), .{});
+    const script_path = try std.fs.path.join(allocator, &.{ bin_root, "abs-script" });
+    defer allocator.free(script_path);
+
+    const paths = try collectLaunchExecPaths(io, allocator, script_path, null);
+    defer freeLaunchExecPaths(allocator, paths);
+
+    try std.testing.expect(pathsContain(paths, script_path));
+    try std.testing.expect(pathsContain(paths, interp));
+}
+
+test "collectLaunchExecPaths rejects directory shebang interpreter" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var bin_tmp = std.testing.tmpDir(.{});
+    defer bin_tmp.cleanup();
+    const bin_root = try bin_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(bin_root);
+
+    try bin_tmp.dir.createDirPath(io, "not-a-binary");
+    const dir_interp = try std.fs.path.join(allocator, &.{ bin_root, "not-a-binary" });
+    defer allocator.free(dir_interp);
+
+    const script_body = try std.fmt.allocPrint(allocator, "#!{s}\n", .{dir_interp});
+    defer allocator.free(script_body);
+    try bin_tmp.dir.writeFile(io, .{ .sub_path = "bad-interp-script", .data = script_body });
+    try bin_tmp.dir.setFilePermissions(io, "bad-interp-script", std.Io.File.Permissions.fromMode(0o755), .{});
+    const script_path = try std.fs.path.join(allocator, &.{ bin_root, "bad-interp-script" });
+    defer allocator.free(script_path);
+
+    const paths = try collectLaunchExecPaths(io, allocator, script_path, null);
+    defer freeLaunchExecPaths(allocator, paths);
+
+    try std.testing.expect(pathsContain(paths, script_path));
+    try std.testing.expect(!pathsContain(paths, dir_interp));
+    try std.testing.expect(!pathsContain(paths, bin_root));
+}
+
+test "spawnAgent attaches when shebang script and interpreter are outside workspace" {
+    if (builtin.os.tag != .macos and builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.os.tag == .macos) {
+        if (!macos_seatbelt.sandboxInitAvailable()) return error.SkipZigTest;
+        const ver = macos_seatbelt.detectProductVersion() catch return error.SkipZigTest;
+        if (!macos_seatbelt.isMatrixMajor(ver.major)) return error.SkipZigTest;
+    } else if (!landlock.isAbiAvailable()) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(io, ".orca");
+    const root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+
+    var bin_tmp = std.testing.tmpDir(.{});
+    defer bin_tmp.cleanup();
+    const bin_root = try bin_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(bin_root);
+
+    const true_src: []const u8 = blk: {
+        std.Io.Dir.cwd().access(io, "/usr/bin/true", .{}) catch break :blk "/bin/true";
+        break :blk "/usr/bin/true";
+    };
+    const interp = try std.fs.path.join(allocator, &.{ bin_root, "interp-true" });
+    defer allocator.free(interp);
+    try std.Io.Dir.copyFileAbsolute(true_src, interp, io, .{});
+    try bin_tmp.dir.setFilePermissions(io, "interp-true", std.Io.File.Permissions.fromMode(0o755), .{});
+
+    const script_body = try std.fmt.allocPrint(allocator, "#!{s}\n", .{interp});
+    defer allocator.free(script_body);
+    try bin_tmp.dir.writeFile(io, .{ .sub_path = "shebang-agent", .data = script_body });
+    try bin_tmp.dir.setFilePermissions(io, "shebang-agent", std.Io.File.Permissions.fromMode(0o755), .{});
+    const script_path = try std.fs.path.join(allocator, &.{ bin_root, "shebang-agent" });
+    defer allocator.free(script_path);
+
+    const exec_paths = try collectLaunchExecPaths(io, allocator, script_path, null);
+    defer freeLaunchExecPaths(allocator, exec_paths);
+    try std.testing.expect(pathsContain(exec_paths, script_path));
+    try std.testing.expect(pathsContain(exec_paths, interp));
+    try std.testing.expect(!pathsContainHomeOrDir(exec_paths, bin_root));
+
+    var result = try applyBeforeExec(.{
+        .allocator = allocator,
+        .mode = .on,
+        .workspace_root = root,
+        .env_map = null,
+        .launch_exec_paths = exec_paths,
+    });
+    defer result.deinit();
+    try std.testing.expect(result.requiresChildApply());
+
+    const spawned = try result.spawnAgent(
+        io,
+        allocator,
+        &[_][]const u8{script_path},
+        null,
+        root,
+        .ignore,
+    );
+    try std.testing.expect(spawned.proof.isValid());
+    try std.testing.expect(result.receipt.isActive());
+
+    var status: c_int = 0;
+    _ = std.c.waitpid(spawned.pid, &status, 0);
+    try std.testing.expect((status & 0x7f) == 0);
+}
+
+test "parseShebangInterpreterToken handles env and absolute forms" {
+    try std.testing.expectEqualStrings("/usr/bin/python3", parseShebangInterpreterToken("/usr/bin/python3").?);
+    try std.testing.expectEqualStrings("node", parseShebangInterpreterToken("/usr/bin/env node").?);
+    try std.testing.expectEqualStrings("node", parseShebangInterpreterToken("/usr/bin/env -S node --experimental").?);
+    try std.testing.expectEqualStrings("node", parseShebangInterpreterToken("/usr/bin/env -Snode --experimental").?);
+    try std.testing.expectEqualStrings("node", parseShebangInterpreterToken("/usr/bin/env -u FOO node").?);
+    try std.testing.expectEqualStrings("node", parseShebangInterpreterToken("/usr/bin/env -uFOO node").?);
+    try std.testing.expectEqualStrings("node", parseShebangInterpreterToken("/usr/bin/env -S -P /opt/bin node").?);
+    try std.testing.expectEqualStrings("node", parseShebangInterpreterToken("/usr/bin/env FOO=bar node").?);
+    try std.testing.expectEqualStrings("node", parseShebangInterpreterToken("/usr/bin/env --unset=FOO node").?);
+    try std.testing.expectEqualStrings("node", parseShebangInterpreterToken("/usr/bin/env --split-string=node --experimental").?);
+    try std.testing.expect(parseShebangInterpreterToken("/usr/bin/env") == null);
+    try std.testing.expect(parseShebangInterpreterToken("/usr/bin/env -u") == null);
+    try std.testing.expect(parseShebangInterpreterToken("") == null);
 }
 
 test "mode on surfaces real reason_code via fail_reason_out on this host" {
