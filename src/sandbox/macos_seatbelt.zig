@@ -472,8 +472,15 @@ test "seatbelt apply survives multi-thread parent stress" {
             applyInChild(sbpl) catch std.c._exit(2);
             std.c._exit(0);
         }
+        // EINTR-safe reap: bare waitpid under multi-thread stress can return -1 with
+        // zero-init status and false-green as exit 0 while the child is unreaped.
         var status: c_int = 0;
-        _ = std.c.waitpid(pid, &status, 0);
+        while (true) {
+            const rc = std.c.waitpid(pid, &status, 0);
+            if (rc >= 0) break;
+            if (std.c.errno(rc) == .INTR) continue;
+            return error.WaitpidFailed;
+        }
         const exited = (status & 0x7f) == 0;
         try std.testing.expect(exited);
         const exit_code: u8 = @intCast((status >> 8) & 0xff);

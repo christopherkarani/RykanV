@@ -694,3 +694,81 @@ test "strict route-force: outbound proxy allowed; bind/listen denied" {
     const bind_code = try waitExitCode(bind_pid);
     try std.testing.expectEqual(@as(u8, 1), bind_code);
 }
+
+// M-5: hardened bootstrap FS residual — no literal `/private/var` grant; live open must deny.
+// Compatible control proves the same path is readable under the historical residual.
+test "hardened profile: open /private/var denied; compatible allows" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    if (!sandboxInitAvailable()) return error.SkipZigTest;
+    const ver = try detectProductVersion();
+    try std.testing.expect(isMatrixMajor(ver.major));
+
+    const allocator = std.testing.allocator;
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(std.testing.io, ".orca");
+    const ws_root = try ws_tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(ws_root);
+
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = ws_root,
+        .include_tmp = false,
+    });
+    defer compiled.deinit();
+
+    // Hardened: open of `/private/var` (literal residual removed) must fail after apply.
+    {
+        const prepared = macos_seatbelt.prepareForChildApplyWithOptions(
+            allocator,
+            &compiled,
+            .supported,
+            .{ .profile_grade = .hardened },
+        );
+        defer if (prepared.sbpl_z) |p| allocator.free(p);
+        try std.testing.expectEqual(.prepared, prepared.status);
+        const sbpl_z = prepared.sbpl_z orelse return error.SeatbeltApplyFailedOnHost;
+        try std.testing.expect(std.mem.indexOf(u8, sbpl_z, "(allow file-read* (literal \"/private/var\"))") == null);
+
+        const pid = std.c.fork();
+        if (pid < 0) return error.SkipZigTest;
+        if (pid == 0) {
+            applyInChild(sbpl_z.ptr) catch std.c._exit(2);
+            const fd = std.c.open("/private/var", .{ .ACCMODE = .RDONLY });
+            if (fd >= 0) {
+                _ = std.c.close(fd);
+                std.c._exit(0); // open succeeded = residual still broad
+            }
+            std.c._exit(1); // expected deny
+        }
+        const code = try waitExitCode(pid);
+        try std.testing.expectEqual(@as(u8, 1), code);
+    }
+
+    // Compatible control: same open succeeds under historical residual.
+    {
+        const prepared = macos_seatbelt.prepareForChildApplyWithOptions(
+            allocator,
+            &compiled,
+            .supported,
+            .{ .profile_grade = .compatible },
+        );
+        defer if (prepared.sbpl_z) |p| allocator.free(p);
+        try std.testing.expectEqual(.prepared, prepared.status);
+        const sbpl_z = prepared.sbpl_z orelse return error.SeatbeltApplyFailedOnHost;
+        try std.testing.expect(std.mem.indexOf(u8, sbpl_z, "(allow file-read* (literal \"/private/var\"))") != null);
+
+        const pid = std.c.fork();
+        if (pid < 0) return error.SkipZigTest;
+        if (pid == 0) {
+            applyInChild(sbpl_z.ptr) catch std.c._exit(2);
+            const fd = std.c.open("/private/var", .{ .ACCMODE = .RDONLY });
+            if (fd >= 0) {
+                _ = std.c.close(fd);
+                std.c._exit(0);
+            }
+            std.c._exit(1);
+        }
+        const code = try waitExitCode(pid);
+        try std.testing.expectEqual(@as(u8, 0), code);
+    }
+}

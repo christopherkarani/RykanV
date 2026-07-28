@@ -685,6 +685,76 @@ test "SBPL default remains explicit unrestricted network under hardened" {
     try std.testing.expectEqualStrings("unrestricted", networkScopeSummary(.hardened, false));
 }
 
+// M-6 partial: dual-encoding lock — SBPL tokens must match networkScopeSummary invariants
+// for every grade × route_force cell (claim vs render drift guard).
+test "grade residual matrix: SBPL tokens match networkScopeSummary invariants" {
+    const allocator = std.testing.allocator;
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = "/tmp/orca-sbpl-grade-matrix",
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+    });
+    defer compiled.deinit();
+
+    const grades = [_]SeatbeltProfileGrade{ .compatible, .hardened, .strict };
+    for (grades) |grade| {
+        // No route force.
+        {
+            const sbpl = try renderSbplWithOptions(allocator, &compiled, .{ .profile_grade = grade });
+            defer allocator.free(sbpl);
+            const summary = networkScopeSummary(grade, false);
+            const has_network_star = std.mem.indexOf(u8, sbpl, "(allow network*)") != null;
+            switch (grade) {
+                .compatible, .hardened => {
+                    try std.testing.expect(has_network_star);
+                    try std.testing.expectEqualStrings("unrestricted", summary);
+                    const has_process_star = std.mem.indexOf(u8, sbpl, "(allow process*)") != null;
+                    const has_private_var = std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/private/var\"))") != null;
+                    try std.testing.expectEqual(grade == .compatible, has_process_star);
+                    try std.testing.expectEqual(grade == .compatible, has_private_var);
+                },
+                .strict => {
+                    try std.testing.expect(!has_network_star);
+                    try std.testing.expectEqualStrings(
+                        "deny-default (no broad network*; no route force)",
+                        summary,
+                    );
+                    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow process*)") == null);
+                    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/private/var\"))") == null);
+                },
+            }
+        }
+        // Route force.
+        {
+            const sbpl = try renderSbplWithOptions(allocator, &compiled, .{
+                .profile_grade = grade,
+                .network_route_forcing = .{ .proxy_port = 43123 },
+            });
+            defer allocator.free(sbpl);
+            const summary = networkScopeSummary(grade, true);
+            try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow network*)") == null);
+            try std.testing.expect(std.mem.indexOf(u8, sbpl, "(remote tcp \"localhost:43123\")") != null);
+            const has_inbound = std.mem.indexOf(u8, sbpl, "(allow network-inbound)") != null;
+            const has_bind = std.mem.indexOf(u8, sbpl, "(allow network-bind)") != null;
+            switch (grade) {
+                .compatible, .hardened => {
+                    try std.testing.expect(has_inbound and has_bind);
+                    try std.testing.expectEqualStrings(
+                        "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind unrestricted)",
+                        summary,
+                    );
+                },
+                .strict => {
+                    try std.testing.expect(!has_inbound and !has_bind);
+                    try std.testing.expectEqualStrings(
+                        "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind denied)",
+                        summary,
+                    );
+                },
+            }
+        }
+    }
+}
+
 test "SBPL denies /System/Volumes/Data even if bare /System is granted" {
     const allocator = std.testing.allocator;
     var compiled = try profile.compileProfile(allocator, .{

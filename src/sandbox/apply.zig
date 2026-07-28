@@ -79,7 +79,7 @@ pub const ChildMaterials = union(enum) {
         /// from a second hardcoded source of truth.
         fs_scope: []const u8,
         /// Residual grade used when rendering SBPL (receipts/network_scope honesty).
-        profile_grade: macos_profile.SeatbeltProfileGrade = .hardened,
+        profile_grade: macos_profile.SeatbeltProfileGrade = macos_profile.SeatbeltProfileGrade.default_grade,
     },
 
     pub fn deinit(self: *ChildMaterials) void {
@@ -319,7 +319,7 @@ const PlatformApplyOutcome = struct {
     /// Allocator that owns `seatbelt_sbpl_z` when non-null.
     sbpl_allocator: ?std.mem.Allocator = null,
     /// Seatbelt residual grade for receipt honesty (macOS only).
-    seatbelt_profile_grade: macos_profile.SeatbeltProfileGrade = .hardened,
+    seatbelt_profile_grade: macos_profile.SeatbeltProfileGrade = macos_profile.SeatbeltProfileGrade.default_grade,
 
     pub fn deinit(self: *PlatformApplyOutcome) void {
         if (self.seatbelt_sbpl_z) |p| {

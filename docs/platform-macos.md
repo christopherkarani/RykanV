@@ -63,6 +63,8 @@ All grades still allow unfiltered `(allow mach-lookup)` (dyld/system services re
 
 Invalid `ORCA_SEATBELT_PROFILE` values are **ignored with a stderr warning** and keep the default `hardened` (never silently select a weaker grade). Invalid `--seatbelt-profile` fails usage.
 
+**Residual identity fields:** active-session `profile_hash` is the SHA-256 of the portable **grant model** (`CompiledProfile`) only — it does **not** incorporate residual grade or the rendered SBPL baselines. Compatible vs hardened vs strict (and route-forced vs not) can share one hash while residual process/FS/network surface differs. Pair hash with `seatbelt_profile=<grade>` and the grade-aware `network_scope` string on the banner / `sandbox_posture` audit reason for full residual identity.
+
 ## Network route forcing
 
 When the proxy backend is active and OS sandbox attach succeeds, Orca renders the child Seatbelt profile without broad `(allow network*)` and permits outbound TCP only to the Orca loopback proxy port.

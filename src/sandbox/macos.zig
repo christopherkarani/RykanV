@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const backend = @import("backend.zig");
 const platform = @import("orca_core").platform;
 const macos_seatbelt = @import("macos_seatbelt.zig");
+const posture = @import("posture.zig");
 
 pub const implemented = true;
 
@@ -33,8 +34,12 @@ pub fn detect() backend.ReportSet {
         .version_unsupported, .symbol_unavailable, .not_macos => .unavailable,
     };
     const strong_note: []const u8 = switch (support) {
-        // Capability only — never live active. Default residual grade is hardened (flag token).
-        .supported => "OS filesystem sandbox API present on a supported macOS version; default residual grade hardened (seatbelt_profile=hardened); session active only after apply-before-exec child attach and profile hash",
+        // Capability only — never live active. Default residual grade from SeatbeltProfileGrade.default_grade.
+        .supported => "OS filesystem sandbox API present on a supported macOS version; default residual grade " ++
+            @tagName(posture.SeatbeltProfileGrade.default_grade) ++
+            " (seatbelt_profile=" ++
+            @tagName(posture.SeatbeltProfileGrade.default_grade) ++
+            "); session active only after apply-before-exec child attach and profile hash",
         .version_unsupported => "OS filesystem sandbox unavailable: running macOS is outside the advertised support matrix (14–26); capability probes are not a live session claim",
         .symbol_unavailable => "OS filesystem sandbox unavailable: sandbox apply symbol not resolvable; capability probes are not a live session claim",
         .not_macos => "OS filesystem sandbox is a macOS feature",

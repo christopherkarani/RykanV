@@ -858,8 +858,8 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
                 options.seatbelt_profile = grade;
             } else {
                 try stderr.print(
-                    "ryk run: WARNING: ignoring invalid ORCA_SEATBELT_PROFILE={s} (use compatible|hardened|strict); defaulting to hardened.\n",
-                    .{value},
+                    "ryk run: WARNING: ignoring invalid ORCA_SEATBELT_PROFILE={s} (use compatible|hardened|strict); defaulting to {s}.\n",
+                    .{ value, sandbox.posture.SeatbeltProfileGrade.default_grade.toString() },
                 );
             }
         }
@@ -2444,6 +2444,20 @@ test "parse --seatbelt-profile accepts grades; invalid fails usage" {
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
+    // Accept path: enum parse + CLI does not reject valid tokens (os-sandbox off avoids attach).
+    inline for (.{ "compatible", "hardened", "strict" }) |grade| {
+        try std.testing.expect(sandbox.posture.SeatbeltProfileGrade.parse(grade) != null);
+        stdout_writer = .fixed(&stdout_buf);
+        stderr_writer = .fixed(&stderr_buf);
+        const code = try command(
+            std.testing.io,
+            &.{ "--mode", "observe", "--os-sandbox", "off", "--seatbelt-profile", grade, "--", "/usr/bin/true" },
+            &stdout_writer,
+            &stderr_writer,
+        );
+        try std.testing.expectEqual(exit_codes.success, code);
+        try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "invalid --seatbelt-profile value") == null);
+    }
     {
         stdout_writer = .fixed(&stdout_buf);
         stderr_writer = .fixed(&stderr_buf);
@@ -2457,6 +2471,44 @@ test "parse --seatbelt-profile accepts grades; invalid fails usage" {
         const code = try command(std.testing.io, &.{"--seatbelt-profile"}, &stdout_writer, &stderr_writer);
         try std.testing.expectEqual(exit_codes.usage, code);
     }
+}
+
+// Env helpers for seatbelt-profile env tests only (not used by production path).
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+// M-2: invalid ORCA_SEATBELT_PROFILE warns and stays hardened (PR test plan A13).
+test "invalid ORCA_SEATBELT_PROFILE warns and keeps hardened default" {
+    const previous = std.c.getenv("ORCA_SEATBELT_PROFILE");
+    const prev_owned: ?[:0]const u8 = if (previous) |p|
+        try std.testing.allocator.dupeZ(u8, std.mem.span(p))
+    else
+        null;
+    defer if (prev_owned) |o| std.testing.allocator.free(o);
+    defer {
+        if (prev_owned) |o| {
+            _ = setenv("ORCA_SEATBELT_PROFILE", o.ptr, 1);
+        } else {
+            _ = unsetenv("ORCA_SEATBELT_PROFILE");
+        }
+    }
+
+    try std.testing.expectEqual(@as(c_int, 0), setenv("ORCA_SEATBELT_PROFILE", "paranoid", 1));
+
+    var stdout_buf: [512]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try command(
+        std.testing.io,
+        &.{ "--mode", "observe", "--os-sandbox", "off", "--", "/usr/bin/true" },
+        &stdout_writer,
+        &stderr_writer,
+    );
+    try std.testing.expectEqual(exit_codes.success, code);
+    const err = stderr_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, err, "WARNING: ignoring invalid ORCA_SEATBELT_PROFILE=paranoid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "defaulting to hardened") != null);
 }
 
 // Always-on attach subset (skip when no backend). Full multi-agent smoke is manual.
@@ -2509,6 +2561,43 @@ test "ryk run --os-sandbox on attaches and banners active when backend available
         try std.testing.expect(std.mem.indexOf(u8, out, "workspace child RW") != null or std.mem.indexOf(u8, out, "root RO") != null);
         try std.testing.expect(std.mem.indexOf(u8, out, "seatbelt_profile=") == null);
     }
+}
+
+// M-4: non-default residual grade must reach banner + audit on the live production path.
+test "ryk run --seatbelt-profile strict surfaces grade on banner and audit when backend available" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    try skipUnlessOsSandboxBackend();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "neighbor.txt", .data = "ok" });
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var stdout_buf: [8192]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try commandForGuardTestWithShellEvaluator(
+        &.{ "--workspace", root, "--mode", "observe", "--os-sandbox", "on", "--seatbelt-profile", "strict", "--", "/usr/bin/true" },
+        &stdout_writer,
+        &stderr_writer,
+        .ignore,
+        shell_eval.mockDaemonAllowEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.success, code);
+    const out = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "OS sandbox: active") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "seatbelt_profile=strict") != null);
+    // Strict without route force: network honesty is deny-default, not unrestricted.
+    try std.testing.expect(std.mem.indexOf(u8, out, "network: unrestricted") == null);
+
+    const events = try readLastEvents(std.testing.allocator, root);
+    defer std.testing.allocator.free(events);
+    try std.testing.expect(std.mem.indexOf(u8, events, "\"type\":\"sandbox_posture\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "seatbelt_profile=strict") != null);
 }
 
 // M-18: active attach must emit sandbox_posture with posture=active and 64-hex profile_hash.
