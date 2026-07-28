@@ -26,7 +26,7 @@
 //! retained. **`SSH_AUTH_SOCK` is stripped by default** on the attach allowlist
 //! (host SSH agent socket is not passed through; opt-in re-allow is residual /
 //! future). Policy-level filtering in `intercept/env.zig` still runs first;
-//! `--secretless` rewrites secret-like values before this allowlist.
+//! `--secretless` constructs a public-only environment before this allowlist.
 //!
 //! HOME grants may be restricted separately by FS profile apply; this module
 //! does not strip HOME from the allowlist (agents need a home path string).
@@ -212,13 +212,28 @@ pub fn isLaunchAllowlisted(name: []const u8) bool {
     return false;
 }
 
+/// True when `value` is the exact local-dummy env reference emitted for `name`.
+fn isNameBoundLocalDummyEnvRef(name: []const u8, value: []const u8) bool {
+    const prefix = "orca-secret://local-dummy/env/";
+    if (name.len == 0 or !std.mem.startsWith(u8, value, prefix)) return false;
+
+    const suffix = value[prefix.len..];
+    const fingerprint_len = 8;
+    if (suffix.len != name.len + 1 + fingerprint_len) return false;
+    if (!std.mem.eql(u8, suffix[0..name.len], name)) return false;
+    if (suffix[name.len] != '/') return false;
+
+    for (suffix[name.len + 1 ..]) |byte| {
+        if (!std.ascii.isDigit(byte) and !(byte >= 'a' and byte <= 'f')) return false;
+    }
+    return true;
+}
+
 /// True when a key/value pair is retained for sandboxed launch.
-/// Keeps allowlisted keys, plus any value that is an Orca secretless ref
-/// (`orca-secret://…`) so `--secretless` dummy refs survive the allowlist.
+/// Keeps allowlisted keys and exact name-bound local-dummy references.
 pub fn shouldRetainLaunchEnv(name: []const u8, value: []const u8) bool {
     if (isLaunchAllowlisted(name)) return true;
-    if (std.mem.startsWith(u8, value, "orca-secret://")) return true;
-    return false;
+    return isNameBoundLocalDummyEnvRef(name, value);
 }
 
 /// Build a new map with scrubbed keys removed. Source is not modified.
@@ -583,6 +598,41 @@ test "launch allowlist keeps TLS trust and strips SSH_AUTH_SOCK" {
     try std.testing.expect(!isLaunchAllowlisted("SSH_AUTH_SOCK"));
 }
 
+test "shouldRetainLaunchEnv rejects untrusted secret reference shapes" {
+    const rejected = [_]struct {
+        name: []const u8,
+        value: []const u8,
+    }{
+        .{ .name = "SMUGGLE", .value = "orca-secret://" },
+        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/" },
+        .{ .name = "SMUGGLE", .value = "orca-secret://evil/env/SMUGGLE/deadbeef" },
+        .{ .name = "SMUGGLE", .value = "orca-secret://x/SMUGGLED_RAW" },
+        .{ .name = "SMUGGLE2", .value = "orca-secret://local-dummy/env/FAKE/aaaaaaaa" },
+        .{ .name = "TOKEN", .value = "orca-secret://local-dummy/env/MYTOKEN/deadbeef" },
+        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/" },
+        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/abcdef0" },
+        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/abcdef012" },
+        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/DEADBEEF" },
+        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/ghijklmn" },
+        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/deadbeef/extra" },
+        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/deadbeef?query" },
+        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/deadbeef#fragment" },
+    };
+
+    for (rejected) |case| {
+        try std.testing.expect(!shouldRetainLaunchEnv(case.name, case.value));
+    }
+}
+
+test "shouldRetainLaunchEnv keeps only name-bound local dummy refs or allowlisted names" {
+    try std.testing.expect(shouldRetainLaunchEnv(
+        "GITHUB_TOKEN",
+        "orca-secret://local-dummy/env/GITHUB_TOKEN/d1c2f8b4",
+    ));
+    try std.testing.expect(shouldRetainLaunchEnv("PATH", "orca-secret://evil"));
+    try std.testing.expect(!shouldRetainLaunchEnv("OPENAI_API_KEY", "sk-raw-synthetic"));
+}
+
 test "applyLaunchAllowlistInPlace strips non-allowlisted keys" {
     var env_map = std.process.Environ.Map.init(std.testing.allocator);
     defer env_map.deinit();
@@ -592,23 +642,28 @@ test "applyLaunchAllowlistInPlace strips non-allowlisted keys" {
     try env_map.put("OPENAI_API_KEY", "sk-test");
     try env_map.put("AWS_SECRET_ACCESS_KEY", "secret");
     try env_map.put("RANDOM_HOST_VAR", "x");
-    try env_map.put("GITHUB_TOKEN", "orca-secret://local-dummy/env/GITHUB_TOKEN/abc");
+    try env_map.put("SMUGGLE2", "orca-secret://local-dummy/env/FAKE/aaaaaaaa");
+    try env_map.put("GITHUB_TOKEN", "orca-secret://local-dummy/env/GITHUB_TOKEN/d1c2f8b4");
     try env_map.put("SSL_CERT_FILE", "/etc/ssl/cert.pem");
     try env_map.put("NODE_EXTRA_CA_CERTS", "/etc/ssl/node-ca.pem");
     try env_map.put("GIT_SSL_CAINFO", "/etc/ssl/git-ca.pem");
     try env_map.put("SSH_AUTH_SOCK", "/tmp/ssh-agent.sock");
 
     const removed = try applyLaunchAllowlistInPlace(&env_map);
-    // OPENAI_API_KEY, AWS_SECRET_ACCESS_KEY, RANDOM_HOST_VAR, SSH_AUTH_SOCK.
-    try std.testing.expectEqual(@as(usize, 4), removed);
+    // OPENAI_API_KEY, AWS_SECRET_ACCESS_KEY, RANDOM_HOST_VAR, SMUGGLE2, SSH_AUTH_SOCK.
+    try std.testing.expectEqual(@as(usize, 5), removed);
     try std.testing.expectEqualStrings("/bin", env_map.get("PATH").?);
     try std.testing.expectEqualStrings("/home/agent", env_map.get("HOME").?);
     try std.testing.expectEqualStrings("s1", env_map.get("ORCA_SESSION_ID").?);
     try std.testing.expect(env_map.get("OPENAI_API_KEY") == null);
     try std.testing.expect(env_map.get("AWS_SECRET_ACCESS_KEY") == null);
     try std.testing.expect(env_map.get("RANDOM_HOST_VAR") == null);
-    // Secretless refs survive allowlist (key present, non-resolving value).
-    try std.testing.expect(std.mem.startsWith(u8, env_map.get("GITHUB_TOKEN").?, "orca-secret://"));
+    try std.testing.expect(env_map.get("SMUGGLE2") == null);
+    // A name-bound local-dummy ref survives the allowlist.
+    try std.testing.expectEqualStrings(
+        "orca-secret://local-dummy/env/GITHUB_TOKEN/d1c2f8b4",
+        env_map.get("GITHUB_TOKEN").?,
+    );
     // Keepers: TLS trust only (SSH agent socket stripped by default).
     try std.testing.expectEqualStrings("/etc/ssl/cert.pem", env_map.get("SSL_CERT_FILE").?);
     try std.testing.expectEqualStrings("/etc/ssl/node-ca.pem", env_map.get("NODE_EXTRA_CA_CERTS").?);

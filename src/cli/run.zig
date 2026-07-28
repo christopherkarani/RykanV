@@ -64,6 +64,14 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         error.Usage => return exit_codes.usage,
         else => return err,
     };
+    const secret_boundary: intercept.env.SecretBoundary = if (options.secretless) .empty_backpack else .off;
+    const effective_os_sandbox = effectiveOsSandboxMode(secret_boundary, options.os_sandbox) catch {
+        try stderr.writeAll(
+            "ryk run: cannot combine --secretless with --os-sandbox off; " ++
+                "empty-backpack requires an active OS sandbox.\n",
+        );
+        return exit_codes.usage;
+    };
 
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_state.deinit();
@@ -94,7 +102,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
 
     const env_request: intercept.env.Request = .{
         .no_secrets = options.no_secrets,
-        .secretless = options.secretless,
+        .secret_boundary = secret_boundary,
         .inherit_env = options.inherit_env,
     };
     var filtered_env = (if (current_env_override) |current_env|
@@ -111,9 +119,6 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         },
     };
     defer filtered_env.deinit();
-    if (options.secretless) {
-        try intercept.env.writeSecretlessReadinessNote(stderr, filtered_env.secretless_replacements);
-    }
     try installNetworkEnvironment(allocator, &filtered_env.env_map, loaded_policy.innerPtr().network);
     var proxy_runtime: ?intercept.proxy.Runtime = null;
     defer if (proxy_runtime) |*runtime| runtime.deinit();
@@ -147,7 +152,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     const launch_argv0: ?[]const u8 = if (options.command_argv.len > 0) options.command_argv[0] else null;
     var apply_result = switch (try run_os_sandbox.applyForRun(
         allocator,
-        options.os_sandbox,
+        effective_os_sandbox,
         workspace_root_for_policy,
         &filtered_env.env_map,
         if (proxy_runtime) |runtime| runtime.bindPort() else null,
@@ -167,7 +172,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         try filtered_env.env_map.put("ORCA_TRANSPARENT_NETWORK_ENFORCEMENT", "tcp-port-route-forced");
         try filtered_env.env_map.put("ORCA_BACKEND_NETWORK_ENFORCEMENT", "tcp-port-route-forced");
     }
-    try run_os_sandbox.warnAutoDegrade(options.os_sandbox, &apply_result, stderr);
+    try run_os_sandbox.warnAutoDegrade(effective_os_sandbox, &apply_result, stderr);
 
     const AuditContext = struct {
         io: std.Io,
@@ -720,9 +725,9 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                     try run_os_sandbox.auditSandboxPosture(&audit_context, session, sandbox.posture.failedReceipt(reason));
                 }
                 try finalizeFailedSession(&audit_context, allocator, exit_codes.unsupported, loaded_policy.path);
-                switch (options.os_sandbox) {
+                switch (effective_os_sandbox) {
                     .on => try stderr.print(
-                        "ryk run: OS sandbox required (--os-sandbox on) but attach failed ({s}).\n",
+                        "ryk run: OS sandbox required but attach failed ({s}).\n",
                         .{reason},
                     ),
                     .auto => try stderr.print(
@@ -1105,6 +1110,15 @@ fn coreModeToPolicyMode(mode: core.types.Mode) policy.schema.Mode {
     };
 }
 
+fn effectiveOsSandboxMode(
+    secret_boundary: intercept.env.SecretBoundary,
+    requested: sandbox.posture.OsSandboxMode,
+) error{SecretBoundaryRequiresSandbox}!sandbox.posture.OsSandboxMode {
+    if (secret_boundary == .off) return requested;
+    if (requested == .off) return error.SecretBoundaryRequiresSandbox;
+    return .on;
+}
+
 fn writeSessionPosture(stdout: anytype, network_mode: policy.schema.NetworkMode, secretless: bool) !void {
     try stdout.print(
         "Posture: network={s} secretless={s}  (override: --network … | --no-network | --secretless)\n",
@@ -1450,23 +1464,32 @@ test "run rejects inherit-env when selected policy disallows it" {
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "--inherit-env is not allowed") != null);
 }
 
-test "run accepts secretless option" {
+test "run rejects secretless with os sandbox off before child launch" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
     var stdout_buf: [1024]u8 = undefined;
     var stderr_buf: [2048]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
-    const code = try commandForTestWithShellEvaluator(&.{ "--secretless", "--os-sandbox", "off", "--", "true" }, &stdout_writer, &stderr_writer, .ignore, shell_eval.mockDaemonAllowEvaluator);
-    try std.testing.expectEqual(exit_codes.success, code);
-    // Host env may contain secret-like vars; if rewritten, expect the loud readiness warning only.
-    const stderr_out = stderr_writer.buffered();
-    if (stderr_out.len != 0) {
-        try std.testing.expect(std.mem.indexOf(u8, stderr_out, "--secretless rewrote") != null);
-        try std.testing.expect(std.mem.indexOf(u8, stderr_out, "non-resolving") != null);
-    }
+    const code = try commandForTestWithShellEvaluator(
+        &.{ "--workspace", root, "--secretless", "--os-sandbox", "off", "--", "/bin/sh", "-c", "touch child-started" },
+        &stdout_writer,
+        &stderr_writer,
+        .ignore,
+        shell_eval.mockDaemonAllowEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.usage, code);
+    try std.testing.expect(
+        std.mem.indexOf(u8, stderr_writer.buffered(), "cannot combine --secretless with --os-sandbox off") != null,
+    );
+    try std.testing.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "child-started", .{}));
 }
 
-test "run secretless replaces child env and keeps raw secret out of audit artifacts" {
+test "run secretless constructs child env and keeps raw secrets out of audit artifacts" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
@@ -1488,7 +1511,9 @@ test "run secretless replaces child env and keeps raw secret out of audit artifa
         defer script.close(std.testing.io);
         try script.writeStreamingAll(std.testing.io,
             \\#!/bin/sh
-            \\printf '%s' "$GITHUB_TOKEN" > child-env.txt
+            \\printf '%s|%s|%s|%s' \
+            \\  "$GITHUB_TOKEN" "$DATABASE_URL" "$MYSQL_PWD" "$RANDOM_HOST_VALUE" \
+            \\  > child-env.txt
             \\
         );
         try tmp.dir.setFilePermissions(std.testing.io, "dump-env.sh", @enumFromInt(0o755), .{});
@@ -1499,6 +1524,10 @@ test "run secretless replaces child env and keeps raw secret out of audit artifa
     const path_env = if (std.c.getenv("PATH")) |path| std.mem.span(path) else "/usr/bin:/bin:/usr/sbin:/sbin";
     try current.put("PATH", path_env);
     try current.put("GITHUB_TOKEN", "ghp_fakeSyntheticTokenValue1234567890");
+    try current.put("DATABASE_URL", "postgres://synthetic:SuperSecretPass99@db.invalid/app");
+    try current.put("MYSQL_PWD", "SuperSecretPass99");
+    try current.put("RANDOM_HOST_VALUE", "must-not-survive");
+    try current.put("TOKEN_ghp_fakeSyntheticNameCanary1234567890", "ordinary");
 
     var stdout_buf: [2048]u8 = undefined;
     var stderr_buf: [2048]u8 = undefined;
@@ -1509,19 +1538,22 @@ test "run secretless replaces child env and keeps raw secret out of audit artifa
     try std.testing.expectEqual(exit_codes.success, code);
 
     const stderr_out = stderr_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, stderr_out, "--secretless rewrote") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_out, "non-resolving") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_out, "--secretless rewrote") == null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_out, "ghp_fakeSyntheticTokenValue") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_out, "ghp_fakeSyntheticNameCanary") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_out, "SuperSecretPass99") == null);
 
     const child_env = try tmp.dir.readFileAlloc(std.testing.io, "child-env.txt", std.testing.allocator, .limited(512));
     defer std.testing.allocator.free(child_env);
-    try std.testing.expect(std.mem.startsWith(u8, child_env, "orca-secret://local-dummy/env/GITHUB_TOKEN/"));
-    try std.testing.expect(std.mem.indexOf(u8, child_env, "ghp_fakeSyntheticTokenValue") == null);
+    try std.testing.expectEqualStrings("|||", child_env);
+    try std.testing.expect(std.mem.indexOf(u8, child_env, "orca-secret://") == null);
 
     const events = try readLastEvents(std.testing.allocator, root);
     defer std.testing.allocator.free(events);
     try std.testing.expect(std.mem.indexOf(u8, events, "\"type\":\"secret_redacted\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, events, "ghp_fakeSyntheticTokenValue") == null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "ghp_fakeSyntheticNameCanary") == null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "SuperSecretPass99") == null);
 }
 
 test "run command guard denies ci ask without prompting and audits command events" {
@@ -2509,6 +2541,71 @@ test "invalid ORCA_SEATBELT_PROFILE warns and keeps hardened default" {
     const err = stderr_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, err, "WARNING: ignoring invalid ORCA_SEATBELT_PROFILE=paranoid") != null);
     try std.testing.expect(std.mem.indexOf(u8, err, "defaulting to hardened") != null);
+}
+
+test "empty backpack resolves sandbox auto to required on" {
+    try std.testing.expectEqual(
+        sandbox.posture.OsSandboxMode.on,
+        try effectiveOsSandboxMode(.empty_backpack, .auto),
+    );
+    try std.testing.expectEqual(
+        sandbox.posture.OsSandboxMode.on,
+        try effectiveOsSandboxMode(.empty_backpack, .on),
+    );
+    try std.testing.expectError(
+        error.SecretBoundaryRequiresSandbox,
+        effectiveOsSandboxMode(.empty_backpack, .off),
+    );
+    try std.testing.expectEqual(
+        sandbox.posture.OsSandboxMode.auto,
+        try effectiveOsSandboxMode(.off, .auto),
+    );
+    try std.testing.expectEqual(
+        sandbox.posture.OsSandboxMode.off,
+        try effectiveOsSandboxMode(.off, .off),
+    );
+    try std.testing.expectEqual(
+        sandbox.posture.OsSandboxMode.on,
+        try effectiveOsSandboxMode(.off, .on),
+    );
+}
+
+test "secretless default fails closed when sandbox profile cannot attach" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+    const marker_path = try std.fs.path.join(std.testing.allocator, &.{ root, "child-started" });
+    defer std.testing.allocator.free(marker_path);
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const args = &.{
+        "--workspace",
+        "/",
+        "--policy",
+        "policies/observe.yaml",
+        "--secretless",
+        "--",
+        "/usr/bin/touch",
+        marker_path,
+    };
+    const code = try commandForGuardTestWithShellEvaluator(
+        args,
+        &stdout_writer,
+        &stderr_writer,
+        .ignore,
+        shell_eval.mockDaemonAllowEvaluator,
+    );
+
+    try std.testing.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "child-started", .{}));
+    try std.testing.expectEqual(exit_codes.unsupported, code);
+    try std.testing.expect(
+        std.mem.indexOf(u8, stderr_writer.buffered(), "OS sandbox required but unavailable") != null,
+    );
 }
 
 // Always-on attach subset (skip when no backend). Full multi-agent smoke is manual.

@@ -60,7 +60,7 @@ pub fn applyForRun(
             // always claim the user passed `--os-sandbox on`.
             switch (mode) {
                 .on => try stderr.print(
-                    "ryk run: OS sandbox required (--os-sandbox on) but unavailable ({s}).\n",
+                    "ryk run: OS sandbox required but unavailable ({s}).\n",
                     .{fail_reason},
                 ),
                 .auto => try stderr.print(
