@@ -995,6 +995,11 @@ test "doctor can render macOS backend details from an injected report" {
     const strong_partial = std.mem.indexOf(u8, written, "strong sandbox: partial") != null;
     try std.testing.expect(strong_unavail or strong_partial);
     try std.testing.expect(std.mem.indexOf(u8, written, "strong sandbox: active") == null);
+    // When attach is possible, doctor surfaces default residual grade (capability, not live).
+    if (strong_partial) {
+        try std.testing.expect(std.mem.indexOf(u8, written, "seatbelt_profile=hardened") != null);
+        try std.testing.expect(std.mem.indexOf(u8, written, "default residual grade hardened") != null);
+    }
     try std.testing.expect(std.mem.indexOf(u8, written, "mcp stdio proxy: active") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "audit/replay: active") != null);
 }

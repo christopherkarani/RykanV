@@ -97,6 +97,8 @@ pub const AttachReceipt = struct {
     fs_scope: []const u8 = "none",
     network_scope: []const u8 = "unrestricted",
     reason_code: ?[]const u8 = null,
+    /// Set only for active macOS Seatbelt sessions (residual grade honesty for banner/audit).
+    seatbelt_profile: ?SeatbeltProfileGrade = null,
 
     pub fn isActive(self: AttachReceipt) bool {
         return self.posture == .active and self.profile_hash_hex != null and self.mechanism != .none;
@@ -138,6 +140,17 @@ pub fn activeReceiptWithNetwork(
     fs_scope: []const u8,
     network_scope: []const u8,
 ) error{InvalidProfileHash}!AttachReceipt {
+    return activeReceiptWithNetworkAndGrade(mechanism, profile_hash_hex, fs_scope, network_scope, null);
+}
+
+/// Active receipt with optional Seatbelt residual grade (macOS only; leave null on Landlock).
+pub fn activeReceiptWithNetworkAndGrade(
+    mechanism: BackendMechanism,
+    profile_hash_hex: []const u8,
+    fs_scope: []const u8,
+    network_scope: []const u8,
+    seatbelt_profile: ?SeatbeltProfileGrade,
+) error{InvalidProfileHash}!AttachReceipt {
     if (!isValidProfileHashHex(profile_hash_hex)) return error.InvalidProfileHash;
     // Copy into owned fixed storage (N1: no borrow of caller-owned / ephemeral memory).
     var hex: [64]u8 = undefined;
@@ -149,6 +162,7 @@ pub fn activeReceiptWithNetwork(
         .fs_scope = fs_scope,
         .network_scope = network_scope,
         .reason_code = null,
+        .seatbelt_profile = seatbelt_profile,
     };
 }
 
@@ -197,9 +211,13 @@ pub fn failedReceipt(reason_code: []const u8) AttachReceipt {
 ///
 /// Must fit the longest production active banner: fixed template (~151) +
 /// landlock fs_scope with platform tmp (~95) + route-forced network_scope (~96)
-/// ≈ 342. 320 was too small (route-forced default no-tmp is already 325) and
-/// caused silent fallback to bare `OS sandbox: active`.
+/// + optional seatbelt_profile token (~28) ≈ 370. 320 was too small (route-forced
+/// default no-tmp is already 325) and caused silent fallback to bare
+/// `OS sandbox: active`.
 pub const session_banner_buf_len: usize = 512;
+
+/// Compact audit reason buffer for `sandbox_posture` events (hash + scopes + grade).
+pub const audit_reason_buf_len: usize = 512;
 
 /// Default user-facing banner language (mechanism-neutral).
 ///
@@ -209,13 +227,23 @@ pub const session_banner_buf_len: usize = 512;
 ///
 /// Unavailable/failed grade-drop keeps denylist-only scrub (injection keys
 /// removed; provider credentials retained) — surface that honesty explicitly.
+///
+/// When `seatbelt_profile` is set (active macOS Seatbelt only), emits the stable
+/// machine-readable token `seatbelt_profile=<grade>` after network scope.
 pub fn formatSessionBanner(buf: []u8, receipt: AttachReceipt) ![]const u8 {
     return switch (receipt.posture) {
-        .active => try std.fmt.bufPrint(
-            buf,
-            "OS sandbox: active (filesystem: {s}; network: {s}; credentials: launch-allowlist (secrets stripped; agent sockets/certs may remain); tools: wrapper-mediated)",
-            .{ receipt.fs_scope, receipt.network_scope },
-        ),
+        .active => if (receipt.seatbelt_profile) |grade|
+            try std.fmt.bufPrint(
+                buf,
+                "OS sandbox: active (filesystem: {s}; network: {s}; seatbelt_profile={s}; credentials: launch-allowlist (secrets stripped; agent sockets/certs may remain); tools: wrapper-mediated)",
+                .{ receipt.fs_scope, receipt.network_scope, grade.toString() },
+            )
+        else
+            try std.fmt.bufPrint(
+                buf,
+                "OS sandbox: active (filesystem: {s}; network: {s}; credentials: launch-allowlist (secrets stripped; agent sockets/certs may remain); tools: wrapper-mediated)",
+                .{ receipt.fs_scope, receipt.network_scope },
+            ),
         // Prepared materials must never read as active or as a grade-drop failure.
         .prepared => if (receipt.reason_code) |reason|
             try std.fmt.bufPrint(buf, "OS sandbox: prepared ({s}; attach pending child apply)", .{reason})
@@ -234,10 +262,18 @@ pub fn formatSessionBanner(buf: []u8, receipt: AttachReceipt) ![]const u8 {
 }
 
 /// Compact audit reason for `sandbox_posture` events (no SBPL / Landlock rule text).
+/// When set, includes the same `seatbelt_profile=<grade>` token as the session banner.
 pub fn formatAuditReason(buf: []u8, receipt: AttachReceipt) ![]const u8 {
     const posture_str = receipt.posture.toString();
     const fs_scope = receipt.fs_scope;
     if (receipt.profileHashSlice()) |hash| {
+        if (receipt.seatbelt_profile) |grade| {
+            return try std.fmt.bufPrint(
+                buf,
+                "posture={s}; profile_hash={s}; fs_scope={s}; network_scope={s}; seatbelt_profile={s}",
+                .{ posture_str, hash, fs_scope, receipt.network_scope, grade.toString() },
+            );
+        }
         return try std.fmt.bufPrint(buf, "posture={s}; profile_hash={s}; fs_scope={s}; network_scope={s}", .{ posture_str, hash, fs_scope, receipt.network_scope });
     } else if (receipt.reason_code) |code| {
         return try std.fmt.bufPrint(buf, "posture={s}; fs_scope={s}; network_scope={s}; reason={s}", .{ posture_str, fs_scope, receipt.network_scope, code });
@@ -408,4 +444,66 @@ test "session_banner_buf_len fits production landlock route-forced scopes" {
     // The previous production size must fail for this receipt (guards constant drift).
     var tiny: [320]u8 = undefined;
     try std.testing.expectError(error.NoSpaceLeft, formatSessionBanner(&tiny, receipt));
+}
+
+test "active seatbelt banner and audit include seatbelt_profile grade token" {
+    var banner_buf: [session_banner_buf_len]u8 = undefined;
+    var audit_buf: [audit_reason_buf_len]u8 = undefined;
+
+    const grades = [_]SeatbeltProfileGrade{ .compatible, .hardened, .strict };
+    for (grades) |grade| {
+        const receipt = try activeReceiptWithNetworkAndGrade(
+            .seatbelt,
+            test_hash_64,
+            "workspace RW, system RO, no home",
+            "unrestricted",
+            grade,
+        );
+        try std.testing.expectEqual(grade, receipt.seatbelt_profile.?);
+
+        const banner = try formatSessionBanner(&banner_buf, receipt);
+        var token_buf: [48]u8 = undefined;
+        const token = try std.fmt.bufPrint(&token_buf, "seatbelt_profile={s}", .{grade.toString()});
+        try std.testing.expect(std.mem.indexOf(u8, banner, token) != null);
+        try std.testing.expect(std.mem.indexOf(u8, banner, "OS sandbox: active") != null);
+        try std.testing.expect(std.mem.indexOf(u8, banner, "Seatbelt") == null);
+
+        const audit = try formatAuditReason(&audit_buf, receipt);
+        try std.testing.expect(std.mem.indexOf(u8, audit, token) != null);
+        try std.testing.expect(std.mem.indexOf(u8, audit, "profile_hash=") != null);
+    }
+}
+
+test "landlock active banner and audit omit seatbelt_profile token" {
+    var banner_buf: [session_banner_buf_len]u8 = undefined;
+    var audit_buf: [audit_reason_buf_len]u8 = undefined;
+    const receipt = try activeReceiptWithNetwork(
+        .landlock,
+        test_hash_64,
+        "workspace child RW, root RO, system RO, no home",
+        "unrestricted",
+    );
+    try std.testing.expect(receipt.seatbelt_profile == null);
+
+    const banner = try formatSessionBanner(&banner_buf, receipt);
+    try std.testing.expect(std.mem.indexOf(u8, banner, "seatbelt_profile=") == null);
+
+    const audit = try formatAuditReason(&audit_buf, receipt);
+    try std.testing.expect(std.mem.indexOf(u8, audit, "seatbelt_profile=") == null);
+}
+
+test "session_banner_buf_len fits seatbelt grade token with route-forced network" {
+    const seatbelt_scope = "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind unrestricted)";
+    const fs_scope = "workspace RW, system RO, platform tmp RW, no home, control write-deny (readable), mach-lookup residual";
+    const receipt = try activeReceiptWithNetworkAndGrade(
+        .seatbelt,
+        test_hash_64,
+        fs_scope,
+        seatbelt_scope,
+        .hardened,
+    );
+    var buf: [session_banner_buf_len]u8 = undefined;
+    const line = try formatSessionBanner(&buf, receipt);
+    try std.testing.expect(std.mem.indexOf(u8, line, "seatbelt_profile=hardened") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line, "loopback proxy only") != null);
 }

@@ -154,14 +154,14 @@ pub const SandboxSpawnCtx = struct {
     }
 };
 
-/// Emit sandbox_posture at session start (posture/hash/fs_scope only — no rule blobs).
+/// Emit sandbox_posture at session start (posture/hash/fs_scope/grade only — no rule blobs).
 pub fn auditSandboxPosture(
     audit_context: anytype,
     session: core.session.Session,
     receipt: sandbox.posture.AttachReceipt,
 ) !void {
     if (audit_context.writer == null) return;
-    var reason_buf: [384]u8 = undefined;
+    var reason_buf: [sandbox.posture.audit_reason_buf_len]u8 = undefined;
     const reason = try sandbox.posture.formatAuditReason(&reason_buf, receipt);
     const ts = core.time.Timestamp.now(audit_context.io);
     const ev: core.event.Event = .{

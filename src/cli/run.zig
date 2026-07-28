@@ -2501,8 +2501,13 @@ test "ryk run --os-sandbox on attaches and banners active when backend available
     try std.testing.expect(std.mem.indexOf(u8, out, "Seatbelt") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Landlock") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "network: unrestricted") != null);
+    if (builtin.os.tag == .macos) {
+        // Residual grade token — same form as audit / doctor capability note.
+        try std.testing.expect(std.mem.indexOf(u8, out, "seatbelt_profile=hardened") != null);
+    }
     if (builtin.os.tag == .linux) {
         try std.testing.expect(std.mem.indexOf(u8, out, "workspace child RW") != null or std.mem.indexOf(u8, out, "root RO") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "seatbelt_profile=") == null);
     }
 }
 
@@ -2544,6 +2549,9 @@ test "ryk run --os-sandbox on active audit has posture=active and 64-hex profile
     while (hash_end < events.len and std.ascii.isHex(events[hash_end])) : (hash_end += 1) {}
     try std.testing.expectEqual(@as(usize, 64), hash_end - hash_start);
     try std.testing.expect(sandbox.posture.isValidProfileHashHex(events[hash_start..hash_end]));
+    if (builtin.os.tag == .macos) {
+        try std.testing.expect(std.mem.indexOf(u8, events, "seatbelt_profile=hardened") != null);
+    }
 }
 
 // M-20 residual honesty: active attach + non-zero agent exit emits follow-up note.

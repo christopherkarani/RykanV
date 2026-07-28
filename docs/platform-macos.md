@@ -25,21 +25,30 @@ Current macOS local output reports process supervision, env filtering, staged wr
 
 ## OS filesystem sandbox
 
-Protected agent launches (`orca <agent>`) use the run engine and can attach a custom Seatbelt (SBPL) filesystem boundary to the agent child. Advanced users can force the same path with `orca run --os-sandbox auto|on|off` (default `auto`):
+Protected agent launches need **no sandbox flags**:
 
-- **Probe ≠ session-attach.** Doctor strong-sandbox / API-presence reports are capability evidence only. Doctor never reports a live session as `active` from a probe alone.
-- **Session-attach** is claimable only after apply-before-exec child attach succeeds for that run (with a profile hash). The pre-exec status handshake (`status_ok`) does not prove `execve`; an `active` session can still fail at exec (e.g. exit 127).
+```sh
+ryk claude
+# or: ryk pi | codex | opencode | …
+ryk run -- <custom-command>
+```
+
+These use the run engine with default `--os-sandbox auto` and attach a custom Seatbelt (SBPL) filesystem boundary to the agent child when the host supports it (default residual grade **hardened**). Advanced users can override attach with `ryk run --os-sandbox auto|on|off`:
+
+- **Probe ≠ session-attach.** Doctor strong-sandbox / API-presence reports are capability evidence only (including that the default residual grade is hardened). Doctor never reports a live session as `active` from a probe alone.
+- **Session-attach** is claimable only after apply-before-exec child attach succeeds for that run (with a profile hash). When active, the session banner and sandbox posture audit include `seatbelt_profile=<grade>`. The pre-exec status handshake (`status_ok`) does not prove `execve`; an `active` session can still fail at exec (e.g. exit 127).
 - **FS scope (Seatbelt):** full workspace subpath RW minus control-root carve-outs (create-at-root allowed); Landlock (Linux) keeps workspace-root RO with child RW only.
 - **Launch binary grant:** the resolved agent executable (and its realpath target when it is a symlink) is granted as a narrow read+exec **literal** path so tools installed outside the workspace — typical `~/.local/bin` / `~/.local/share/...` installs — can pass child preflight after attach. When the launch file is a shebang script, the shebang interpreter (absolute path, or PATH-resolved name from `#!/usr/bin/env NAME` / `env -S` / flag forms) is granted the same way as a single regular file. Seatbelt uses `literal` (not `subpath`) for `.exec` so a mistaken directory path cannot tree-open. This is **not** a broad `$HOME` grant; sibling home secrets stay denied.
 - **`auto`** attaches when the running product major is in the advertised matrix and the sandbox apply symbol resolves; otherwise degrades loudly.
 - **`on`** fails closed when attach cannot complete.
 - **`off`** disables OS apply.
 
-## Seatbelt profile grades
+## Seatbelt profile grades (advanced)
 
-`--os-sandbox` controls attach mode only. Residual surface is controlled separately with:
+`--os-sandbox` controls attach mode only. Residual surface is controlled separately (not required for the happy path):
 
 ```sh
+# Advanced residual override only — default is already hardened.
 ryk run --seatbelt-profile compatible|hardened|strict -- ...
 # or: ORCA_SEATBELT_PROFILE=compatible|hardened|strict
 ```

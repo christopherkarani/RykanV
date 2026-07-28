@@ -214,7 +214,17 @@ pub const ApplyResult = struct {
             .landlock => |*p| p.compiled.effectiveFsScopeSummary(.landlock),
             .seatbelt => |*s| s.fs_scope, // precomputed at prepare (single source)
         };
-        self.receipt = posture.activeReceiptWithNetwork(mechanism, hash[0..], fs_scope, network_scope) catch return error.ApplyFailed;
+        const seatbelt_profile: ?macos_profile.SeatbeltProfileGrade = switch (self.materials) {
+            .seatbelt => |*s| s.profile_grade,
+            else => null,
+        };
+        self.receipt = posture.activeReceiptWithNetworkAndGrade(
+            mechanism,
+            hash[0..],
+            fs_scope,
+            network_scope,
+            seatbelt_profile,
+        ) catch return error.ApplyFailed;
         return .{ .mechanism = mechanism };
     }
 
@@ -1413,10 +1423,17 @@ test "activateAfterHandshake sets seatbelt loopback route-forced network_scope" 
 
     _ = try result.activateAfterHandshake();
     try std.testing.expect(result.receipt.isActive());
+    try std.testing.expectEqual(macos_profile.SeatbeltProfileGrade.hardened, result.receipt.seatbelt_profile.?);
     try std.testing.expectEqualStrings(
         "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind unrestricted)",
         result.receipt.network_scope,
     );
+    var banner_buf: [posture.session_banner_buf_len]u8 = undefined;
+    const banner = try posture.formatSessionBanner(&banner_buf, result.receipt);
+    try std.testing.expect(std.mem.indexOf(u8, banner, "seatbelt_profile=hardened") != null);
+    var audit_buf: [posture.audit_reason_buf_len]u8 = undefined;
+    const audit = try posture.formatAuditReason(&audit_buf, result.receipt);
+    try std.testing.expect(std.mem.indexOf(u8, audit, "seatbelt_profile=hardened") != null);
     // Unforced path stays unrestricted under hardened.
     var unforced: ApplyResult = .{
         .receipt = posture.preparedReceipt(.seatbelt, "seatbelt_child_apply_required"),
@@ -1433,6 +1450,7 @@ test "activateAfterHandshake sets seatbelt loopback route-forced network_scope" 
     defer unforced.deinit();
     _ = try unforced.activateAfterHandshake();
     try std.testing.expectEqualStrings("unrestricted", unforced.receipt.network_scope);
+    try std.testing.expectEqual(macos_profile.SeatbeltProfileGrade.hardened, unforced.receipt.seatbelt_profile.?);
 }
 
 test "activateAfterHandshake strict route-forced denies inbound/bind in network_scope" {
@@ -1454,10 +1472,14 @@ test "activateAfterHandshake strict route-forced denies inbound/bind in network_
     defer result.deinit();
 
     _ = try result.activateAfterHandshake();
+    try std.testing.expectEqual(macos_profile.SeatbeltProfileGrade.strict, result.receipt.seatbelt_profile.?);
     try std.testing.expectEqualStrings(
         "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind denied)",
         result.receipt.network_scope,
     );
+    var banner_buf: [posture.session_banner_buf_len]u8 = undefined;
+    const banner = try posture.formatSessionBanner(&banner_buf, result.receipt);
+    try std.testing.expect(std.mem.indexOf(u8, banner, "seatbelt_profile=strict") != null);
 }
 
 test "require_network_route_forcing without proxy port fails closed" {
