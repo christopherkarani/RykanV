@@ -578,3 +578,197 @@ test "real FS deny: workspace symlink to outside is not readable" {
         else => return error.UnexpectedSandboxProbeExit,
     }
 }
+
+test "hardened profile: shell fork+exec works under attach" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    if (!sandboxInitAvailable()) return error.SkipZigTest;
+    const ver = try detectProductVersion();
+    try std.testing.expect(isMatrixMajor(ver.major));
+
+    const allocator = std.testing.allocator;
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(std.testing.io, ".orca");
+    const ws_root = try ws_tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(ws_root);
+
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = ws_root,
+        .include_tmp = false,
+    });
+    defer compiled.deinit();
+
+    const prepared = macos_seatbelt.prepareForChildApplyWithOptions(
+        allocator,
+        &compiled,
+        .supported,
+        .{ .profile_grade = .hardened },
+    );
+    defer if (prepared.sbpl_z) |p| allocator.free(p);
+    try std.testing.expectEqual(.prepared, prepared.status);
+    const sbpl_z = prepared.sbpl_z orelse return error.SeatbeltApplyFailedOnHost;
+    try std.testing.expect(std.mem.indexOf(u8, sbpl_z, "(allow process*)") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl_z, "(allow process-fork)") != null);
+
+    const pid = std.c.fork();
+    if (pid < 0) return error.SkipZigTest;
+    if (pid == 0) {
+        applyInChild(sbpl_z.ptr) catch std.c._exit(2);
+        const argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", "/bin/echo hardened_ok", null };
+        _ = std.c.execve("/bin/sh", @ptrCast(&argv), @ptrCast(std.c.environ));
+        std.c._exit(8);
+    }
+    const code = try waitExitCode(pid);
+    try std.testing.expectEqual(@as(u8, 0), code);
+}
+
+test "strict route-force: outbound proxy allowed; bind/listen denied" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    if (!sandboxInitAvailable()) return error.SkipZigTest;
+    const ver = try detectProductVersion();
+    try std.testing.expect(isMatrixMajor(ver.major));
+
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var allowed_server = try (try std.Io.net.IpAddress.parse("127.0.0.1", 0)).listen(io, .{ .reuse_address = true });
+    defer allowed_server.deinit(io);
+    const allowed_port = allowed_server.socket.address.getPort();
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(io, ".orca");
+    const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(ws_root);
+
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = ws_root,
+        .include_tmp = false,
+    });
+    defer compiled.deinit();
+
+    const prepared = macos_seatbelt.prepareForChildApplyWithOptions(
+        allocator,
+        &compiled,
+        .supported,
+        .{
+            .network_route_forcing = .{ .proxy_port = allowed_port },
+            .profile_grade = .strict,
+        },
+    );
+    defer if (prepared.sbpl_z) |p| allocator.free(p);
+    try std.testing.expectEqual(.prepared, prepared.status);
+    const sbpl_z = prepared.sbpl_z orelse return error.SeatbeltApplyFailedOnHost;
+    try std.testing.expect(std.mem.indexOf(u8, sbpl_z, "(allow network-inbound)") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl_z, "(allow network-bind)") == null);
+
+    // Outbound to proxy port still allowed.
+    const allow_pid = std.c.fork();
+    if (allow_pid < 0) return error.SkipZigTest;
+    if (allow_pid == 0) {
+        applyInChild(sbpl_z.ptr) catch std.c._exit(2);
+        var port_buf: [8]u8 = undefined;
+        const port_text = std.fmt.bufPrintZ(&port_buf, "{d}", .{allowed_port}) catch std.c._exit(7);
+        childExecNc(port_text.ptr);
+    }
+    const allow_code = try waitExitCode(allow_pid);
+    try std.testing.expectEqual(@as(u8, 0), allow_code);
+
+    // Bind/listen denied under strict route-force.
+    const bind_pid = std.c.fork();
+    if (bind_pid < 0) return error.SkipZigTest;
+    if (bind_pid == 0) {
+        applyInChild(sbpl_z.ptr) catch std.c._exit(2);
+        const fd = std.c.socket(std.c.AF.INET, std.c.SOCK.STREAM, 0);
+        if (fd < 0) std.c._exit(3);
+        var addr: std.c.sockaddr.in = .{
+            .family = std.c.AF.INET,
+            .port = 0,
+            .addr = std.mem.nativeToBig(u32, 0x7f000001),
+            .zero = [_]u8{0} ** 8,
+        };
+        const rc = std.c.bind(fd, @ptrCast(&addr), @sizeOf(std.c.sockaddr.in));
+        if (rc == 0) std.c._exit(0); // bind succeeded = fail the canary
+        std.c._exit(1); // expected: bind denied
+    }
+    const bind_code = try waitExitCode(bind_pid);
+    try std.testing.expectEqual(@as(u8, 1), bind_code);
+}
+
+// M-5: hardened bootstrap FS residual — no literal `/private/var` grant; live open must deny.
+// Compatible control proves the same path is readable under the historical residual.
+test "hardened profile: open /private/var denied; compatible allows" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    if (!sandboxInitAvailable()) return error.SkipZigTest;
+    const ver = try detectProductVersion();
+    try std.testing.expect(isMatrixMajor(ver.major));
+
+    const allocator = std.testing.allocator;
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(std.testing.io, ".orca");
+    const ws_root = try ws_tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(ws_root);
+
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = ws_root,
+        .include_tmp = false,
+    });
+    defer compiled.deinit();
+
+    // Hardened: open of `/private/var` (literal residual removed) must fail after apply.
+    {
+        const prepared = macos_seatbelt.prepareForChildApplyWithOptions(
+            allocator,
+            &compiled,
+            .supported,
+            .{ .profile_grade = .hardened },
+        );
+        defer if (prepared.sbpl_z) |p| allocator.free(p);
+        try std.testing.expectEqual(.prepared, prepared.status);
+        const sbpl_z = prepared.sbpl_z orelse return error.SeatbeltApplyFailedOnHost;
+        try std.testing.expect(std.mem.indexOf(u8, sbpl_z, "(allow file-read* (literal \"/private/var\"))") == null);
+
+        const pid = std.c.fork();
+        if (pid < 0) return error.SkipZigTest;
+        if (pid == 0) {
+            applyInChild(sbpl_z.ptr) catch std.c._exit(2);
+            const fd = std.c.open("/private/var", .{ .ACCMODE = .RDONLY });
+            if (fd >= 0) {
+                _ = std.c.close(fd);
+                std.c._exit(0); // open succeeded = residual still broad
+            }
+            std.c._exit(1); // expected deny
+        }
+        const code = try waitExitCode(pid);
+        try std.testing.expectEqual(@as(u8, 1), code);
+    }
+
+    // Compatible control: same open succeeds under historical residual.
+    {
+        const prepared = macos_seatbelt.prepareForChildApplyWithOptions(
+            allocator,
+            &compiled,
+            .supported,
+            .{ .profile_grade = .compatible },
+        );
+        defer if (prepared.sbpl_z) |p| allocator.free(p);
+        try std.testing.expectEqual(.prepared, prepared.status);
+        const sbpl_z = prepared.sbpl_z orelse return error.SeatbeltApplyFailedOnHost;
+        try std.testing.expect(std.mem.indexOf(u8, sbpl_z, "(allow file-read* (literal \"/private/var\"))") != null);
+
+        const pid = std.c.fork();
+        if (pid < 0) return error.SkipZigTest;
+        if (pid == 0) {
+            applyInChild(sbpl_z.ptr) catch std.c._exit(2);
+            const fd = std.c.open("/private/var", .{ .ACCMODE = .RDONLY });
+            if (fd >= 0) {
+                _ = std.c.close(fd);
+                std.c._exit(0);
+            }
+            std.c._exit(1);
+        }
+        const code = try waitExitCode(pid);
+        try std.testing.expectEqual(@as(u8, 0), code);
+    }
+}

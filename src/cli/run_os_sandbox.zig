@@ -31,6 +31,7 @@ pub fn applyForRun(
     env_map: *std.process.Environ.Map,
     network_proxy_port: ?u16,
     require_network_route_forcing: bool,
+    seatbelt_profile: sandbox.posture.SeatbeltProfileGrade,
     stderr: anytype,
     launch_argv0: ?[]const u8,
 ) !ApplyForRunOutcome {
@@ -51,6 +52,7 @@ pub fn applyForRun(
         .launch_exec_paths = launch_exec_paths,
         .network_proxy_port = network_proxy_port,
         .require_network_route_forcing = require_network_route_forcing,
+        .seatbelt_profile = seatbelt_profile,
         .fail_reason_out = &fail_reason,
     }) catch |err| switch (err) {
         error.RequireFailed => {
@@ -152,14 +154,14 @@ pub const SandboxSpawnCtx = struct {
     }
 };
 
-/// Emit sandbox_posture at session start (posture/hash/fs_scope only — no rule blobs).
+/// Emit sandbox_posture at session start (posture/hash/fs_scope/grade only — no rule blobs).
 pub fn auditSandboxPosture(
     audit_context: anytype,
     session: core.session.Session,
     receipt: sandbox.posture.AttachReceipt,
 ) !void {
     if (audit_context.writer == null) return;
-    var reason_buf: [384]u8 = undefined;
+    var reason_buf: [sandbox.posture.audit_reason_buf_len]u8 = undefined;
     const reason = try sandbox.posture.formatAuditReason(&reason_buf, receipt);
     const ts = core.time.Timestamp.now(audit_context.io);
     const ev: core.event.Event = .{

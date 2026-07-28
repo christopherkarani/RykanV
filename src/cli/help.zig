@@ -65,17 +65,19 @@ pub const commands =
                 "ryk run --network allowlist -- ./scripts/agent-task.sh",
                 "ryk run --no-network --no-secrets -- echo 'offline'",
                 "ryk run --secretless --network-backend proxy -- <command>",
+                // Advanced: force attach fail-closed (default is auto + hardened; not the day-1 path).
                 "ryk run --os-sandbox on -- <command>",
             },
-            .additional_completion_flags = &.{ "--workspace", "--policy", "--session-name", "--secretless", "--inherit-env", "--allow-network", "--network", "--network-backend", "--os-sandbox", "--require-backend" },
+            .additional_completion_flags = &.{ "--workspace", "--policy", "--session-name", "--secretless", "--inherit-env", "--allow-network", "--network", "--network-backend", "--os-sandbox", "--seatbelt-profile", "--require-backend" },
             .details = &.{
                 "Starts a protected session, filters the child environment through policy, checks the command through a command safety check, writes audit artifacts, and mirrors the child exit code.",
                 "Agent-primary defaults: network mode is ask when --network/--no-network are omitted (overrides policy network.mode for this run). Secretless stays off unless --secretless. Opt-outs: --network open|allowlist|observe|off|ask, --no-network.",
                 "Host launch aliases (ryk claude, ryk pi, …) rewrite to this command with no extra flags — same defaults. Pass ryk run flags only on `ryk run`, not after a host alias name.",
-                "Options: --workspace <path>, --mode observe|ask|yolo|strict|ci, --policy <path>, --session-name <name>, --no-secrets, --secretless, --inherit-env, --no-network, --allow-network <domain>, --network observe|ask|allowlist|open|off, --network-backend decision-only|proxy, --os-sandbox auto|on|off, --require-backend <capability>, --help",
+                "Options: --workspace <path>, --mode observe|ask|yolo|strict|ci, --policy <path>, --session-name <name>, --no-secrets, --secretless, --inherit-env, --no-network, --allow-network <domain>, --network observe|ask|allowlist|open|off, --network-backend decision-only|proxy, --os-sandbox auto|on|off, --seatbelt-profile compatible|hardened|strict, --require-backend <capability>, --help",
                 "Strict and CI modes default to environments without secret access. --secretless replaces policy-visible secret env values with non-resolving orca-secret:// local-dummy references (not usable as raw model API keys; opt-in strip/demo only — not day-1 model auth). --inherit-env is allowed only when the selected policy permits inheritance.",
                 "Network flags update the run-time policy and audit network decisions. --network-backend proxy starts an explicit localhost proxy and injects HTTP_PROXY/HTTPS_PROXY/ALL_PROXY; HTTPS CONNECT is host/port only without interception.",
-                "--os-sandbox auto|on|off controls the OS filesystem sandbox (default auto). on fails closed when the platform backend cannot attach. auto: degrades loudly when no backend plan exists; fails closed on incomplete env scrub/allowlist; fails closed if attach fails after materials are prepared. off disables OS apply.",
+                "Protected launch defaults attach the OS filesystem sandbox automatically when the host supports it (no flags required for ryk <agent> or ryk run -- <command>). Advanced: --os-sandbox auto|on|off (default auto). on fails closed when the platform backend cannot attach. auto: degrades loudly when no backend plan exists; fails closed on incomplete env scrub/allowlist; fails closed if attach fails after materials are prepared. off disables OS apply.",
+                "Advanced (macOS residual grade only): --seatbelt-profile compatible|hardened|strict (default hardened; also ORCA_SEATBELT_PROFILE). compatible is the historical broad process*/private/var residual; hardened narrows process ops and bootstrap FS; strict also drops inbound/bind under route-force and omits broad network* without route force. Still not process/XPC isolation. Use compatible if a tool breaks under hardened. Not required for the happy path.",
                 "Linux (Landlock): when active, the session banner reports workspace child RW with workspace-root RO — create/write at the workspace root is denied; write works under pre-existing non-control children. macOS (Seatbelt): full workspace subpath RW minus control-root carve-outs (create-at-root allowed). With the proxy backend, supported OS sandbox sessions can route-force child outbound TCP to the ryk loopback proxy.",
                 "Linux uses platform feature detection where available. Optional kernel features are reported honestly and are not claimed active unless actually active.",
             },
@@ -961,10 +963,18 @@ test "run help documents --os-sandbox auto degrade and fail-closed paths" {
     }
     const text = w.buffered();
     try std.testing.expect(std.mem.indexOf(u8, text, "--os-sandbox auto|on|off") != null);
+    // Happy path: no required sandbox flags for protected launch.
+    try std.testing.expect(std.mem.indexOf(u8, text, "no flags required") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "ryk <agent>") != null);
     // Three auto outcomes (Z-6): degrade when no backend plan; scrub fail-closed; attach fail-closed.
     try std.testing.expect(std.mem.indexOf(u8, text, "degrades loudly when no backend plan exists") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "fails closed on incomplete env scrub/allowlist") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "fails closed if attach fails after materials are prepared") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "--seatbelt-profile compatible|hardened|strict") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "default hardened") != null);
+    // Primary examples are host aliases / bare run — not multi-flag probe recipes.
+    try std.testing.expectEqualStrings("ryk claude", info.examples[0]);
+    try std.testing.expectEqualStrings("ryk run -- <custom-command>", info.examples[2]);
 }
 
 test "mode option lists include yolo" {

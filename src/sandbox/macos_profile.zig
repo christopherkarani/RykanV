@@ -7,6 +7,13 @@
 //! - no broad $HOME grant
 //! - process/mach/network baseline so a sandboxed child can still exec
 //!
+//! Profile grades (`posture.SeatbeltProfileGrade`):
+//! - `compatible`: historical residuals (`process*`, broad `/private/var`, route-force
+//!   keeps inbound/bind)
+//! - `hardened` (default): narrowed process ops + bootstrap FS; same network model
+//! - `strict`: hardened + no listeners under route-force; no broad `network*` without
+//!   route forcing (deny-default). Still not process/XPC isolation.
+//!
 //! Path form (M-28): Seatbelt `subpath` filters on product majors match the
 //! normalized `/Users/…` firmlink form. Realpath often returns
 //! `/System/Volumes/Data/Users/…`; we strip the Data prefix for SBPL emission
@@ -14,9 +21,12 @@
 
 const std = @import("std");
 const profile = @import("profile.zig");
+const posture = @import("posture.zig");
 
 /// Data-volume prefix stripped when emitting Users-tree grants (see `sbplEmitPath`).
 const data_volume_prefix = "/System/Volumes/Data";
+
+pub const SeatbeltProfileGrade = posture.SeatbeltProfileGrade;
 
 pub const NetworkRouteForcing = struct {
     proxy_port: u16,
@@ -24,21 +34,40 @@ pub const NetworkRouteForcing = struct {
 
 pub const RenderOptions = struct {
     network_route_forcing: ?NetworkRouteForcing = null,
+    /// Residual grade. Default is hardened.
+    profile_grade: SeatbeltProfileGrade = SeatbeltProfileGrade.default_grade,
 };
 
+/// Honest network_scope string for receipts/banners after child attach.
+pub fn networkScopeSummary(grade: SeatbeltProfileGrade, route_forced: bool) []const u8 {
+    if (!route_forced) {
+        return switch (grade) {
+            .compatible, .hardened => "unrestricted",
+            // Strict without route force omits `(allow network*)` — deny default.
+            .strict => "deny-default (no broad network*; no route force)",
+        };
+    }
+    return switch (grade) {
+        .compatible, .hardened => "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind unrestricted)",
+        .strict => "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind denied)",
+    };
+}
+
 /// Render a custom SBPL profile string from a compiled grant model.
-/// Caller owns the returned slice.
+/// Caller owns the returned slice. Uses default (`hardened`) grade.
 pub fn renderSbpl(allocator: std.mem.Allocator, compiled: *const profile.CompiledProfile) ![]u8 {
     return renderSbplWithOptions(allocator, compiled, .{});
 }
 
-/// Render a custom SBPL profile string with optional child network route forcing.
+/// Render a custom SBPL profile string with optional child network route forcing
+/// and residual grade.
+///
 /// Route forcing removes broad `network*` and permits outbound TCP only to the
-/// local proxy port, while keeping inbound/bind unrestricted so agents can still
-/// start listeners (dev servers, test DBs, ephemeral binds) — matching Landlock's
-/// connect-only mediation. macOS Seatbelt accepts `localhost` (not numeric
-/// loopback) for TCP address filters; live tests prove that filter still matches
-/// numeric `127.0.0.1` client connects, avoiding DNS inside the sandboxed child.
+/// local proxy port. Under `compatible`/`hardened`, inbound/bind stay unrestricted
+/// so agents can start listeners (Landlock connect-only parity). Under `strict`,
+/// inbound/bind are omitted (listener lockdown). macOS Seatbelt accepts
+/// `localhost` (not numeric loopback) for TCP address filters; live tests prove
+/// that filter still matches numeric `127.0.0.1` client connects.
 pub fn renderSbplWithOptions(
     allocator: std.mem.Allocator,
     compiled: *const profile.CompiledProfile,
@@ -53,60 +82,20 @@ pub fn renderSbplWithOptions(
 
     // Baseline: process lifecycle, signals, sysctl, mach, and optional network.
     // Intentional non-goals (FS confinement only — not process/IPC/network isolation):
-    // unrestricted process*, mach-lookup. Network is unrestricted only when route
-    // forcing is not requested. See docs/platform-macos.md.
+    // unfiltered mach-lookup remains on all grades. See docs/platform-macos.md.
     // Metadata is scoped to root literals + granted trees only — never bare
     // (allow file-read-metadata) which enables host-wide path discovery.
+    try appendProcessBaseline(&out, allocator, options.profile_grade);
     try out.appendSlice(allocator,
-        \\;; process / IPC baseline (FS confinement is the product surface;
-        \\;; process*/mach-lookup are intentional residuals — not isolation)
-        \\(allow process*)
         \\(allow signal)
         \\(allow sysctl-read)
         \\;; mach-lookup required for dyld; omit mach-register (no host service registration)
+        \\;; unfiltered — not an XPC/service allowlist (residual on all grades)
         \\(allow mach-lookup)
         \\
     );
-    if (options.network_route_forcing) |route| {
-        // Outbound: only the Orca loopback proxy. Inbound/bind stay open — route
-        // forcing is connect mediation, not a listener lockdown (parity with
-        // Landlock ACCESS_NET_CONNECT_TCP-only handling).
-        const line = try std.fmt.allocPrint(allocator,
-            \\;; network route forcing: outbound TCP only to Orca loopback proxy;
-            \\;; inbound/bind unrestricted (dev servers, ephemeral listeners)
-            \\(allow network-inbound)
-            \\(allow network-bind)
-            \\(allow network-outbound (remote tcp "localhost:{d}"))
-            \\
-        , .{route.proxy_port});
-        defer allocator.free(line);
-        try out.appendSlice(allocator, line);
-    } else {
-        try out.appendSlice(allocator,
-            \\;; network unrestricted unless the launcher requested proxy route forcing
-            \\(allow network*)
-            \\
-        );
-    }
-    try out.appendSlice(allocator,
-        \\;; dyld / device / root path components needed for exec (content + metadata)
-        \\(allow file-read-metadata (literal "/"))
-        \\(allow file-read-metadata (literal "/private"))
-        \\(allow file-read* (literal "/"))
-        \\(allow file-read* (literal "/private"))
-        \\(allow file-read* (literal "/private/tmp"))
-        \\(allow file-read* (literal "/private/var"))
-        \\(allow file-read* (literal "/private/var/tmp"))
-        \\(allow file-read-metadata (subpath "/dev"))
-        \\(allow file-read* (subpath "/dev"))
-        \\(allow file-ioctl (subpath "/dev"))
-        \\(allow file-read-metadata (subpath "/private/var/db/dyld"))
-        \\(allow file-read* (subpath "/private/var/db/dyld"))
-        \\;; device writes: only null/urandom (not bare /dev)
-        \\(allow file-write* (literal "/dev/null"))
-        \\(allow file-write* (literal "/dev/urandom"))
-        \\
-    );
+    try appendNetworkBaseline(&out, allocator, options);
+    try appendBootstrapFs(&out, allocator, options.profile_grade);
 
     // Path grants from the portable profile model (Users-form when under Data/Users).
     // `.exec` uses `literal` (file-only) so a mistaken directory path cannot tree-open.
@@ -190,6 +179,119 @@ pub fn renderSbplWithOptions(
 
     // No broad HOME: assert via absence — never emit $HOME or ~ grants.
     return try out.toOwnedSlice(allocator);
+}
+
+fn appendProcessBaseline(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    grade: SeatbeltProfileGrade,
+) !void {
+    switch (grade) {
+        .compatible => try out.appendSlice(allocator,
+            \\;; process baseline (compatible): unrestricted process* residual
+            \\(allow process*)
+            \\
+        ),
+        // Hardened + strict: lifecycle ops agents need without blanket process*.
+        // process-exec is also re-granted per compiled path trees below.
+        .hardened, .strict => try out.appendSlice(allocator,
+            \\;; process baseline (hardened/strict): fork/exec/info only — not process isolation
+            \\(allow process-fork)
+            \\(allow process-exec)
+            \\(allow process-info*)
+            \\
+        ),
+    }
+}
+
+fn appendNetworkBaseline(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    options: RenderOptions,
+) !void {
+    if (options.network_route_forcing) |route| {
+        switch (options.profile_grade) {
+            .compatible, .hardened => {
+                // Outbound: only the Orca loopback proxy. Inbound/bind stay open —
+                // connect mediation, not a listener lockdown (Landlock parity).
+                const line = try std.fmt.allocPrint(allocator,
+                    \\;; network route forcing: outbound TCP only to Orca loopback proxy;
+                    \\;; inbound/bind unrestricted (dev servers, ephemeral listeners)
+                    \\(allow network-inbound)
+                    \\(allow network-bind)
+                    \\(allow network-outbound (remote tcp "localhost:{d}"))
+                    \\
+                , .{route.proxy_port});
+                defer allocator.free(line);
+                try out.appendSlice(allocator, line);
+            },
+            .strict => {
+                const line = try std.fmt.allocPrint(allocator,
+                    \\;; network route forcing (strict): outbound TCP only to Orca loopback proxy;
+                    \\;; inbound/bind omitted (listener lockdown — breaks Landlock parity intentionally)
+                    \\(allow network-outbound (remote tcp "localhost:{d}"))
+                    \\
+                , .{route.proxy_port});
+                defer allocator.free(line);
+                try out.appendSlice(allocator, line);
+            },
+        }
+        return;
+    }
+    switch (options.profile_grade) {
+        .compatible, .hardened => try out.appendSlice(allocator,
+            \\;; network unrestricted unless the launcher requested proxy route forcing
+            \\(allow network*)
+            \\
+        ),
+        // Strict without route force: omit network* — deny default blocks network.
+        .strict => try out.appendSlice(allocator,
+            \\;; strict without route force: no broad network* (deny default)
+            \\
+        ),
+    }
+}
+
+fn appendBootstrapFs(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    grade: SeatbeltProfileGrade,
+) !void {
+    // Shared dyld/device/root literals.
+    try out.appendSlice(allocator,
+        \\;; dyld / device / root path components needed for exec (content + metadata)
+        \\(allow file-read-metadata (literal "/"))
+        \\(allow file-read-metadata (literal "/private"))
+        \\(allow file-read* (literal "/"))
+        \\(allow file-read* (literal "/private"))
+        \\(allow file-read* (literal "/private/tmp"))
+        \\(allow file-read* (literal "/private/var/tmp"))
+        \\
+    );
+    switch (grade) {
+        // Historical: broad /private/var read (host discovery residual).
+        .compatible => try out.appendSlice(allocator,
+            \\(allow file-read* (literal "/private/var"))
+            \\
+        ),
+        // Hardened/strict: no broad /private/var — only dyld + shell select + tmp.
+        .hardened, .strict => try out.appendSlice(allocator,
+            \\;; bootstrap FS (hardened/strict): no broad /private/var
+            \\(allow file-read* (subpath "/private/var/select"))
+            \\
+        ),
+    }
+    try out.appendSlice(allocator,
+        \\(allow file-read-metadata (subpath "/dev"))
+        \\(allow file-read* (subpath "/dev"))
+        \\(allow file-ioctl (subpath "/dev"))
+        \\(allow file-read-metadata (subpath "/private/var/db/dyld"))
+        \\(allow file-read* (subpath "/private/var/db/dyld"))
+        \\;; device writes: only null/urandom (not bare /dev)
+        \\(allow file-write* (literal "/dev/null"))
+        \\(allow file-write* (literal "/dev/urandom"))
+        \\
+    );
 }
 
 /// True when a grant path is exactly Data volume or a strict descendant (realpath workspace).
@@ -463,6 +565,43 @@ test "SBPL narrows /dev writes to null and urandom only" {
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow mach-register)") == null);
 }
 
+test "SBPL hardened default narrows process* and broad /private/var" {
+    const allocator = std.testing.allocator;
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = "/tmp/orca-sbpl-hardened",
+        .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
+    });
+    defer compiled.deinit();
+
+    const sbpl = try renderSbpl(allocator, &compiled);
+    defer allocator.free(sbpl);
+
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow process*)") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow process-fork)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow process-exec)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow process-info*)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/private/var\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/private/var/select\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/private/var/db/dyld\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow network*)") != null);
+}
+
+test "SBPL compatible retains process* and broad /private/var" {
+    const allocator = std.testing.allocator;
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = "/tmp/orca-sbpl-compat",
+        .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
+    });
+    defer compiled.deinit();
+
+    const sbpl = try renderSbplWithOptions(allocator, &compiled, .{ .profile_grade = .compatible });
+    defer allocator.free(sbpl);
+
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow process*)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/private/var\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow network*)") != null);
+}
+
 test "SBPL route forcing removes broad network and allows only proxy TCP port" {
     const allocator = std.testing.allocator;
     var compiled = try profile.compileProfile(allocator, .{
@@ -473,6 +612,7 @@ test "SBPL route forcing removes broad network and allows only proxy TCP port" {
 
     const sbpl = try renderSbplWithOptions(allocator, &compiled, .{
         .network_route_forcing = .{ .proxy_port = 43123 },
+        .profile_grade = .hardened,
     });
     defer allocator.free(sbpl);
 
@@ -481,13 +621,56 @@ test "SBPL route forcing removes broad network and allows only proxy TCP port" {
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(remote tcp \"*:43123\")") == null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(remote tcp)") == null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(remote udp)") == null);
-    // Inbound/bind must remain allowed so route-forced agents can listen.
+    // Hardened: inbound/bind remain so route-forced agents can listen.
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow network-inbound)") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow network-bind)") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow network-outbound (remote tcp \"localhost:43123\"))") != null);
 }
 
-test "SBPL default remains explicit unrestricted network" {
+test "SBPL strict route forcing denies inbound/bind" {
+    const allocator = std.testing.allocator;
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = "/tmp/orca-sbpl-strict-route",
+        .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
+    });
+    defer compiled.deinit();
+
+    const sbpl = try renderSbplWithOptions(allocator, &compiled, .{
+        .network_route_forcing = .{ .proxy_port = 43123 },
+        .profile_grade = .strict,
+    });
+    defer allocator.free(sbpl);
+
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow network*)") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow network-inbound)") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow network-bind)") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow network-outbound (remote tcp \"localhost:43123\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow process*)") == null);
+    try std.testing.expectEqualStrings(
+        "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind denied)",
+        networkScopeSummary(.strict, true),
+    );
+}
+
+test "SBPL strict without route force omits network*" {
+    const allocator = std.testing.allocator;
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = "/tmp/orca-sbpl-strict-no-route",
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+    });
+    defer compiled.deinit();
+
+    const sbpl = try renderSbplWithOptions(allocator, &compiled, .{ .profile_grade = .strict });
+    defer allocator.free(sbpl);
+
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow network*)") == null);
+    try std.testing.expectEqualStrings(
+        "deny-default (no broad network*; no route force)",
+        networkScopeSummary(.strict, false),
+    );
+}
+
+test "SBPL default remains explicit unrestricted network under hardened" {
     const allocator = std.testing.allocator;
     var compiled = try profile.compileProfile(allocator, .{
         .workspace_root = "/tmp/orca-sbpl-network-default",
@@ -499,6 +682,77 @@ test "SBPL default remains explicit unrestricted network" {
     defer allocator.free(sbpl);
 
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow network*)") != null);
+    try std.testing.expectEqualStrings("unrestricted", networkScopeSummary(.hardened, false));
+}
+
+// M-6 partial: dual-encoding lock — SBPL tokens must match networkScopeSummary invariants
+// for every grade × route_force cell (claim vs render drift guard).
+test "grade residual matrix: SBPL tokens match networkScopeSummary invariants" {
+    const allocator = std.testing.allocator;
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = "/tmp/orca-sbpl-grade-matrix",
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+    });
+    defer compiled.deinit();
+
+    const grades = [_]SeatbeltProfileGrade{ .compatible, .hardened, .strict };
+    for (grades) |grade| {
+        // No route force.
+        {
+            const sbpl = try renderSbplWithOptions(allocator, &compiled, .{ .profile_grade = grade });
+            defer allocator.free(sbpl);
+            const summary = networkScopeSummary(grade, false);
+            const has_network_star = std.mem.indexOf(u8, sbpl, "(allow network*)") != null;
+            switch (grade) {
+                .compatible, .hardened => {
+                    try std.testing.expect(has_network_star);
+                    try std.testing.expectEqualStrings("unrestricted", summary);
+                    const has_process_star = std.mem.indexOf(u8, sbpl, "(allow process*)") != null;
+                    const has_private_var = std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/private/var\"))") != null;
+                    try std.testing.expectEqual(grade == .compatible, has_process_star);
+                    try std.testing.expectEqual(grade == .compatible, has_private_var);
+                },
+                .strict => {
+                    try std.testing.expect(!has_network_star);
+                    try std.testing.expectEqualStrings(
+                        "deny-default (no broad network*; no route force)",
+                        summary,
+                    );
+                    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow process*)") == null);
+                    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/private/var\"))") == null);
+                },
+            }
+        }
+        // Route force.
+        {
+            const sbpl = try renderSbplWithOptions(allocator, &compiled, .{
+                .profile_grade = grade,
+                .network_route_forcing = .{ .proxy_port = 43123 },
+            });
+            defer allocator.free(sbpl);
+            const summary = networkScopeSummary(grade, true);
+            try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow network*)") == null);
+            try std.testing.expect(std.mem.indexOf(u8, sbpl, "(remote tcp \"localhost:43123\")") != null);
+            const has_inbound = std.mem.indexOf(u8, sbpl, "(allow network-inbound)") != null;
+            const has_bind = std.mem.indexOf(u8, sbpl, "(allow network-bind)") != null;
+            switch (grade) {
+                .compatible, .hardened => {
+                    try std.testing.expect(has_inbound and has_bind);
+                    try std.testing.expectEqualStrings(
+                        "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind unrestricted)",
+                        summary,
+                    );
+                },
+                .strict => {
+                    try std.testing.expect(!has_inbound and !has_bind);
+                    try std.testing.expectEqualStrings(
+                        "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind denied)",
+                        summary,
+                    );
+                },
+            }
+        }
+    }
 }
 
 test "SBPL denies /System/Volumes/Data even if bare /System is granted" {

@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const backend = @import("backend.zig");
 const platform = @import("orca_core").platform;
 const macos_seatbelt = @import("macos_seatbelt.zig");
+const posture = @import("posture.zig");
 
 pub const implemented = true;
 
@@ -33,7 +34,12 @@ pub fn detect() backend.ReportSet {
         .version_unsupported, .symbol_unavailable, .not_macos => .unavailable,
     };
     const strong_note: []const u8 = switch (support) {
-        .supported => "OS filesystem sandbox API present on a supported macOS version; session active only after apply-before-exec child attach and profile hash",
+        // Capability only — never live active. Default residual grade from SeatbeltProfileGrade.default_grade.
+        .supported => "OS filesystem sandbox API present on a supported macOS version; default residual grade " ++
+            @tagName(posture.SeatbeltProfileGrade.default_grade) ++
+            " (seatbelt_profile=" ++
+            @tagName(posture.SeatbeltProfileGrade.default_grade) ++
+            "); session active only after apply-before-exec child attach and profile hash",
         .version_unsupported => "OS filesystem sandbox unavailable: running macOS is outside the advertised support matrix (14–26); capability probes are not a live session claim",
         .symbol_unavailable => "OS filesystem sandbox unavailable: sandbox apply symbol not resolvable; capability probes are not a live session claim",
         .not_macos => "OS filesystem sandbox is a macOS feature",
@@ -62,8 +68,14 @@ test "macOS capability detector is honest about wrapper and unavailable protecti
     // strong_sandbox never active from detect (S-GLO-01).
     try std.testing.expect(report.get(.strong_sandbox).level != .active);
     try std.testing.expect(!report.featureAvailable(.strong_sandbox) or report.get(.strong_sandbox).level == .partial);
-    // Default doctor notes stay mechanism-neutral (no "Seatbelt" branding).
+    // Default doctor notes stay mechanism-neutral (no capital "Seatbelt" branding).
     try std.testing.expect(std.mem.indexOf(u8, report.get(.strong_sandbox).note, "Seatbelt") == null);
+    // When attach is possible, surface default residual grade (capability, not live active).
+    if (report.get(.strong_sandbox).level == .partial) {
+        try std.testing.expect(std.mem.indexOf(u8, report.get(.strong_sandbox).note, "seatbelt_profile=hardened") != null);
+        try std.testing.expect(std.mem.indexOf(u8, report.get(.strong_sandbox).note, "default residual grade hardened") != null);
+        try std.testing.expect(std.mem.indexOf(u8, report.get(.strong_sandbox).note, "session active only after") != null);
+    }
 }
 
 test "macOS strong_sandbox tracks version matrix without live active claim" {
@@ -71,7 +83,10 @@ test "macOS strong_sandbox tracks version matrix without live active claim" {
     const report = detect();
     const support = macos_seatbelt.evaluateSupport();
     switch (support) {
-        .supported => try std.testing.expectEqual(backend.Level.partial, report.get(.strong_sandbox).level),
+        .supported => {
+            try std.testing.expectEqual(backend.Level.partial, report.get(.strong_sandbox).level);
+            try std.testing.expect(std.mem.indexOf(u8, report.get(.strong_sandbox).note, "seatbelt_profile=hardened") != null);
+        },
         else => try std.testing.expectEqual(backend.Level.unavailable, report.get(.strong_sandbox).level),
     }
     try std.testing.expect(report.get(.strong_sandbox).level != .active);

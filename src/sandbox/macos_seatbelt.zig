@@ -30,6 +30,11 @@
 //! threaded parent. We do not pause/join proxy threads around fork (would
 //! couple sandbox to cli/run lifecycle). Prefer a short child path + honest
 //! residual over a large proxy rewrite. Nested re-apply remains unsupported.
+//!
+//! **Stress note:** live unit tests fork-apply-exec under the normal test runner
+//! (which may already be multi-threaded). A dedicated multi-thread parent stress
+//! canary lives in `test "seatbelt apply survives multi-thread parent stress"`.
+//! Do not claim async-signal-safe attach until a single-thread spawner exists.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -185,6 +190,7 @@ pub const ParentApplyOutcome = struct {
 
 pub const PrepareOptions = struct {
     network_route_forcing: ?macos_profile.NetworkRouteForcing = null,
+    profile_grade: macos_profile.SeatbeltProfileGrade = macos_profile.SeatbeltProfileGrade.default_grade,
 };
 
 /// Parent-side Seatbelt prepare: version gate, symbol check, SBPL render.
@@ -226,6 +232,7 @@ pub fn prepareForChildApplyWithOptions(
     // OOM must use seatbelt_profile_oom so apply maps to hard OutOfMemory (not soft failed).
     const sbpl = macos_profile.renderSbplWithOptions(allocator, compiled, .{
         .network_route_forcing = options.network_route_forcing,
+        .profile_grade = options.profile_grade,
     }) catch |err| {
         return .{
             .status = .failed,
@@ -414,6 +421,71 @@ test "prepare SBPL emits Users-form for Data-volume workspace (M-28 / R2-1)" {
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/projects/app\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(subpath \"/System/Volumes/Data/Users/dev/projects/app\")") == null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(subpath \"/System/Volumes/Data/Users/dev/.ssh\")") == null);
+}
+
+test "seatbelt apply survives multi-thread parent stress" {
+    // Phase 4 residual canary: parent starts worker threads (malloc pressure), then
+    // fork-apply-exec. Documents multi-thread residual without claiming async-signal
+    // safety. Flakes here mean proxy-thread pause / single-thread spawner should land.
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    if (!sandboxInitAvailable()) return error.SkipZigTest;
+    const ver = try detectProductVersion();
+    if (!isMatrixMajor(ver.major)) return error.SkipZigTest;
+
+    const Worker = struct {
+        fn run() void {
+            var i: usize = 0;
+            while (i < 2000) : (i += 1) {
+                const p = std.heap.c_allocator.alloc(u8, 64) catch continue;
+                @memset(p, @truncate(i));
+                std.heap.c_allocator.free(p);
+            }
+        }
+    };
+    var threads: [4]std.Thread = undefined;
+    for (&threads) |*t| {
+        t.* = try std.Thread.spawn(.{}, Worker.run, .{});
+    }
+    defer for (&threads) |*t| t.join();
+
+    const sbpl =
+        \\(version 1)
+        \\(deny default)
+        \\(allow process-fork)
+        \\(allow process-exec)
+        \\(allow process-info*)
+        \\(allow signal)
+        \\(allow sysctl-read)
+        \\(allow mach-lookup)
+        \\(allow network*)
+        \\(allow file-read-metadata)
+        \\(allow file-read*)
+        \\(allow file-write* (literal "/dev/null"))
+        \\(allow file-write* (literal "/dev/urandom"))
+        \\(allow file-ioctl (subpath "/dev"))
+    ;
+    var round: usize = 0;
+    while (round < 8) : (round += 1) {
+        const pid = std.c.fork();
+        if (pid < 0) return error.SkipZigTest;
+        if (pid == 0) {
+            applyInChild(sbpl) catch std.c._exit(2);
+            std.c._exit(0);
+        }
+        // EINTR-safe reap: bare waitpid under multi-thread stress can return -1 with
+        // zero-init status and false-green as exit 0 while the child is unreaped.
+        var status: c_int = 0;
+        while (true) {
+            const rc = std.c.waitpid(pid, &status, 0);
+            if (rc >= 0) break;
+            if (std.c.errno(rc) == .INTR) continue;
+            return error.WaitpidFailed;
+        }
+        const exited = (status & 0x7f) == 0;
+        try std.testing.expect(exited);
+        const exit_code: u8 = @intCast((status >> 8) & 0xff);
+        try std.testing.expectEqual(@as(u8, 0), exit_code);
+    }
 }
 
 // Real-FS deny / canary integration tests live in macos_seatbelt_deny_tests.zig.

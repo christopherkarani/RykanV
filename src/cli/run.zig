@@ -32,6 +32,9 @@ const RunOptions = struct {
     network_backend: ?policy.schema.NetworkBackend = null,
     /// OS FS sandbox mode (`--os-sandbox`). Default auto (on when available).
     os_sandbox: sandbox.posture.OsSandboxMode = .auto,
+    /// macOS Seatbelt residual grade (`--seatbelt-profile` / `ORCA_SEATBELT_PROFILE`).
+    /// Default hardened. Ignored on non-macOS.
+    seatbelt_profile: sandbox.posture.SeatbeltProfileGrade = sandbox.posture.SeatbeltProfileGrade.default_grade,
     allow_network_values: [32][]const u8 = undefined,
     allow_network_count: usize = 0,
     required_backend_values: [16]sandbox.backend.Feature = undefined,
@@ -149,6 +152,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         &filtered_env.env_map,
         if (proxy_runtime) |runtime| runtime.bindPort() else null,
         requiresBackend(options, .network_enforce),
+        options.seatbelt_profile,
         stderr,
         launch_argv0,
     )) {
@@ -845,6 +849,21 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
 
 fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !RunOptions {
     var options: RunOptions = .{};
+    // Env default; CLI `--seatbelt-profile` overrides when present.
+    // Invalid values keep the hardened default and warn (flag path still fails closed).
+    if (std.c.getenv("ORCA_SEATBELT_PROFILE")) |raw| {
+        const value = std.mem.span(raw);
+        if (value.len > 0) {
+            if (sandbox.posture.SeatbeltProfileGrade.parse(value)) |grade| {
+                options.seatbelt_profile = grade;
+            } else {
+                try stderr.print(
+                    "ryk run: WARNING: ignoring invalid ORCA_SEATBELT_PROFILE={s} (use compatible|hardened|strict); defaulting to {s}.\n",
+                    .{ value, sandbox.posture.SeatbeltProfileGrade.default_grade.toString() },
+                );
+            }
+        }
+    }
     var index: usize = 0;
 
     while (index < argv.len) : (index += 1) {
@@ -940,6 +959,16 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
                 try suggestions.writeInvalidValue(stderr, "ryk run", "--os-sandbox", argv[index], &.{ "auto", "on", "off" }, "run");
                 return error.Usage;
             };
+        } else if (std.mem.eql(u8, arg, "--seatbelt-profile")) {
+            index += 1;
+            if (index >= argv.len) {
+                try stderr.writeAll("ryk run: --seatbelt-profile requires compatible, hardened, or strict.\n");
+                return error.Usage;
+            }
+            options.seatbelt_profile = sandbox.posture.SeatbeltProfileGrade.parse(argv[index]) orelse {
+                try suggestions.writeInvalidValue(stderr, "ryk run", "--seatbelt-profile", argv[index], &.{ "compatible", "hardened", "strict" }, "run");
+                return error.Usage;
+            };
         } else if (std.mem.eql(u8, arg, "--require-backend")) {
             index += 1;
             if (index >= argv.len) {
@@ -956,7 +985,7 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
             };
             options.required_backend_count += 1;
         } else if (std.mem.startsWith(u8, arg, "-")) {
-            try suggestions.writeUnknownOption(stderr, "ryk run", arg, &.{ "--workspace", "--mode", "--policy", "--session-name", "--no-secrets", "--secretless", "--inherit-env", "--no-network", "--allow-network", "--network", "--network-backend", "--os-sandbox", "--require-backend", "--help", "-h" }, "run");
+            try suggestions.writeUnknownOption(stderr, "ryk run", arg, &.{ "--workspace", "--mode", "--policy", "--session-name", "--no-secrets", "--secretless", "--inherit-env", "--no-network", "--allow-network", "--network", "--network-backend", "--os-sandbox", "--seatbelt-profile", "--require-backend", "--help", "-h" }, "run");
             return error.Usage;
         } else {
             try stderr.writeAll("ryk run: expected '--' before the command you want to run.\n" ++
@@ -2406,6 +2435,80 @@ test "run --os-sandbox auto degrades loudly when backend unavailable" {
 test "RunOptions default os_sandbox is auto" {
     const defaults: RunOptions = .{};
     try std.testing.expectEqual(sandbox.posture.OsSandboxMode.auto, defaults.os_sandbox);
+    try std.testing.expectEqual(sandbox.posture.SeatbeltProfileGrade.hardened, defaults.seatbelt_profile);
+}
+
+test "parse --seatbelt-profile accepts grades; invalid fails usage" {
+    var stdout_buf: [512]u8 = undefined;
+    var stderr_buf: [512]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    // Accept path: enum parse + CLI does not reject valid tokens (os-sandbox off avoids attach).
+    inline for (.{ "compatible", "hardened", "strict" }) |grade| {
+        try std.testing.expect(sandbox.posture.SeatbeltProfileGrade.parse(grade) != null);
+        stdout_writer = .fixed(&stdout_buf);
+        stderr_writer = .fixed(&stderr_buf);
+        const code = try command(
+            std.testing.io,
+            &.{ "--mode", "observe", "--os-sandbox", "off", "--seatbelt-profile", grade, "--", "/usr/bin/true" },
+            &stdout_writer,
+            &stderr_writer,
+        );
+        try std.testing.expectEqual(exit_codes.success, code);
+        try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "invalid --seatbelt-profile value") == null);
+    }
+    {
+        stdout_writer = .fixed(&stdout_buf);
+        stderr_writer = .fixed(&stderr_buf);
+        const code = try command(std.testing.io, &.{ "--seatbelt-profile", "paranoid", "--", "true" }, &stdout_writer, &stderr_writer);
+        try std.testing.expectEqual(exit_codes.usage, code);
+        try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "invalid --seatbelt-profile value") != null);
+    }
+    {
+        stdout_writer = .fixed(&stdout_buf);
+        stderr_writer = .fixed(&stderr_buf);
+        const code = try command(std.testing.io, &.{"--seatbelt-profile"}, &stdout_writer, &stderr_writer);
+        try std.testing.expectEqual(exit_codes.usage, code);
+    }
+}
+
+// Env helpers for seatbelt-profile env tests only (not used by production path).
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+// M-2: invalid ORCA_SEATBELT_PROFILE warns and stays hardened (PR test plan A13).
+test "invalid ORCA_SEATBELT_PROFILE warns and keeps hardened default" {
+    const previous = std.c.getenv("ORCA_SEATBELT_PROFILE");
+    const prev_owned: ?[:0]const u8 = if (previous) |p|
+        try std.testing.allocator.dupeZ(u8, std.mem.span(p))
+    else
+        null;
+    defer if (prev_owned) |o| std.testing.allocator.free(o);
+    defer {
+        if (prev_owned) |o| {
+            _ = setenv("ORCA_SEATBELT_PROFILE", o.ptr, 1);
+        } else {
+            _ = unsetenv("ORCA_SEATBELT_PROFILE");
+        }
+    }
+
+    try std.testing.expectEqual(@as(c_int, 0), setenv("ORCA_SEATBELT_PROFILE", "paranoid", 1));
+
+    var stdout_buf: [512]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try command(
+        std.testing.io,
+        &.{ "--mode", "observe", "--os-sandbox", "off", "--", "/usr/bin/true" },
+        &stdout_writer,
+        &stderr_writer,
+    );
+    try std.testing.expectEqual(exit_codes.success, code);
+    const err = stderr_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, err, "WARNING: ignoring invalid ORCA_SEATBELT_PROFILE=paranoid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "defaulting to hardened") != null);
 }
 
 // Always-on attach subset (skip when no backend). Full multi-agent smoke is manual.
@@ -2437,7 +2540,8 @@ test "ryk run --os-sandbox on attaches and banners active when backend available
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
     const code = try commandForGuardTestWithShellEvaluator(
-        &.{ "--workspace", root, "--os-sandbox", "on", "--", "/usr/bin/true" },
+        // observe: avoid builtin:strict command-guard deny so this test measures Seatbelt attach.
+        &.{ "--workspace", root, "--mode", "observe", "--os-sandbox", "on", "--seatbelt-profile", "hardened", "--", "/usr/bin/true" },
         &stdout_writer,
         &stderr_writer,
         .ignore,
@@ -2449,9 +2553,51 @@ test "ryk run --os-sandbox on attaches and banners active when backend available
     try std.testing.expect(std.mem.indexOf(u8, out, "Seatbelt") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Landlock") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "network: unrestricted") != null);
+    if (builtin.os.tag == .macos) {
+        // Residual grade token — same form as audit / doctor capability note.
+        try std.testing.expect(std.mem.indexOf(u8, out, "seatbelt_profile=hardened") != null);
+    }
     if (builtin.os.tag == .linux) {
         try std.testing.expect(std.mem.indexOf(u8, out, "workspace child RW") != null or std.mem.indexOf(u8, out, "root RO") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "seatbelt_profile=") == null);
     }
+}
+
+// M-4: non-default residual grade must reach banner + audit on the live production path.
+test "ryk run --seatbelt-profile strict surfaces grade on banner and audit when backend available" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    try skipUnlessOsSandboxBackend();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "neighbor.txt", .data = "ok" });
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var stdout_buf: [8192]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try commandForGuardTestWithShellEvaluator(
+        &.{ "--workspace", root, "--mode", "observe", "--os-sandbox", "on", "--seatbelt-profile", "strict", "--", "/usr/bin/true" },
+        &stdout_writer,
+        &stderr_writer,
+        .ignore,
+        shell_eval.mockDaemonAllowEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.success, code);
+    const out = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "OS sandbox: active") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "seatbelt_profile=strict") != null);
+    // Strict without route force: network honesty is deny-default, not unrestricted.
+    try std.testing.expect(std.mem.indexOf(u8, out, "network: unrestricted") == null);
+
+    const events = try readLastEvents(std.testing.allocator, root);
+    defer std.testing.allocator.free(events);
+    try std.testing.expect(std.mem.indexOf(u8, events, "\"type\":\"sandbox_posture\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "seatbelt_profile=strict") != null);
 }
 
 // M-18: active attach must emit sandbox_posture with posture=active and 64-hex profile_hash.
@@ -2471,7 +2617,7 @@ test "ryk run --os-sandbox on active audit has posture=active and 64-hex profile
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
     const code = try commandForGuardTestWithShellEvaluator(
-        &.{ "--workspace", root, "--os-sandbox", "on", "--", "/usr/bin/true" },
+        &.{ "--workspace", root, "--mode", "observe", "--os-sandbox", "on", "--seatbelt-profile", "hardened", "--", "/usr/bin/true" },
         &stdout_writer,
         &stderr_writer,
         .ignore,
@@ -2492,6 +2638,9 @@ test "ryk run --os-sandbox on active audit has posture=active and 64-hex profile
     while (hash_end < events.len and std.ascii.isHex(events[hash_end])) : (hash_end += 1) {}
     try std.testing.expectEqual(@as(usize, 64), hash_end - hash_start);
     try std.testing.expect(sandbox.posture.isValidProfileHashHex(events[hash_start..hash_end]));
+    if (builtin.os.tag == .macos) {
+        try std.testing.expect(std.mem.indexOf(u8, events, "seatbelt_profile=hardened") != null);
+    }
 }
 
 // M-20 residual honesty: active attach + non-zero agent exit emits follow-up note.
@@ -2514,7 +2663,7 @@ test "ryk run notes attach-ok residual when agent exits non-zero after active at
         break :blk "/usr/bin/false";
     };
     const code = try commandForGuardTestWithShellEvaluator(
-        &.{ "--workspace", root, "--os-sandbox", "on", "--", false_bin },
+        &.{ "--workspace", root, "--mode", "observe", "--os-sandbox", "on", "--", false_bin },
         &stdout_writer,
         &stderr_writer,
         .ignore,
@@ -2550,7 +2699,7 @@ test "ryk run --os-sandbox on fail-closed when child handshake fails" {
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
     const code = try commandForGuardTestWithShellEvaluator(
-        &.{ "--workspace", root, "--os-sandbox", "on", "--", agent_path },
+        &.{ "--workspace", root, "--mode", "observe", "--os-sandbox", "on", "--", agent_path },
         &stdout_writer,
         &stderr_writer,
         .ignore,
@@ -2584,7 +2733,7 @@ test "ryk run --os-sandbox auto fail-closed when child handshake fails (no unbox
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
     const code = try commandForGuardTestWithShellEvaluator(
-        &.{ "--workspace", root, "--os-sandbox", "auto", "--", agent_path },
+        &.{ "--workspace", root, "--mode", "observe", "--os-sandbox", "auto", "--", agent_path },
         &stdout_writer,
         &stderr_writer,
         .ignore,
@@ -2615,8 +2764,9 @@ test "ryk run default auto attaches when backend available" {
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
     // Intentionally omit --os-sandbox so default .auto is used.
+    // observe: avoid builtin:strict command-guard deny of /usr/bin/true.
     const code = try commandForGuardTestWithShellEvaluator(
-        &.{ "--workspace", root, "--", "/usr/bin/true" },
+        &.{ "--workspace", root, "--mode", "observe", "--", "/usr/bin/true" },
         &stdout_writer,
         &stderr_writer,
         .ignore,
