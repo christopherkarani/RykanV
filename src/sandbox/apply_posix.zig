@@ -30,6 +30,7 @@ const landlock = @import("landlock.zig");
 const fd_scrub = @import("fd_scrub.zig");
 const macos_seatbelt = @import("macos_seatbelt.zig");
 const session_tmp = @import("session_tmp.zig");
+const linux_workspace_view_spawn = @import("linux_workspace_view_spawn.zig");
 
 pub const SpawnError = error{
     Unsupported,
@@ -52,6 +53,17 @@ pub const StdioBehavior = enum {
 /// After a successful handshake the child is about to `execve`; free only after
 /// `waitpid` has reaped the child (or on process exit). `ApplyResult.deinit`
 /// frees the lease after the supervisor wait completes on the production path.
+///
+/// Linux protect-on also records `workspace_view_daemon_pid` (FUSE server). That
+/// process is a child of the agent bootstrap (not of this parent), so the parent
+/// cannot `waitpid` it. Lifecycle (primary reapers only — no bare-PID residual):
+/// 1. FUSE daemon installs `PR_SET_PDEATHSIG=SIGKILL` against the bootstrap/agent.
+/// 2. When the agent exits or is killed, the kernel delivers SIGKILL to the daemon.
+/// 3. Parent `killAndReapChild(agent)` kills the agent process group; the daemon
+///    inherits the bootstrap `setpgid(0,0)` pgid, so PG kill covers it too.
+/// 4. `deinit` only clears the recorded PID. Without pidfd identity fencing we
+///    must not residual-`kill(daemon_pid)` after the agent may already be reaped —
+///    the numeric PID can be reused (M-4).
 pub const SpawnLease = struct {
     pid: i32,
     allocator: std.mem.Allocator,
@@ -59,8 +71,14 @@ pub const SpawnLease = struct {
     envp: ?AllocatedEnvp = null,
     cwd_z: ?[:0]const u8 = null,
     expand_plan: ?landlock.ChildLandlockPlan = null,
+    workspace_view_daemon_pid: ?u32 = null,
 
     pub fn deinit(self: *SpawnLease) void {
+        // Rely on PDEATHSIG + process-group kill for daemon reaping. Do not bare-
+        // kill workspace_view_daemon_pid here: after agent reap the PID may name
+        // an unrelated process (no pidfd to prove identity).
+        self.workspace_view_daemon_pid = null;
+
         if (self.argv_z) |a| {
             freeArgvZ(self.allocator, a);
             self.argv_z = null;
@@ -80,6 +98,21 @@ pub const SpawnLease = struct {
         self.pid = -1;
     }
 };
+
+/// Best-effort SIGKILL for a FUSE workspace-view daemon that is not a direct
+/// child of this process. Does not waitpid (would be ECHILD). Safe on null/0.
+///
+/// **When safe:** only while the agent bootstrap is still considered live
+/// (`SpawnLease.pid > 0` and not yet reaped), so the stored daemon PID cannot
+/// yet have been recycled after agent exit. Prefer PDEATHSIG + process-group
+/// kill for teardown; do **not** call from `SpawnLease.deinit` after a possible
+/// agent reap (PID-reuse hazard without pidfd).
+pub fn signalWorkspaceViewDaemon(daemon_pid: ?u32) void {
+    const pid_u = daemon_pid orelse return;
+    if (pid_u == 0) return;
+    const pid: i32 = std.math.cast(i32, pid_u) orelse return;
+    std.posix.kill(pid, std.posix.SIG.KILL) catch {};
+}
 
 /// Single-byte status pipe protocol: child writes this after successful apply
 /// *and* required pre-exec setup (chdir, preflight, FD scrub with status_w
@@ -122,6 +155,7 @@ const ParentApplySpec = union(enum) {
 ///
 /// Linux only. Optional route forcing uses Landlock TCP port rules.
 pub fn forkApplyLandlockAndExec(
+    io: std.Io,
     compiled: *const profile.CompiledProfile,
     route_forcing: ?landlock.RouteForcing,
     argv: []const []const u8,
@@ -131,7 +165,45 @@ pub fn forkApplyLandlockAndExec(
 ) SpawnError!SpawnLease {
     if (builtin.os.tag != .linux) return error.Unsupported;
     if (argv.len == 0) return error.ExecFailed;
+    if (compiled.protect_workspace_secrets) {
+        const constructed_env = env_map orelse return error.ApplyFailed;
+        const target_cwd = cwd orelse compiled.workspace_root;
+        const spawned = linux_workspace_view_spawn.spawnWorkspaceView(.{
+            .io = io,
+            .allocator = std.heap.page_allocator,
+            .compiled = compiled,
+            .profile = .{
+                .include_tmp = compiledIncludesClassicTmp(compiled),
+                .network_proxy_port = if (route_forcing) |route| route.proxy_port else null,
+                .require_network_route_forcing = route_forcing != null,
+            },
+            .argv = argv,
+            .environment = constructed_env,
+            .cwd = target_cwd,
+            .stdio = switch (stdio) {
+                .inherit => .inherit,
+                .ignore => .ignore,
+            },
+        }) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Unsupported => return error.Unsupported,
+            error.ForkFailed => return error.ForkFailed,
+            else => return error.ApplyFailed,
+        };
+        return .{
+            .pid = spawned.agent_bootstrap_pid,
+            .allocator = std.heap.page_allocator,
+            .workspace_view_daemon_pid = spawned.daemon_pid,
+        };
+    }
     return forkApplyAndExecLandlock(compiled, route_forcing, argv, env_map, cwd, stdio);
+}
+
+fn compiledIncludesClassicTmp(compiled: *const profile.CompiledProfile) bool {
+    for (compiled.grants) |grant| {
+        if (grant.mode == .rw and profile.isClassicTmpPath(grant.path)) return true;
+    }
+    return false;
 }
 
 /// Fork, apply Seatbelt SBPL in the child, chdir, preflight, scrub FDs (keep
@@ -671,6 +743,7 @@ fn expectExitedZero(status: c_int) !void {
 test "forkApplyLandlockAndExec is unsupported off Linux" {
     if (builtin.os.tag == .linux) return error.SkipZigTest;
     try std.testing.expectError(error.Unsupported, forkApplyLandlockAndExec(
+        std.testing.io,
         &.{
             .allocator = std.testing.allocator,
             .workspace_root = "/",
@@ -719,6 +792,7 @@ test "forkApplyLandlockAndExec applies then execs on Linux with handshake" {
     // Parent only gets a pid after child apply+chdir status pipe succeeds.
     // Successful handshake proves status_w was retained through fd_scrub (M-17).
     var child = try forkApplyLandlockAndExec(
+        io,
         &compiled,
         null,
         &[_][]const u8{true_path},
@@ -761,6 +835,7 @@ test "forkApplyLandlockAndExec fails handshake on bad chdir" {
 
     // chdir failure must not write status_ok — parent sees ApplyFailed.
     try std.testing.expectError(error.ApplyFailed, forkApplyLandlockAndExec(
+        io,
         &compiled,
         null,
         &[_][]const u8{true_path},
@@ -972,6 +1047,7 @@ test "preflight fail does not write status_ok (missing exec target)" {
     defer compiled.deinit();
 
     try std.testing.expectError(error.ApplyFailed, forkApplyLandlockAndExec(
+        io,
         &compiled,
         null,
         &[_][]const u8{"/no/such/orca/exec/target/for/preflight"},
@@ -1053,6 +1129,7 @@ test "planted non-kept FD is closed after successful handshake" {
     };
 
     var child = try forkApplyLandlockAndExec(
+        io,
         &compiled,
         null,
         &[_][]const u8{ sh_path, "-c", check_closed },
@@ -1084,4 +1161,52 @@ test "freeDupeZ matches dupeZ allocation size under testing.allocator" {
     const allocator = std.testing.allocator;
     const z = try allocator.dupeZ(u8, "sentinel-free");
     freeDupeZ(allocator, z.ptr);
+}
+
+test "signalWorkspaceViewDaemon is a no-op for null and zero pids" {
+    // Must not panic / raise on missing daemon records.
+    signalWorkspaceViewDaemon(null);
+    signalWorkspaceViewDaemon(0);
+}
+
+test "SpawnLease deinit clears workspace_view_daemon_pid without bare kill" {
+    var lease: SpawnLease = .{
+        .pid = -1,
+        .allocator = std.testing.allocator,
+        // Stale/non-existent pid: deinit clears the field only. Residual bare
+        // kill after agent reap is intentionally not performed (PID reuse).
+        .workspace_view_daemon_pid = 1 << 30,
+    };
+    lease.deinit();
+    try std.testing.expect(lease.workspace_view_daemon_pid == null);
+    try std.testing.expectEqual(@as(i32, -1), lease.pid);
+}
+
+test "protect-on landlock spawn fails closed without env map (no unprotected fallthrough)" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(root);
+
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = root,
+        .protect_workspace_secrets = true,
+    });
+    defer compiled.deinit();
+    try std.testing.expect(compiled.protect_workspace_secrets);
+
+    // Missing constructed env → ApplyFailed. Must not fall through to plain Landlock.
+    const err = forkApplyLandlockAndExec(
+        std.testing.io,
+        &compiled,
+        null,
+        &[_][]const u8{"/bin/true"},
+        null,
+        root,
+        .ignore,
+    );
+    try std.testing.expectError(error.ApplyFailed, err);
 }

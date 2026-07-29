@@ -59,6 +59,10 @@ pub const CompileOptions = struct {
     /// directory trees. `compileProfile` rejects filesystem-root exec (`InvalidExecPath`);
     /// apply layers re-check file-ness (Seatbelt `literal`, Landlock regular-file gate).
     exec_paths: []const []const u8 = &.{},
+    /// Deny workspace `.env` / `.env.*` content at the OS sandbox layer.
+    /// Exact safe templates remain readable: `.env.example`, `.env.sample`,
+    /// and `.env.template`.
+    protect_workspace_secrets: bool = false,
 };
 
 pub const CompiledProfile = struct {
@@ -69,6 +73,8 @@ pub const CompiledProfile = struct {
     grants: []PathGrant,
     /// Absolute control roots that are NOT agent-writable (owned paths).
     control_roots: []const []const u8,
+    /// Whether backends must carve workspace secret-form files out of grants.
+    protect_workspace_secrets: bool = false,
     /// Deterministic serialization used for hashing (owned).
     canonical_bytes: []const u8,
     /// Lowercase hex SHA-256 of `canonical_bytes`.
@@ -148,6 +154,20 @@ pub const CompiledProfile = struct {
             }
             break :blk false;
         };
+        // Protect-on carves secret-form names (and hardlink aliases on macOS
+        // prepare / Linux FUSE) out of the workspace RW grant — surface that.
+        if (self.protect_workspace_secrets) {
+            return switch (backend) {
+                .landlock => if (has_tmp)
+                    "workspace child RW (env secret forms denied), root RO, system RO, platform tmp RW, no home, control write-deny (readable)"
+                else
+                    "workspace child RW (env secret forms denied), root RO, system RO, no home, control write-deny (readable)",
+                .seatbelt => if (has_tmp)
+                    "workspace RW (env secret forms denied), system RO, platform tmp RW, no home, control write-deny (readable), mach-lookup residual"
+                else
+                    "workspace RW (env secret forms denied), system RO, no home, control write-deny (readable), mach-lookup residual",
+            };
+        }
         return switch (backend) {
             .landlock => if (has_tmp)
                 "workspace child RW, root RO, system RO, platform tmp RW, no home, control write-deny (readable)"
@@ -426,7 +446,12 @@ pub fn compileProfile(allocator: std.mem.Allocator, options: CompileOptions) !Co
         allocator.free(control_roots);
     }
 
-    const canonical_bytes = try serializeCanonical(allocator, grants, control_roots);
+    const canonical_bytes = try serializeCanonical(
+        allocator,
+        grants,
+        control_roots,
+        options.protect_workspace_secrets,
+    );
     errdefer allocator.free(canonical_bytes);
 
     var digest: [32]u8 = undefined;
@@ -440,12 +465,130 @@ pub fn compileProfile(allocator: std.mem.Allocator, options: CompileOptions) !Co
         .workspace_root = workspace_root,
         .grants = grants,
         .control_roots = control_roots,
+        .protect_workspace_secrets = options.protect_workspace_secrets,
         .canonical_bytes = canonical_bytes,
         .hash_hex = hash_hex,
     };
 }
 
 // --- path helpers ----------------------------------------------------------------
+
+// Workspace secret-form policy (single rule book).
+//
+// Product law: basename is a secret if it is exactly `.env`, or starts with
+// `.env.` and is not an exact safe template. Linux FUSE calls
+// `isWorkspaceSecretPath`. macOS Seatbelt cannot run Zig at open time, so
+// SBPL emission uses only the fragments exported below (built from this same
+// rule book). Do not hand-write `.env` regexes outside these helpers.
+
+/// Exact basenames that are safe `.env.*` templates (not workspace secrets).
+/// Sole source for template allow; SBPL `require-not` stems are derived from this.
+pub const workspace_secret_safe_template_names = [_][]const u8{
+    ".env.example",
+    ".env.sample",
+    ".env.template",
+};
+
+/// Seatbelt path regex that matches the same basenames as `isWorkspaceSecretBasename`
+/// *before* the safe-template `require-not`. Owned only here; SBPL emitters must
+/// use this constant (never duplicate the pattern string elsewhere).
+pub const workspace_secret_form_sbpl_regex =
+    "/[.]env($|/|[.][^/]*($|/))";
+
+/// Alternation of safe-template stems after `.env.`, derived at comptime from
+/// `workspace_secret_safe_template_names` (e.g. `example|sample|template`).
+pub const workspace_secret_safe_template_sbpl_alt: []const u8 = blk: {
+    var out: []const u8 = "";
+    for (workspace_secret_safe_template_names, 0..) |name, i| {
+        if (!std.mem.startsWith(u8, name, ".env.")) {
+            @compileError("workspace secret safe template must start with \".env.\"");
+        }
+        const stem = name[".env.".len..];
+        if (stem.len == 0) {
+            @compileError("workspace secret safe template stem after \".env.\" must be non-empty");
+        }
+        if (i == 0) {
+            out = stem;
+        } else {
+            out = out ++ "|" ++ stem;
+        }
+    }
+    if (out.len == 0) @compileError("workspace_secret_safe_template_names must be non-empty");
+    break :blk out;
+};
+
+/// True when `name` is an exact safe template basename from
+/// `workspace_secret_safe_template_names`.
+pub fn isWorkspaceSecretSafeTemplateName(name: []const u8) bool {
+    for (workspace_secret_safe_template_names) |safe| {
+        if (std.mem.eql(u8, name, safe)) return true;
+    }
+    return false;
+}
+
+/// True when a path component matches the secret-form *shape* (exact `.env` or
+/// starts with `.env.`), before template allowlist. Shared by Zig classify and
+/// the pure SBPL-intent simulator. Aligns with SBPL `workspace_secret_form_sbpl_regex`
+/// (`[^/]*` may be empty after `.env.`).
+pub fn isWorkspaceSecretFormShape(name: []const u8) bool {
+    if (std.mem.eql(u8, name, ".env")) return true;
+    if (std.mem.startsWith(u8, name, ".env.")) return true;
+    return false;
+}
+
+/// Classify a single path component (basename). Canonical product-law decision.
+pub fn isWorkspaceSecretBasename(name: []const u8) bool {
+    if (!isWorkspaceSecretFormShape(name)) return false;
+    return !isWorkspaceSecretSafeTemplateName(name);
+}
+
+/// True when the final path component is a workspace secret-form environment file.
+///
+/// Matching is component-bounded: `.env` and `.env.*` are protected, except for
+/// the exact safe template names in `workspace_secret_safe_template_names`.
+/// The caller is responsible for scoping the path to the workspace grant.
+pub fn isWorkspaceSecretPath(path: []const u8) bool {
+    return isWorkspaceSecretBasename(std.fs.path.basename(path));
+}
+
+/// Pure simulator of the Seatbelt deny regex + template `require-not` for a
+/// basename. Must stay identical to `isWorkspaceSecretBasename` — enforced by
+/// dual-path tests. Used so Mac SBPL intent is proven without running sandbox_init.
+pub fn sbplWouldDenyWorkspaceSecretBasename(name: []const u8) bool {
+    // Form regex: `/[.]env($|/|[.][^/]*($|/))` on a path ending with `/name` or `name`.
+    // On a bare basename: match `.env` or `.env.` + non-slash run.
+    if (!isWorkspaceSecretFormShape(name)) return false;
+    // require-not: `/[.]env[.](alt)$` for exact safe templates.
+    if (isWorkspaceSecretSafeTemplateName(name)) return false;
+    return true;
+}
+
+/// Append the SBPL regex predicates for protect-on secret deny (form match +
+/// template require-not). Only emission site for these patterns into SBPL text.
+pub fn appendWorkspaceSecretSbplRegexPredicates(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+) !void {
+    try out.appendSlice(allocator, "(regex #\"");
+    try out.appendSlice(allocator, workspace_secret_form_sbpl_regex);
+    try out.appendSlice(allocator, "\") ");
+    try out.appendSlice(allocator, "(require-not (regex #\"/[.]env[.](");
+    try out.appendSlice(allocator, workspace_secret_safe_template_sbpl_alt);
+    try out.appendSlice(allocator, ")$\"))");
+}
+
+/// True when any slash-delimited component is a protected workspace secret name.
+///
+/// This is intentionally conservative for lexical paths containing `.` or `..`:
+/// encountering a protected component denies the operation even if later
+/// components would navigate away from it.
+pub fn hasWorkspaceSecretComponent(path: []const u8) bool {
+    var components = std.mem.splitScalar(u8, path, '/');
+    while (components.next()) |component| {
+        if (component.len != 0 and isWorkspaceSecretPath(component)) return true;
+    }
+    return false;
+}
 
 fn pathEqual(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
@@ -557,6 +700,7 @@ fn serializeCanonical(
     allocator: std.mem.Allocator,
     grants: []const PathGrant,
     control_roots: []const []const u8,
+    protect_workspace_secrets: bool,
 ) ![]u8 {
     var lines: std.ArrayList([]u8) = .empty;
     defer {
@@ -578,6 +722,11 @@ fn serializeCanonical(
             return err;
         };
     }
+    try lines.append(allocator, try std.fmt.allocPrint(
+        allocator,
+        "protect_workspace_secrets\t{}",
+        .{protect_workspace_secrets},
+    ));
 
     std.mem.sort([]u8, lines.items, {}, pathLessThan);
 

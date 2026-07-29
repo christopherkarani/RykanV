@@ -250,7 +250,8 @@ test "real FS deny under production defaults: outside denied; neighbor RW; contr
     defer allocator.free(ws_root);
 
     // Outside secret under $HOME. Skip if HOME unusable.
-    const home = std.posix.getenv("HOME") orelse return error.SkipZigTest;
+    const home_z = std.c.getenv("HOME") orelse return error.SkipZigTest;
+    const home = std.mem.span(home_z);
     if (home.len == 0 or home[0] != '/') return error.SkipZigTest;
     // Refuse if HOME is under a classic tmp prefix (edge case only when
     // include_tmp is forced true; production defaults omit classic tmp RW).
@@ -260,7 +261,7 @@ test "real FS deny under production defaults: outside denied; neighbor RW; contr
 
     const outside_dir = try std.fs.path.join(allocator, &.{ home, ".orca-ll-prod-canary" });
     defer allocator.free(outside_dir);
-    std.Io.Dir.cwd().makePath(io, outside_dir) catch return error.SkipZigTest;
+    std.Io.Dir.cwd().createDirPath(io, outside_dir) catch return error.SkipZigTest;
     defer std.Io.Dir.cwd().deleteTree(io, outside_dir) catch {};
 
     const canary_path = try std.fs.path.join(allocator, &.{ outside_dir, "canary.txt" });

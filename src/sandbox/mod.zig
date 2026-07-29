@@ -15,6 +15,13 @@ pub const landlock = @import("landlock.zig");
 pub const apply_posix = @import("apply_posix.zig");
 pub const macos_profile = @import("macos_profile.zig");
 pub const macos_seatbelt = @import("macos_seatbelt.zig");
+pub const linux_fuse_protocol = @import("linux_fuse_protocol.zig");
+pub const linux_workspace_view = @import("linux_workspace_view.zig");
+pub const linux_workspace_view_mount = @import("linux_workspace_view_mount.zig");
+pub const workspace_view_ipc = @import("workspace_view_ipc.zig");
+pub const linux_capabilities = @import("linux_capabilities.zig");
+pub const linux_workspace_view_bootstrap = @import("linux_workspace_view_bootstrap.zig");
+pub const linux_workspace_view_spawn = @import("linux_workspace_view_spawn.zig");
 
 pub const phase = "02-repo-bootstrap";
 
@@ -36,4 +43,11 @@ test {
     _ = apply_posix;
     _ = macos_profile;
     _ = macos_seatbelt;
+    _ = linux_fuse_protocol;
+    _ = linux_workspace_view;
+    _ = linux_workspace_view_mount;
+    _ = workspace_view_ipc;
+    _ = linux_capabilities;
+    _ = linux_workspace_view_bootstrap;
+    _ = linux_workspace_view_spawn;
 }

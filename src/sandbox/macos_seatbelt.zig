@@ -229,10 +229,38 @@ pub fn prepareForChildApplyWithOptions(
         };
     }
 
+    // Protect-on: discover pre-planted hardlink aliases of secret-form inodes so
+    // path-regex deny cannot be bypassed via a non-.env basename (Linux FUSE
+    // taints; Seatbelt needs explicit last-match path denies). Missing workspace
+    // yields an empty list (regex still applies). Open/capacity/depth failures
+    // fail closed. OOM uses seatbelt_profile_oom (hard OutOfMemory at apply);
+    // other scan errors use seatbelt_secret_hardlink_scan_failed.
+    var hardlink_aliases: ?[]const []const u8 = null;
+    defer if (hardlink_aliases) |paths| macos_profile.freeHardlinkAliasPaths(allocator, paths);
+    if (compiled.protect_workspace_secrets) {
+        var threaded: std.Io.Threaded = .init_single_threaded;
+        const io = threaded.io();
+        hardlink_aliases = macos_profile.collectSecretHardlinkAliasPaths(
+            allocator,
+            io,
+            compiled.workspace_root,
+        ) catch |err| {
+            return .{
+                .status = .failed,
+                .mechanism = .none,
+                .reason_code = if (err == error.OutOfMemory)
+                    "seatbelt_profile_oom"
+                else
+                    "seatbelt_secret_hardlink_scan_failed",
+            };
+        };
+    }
+
     // OOM must use seatbelt_profile_oom so apply maps to hard OutOfMemory (not soft failed).
     const sbpl = macos_profile.renderSbplWithOptions(allocator, compiled, .{
         .network_route_forcing = options.network_route_forcing,
         .profile_grade = options.profile_grade,
+        .hardlink_alias_denies = hardlink_aliases orelse &.{},
     }) catch |err| {
         return .{
             .status = .failed,
@@ -486,6 +514,78 @@ test "seatbelt apply survives multi-thread parent stress" {
         const exit_code: u8 = @intCast((status >> 8) & 0xff);
         try std.testing.expectEqual(@as(u8, 0), exit_code);
     }
+}
+
+// Real-FS deny / canary integration tests live in macos_seatbelt_deny_tests.zig.
+test {
+    _ = @import("macos_seatbelt_deny_tests.zig");
+}
+
+test "prepare hardlink scan OOM maps to seatbelt_profile_oom" {
+    // M-3: OutOfMemory during protect-on hardlink scan must not soft-fail as
+    // seatbelt_secret_hardlink_scan_failed — apply maps seatbelt_profile_oom hard.
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    const backing = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = ".env", .data = "secret" });
+    const root = try tmp.dir.realPathFileAlloc(io, ".", backing);
+    defer backing.free(root);
+
+    var compiled = try profile.compileProfile(backing, .{
+        .workspace_root = root,
+        .include_tmp = false,
+        .protect_workspace_secrets = true,
+    });
+    defer compiled.deinit();
+
+    var failing = std.testing.FailingAllocator.init(backing, .{ .fail_index = 0 });
+    const out = prepareForChildApplyWith(failing.allocator(), &compiled, .supported);
+    defer if (out.sbpl_z) |p| backing.free(p);
+    try std.testing.expectEqual(.failed, out.status);
+    try std.testing.expectEqual(posture.BackendMechanism.none, out.mechanism);
+    try std.testing.expectEqualStrings("seatbelt_profile_oom", out.reason_code);
+    try std.testing.expect(out.sbpl_z == null);
+    try std.testing.expect(failing.has_induced_failure);
+}
+
+test "prepare hardlink scan open failure maps to seatbelt_secret_hardlink_scan_failed" {
+    // M-1: mode-000 nested dir with secret + hardlink alias → scan fail closed,
+    // never prepared with incomplete alias denies.
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "d");
+    try tmp.dir.writeFile(io, .{ .sub_path = "d/.env", .data = "secret-body" });
+    tmp.dir.hardLink("d/.env", tmp.dir, "notes.txt", io, .{}) catch return error.SkipZigTest;
+
+    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+    const nested = try std.fs.path.join(allocator, &.{ root, "d" });
+    defer allocator.free(nested);
+    const nested_z = try allocator.dupeZ(u8, nested);
+    defer allocator.free(nested_z);
+
+    if (std.c.chmod(nested_z.ptr, 0) != 0) return error.SkipZigTest;
+    defer _ = std.c.chmod(nested_z.ptr, 0o755);
+
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = root,
+        .include_tmp = false,
+        .protect_workspace_secrets = true,
+    });
+    defer compiled.deinit();
+
+    const out = prepareForChildApplyWith(allocator, &compiled, .supported);
+    defer if (out.sbpl_z) |p| allocator.free(p);
+    try std.testing.expectEqual(.failed, out.status);
+    try std.testing.expectEqualStrings("seatbelt_secret_hardlink_scan_failed", out.reason_code);
+    try std.testing.expect(out.sbpl_z == null);
 }
 
 // Real-FS deny / canary integration tests live in macos_seatbelt_deny_tests.zig.

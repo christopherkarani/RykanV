@@ -115,6 +115,9 @@ pub const ApplyBoundary = struct {
     /// Agents installed outside workspace/system prefixes (e.g. `~/.local/...`) need these
     /// so child preflight after Seatbelt/Landlock can still read+exec argv0.
     launch_exec_paths: []const []const u8 = &.{},
+    /// Empty-backpack sessions require OS enforcement for workspace `.env`
+    /// and `.env.*` names (safe templates remain readable).
+    protect_workspace_secrets: bool = false,
     /// Optional per-launch proxy TCP port. When set, supported platforms install
     /// child network rules that force outbound TCP through the loopback proxy.
     network_proxy_port: ?u16 = null,
@@ -266,6 +269,7 @@ pub const ApplyResult = struct {
         var lease = switch (self.materials) {
             .none => return error.ApplyFailed,
             .landlock => |*ll| try apply_posix.forkApplyLandlockAndExec(
+                io,
                 &ll.compiled,
                 ll.route_forcing,
                 argv_owned,
@@ -701,6 +705,7 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
         .control_roots = boundary.control_roots,
         .include_tmp = boundary.include_tmp,
         .exec_paths = boundary.launch_exec_paths,
+        .protect_workspace_secrets = boundary.protect_workspace_secrets,
     }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => {
@@ -2062,4 +2067,15 @@ test "attach path rewrites host TMPDIR out of var/folders (R2-2)" {
         // Grade-drop: no rewrite (attach-only contract).
         try std.testing.expectEqualStrings("/var/folders/xx/yy/T/", env_map.get("TMPDIR").?);
     }
+}
+
+test "protect_workspace_secrets compiles into profile hash material" {
+    var compiled = try profile.compileProfile(std.testing.allocator, .{
+        .workspace_root = "/tmp/orca-ws-protect",
+        .include_tmp = false,
+        .protect_workspace_secrets = true,
+    });
+    defer compiled.deinit();
+    try std.testing.expect(compiled.protect_workspace_secrets);
+    try std.testing.expect(std.mem.indexOf(u8, compiled.canonical_bytes, "protect_workspace_secrets\ttrue") != null);
 }

@@ -158,6 +158,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         if (proxy_runtime) |runtime| runtime.bindPort() else null,
         requiresBackend(options, .network_enforce),
         options.seatbelt_profile,
+        secret_boundary == .empty_backpack,
         stderr,
         launch_argv0,
     )) {

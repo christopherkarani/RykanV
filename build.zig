@@ -235,6 +235,7 @@ pub fn build(b: *std.Build) void {
         }),
         .filters = test_filters,
     });
+    sandbox_tests.root_module.link_libc = true;
     const run_sandbox_tests = addRunTestTerminal(b, sandbox_tests);
 
     const intercept_tests = b.addTest(.{
