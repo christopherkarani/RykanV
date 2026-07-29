@@ -66,18 +66,18 @@ Use only for code and commands you already trust:
 
 This updates Orca network policy decisions and environment metadata. It is not transparent network blocking unless `orca doctor` reports an active backend.
 
-## Secretless Runtime (opt-in only)
+## Secretless Runtime (empty backpack, opt-in only)
 
-**Not ready — do not default** for day-1 agent launches that need model API keys from the environment. Secretless always rewrites secret-like env to non-resolving `orca-secret://local-dummy/…` references. Claude, Pi, Codex, and similar hosts do not resolve those refs, so providers typically fail auth (for example 401). When rewrites occur, `orca run` prints a stderr warning — see [credentials.md](credentials.md) § Secretless Mode.
+**Not ready — do not default** for day-1 agent launches that need model API keys from the environment. `--secretless` is **empty backpack**: public host env only (no raw secrets, no `orca-secret://` rewrite), OS sandbox required, and workspace `.env` secret forms denied at the OS layer when attach succeeds. Claude, Pi, Codex, and similar hosts that expect env API keys will fail auth — see [credentials.md](credentials.md) § Secretless Mode.
 
 ```sh
-./zig-out/bin/orca credentials check
-./zig-out/bin/orca run --secretless --network-backend proxy -- <command>
+./zig-out/bin/ryk credentials check
+./zig-out/bin/ryk run --secretless --network-backend proxy -- <command>
 ```
 
-This strips raw secret-like environment values from the child process and substitutes broker **references**. Orca records policy, redaction, and proxy request decision evidence, but it is not a vault and does **not** inject usable credentials into the child environment or into HTTPS to model providers. Proxy mode is explicit and loopback-only; HTTPS policy is host/port-only unless a cooperative hook supplies method/path metadata.
+This constructs a public-only child environment and requires OS FS isolation. Orca records policy, redaction, and proxy request decision evidence, but it is not a vault and does **not** inject usable credentials into the child environment or into HTTPS to model providers. Proxy mode is explicit and loopback-only; HTTPS policy is host/port-only unless a cooperative hook supplies method/path metadata.
 
-Use secretless for deliberate strip/demo workflows, not as the default agent launch path until env broker injection/resolution is product-ready.
+Use secretless for deliberate leak-resistance / secret-boundary demos, not as the default agent launch path until a product path supplies usable credentials.
 
 ## CI Mode
 

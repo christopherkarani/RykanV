@@ -448,7 +448,7 @@ CI never prompts. `ask` decisions become `deny`.
 
 ## Secretless Runtime
 
-`orca run --secretless -- <agent-command>` removes raw secret-like environment values from the child process and replaces policy-visible secret env entries with `orca-secret://...` broker references. Today those rewrites always use the **local-dummy** broker (reference-only; does not resolve raw values). Orca does not store raw secrets and does not inject raw secrets into the child environment or into model-provider HTTP. Coding agents that need env API keys will not authenticate under secretless; **do not default** agent launches to `--secretless` until a product path supplies usable credentials. See [credentials.md](credentials.md) § Secretless Mode and [agent-recipes.md](agent-recipes.md).
+`ryk run --secretless -- <agent-command>` enables the **empty backpack** secret boundary: public host env only (no raw secrets, no `orca-secret://` rewrite), OS sandbox required, and workspace `.env` / `.env.*` forms denied at the OS layer when attach succeeds. Orca does not store raw secrets and does not inject raw secrets into the child environment or into model-provider HTTP. Coding agents that need env API keys will not authenticate under secretless; **do not default** agent launches to `--secretless` until a product path supplies usable credentials. See [credentials.md](credentials.md) § Secretless Mode and [agent-recipes.md](agent-recipes.md).
 
 ```yaml
 credentials:

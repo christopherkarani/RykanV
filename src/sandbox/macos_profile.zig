@@ -20,6 +20,7 @@
 //! so grants are live-effective. Data-form path strings are not dual-emitted.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const profile = @import("profile.zig");
 const posture = @import("posture.zig");
 
@@ -27,6 +28,10 @@ const posture = @import("posture.zig");
 const data_volume_prefix = "/System/Volumes/Data";
 
 pub const SeatbeltProfileGrade = posture.SeatbeltProfileGrade;
+
+/// Bounds for prepare-time hardlink alias discovery under protect-on.
+pub const secret_hardlink_scan_max_depth: u32 = 48;
+pub const secret_hardlink_scan_max_entries: u32 = 50_000;
 
 pub const NetworkRouteForcing = struct {
     proxy_port: u16,
@@ -36,6 +41,10 @@ pub const RenderOptions = struct {
     network_route_forcing: ?NetworkRouteForcing = null,
     /// Residual grade. Default is hardened.
     profile_grade: SeatbeltProfileGrade = SeatbeltProfileGrade.default_grade,
+    /// Absolute paths of non-secret basenames that share an inode with a
+    /// workspace secret-form file (pre-planted hardlinks). Each path receives
+    /// last-match deny for read/write/metadata. Caller owns the slices.
+    hardlink_alias_denies: []const []const u8 = &.{},
 };
 
 /// Honest network_scope string for receipts/banners after child attach.
@@ -177,6 +186,21 @@ pub fn renderSbplWithOptions(
         }
     }
 
+    if (compiled.protect_workspace_secrets) {
+        try out.appendSlice(allocator, "\n;; workspace env secret carve-out\n");
+        try appendWorkspaceSecretDeny(&out, allocator, "file-read*", compiled.workspace_root);
+        try appendWorkspaceSecretDeny(&out, allocator, "file-read-metadata", compiled.workspace_root);
+        try appendWorkspaceSecretDeny(&out, allocator, "file-write*", compiled.workspace_root);
+        if (options.hardlink_alias_denies.len > 0) {
+            try out.appendSlice(allocator, ";; hardlink aliases of secret-form inodes (prepare-time scan)\n");
+            for (options.hardlink_alias_denies) |alias_path| {
+                try appendDenySubpath(&out, allocator, "file-read*", alias_path);
+                try appendDenySubpath(&out, allocator, "file-read-metadata", alias_path);
+                try appendDenySubpath(&out, allocator, "file-write*", alias_path);
+            }
+        }
+    }
+
     // No broad HOME: assert via absence — never emit $HOME or ~ grants.
     return try out.toOwnedSlice(allocator);
 }
@@ -295,6 +319,232 @@ fn appendBootstrapFs(
 }
 
 /// True when a grant path is exactly Data volume or a strict descendant (realpath workspace).
+const FileId = struct {
+    dev: u64,
+    ino: u64,
+
+    fn eql(a: FileId, b: FileId) bool {
+        return a.dev == b.dev and a.ino == b.ino;
+    }
+
+    fn hash(self: FileId) u64 {
+        var h = std.hash.Wyhash.init(0);
+        h.update(std.mem.asBytes(&self.dev));
+        h.update(std.mem.asBytes(&self.ino));
+        return h.final();
+    }
+};
+
+const FileIdContext = struct {
+    pub fn hash(_: FileIdContext, key: FileId) u64 {
+        return key.hash();
+    }
+    pub fn eql(_: FileIdContext, a: FileId, b: FileId) bool {
+        return FileId.eql(a, b);
+    }
+};
+
+const ScannedFile = struct {
+    path: []u8,
+    id: FileId,
+    secret_name: bool,
+};
+
+/// Walk `workspace_root` and return owned absolute paths of regular files that
+/// share an inode with a secret-form basename but themselves use a non-secret
+/// name (pre-planted hardlink aliases).
+///
+/// Fail-closed policy (protect-on prepare path):
+/// - Missing workspace (`error.FileNotFound`) → empty list (regex deny still
+///   applies; unit tests with synthetic roots keep working).
+/// - Any other root open failure (access denied, not a directory, …) →
+///   `error.ScanOpenFailed`.
+/// - Nested directory open failure → `error.ScanOpenFailed` (never skip).
+/// - Regular-file open/fstat failure → `error.ScanOpenFailed` (non-regular
+///   files after successful fstat are skipped, not errors).
+/// - Scan capacity/depth exceeded → `error.ScanCapacity` /
+///   `error.ScanDepthExceeded`.
+///
+/// Prepare maps `OutOfMemory` to `seatbelt_profile_oom` and other scan errors
+/// to `seatbelt_secret_hardlink_scan_failed`.
+///
+/// Caller frees each path and the outer slice via `freeHardlinkAliasPaths`.
+pub fn collectSecretHardlinkAliasPaths(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    workspace_root: []const u8,
+) ![]const []const u8 {
+    if (builtin.os.tag != .macos) return try allocator.alloc([]const u8, 0);
+
+    var root = std.Io.Dir.openDirAbsolute(io, workspace_root, .{
+        .iterate = true,
+        .follow_symlinks = false,
+    }) catch |err| switch (err) {
+        // Only absence is soft: regex deny still covers secret basenames.
+        error.FileNotFound => return try allocator.alloc([]const u8, 0),
+        else => return error.ScanOpenFailed,
+    };
+    defer root.close(io);
+
+    var secret_ids: std.HashMap(FileId, void, FileIdContext, 80) = .init(allocator);
+    defer secret_ids.deinit();
+
+    var entries: std.ArrayList(ScannedFile) = .empty;
+    defer {
+        for (entries.items) |e| allocator.free(e.path);
+        entries.deinit(allocator);
+    }
+
+    var scanned: u32 = 0;
+    try walkCollectFileIds(
+        allocator,
+        io,
+        &root,
+        workspace_root,
+        0,
+        &scanned,
+        &entries,
+        &secret_ids,
+    );
+
+    var aliases: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (aliases.items) |p| allocator.free(p);
+        aliases.deinit(allocator);
+    }
+
+    for (entries.items) |e| {
+        if (e.secret_name) continue;
+        if (secret_ids.get(e.id) == null) continue;
+        // dupe before append: free on append failure (partial-success path).
+        const owned = try allocator.dupe(u8, e.path);
+        errdefer allocator.free(owned);
+        try aliases.append(allocator, owned);
+    }
+
+    return try aliases.toOwnedSlice(allocator);
+}
+
+pub fn freeHardlinkAliasPaths(allocator: std.mem.Allocator, paths: []const []const u8) void {
+    for (paths) |p| allocator.free(p);
+    allocator.free(paths);
+}
+
+fn walkCollectFileIds(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    dir: *std.Io.Dir,
+    dir_path: []const u8,
+    depth: u32,
+    scanned: *u32,
+    entries: *std.ArrayList(ScannedFile),
+    secret_ids: *std.HashMap(FileId, void, FileIdContext, 80),
+) !void {
+    if (depth > secret_hardlink_scan_max_depth) return error.ScanDepthExceeded;
+
+    var it = dir.iterate();
+    while (try it.next(io)) |entry| {
+        if (std.mem.eql(u8, entry.name, ".") or std.mem.eql(u8, entry.name, "..")) continue;
+        if (std.mem.indexOfScalar(u8, entry.name, 0) != null) continue;
+
+        scanned.* = std.math.add(u32, scanned.*, 1) catch return error.ScanCapacity;
+        if (scanned.* > secret_hardlink_scan_max_entries) return error.ScanCapacity;
+
+        const child_path = try std.fs.path.join(allocator, &.{ dir_path, entry.name });
+        defer allocator.free(child_path);
+
+        switch (entry.kind) {
+            .directory => {
+                // iterate() reports real directories as .directory; symlinks are
+                // .sym_link and are intentionally not followed into the walk.
+                // Open failures fail closed: skipping an unreadable dir would
+                // miss secret basenames and leave hardlink aliases undenied.
+                var child = std.Io.Dir.openDirAbsolute(io, child_path, .{
+                    .iterate = true,
+                    .follow_symlinks = false,
+                }) catch return error.ScanOpenFailed;
+                defer child.close(io);
+                try walkCollectFileIds(
+                    allocator,
+                    io,
+                    &child,
+                    child_path,
+                    depth + 1,
+                    scanned,
+                    entries,
+                    secret_ids,
+                );
+            },
+            .file => {
+                const id = (try fileIdForPath(io, child_path)) orelse continue;
+                const secret_name = profile.isWorkspaceSecretPath(entry.name);
+                if (secret_name) {
+                    try secret_ids.put(id, {});
+                }
+                const owned = try allocator.dupe(u8, child_path);
+                errdefer allocator.free(owned);
+                try entries.append(allocator, .{
+                    .path = owned,
+                    .id = id,
+                    .secret_name = secret_name,
+                });
+            },
+            // Fail closed on unclassified kinds (.unknown, sockets, …): skipping
+            // would miss a hardlink alias of a secret-form inode reported oddly.
+            else => {
+                const id = (try fileIdForPath(io, child_path)) orelse return error.ScanOpenFailed;
+                const secret_name = profile.isWorkspaceSecretPath(entry.name);
+                if (secret_name) {
+                    try secret_ids.put(id, {});
+                }
+                const owned = try allocator.dupe(u8, child_path);
+                errdefer allocator.free(owned);
+                try entries.append(allocator, .{
+                    .path = owned,
+                    .id = id,
+                    .secret_name = secret_name,
+                });
+            },
+        }
+    }
+}
+
+/// Resolve (dev, ino) for a regular file. Open/fstat failures → `ScanOpenFailed`
+/// (fail closed). Non-regular files after a successful fstat → `null` (skip).
+fn fileIdForPath(io: std.Io, path: []const u8) error{ScanOpenFailed}!?FileId {
+    if (builtin.os.tag != .macos) return null;
+    const file = std.Io.Dir.openFileAbsolute(io, path, .{
+        .path_only = true,
+        .follow_symlinks = false,
+    }) catch return error.ScanOpenFailed;
+    defer file.close(io);
+    // Zig 0.16 File.Stat omits device; use libc fstat for (dev, ino) hardlink identity.
+    var st: std.posix.Stat = undefined;
+    if (std.c.fstat(file.handle, &st) != 0) return error.ScanOpenFailed;
+    if (!std.posix.S.ISREG(st.mode)) return null;
+    return .{
+        .dev = @intCast(st.dev),
+        .ino = @intCast(st.ino),
+    };
+}
+
+/// True when a grant path is exactly Data volume or a strict descendant (realpath workspace).
+fn appendWorkspaceSecretDeny(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    op: []const u8,
+    workspace_root: []const u8,
+) !void {
+    try out.appendSlice(allocator, "(deny ");
+    try out.appendSlice(allocator, op);
+    try out.appendSlice(allocator, " (require-all (subpath \"");
+    try appendEscaped(out, allocator, sbplEmitPath(workspace_root));
+    // Secret form + template allow: only profile rule book (no local .env regex).
+    try out.appendSlice(allocator, "\") ");
+    try profile.appendWorkspaceSecretSbplRegexPredicates(out, allocator);
+    try out.appendSlice(allocator, "))\n");
+}
+
 fn grantUnderDataVolume(path: []const u8) bool {
     return profile.isPathWithin(path, data_volume_prefix);
 }
@@ -851,4 +1101,242 @@ test "SBPL production defaults omit bare /System and /Library grants" {
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(subpath \"/System/Library\")") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(subpath \"/Library/Frameworks\")") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-read* (subpath \"/System/Volumes/Data\"))") != null);
+}
+
+test "SBPL secret boundary denies workspace env forms but not exact safe templates" {
+    const allocator = std.testing.allocator;
+    var ordinary = try profile.compileProfile(allocator, .{
+        .workspace_root = "/workspace/app",
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+    });
+    defer ordinary.deinit();
+    var protected = try profile.compileProfile(allocator, .{
+        .workspace_root = "/workspace/app",
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+        .protect_workspace_secrets = true,
+    });
+    defer protected.deinit();
+
+    const ordinary_sbpl = try renderSbpl(allocator, &ordinary);
+    defer allocator.free(ordinary_sbpl);
+    const protected_sbpl = try renderSbpl(allocator, &protected);
+    defer allocator.free(protected_sbpl);
+
+    try std.testing.expect(std.mem.indexOf(u8, ordinary_sbpl, "workspace env secret carve-out") == null);
+    try std.testing.expect(
+        std.mem.indexOf(u8, protected_sbpl, ";; workspace env secret carve-out") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(
+            u8,
+            protected_sbpl,
+            "(deny file-read* (require-all (subpath \"/workspace/app\")",
+        ) != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(
+            u8,
+            protected_sbpl,
+            "(deny file-write* (require-all (subpath \"/workspace/app\")",
+        ) != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(
+            u8,
+            protected_sbpl,
+            "(deny file-read-metadata (require-all (subpath \"/workspace/app\")",
+        ) != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(
+            u8,
+            protected_sbpl,
+            profile.workspace_secret_form_sbpl_regex,
+        ) != null,
+    );
+    var template_needle_buf: [128]u8 = undefined;
+    const template_needle = try std.fmt.bufPrint(
+        &template_needle_buf,
+        "(require-not (regex #\"/[.]env[.]({s})$\"))",
+        .{profile.workspace_secret_safe_template_sbpl_alt},
+    );
+    try std.testing.expect(std.mem.indexOf(u8, protected_sbpl, template_needle) != null);
+}
+
+test "SBPL secret boundary uses live Users firmlink form" {
+    const allocator = std.testing.allocator;
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = "/System/Volumes/Data/Users/dev/projects/app",
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+        .protect_workspace_secrets = true,
+    });
+    defer compiled.deinit();
+
+    const sbpl = try renderSbpl(allocator, &compiled);
+    defer allocator.free(sbpl);
+
+    try std.testing.expect(
+        std.mem.indexOf(
+            u8,
+            sbpl,
+            "(deny file-read* (require-all (subpath \"/Users/dev/projects/app\")",
+        ) != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(
+            u8,
+            sbpl,
+            "(deny file-read* (require-all (subpath \"/System/Volumes/Data/Users/dev/projects/app\")",
+        ) == null,
+    );
+}
+
+test "SBPL protect-on emits explicit denies for hardlink alias paths" {
+    const allocator = std.testing.allocator;
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = "/workspace/app",
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+        .protect_workspace_secrets = true,
+    });
+    defer compiled.deinit();
+
+    const sbpl = try renderSbplWithOptions(allocator, &compiled, .{
+        .hardlink_alias_denies = &[_][]const u8{"/workspace/app/notes.txt"},
+    });
+    defer allocator.free(sbpl);
+
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "hardlink aliases of secret-form inodes") != null);
+    try std.testing.expect(
+        std.mem.indexOf(u8, sbpl, "(deny file-read* (subpath \"/workspace/app/notes.txt\"))") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, sbpl, "(deny file-write* (subpath \"/workspace/app/notes.txt\"))") != null,
+    );
+}
+
+test "collectSecretHardlinkAliasPaths finds non-secret basenames sharing secret inode" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = ".env", .data = "secret-body" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "ordinary.txt", .data = "plain" });
+    tmp.dir.hardLink(".env", tmp.dir, "alias.txt", io, .{}) catch return error.SkipZigTest;
+
+    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+
+    const aliases = try collectSecretHardlinkAliasPaths(allocator, io, root);
+    defer freeHardlinkAliasPaths(allocator, aliases);
+
+    try std.testing.expectEqual(@as(usize, 1), aliases.len);
+    try std.testing.expect(std.mem.endsWith(u8, aliases[0], "alias.txt"));
+    try std.testing.expect(!std.mem.endsWith(u8, aliases[0], ".env"));
+    try std.testing.expect(!std.mem.endsWith(u8, aliases[0], "ordinary.txt"));
+}
+
+test "collectSecretHardlinkAliasPaths fails closed on mode-000 nested directory" {
+    // Unreadable nested dir with secret + root hardlink alias must not soft-skip
+    // the dir (fail open). Scan returns ScanOpenFailed so prepare fails closed.
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "d");
+    try tmp.dir.writeFile(io, .{ .sub_path = "d/.env", .data = "secret-body" });
+    tmp.dir.hardLink("d/.env", tmp.dir, "notes.txt", io, .{}) catch return error.SkipZigTest;
+
+    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+    const nested = try std.fs.path.join(allocator, &.{ root, "d" });
+    defer allocator.free(nested);
+    const nested_z = try allocator.dupeZ(u8, nested);
+    defer allocator.free(nested_z);
+
+    // Drop all perms on nested dir; restore so tmpDir cleanup can remove it.
+    if (std.c.chmod(nested_z.ptr, 0) != 0) return error.SkipZigTest;
+    defer _ = std.c.chmod(nested_z.ptr, 0o755);
+
+    try std.testing.expectError(
+        error.ScanOpenFailed,
+        collectSecretHardlinkAliasPaths(allocator, io, root),
+    );
+}
+
+test "collectSecretHardlinkAliasPaths missing workspace is empty not ScanOpenFailed" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const aliases = try collectSecretHardlinkAliasPaths(
+        allocator,
+        io,
+        "/tmp/orca-hardlink-scan-missing-ws-does-not-exist",
+    );
+    defer freeHardlinkAliasPaths(allocator, aliases);
+    try std.testing.expectEqual(@as(usize, 0), aliases.len);
+}
+
+test "dual-path secret policy: single rule book for Zig classify and SBPL emit" {
+    // Every basename: Zig product law == pure SBPL-intent simulator.
+    // SBPL text must embed only profile-owned fragments (no local .env regex).
+    const basenames = [_][]const u8{
+        ".env",
+        ".env.local",
+        ".env.production",
+        ".env.example.local",
+        ".env.example",
+        ".env.sample",
+        ".env.template",
+        ".envrc",
+        "notes.txt",
+        "service.env",
+        ".env.",
+        "env",
+        ".ENV",
+    };
+
+    for (basenames) |name| {
+        const zig = profile.isWorkspaceSecretBasename(name);
+        const sbpl_intent = profile.sbplWouldDenyWorkspaceSecretBasename(name);
+        try std.testing.expectEqual(zig, sbpl_intent);
+        try std.testing.expectEqual(zig, profile.isWorkspaceSecretPath(name));
+    }
+
+    // Template stems in SBPL alt are derived only from the name list.
+    try std.testing.expectEqualStrings("example|sample|template", profile.workspace_secret_safe_template_sbpl_alt);
+    for (profile.workspace_secret_safe_template_names) |full| {
+        try std.testing.expect(std.mem.startsWith(u8, full, ".env."));
+        const stem = full[".env.".len..];
+        try std.testing.expect(std.mem.indexOf(u8, profile.workspace_secret_safe_template_sbpl_alt, stem) != null);
+    }
+
+    const allocator = std.testing.allocator;
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = "/workspace/app",
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+        .protect_workspace_secrets = true,
+    });
+    defer compiled.deinit();
+    const sbpl = try renderSbpl(allocator, &compiled);
+    defer allocator.free(sbpl);
+
+    // Form regex + template require-not come only from profile constants.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, profile.workspace_secret_form_sbpl_regex) != null);
+    var needle_buf: [160]u8 = undefined;
+    const needle = try std.fmt.bufPrint(
+        &needle_buf,
+        "(require-not (regex #\"/[.]env[.]({s})$\"))",
+        .{profile.workspace_secret_safe_template_sbpl_alt},
+    );
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, needle) != null);
+
+    // Emission helper matches what SBPL contains (single emission path).
+    var pred: std.ArrayList(u8) = .empty;
+    defer pred.deinit(allocator);
+    try profile.appendWorkspaceSecretSbplRegexPredicates(&pred, allocator);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, pred.items) != null);
 }

@@ -772,3 +772,361 @@ test "hardened profile: open /private/var denied; compatible allows" {
         try std.testing.expectEqual(@as(u8, 0), code);
     }
 }
+
+
+// Phase 1d / P1-5: workspace secret-form deny under protect_workspace_secrets.
+// Edge cases exercised under live Seatbelt:
+//   - `.env` canary content never returned (open fails; no partial read)
+//   - nested `.env.local` denied
+//   - `.env.example.local` denied (not an exact safe template)
+//   - exact templates `.env.example` / `.env.sample` / `.env.template` readable
+//   - ordinary workspace file remains RW
+//   - write create of new `.env` denied
+//   - protect-off control SBPL still allows `.env` read (negative control)
+// Exit: 0=ok, 2=apply fail, 3=.env readable, 4=template fail, 5=ordinary fail,
+//       6=.env.local readable, 7=.env.example.local readable, 8=write to .env ok (leak),
+//       10=ordinary write fail, 11=canary body leaked via any open buffer.
+test "real FS deny: workspace .env secret forms denied under protect; templates and ordinary remain" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    if (!sandboxInitAvailable()) return error.SkipZigTest;
+
+    const ver = try detectProductVersion();
+    try std.testing.expect(isMatrixMajor(ver.major));
+    try std.testing.expectEqual(SupportStatus.supported, evaluateSupport());
+
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, "nested");
+
+    var synth = try canary.generate(allocator);
+    defer synth.deinit();
+
+    try ws_tmp.dir.writeFile(io, .{ .sub_path = ".env", .data = synth.body });
+    try ws_tmp.dir.writeFile(io, .{ .sub_path = "nested/.env.local", .data = synth.body });
+    try ws_tmp.dir.writeFile(io, .{ .sub_path = ".env.example.local", .data = synth.body });
+    try ws_tmp.dir.writeFile(io, .{ .sub_path = ".env.example", .data = "template-ok" });
+    try ws_tmp.dir.writeFile(io, .{ .sub_path = ".env.sample", .data = "sample-ok" });
+    try ws_tmp.dir.writeFile(io, .{ .sub_path = ".env.template", .data = "template-file-ok" });
+    try ws_tmp.dir.writeFile(io, .{ .sub_path = "readme.txt", .data = "ordinary-ok" });
+
+    const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(ws_root);
+
+    const env_path = try std.fs.path.join(allocator, &.{ ws_root, ".env" });
+    defer allocator.free(env_path);
+    const env_local_path = try std.fs.path.join(allocator, &.{ ws_root, "nested", ".env.local" });
+    defer allocator.free(env_local_path);
+    const env_example_local_path = try std.fs.path.join(allocator, &.{ ws_root, ".env.example.local" });
+    defer allocator.free(env_example_local_path);
+    const env_example_path = try std.fs.path.join(allocator, &.{ ws_root, ".env.example" });
+    defer allocator.free(env_example_path);
+    const env_sample_path = try std.fs.path.join(allocator, &.{ ws_root, ".env.sample" });
+    defer allocator.free(env_sample_path);
+    const env_template_path = try std.fs.path.join(allocator, &.{ ws_root, ".env.template" });
+    defer allocator.free(env_template_path);
+    const readme_path = try std.fs.path.join(allocator, &.{ ws_root, "readme.txt" });
+    defer allocator.free(readme_path);
+    const write_env_path = try std.fs.path.join(allocator, &.{ ws_root, ".env.created_by_probe" });
+    defer allocator.free(write_env_path);
+    const write_ordinary_path = try std.fs.path.join(allocator, &.{ ws_root, "write_probe.txt" });
+    defer allocator.free(write_ordinary_path);
+
+    // CTRL-BASELINE: unsandboxed parent can still read the canary.
+    {
+        const baseline = try std.Io.Dir.cwd().readFileAlloc(io, env_path, allocator, .limited(4096));
+        defer allocator.free(baseline);
+        try std.testing.expectEqualStrings(synth.body, baseline);
+        try std.testing.expect(canary.bodyLeaked(synth, baseline));
+    }
+
+    // Negative control: protect-off product SBPL must still allow workspace `.env` open.
+    {
+        var unprotected = try profile.compileProfile(allocator, .{
+            .workspace_root = ws_root,
+            .include_tmp = false,
+            .protect_workspace_secrets = false,
+        });
+        defer unprotected.deinit();
+        const prepared_off = prepareForChildApply(allocator, &unprotected);
+        defer if (prepared_off.sbpl_z) |p| allocator.free(p);
+        try std.testing.expectEqual(.prepared, prepared_off.status);
+        const sbpl_off = prepared_off.sbpl_z.?;
+
+        const env_z_off = try allocator.dupeZ(u8, env_path);
+        defer allocator.free(env_z_off);
+
+        const pid_off = std.c.fork();
+        if (pid_off < 0) return error.SkipZigTest;
+        if (pid_off == 0) {
+            applyInChild(sbpl_off.ptr) catch std.c._exit(2);
+            const fd = std.c.open(env_z_off.ptr, .{ .ACCMODE = .RDONLY });
+            if (fd < 0) std.c._exit(3);
+            var buf: [256]u8 = undefined;
+            const n = std.c.read(fd, &buf, buf.len);
+            _ = std.c.close(fd);
+            if (n <= 0) std.c._exit(3);
+            if (std.mem.indexOf(u8, buf[0..@intCast(n)], synth.body) == null) std.c._exit(3);
+            std.c._exit(0);
+        }
+        const code_off = try waitExitCode(pid_off);
+        switch (code_off) {
+            0 => {},
+            2 => return error.SeatbeltApplyFailedOnHost,
+            3 => return error.ProtectOffControlCouldNotReadEnv,
+            else => return error.UnexpectedSandboxChildExit,
+        }
+    }
+
+    var protected = try profile.compileProfile(allocator, .{
+        .workspace_root = ws_root,
+        .include_tmp = false,
+        .protect_workspace_secrets = true,
+    });
+    defer protected.deinit();
+    try std.testing.expect(protected.protect_workspace_secrets);
+
+    const prepared = prepareForChildApply(allocator, &protected);
+    defer if (prepared.sbpl_z) |p| allocator.free(p);
+    try std.testing.expectEqual(.prepared, prepared.status);
+    const sbpl = prepared.sbpl_z.?;
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "workspace env secret carve-out") != null);
+
+    const env_z = try allocator.dupeZ(u8, env_path);
+    defer allocator.free(env_z);
+    const env_local_z = try allocator.dupeZ(u8, env_local_path);
+    defer allocator.free(env_local_z);
+    const env_example_local_z = try allocator.dupeZ(u8, env_example_local_path);
+    defer allocator.free(env_example_local_z);
+    const env_example_z = try allocator.dupeZ(u8, env_example_path);
+    defer allocator.free(env_example_z);
+    const env_sample_z = try allocator.dupeZ(u8, env_sample_path);
+    defer allocator.free(env_sample_z);
+    const env_template_z = try allocator.dupeZ(u8, env_template_path);
+    defer allocator.free(env_template_z);
+    const readme_z = try allocator.dupeZ(u8, readme_path);
+    defer allocator.free(readme_z);
+    const write_env_z = try allocator.dupeZ(u8, write_env_path);
+    defer allocator.free(write_env_z);
+    const write_ordinary_z = try allocator.dupeZ(u8, write_ordinary_path);
+    defer allocator.free(write_ordinary_z);
+
+    const pid = std.c.fork();
+    if (pid < 0) return error.SkipZigTest;
+    if (pid == 0) {
+        applyInChild(sbpl.ptr) catch std.c._exit(2);
+
+        // Denied secret forms must not open (and must never return canary bytes).
+        const env_fd = std.c.open(env_z.ptr, .{ .ACCMODE = .RDONLY });
+        if (env_fd >= 0) {
+            var leak_buf: [256]u8 = undefined;
+            const n = std.c.read(env_fd, &leak_buf, leak_buf.len);
+            _ = std.c.close(env_fd);
+            if (n > 0 and std.mem.indexOf(u8, leak_buf[0..@intCast(n)], synth.body) != null) {
+                std.c._exit(11);
+            }
+            std.c._exit(3);
+        }
+
+        const local_fd = std.c.open(env_local_z.ptr, .{ .ACCMODE = .RDONLY });
+        if (local_fd >= 0) {
+            var leak_buf: [256]u8 = undefined;
+            const n = std.c.read(local_fd, &leak_buf, leak_buf.len);
+            _ = std.c.close(local_fd);
+            if (n > 0 and std.mem.indexOf(u8, leak_buf[0..@intCast(n)], synth.body) != null) {
+                std.c._exit(11);
+            }
+            std.c._exit(6);
+        }
+
+        const ex_local_fd = std.c.open(env_example_local_z.ptr, .{ .ACCMODE = .RDONLY });
+        if (ex_local_fd >= 0) {
+            var leak_buf: [256]u8 = undefined;
+            const n = std.c.read(ex_local_fd, &leak_buf, leak_buf.len);
+            _ = std.c.close(ex_local_fd);
+            if (n > 0 and std.mem.indexOf(u8, leak_buf[0..@intCast(n)], synth.body) != null) {
+                std.c._exit(11);
+            }
+            std.c._exit(7);
+        }
+
+        // Exact safe templates remain readable.
+        if (!childReadEquals(env_example_z.ptr, "template-ok")) std.c._exit(4);
+        if (!childReadEquals(env_sample_z.ptr, "sample-ok")) std.c._exit(4);
+        if (!childReadEquals(env_template_z.ptr, "template-file-ok")) std.c._exit(4);
+
+        // Ordinary workspace file remains readable.
+        if (!childReadEquals(readme_z.ptr, "ordinary-ok")) std.c._exit(5);
+
+        // Ordinary write remains allowed.
+        const wfd = std.c.open(
+            write_ordinary_z.ptr,
+            .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true },
+            @as(std.c.mode_t, 0o600),
+        );
+        if (wfd < 0) std.c._exit(10);
+        const wrote = std.c.write(wfd, "wrote-ok", 8);
+        _ = std.c.close(wfd);
+        if (wrote != 8) std.c._exit(10);
+
+        // Creating a new secret-form file under the workspace must fail.
+        const sfd = std.c.open(
+            write_env_z.ptr,
+            .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true },
+            @as(std.c.mode_t, 0o600),
+        );
+        if (sfd >= 0) {
+            _ = std.c.close(sfd);
+            std.c._exit(8);
+        }
+
+        std.c._exit(0);
+    }
+
+    const exit_code = try waitExitCode(pid);
+    switch (exit_code) {
+        0 => {},
+        2 => return error.SeatbeltApplyFailedOnHost,
+        3 => return error.WorkspaceEnvReadableUnderProtect,
+        4 => return error.WorkspaceEnvTemplateUnreadableUnderProtect,
+        5 => return error.OrdinaryWorkspaceFileUnreadableUnderProtect,
+        6 => return error.NestedEnvLocalReadableUnderProtect,
+        7 => return error.EnvExampleLocalReadableUnderProtect,
+        8 => return error.WorkspaceEnvWriteAllowedUnderProtect,
+        10 => return error.OrdinaryWorkspaceWriteFailedUnderProtect,
+        11 => return error.CanaryBodyLeakedUnderProtect,
+        else => return error.UnexpectedSandboxChildExit,
+    }
+
+    const probe = try std.Io.Dir.cwd().readFileAlloc(io, write_ordinary_path, allocator, .limited(64));
+    defer allocator.free(probe);
+    try std.testing.expectEqualStrings("wrote-ok", probe);
+
+    // Parent still holds the real canary; sandboxed child never returned it.
+    const still = try std.Io.Dir.cwd().readFileAlloc(io, env_path, allocator, .limited(4096));
+    defer allocator.free(still);
+    try std.testing.expect(canary.bodyLeaked(synth, still));
+}
+
+fn childReadEquals(path_z: [*:0]const u8, expected: []const u8) bool {
+    if (expected.len > 128) return false;
+    const fd = std.c.open(path_z, .{ .ACCMODE = .RDONLY });
+    if (fd < 0) return false;
+    var buf: [128]u8 = undefined;
+    const n = std.c.read(fd, &buf, buf.len);
+    _ = std.c.close(fd);
+    if (n < 0) return false;
+    if (@as(usize, @intCast(n)) != expected.len) return false;
+    return std.mem.eql(u8, buf[0..@intCast(n)], expected);
+}
+
+// Pre-planted hardlink to a secret-form inode must not return canary content under
+// protect-on. Path-regex alone misses non-.env basenames; prepare-time scan emits
+// last-match path denies for those aliases. Exit: 0=ok, 2=apply, 3=alias readable,
+// 4=canary leak, 5=neighbor fail.
+//
+// When prepare fails closed (e.g. scan open error), this test fails at prepare —
+// never observes canary body. Companion unit tests cover mode-000 ScanOpenFailed.
+
+
+// Pre-planted hardlink to a secret-form inode must not return canary content under
+// protect-on. Path-regex alone misses non-.env basenames; prepare-time scan emits
+// last-match path denies for those aliases. Exit: 0=ok, 2=apply, 3=alias readable,
+// 4=canary leak, 5=neighbor fail.
+//
+// When prepare fails closed (e.g. scan open error), this test fails at prepare —
+// never observes canary body. Companion unit tests cover mode-000 ScanOpenFailed.
+test "real FS deny: hardlink alias of workspace .env denied under protect" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    if (!sandboxInitAvailable()) return error.SkipZigTest;
+
+    const ver = try detectProductVersion();
+    try std.testing.expect(isMatrixMajor(ver.major));
+    try std.testing.expectEqual(SupportStatus.supported, evaluateSupport());
+
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(io, ".orca");
+
+    var synth = try canary.generate(allocator);
+    defer synth.deinit();
+    try ws_tmp.dir.writeFile(io, .{ .sub_path = ".env", .data = synth.body });
+    try ws_tmp.dir.writeFile(io, .{ .sub_path = "neighbor.txt", .data = "neighbor-ok" });
+
+    // Pre-plant hardlink with a non-secret basename (path-regex alone would miss it).
+    ws_tmp.dir.hardLink(".env", ws_tmp.dir, "notes.txt", io, .{}) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return error.SkipZigTest,
+    };
+
+    const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(ws_root);
+
+    const alias_path = try std.fs.path.join(allocator, &.{ ws_root, "notes.txt" });
+    defer allocator.free(alias_path);
+    const neighbor_path = try std.fs.path.join(allocator, &.{ ws_root, "neighbor.txt" });
+    defer allocator.free(neighbor_path);
+
+    // CTRL-BASELINE: unsandboxed parent can read the alias (same inode as .env).
+    {
+        const baseline = try std.Io.Dir.cwd().readFileAlloc(io, alias_path, allocator, .limited(4096));
+        defer allocator.free(baseline);
+        try std.testing.expectEqualStrings(synth.body, baseline);
+    }
+
+    var protected = try profile.compileProfile(allocator, .{
+        .workspace_root = ws_root,
+        .include_tmp = false,
+        .protect_workspace_secrets = true,
+    });
+    defer protected.deinit();
+
+    const prepared = prepareForChildApply(allocator, &protected);
+    defer if (prepared.sbpl_z) |p| allocator.free(p);
+    try std.testing.expectEqual(.prepared, prepared.status);
+    const sbpl = prepared.sbpl_z.?;
+    // Prepare scan must emit an explicit deny for the alias path.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "hardlink aliases of secret-form inodes") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "notes.txt") != null);
+
+    const alias_z = try allocator.dupeZ(u8, alias_path);
+    defer allocator.free(alias_z);
+    const neighbor_z = try allocator.dupeZ(u8, neighbor_path);
+    defer allocator.free(neighbor_z);
+
+    const pid = std.c.fork();
+    if (pid < 0) return error.SkipZigTest;
+    if (pid == 0) {
+        applyInChild(sbpl.ptr) catch std.c._exit(2);
+
+        const afd = std.c.open(alias_z.ptr, .{ .ACCMODE = .RDONLY });
+        if (afd >= 0) {
+            var buf: [256]u8 = undefined;
+            const n = std.c.read(afd, &buf, buf.len);
+            _ = std.c.close(afd);
+            if (n > 0 and std.mem.indexOf(u8, buf[0..@intCast(n)], synth.body) != null) {
+                std.c._exit(4);
+            }
+            std.c._exit(3);
+        }
+
+        if (!childReadEquals(neighbor_z.ptr, "neighbor-ok")) std.c._exit(5);
+        std.c._exit(0);
+    }
+
+    const exit_code = try waitExitCode(pid);
+    switch (exit_code) {
+        0 => {},
+        2 => return error.SeatbeltApplyFailedOnHost,
+        3 => return error.HardlinkAliasReadableUnderProtect,
+        4 => return error.CanaryBodyLeakedViaHardlinkAlias,
+        5 => return error.OrdinaryNeighborUnreadableUnderProtect,
+        else => return error.UnexpectedSandboxChildExit,
+    }
+}

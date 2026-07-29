@@ -14,6 +14,17 @@ pub fn main(init: std.process.Init) !u8 {
     const io = init.io;
     const argv = try init.minimal.args.toSlice(init.arena.allocator());
 
+    if (builtin.os.tag == .linux and
+        argv.len > 1 and
+        std.mem.eql(
+            u8,
+            argv[1],
+            orca.sandbox.linux_workspace_view_bootstrap.internal_command,
+        ))
+    {
+        return orca.sandbox.linux_workspace_view_bootstrap.command(allocator, argv[2..]);
+    }
+
     var stdout_buffer: [4096]u8 = undefined;
     var stderr_buffer: [4096]u8 = undefined;
     var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
