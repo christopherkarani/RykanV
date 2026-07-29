@@ -70,6 +70,8 @@ pub const ChildMaterials = union(enum) {
     landlock: struct {
         compiled: profile.CompiledProfile,
         route_forcing: ?landlock.RouteForcing = null,
+        /// Original compile input (not recoverable from grants when workspace is /tmp).
+        include_tmp: bool = false,
     },
     seatbelt: struct {
         sbpl_z: [:0]u8,
@@ -272,6 +274,7 @@ pub const ApplyResult = struct {
                 io,
                 &ll.compiled,
                 ll.route_forcing,
+                ll.include_tmp,
                 argv_owned,
                 env_map,
                 workspace_root,
@@ -836,6 +839,7 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
                     .materials = .{ .landlock = .{
                         .compiled = compiled,
                         .route_forcing = platform.landlock_route_forcing,
+                        .include_tmp = boundary.include_tmp,
                     } },
                     .network_route_forced = platform.network_route_forced,
                 };

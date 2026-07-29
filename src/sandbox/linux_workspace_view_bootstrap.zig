@@ -126,11 +126,15 @@ fn runLinux(allocator: std.mem.Allocator, fds: BootstrapFds) !void {
     }
     applyBootstrapStdio(request.stdio) catch return response.fail(.stdio_setup_failed);
 
+    // Rebuild with the same CompileOptions the parent hashed (including launch
+    // .exec grants). Hard-coding protect-on is intentional: this bootstrap is
+    // only used for secret-boundary protect-on; still honor request flag when set.
     var compiled = profile.compileProfile(allocator, .{
         .workspace_root = request.workspace_root,
         .control_roots = request.profile.control_roots,
         .include_tmp = request.profile.include_tmp,
-        .protect_workspace_secrets = true,
+        .exec_paths = request.profile.exec_paths,
+        .protect_workspace_secrets = request.profile.protect_workspace_secrets,
     }) catch return response.fail(.profile_rebuild_failed);
     defer compiled.deinit();
     var io_runtime: std.Io.Threaded = .init_single_threaded;
@@ -441,20 +445,32 @@ fn redirectDaemonStdio() !void {
 }
 
 fn waitForFuseReady(read_fd: i32, daemon_pid: i32) bool {
-    var poll_fds = [_]std.posix.pollfd{.{
-        .fd = read_fd,
-        .events = std.posix.POLL.IN,
-        .revents = 0,
-    }};
-    const ready = std.posix.poll(&poll_fds, 10_000) catch return false;
-    if (ready != 1) return false;
-
-    var byte: [1]u8 = undefined;
+    // One remaining-deadline budget (do not restart a full 10s on EINTR).
+    const deadline_ms: i64 = 10_000;
+    const start_ms = std.time.milliTimestamp();
     while (true) {
-        const count = std.c.read(read_fd, &byte, 1);
-        if (count == 1) return byte[0] == 1 and processIsAlive(daemon_pid);
-        if (std.c.errno(count) == .INTR) continue;
-        return false;
+        const elapsed = std.time.milliTimestamp() - start_ms;
+        if (elapsed >= deadline_ms) return false;
+        const remaining: i32 = @intCast(deadline_ms - elapsed);
+        var poll_fds = [_]std.posix.pollfd{.{
+            .fd = read_fd,
+            .events = std.posix.POLL.IN,
+            .revents = 0,
+        }};
+        const ready = std.posix.poll(&poll_fds, remaining) catch |err| switch (err) {
+            error.Interrupted => continue,
+            else => return false,
+        };
+        if (ready == 0) return false;
+        if (ready != 1) return false;
+
+        var byte: [1]u8 = undefined;
+        while (true) {
+            const count = std.c.read(read_fd, &byte, 1);
+            if (count == 1) return byte[0] == 1 and processIsAlive(daemon_pid);
+            if (std.c.errno(count) == .INTR) continue;
+            return false;
+        }
     }
 }
 

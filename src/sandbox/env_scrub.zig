@@ -212,28 +212,11 @@ pub fn isLaunchAllowlisted(name: []const u8) bool {
     return false;
 }
 
-/// True when `value` is the exact local-dummy env reference emitted for `name`.
-fn isNameBoundLocalDummyEnvRef(name: []const u8, value: []const u8) bool {
-    const prefix = "orca-secret://local-dummy/env/";
-    if (name.len == 0 or !std.mem.startsWith(u8, value, prefix)) return false;
-
-    const suffix = value[prefix.len..];
-    const fingerprint_len = 8;
-    if (suffix.len != name.len + 1 + fingerprint_len) return false;
-    if (!std.mem.eql(u8, suffix[0..name.len], name)) return false;
-    if (suffix[name.len] != '/') return false;
-
-    for (suffix[name.len + 1 ..]) |byte| {
-        if (!std.ascii.isDigit(byte) and !(byte >= 'a' and byte <= 'f')) return false;
-    }
-    return true;
-}
-
 /// True when a key/value pair is retained for sandboxed launch.
-/// Keeps allowlisted keys and exact name-bound local-dummy references.
+/// Allowlist-only: empty backpack does not emit `orca-secret://` local-dummy refs.
 pub fn shouldRetainLaunchEnv(name: []const u8, value: []const u8) bool {
-    if (isLaunchAllowlisted(name)) return true;
-    return isNameBoundLocalDummyEnvRef(name, value);
+    _ = value;
+    return isLaunchAllowlisted(name);
 }
 
 /// Build a new map with scrubbed keys removed. Source is not modified.
@@ -624,8 +607,8 @@ test "shouldRetainLaunchEnv rejects untrusted secret reference shapes" {
     }
 }
 
-test "shouldRetainLaunchEnv keeps only name-bound local dummy refs or allowlisted names" {
-    try std.testing.expect(shouldRetainLaunchEnv(
+test "shouldRetainLaunchEnv is allowlist-only (no local-dummy retention)" {
+    try std.testing.expect(!shouldRetainLaunchEnv(
         "GITHUB_TOKEN",
         "orca-secret://local-dummy/env/GITHUB_TOKEN/d1c2f8b4",
     ));
@@ -650,8 +633,8 @@ test "applyLaunchAllowlistInPlace strips non-allowlisted keys" {
     try env_map.put("SSH_AUTH_SOCK", "/tmp/ssh-agent.sock");
 
     const removed = try applyLaunchAllowlistInPlace(&env_map);
-    // OPENAI_API_KEY, AWS_SECRET_ACCESS_KEY, RANDOM_HOST_VAR, SMUGGLE2, SSH_AUTH_SOCK.
-    try std.testing.expectEqual(@as(usize, 5), removed);
+    // OPENAI_API_KEY, AWS_SECRET_ACCESS_KEY, RANDOM_HOST_VAR, SMUGGLE2, GITHUB_TOKEN dummy, SSH_AUTH_SOCK.
+    try std.testing.expectEqual(@as(usize, 6), removed);
     try std.testing.expectEqualStrings("/bin", env_map.get("PATH").?);
     try std.testing.expectEqualStrings("/home/agent", env_map.get("HOME").?);
     try std.testing.expectEqualStrings("s1", env_map.get("ORCA_SESSION_ID").?);
@@ -659,11 +642,8 @@ test "applyLaunchAllowlistInPlace strips non-allowlisted keys" {
     try std.testing.expect(env_map.get("AWS_SECRET_ACCESS_KEY") == null);
     try std.testing.expect(env_map.get("RANDOM_HOST_VAR") == null);
     try std.testing.expect(env_map.get("SMUGGLE2") == null);
-    // A name-bound local-dummy ref survives the allowlist.
-    try std.testing.expectEqualStrings(
-        "orca-secret://local-dummy/env/GITHUB_TOKEN/d1c2f8b4",
-        env_map.get("GITHUB_TOKEN").?,
-    );
+    // Empty backpack: local-dummy refs are not retained on the attach allowlist.
+    try std.testing.expect(env_map.get("GITHUB_TOKEN") == null);
     // Keepers: TLS trust only (SSH agent socket stripped by default).
     try std.testing.expectEqualStrings("/etc/ssl/cert.pem", env_map.get("SSL_CERT_FILE").?);
     try std.testing.expectEqualStrings("/etc/ssl/node-ca.pem", env_map.get("NODE_EXTRA_CA_CERTS").?);

@@ -100,30 +100,32 @@ Before launching the agent process, Orca filters the environment variables based
 | `ask` | Removes secret-like vars unless explicitly allowed. Prompts for risky ones. |
 | `observe` | Passes all vars through but records redactions for audit. |
 
-### Secretless Mode
+### Secretless Mode (empty backpack)
 
-Run with `--secretless` to replace secret-like environment values with **non-resolving** broker references:
+Run with `--secretless` for the **empty-backpack** secret boundary (breaking change from older local-dummy rewrite behavior):
 
 ```bash
-orca run --secretless -- <command>
+ryk run --secretless -- <command>
 ```
 
 In this mode:
-- `GITHUB_TOKEN=ghp_xxxxxxxx` becomes `GITHUB_TOKEN=orca-secret://local-dummy/env/GITHUB_TOKEN/a1b2c3d4`
-- The child process sees the reference, not the raw value
-- Raw values are never written to policy, audit, or replay artifacts
-- `orca run` prints a stderr warning when one or more secret-like vars were rewritten
+- The child env is **public host keys only** (PATH, locale, display, proxy surface, etc.) — secret-like names and values are not passed through
+- There is **no** `orca-secret://local-dummy/...` substitution and no readiness rewrite warning for dummy refs
+- Raw secret values are never written to policy, audit, or replay artifacts
+- An **active OS sandbox is required** (`--os-sandbox off` is rejected; `auto` promotes to required on)
+- When OS attach succeeds, workspace `.env` / `.env.*` secret forms are denied at the OS layer (exact safe templates `.env.example` / `.env.sample` / `.env.template` remain readable)
 
 **Day-1 agent readiness (read carefully):**
 
 | Fact | Detail |
 |------|--------|
-| Broker used for env rewrite | Always `local-dummy` today — **reference-only; does not resolve raw values** |
-| Claude / Pi / Codex / OpenCode | Do **not** natively understand `orca-secret://…`. They expect real provider credentials (env API keys, or host-specific login stores). |
-| Broker resolve APIs | `orca credentials check` / policy `credentials.refs` resolve configured refs for **check** boundaries — they are **not** wired into secretless env rewrite at spawn |
+| Env contract | Public-only constructed child env — not broker substitution |
+| Claude / Pi / Codex / OpenCode | Expect real provider credentials (env API keys or host login stores). Empty backpack removes those env keys. |
+| Broker resolve APIs | `ryk credentials check` / policy `credentials.refs` resolve configured refs for **check** boundaries — they are **not** wired into secretless spawn env |
 | Network proxy | Does **not** mint or inject model API keys into agent HTTP requests |
+| OS sandbox | Required for empty backpack; Linux protect-on uses a FUSE workspace view + Landlock |
 
-**Not ready — do not default.** Do **not** treat `--secretless` as a safe default for day-1 agent launches that authenticate via `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`, or similar env vars. Those launches will get non-functional refs and typically fail with provider auth errors (for example HTTP 401), not a clear “missing broker” failure from the model host.
+**Not ready — do not default.** Do **not** treat `--secretless` as a safe default for day-1 agent launches that authenticate via `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`, or similar env vars. Those launches lose usable keys and typically fail with provider auth errors.
 
 **Recommended day-1 agent path (usable credentials):**
 
@@ -131,17 +133,17 @@ In this mode:
 # Prefer host login / non-env credential stores when available (e.g. Claude Code login).
 # For env-based model keys, omit --secretless so the filtered child env can still carry raw keys
 # subject to policy mode (observe inherits; strict/ci strip secrets unless allowlisted).
-orca run -- <agent-command>
+ryk run -- <agent-command>
 ```
 
-**Opt-in secretless path (strip/tooling demos, not model-key auth):**
+**Opt-in secretless path (leak resistance / secret-boundary demos, not model-key auth):**
 
 ```bash
-orca credentials check
-orca run --secretless --network-backend proxy -- <command>
+ryk credentials check
+ryk run --secretless --network-backend proxy -- <command>
 ```
 
-Use secretless when you intentionally want raw secret-like env **out** of the child (demo leak resistance, redaction evidence). Expect model providers that read those env names to fail auth until a product path injects or resolves usable credentials into the agent.
+Use secretless when you intentionally want raw secret-like env **out** of the child and OS deny of workspace secret files. Expect model providers that read those env names to fail auth until a product path injects usable credentials into the agent.
 
 ### Redaction Records
 

@@ -235,6 +235,11 @@ pub fn prepareForChildApplyWithOptions(
     // yields an empty list (regex still applies). Open/capacity/depth failures
     // fail closed. OOM uses seatbelt_profile_oom (hard OutOfMemory at apply);
     // other scan errors use seatbelt_secret_hardlink_scan_failed.
+    //
+    // Accepted residual (single-writer threat model): the scan is prepare-time
+    // only. Concurrent post-prepare hardlinks or agent-created link(.env→alias)
+    // after sandbox_init are not rescanned; Seatbelt has no runtime inode taint.
+    // Pre-planted aliases are covered by process canaries.
     var hardlink_aliases: ?[]const []const u8 = null;
     defer if (hardlink_aliases) |paths| macos_profile.freeHardlinkAliasPaths(allocator, paths);
     if (compiled.protect_workspace_secrets) {

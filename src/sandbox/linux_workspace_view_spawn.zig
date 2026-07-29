@@ -24,6 +24,22 @@ pub const ProfileInputs = struct {
     require_network_route_forcing: bool = false,
 };
 
+/// Collect absolute `.exec` grant paths from a parent-compiled profile so the
+/// bootstrap rebuild can seal the same launch grants into the wire request.
+pub fn execPathsFromCompiled(
+    compiled: *const profile_mod.CompiledProfile,
+    buffer: [][]const u8,
+) []const []const u8 {
+    var count: usize = 0;
+    for (compiled.grants) |grant| {
+        if (grant.mode != .exec) continue;
+        if (count >= buffer.len) break;
+        buffer[count] = grant.path;
+        count += 1;
+    }
+    return buffer[0..count];
+}
+
 pub const LaunchRequest = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -96,6 +112,11 @@ fn spawnWithOperations(request: LaunchRequest, operations: Operations) !SpawnedW
     defer std.crypto.secureZero(u8, &profile_hash);
     std.crypto.hash.sha2.Sha256.hash(request.compiled.canonical_bytes, &profile_hash, .{});
 
+    // Seal parent `.exec` grants so bootstrap rebuild matches expected_profile_hash.
+    // Cap matches ipc.Limits.max_exec_paths (64).
+    var exec_path_buf: [64][]const u8 = undefined;
+    const exec_paths = execPathsFromCompiled(request.compiled, exec_path_buf[0..]);
+
     var frame = try ipc.encodeRequestAlloc(request.allocator, .{
         .cookie = cookie,
         .expected_profile_hash = profile_hash,
@@ -106,6 +127,7 @@ fn spawnWithOperations(request: LaunchRequest, operations: Operations) !SpawnedW
         .profile = .{
             .include_tmp = request.profile.include_tmp,
             .control_roots = request.compiled.control_roots,
+            .exec_paths = exec_paths,
             .network_proxy_port = request.profile.network_proxy_port,
             .require_network_route_forcing = request.profile.require_network_route_forcing,
             .protect_workspace_secrets = request.compiled.protect_workspace_secrets,
@@ -709,4 +731,63 @@ test "child descriptor scrub ranges preserve only stdio and request response" {
 
 test {
     std.testing.refAllDecls(@This());
+}
+
+test "bootstrap profile rebuild matches parent hash with launch exec grants" {
+    // M11 / B1: parent compile with non-empty exec_paths + protect-on must equal
+    // bootstrap-style recompile that receives those same paths over the wire.
+    const allocator = std.testing.allocator;
+    const exec_paths = [_][]const u8{ "/home/user/.local/bin/agent", "/home/user/.local/bin/agent-real" };
+    var parent = try profile_mod.compileProfile(allocator, .{
+        .workspace_root = "/work/project",
+        .control_roots = &[_][]const u8{"/work/project/.orca"},
+        .include_tmp = false,
+        .exec_paths = &exec_paths,
+        .protect_workspace_secrets = true,
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+    });
+    defer parent.deinit();
+
+    var rebuilt = try profile_mod.compileProfile(allocator, .{
+        .workspace_root = "/work/project",
+        .control_roots = &[_][]const u8{"/work/project/.orca"},
+        .include_tmp = false,
+        .exec_paths = &exec_paths,
+        .protect_workspace_secrets = true,
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+    });
+    defer rebuilt.deinit();
+
+    try std.testing.expectEqualSlices(u8, parent.canonical_bytes, rebuilt.canonical_bytes);
+    try std.testing.expectEqualSlices(u8, parent.hash(), rebuilt.hash());
+    try std.testing.expect(parent.hasGrant("/home/user/.local/bin/agent", .exec));
+    try std.testing.expect(rebuilt.hasGrant("/home/user/.local/bin/agent", .exec));
+
+    // Omitting exec_paths must change the digest (detects the B1 regression).
+    var without_exec = try profile_mod.compileProfile(allocator, .{
+        .workspace_root = "/work/project",
+        .control_roots = &[_][]const u8{"/work/project/.orca"},
+        .include_tmp = false,
+        .protect_workspace_secrets = true,
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+    });
+    defer without_exec.deinit();
+    try std.testing.expect(!std.mem.eql(u8, parent.hash(), without_exec.hash()));
+}
+
+test "execPathsFromCompiled collects only .exec grants" {
+    const allocator = std.testing.allocator;
+    const exec_paths = [_][]const u8{"/opt/agents/tool"};
+    var compiled = try profile_mod.compileProfile(allocator, .{
+        .workspace_root = "/work",
+        .include_tmp = false,
+        .exec_paths = &exec_paths,
+        .protect_workspace_secrets = true,
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+    });
+    defer compiled.deinit();
+    var buf: [8][]const u8 = undefined;
+    const got = execPathsFromCompiled(&compiled, &buf);
+    try std.testing.expectEqual(@as(usize, 1), got.len);
+    try std.testing.expectEqualStrings("/opt/agents/tool", got[0]);
 }

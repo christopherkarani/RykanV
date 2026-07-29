@@ -39,6 +39,14 @@ pub const SpawnError = error{
     ExecFailed,
     OutOfMemory,
     FileNotFound,
+    /// Workspace-view bootstrap: sealed profile rebuild hash ≠ parent hash.
+    ProfileHashMismatch,
+    /// Workspace-view bootstrap: parent handshake timed out waiting for ready.
+    HandshakeTimeout,
+    /// Workspace-view bootstrap: /dev/fuse unavailable.
+    FuseDeviceUnavailable,
+    /// Workspace-view bootstrap: profile recompile failed.
+    ProfileRebuildFailed,
 };
 
 /// Match core.process.StdioBehavior without importing core (module boundary).
@@ -154,10 +162,14 @@ const ParentApplySpec = union(enum) {
 /// `deinit` the lease after reaping the child (or process exit).
 ///
 /// Linux only. Optional route forcing uses Landlock TCP port rules.
+/// Linux Landlock attach path. When `protect_workspace_secrets`, routes through
+/// the FUSE workspace-view bootstrap (`forkApplyWorkspaceViewAndExec` semantics)
+/// instead of plain Landlock-only child apply.
 pub fn forkApplyLandlockAndExec(
     io: std.Io,
     compiled: *const profile.CompiledProfile,
     route_forcing: ?landlock.RouteForcing,
+    include_tmp: bool,
     argv: []const []const u8,
     env_map: ?*const std.process.Environ.Map,
     cwd: ?[]const u8,
@@ -166,44 +178,60 @@ pub fn forkApplyLandlockAndExec(
     if (builtin.os.tag != .linux) return error.Unsupported;
     if (argv.len == 0) return error.ExecFailed;
     if (compiled.protect_workspace_secrets) {
-        const constructed_env = env_map orelse return error.ApplyFailed;
-        const target_cwd = cwd orelse compiled.workspace_root;
-        const spawned = linux_workspace_view_spawn.spawnWorkspaceView(.{
-            .io = io,
-            .allocator = std.heap.page_allocator,
-            .compiled = compiled,
-            .profile = .{
-                .include_tmp = compiledIncludesClassicTmp(compiled),
-                .network_proxy_port = if (route_forcing) |route| route.proxy_port else null,
-                .require_network_route_forcing = route_forcing != null,
-            },
-            .argv = argv,
-            .environment = constructed_env,
-            .cwd = target_cwd,
-            .stdio = switch (stdio) {
-                .inherit => .inherit,
-                .ignore => .ignore,
-            },
-        }) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.Unsupported => return error.Unsupported,
-            error.ForkFailed => return error.ForkFailed,
-            else => return error.ApplyFailed,
-        };
-        return .{
-            .pid = spawned.agent_bootstrap_pid,
-            .allocator = std.heap.page_allocator,
-            .workspace_view_daemon_pid = spawned.daemon_pid,
-        };
+        return forkApplyWorkspaceViewAndExec(io, compiled, route_forcing, include_tmp, argv, env_map, cwd, stdio);
     }
     return forkApplyAndExecLandlock(compiled, route_forcing, argv, env_map, cwd, stdio);
 }
 
-fn compiledIncludesClassicTmp(compiled: *const profile.CompiledProfile) bool {
-    for (compiled.grants) |grant| {
-        if (grant.mode == .rw and profile.isClassicTmpPath(grant.path)) return true;
-    }
-    return false;
+/// Explicit protect-on entry: sealed FUSE workspace view + Landlock in bootstrap.
+fn forkApplyWorkspaceViewAndExec(
+    io: std.Io,
+    compiled: *const profile.CompiledProfile,
+    route_forcing: ?landlock.RouteForcing,
+    include_tmp: bool,
+    argv: []const []const u8,
+    env_map: ?*const std.process.Environ.Map,
+    cwd: ?[]const u8,
+    stdio: StdioBehavior,
+) SpawnError!SpawnLease {
+    const constructed_env = env_map orelse return error.ApplyFailed;
+    const target_cwd = cwd orelse compiled.workspace_root;
+    const spawned = linux_workspace_view_spawn.spawnWorkspaceView(.{
+        .io = io,
+        .allocator = std.heap.page_allocator,
+        .compiled = compiled,
+        .profile = .{
+            // Use the original compile option, not grant inference (workspace=/tmp trap).
+            .include_tmp = include_tmp,
+            .network_proxy_port = if (route_forcing) |route| route.proxy_port else null,
+            .require_network_route_forcing = route_forcing != null,
+        },
+        .argv = argv,
+        .environment = constructed_env,
+        .cwd = target_cwd,
+        .stdio = switch (stdio) {
+            .inherit => .inherit,
+            .ignore => .ignore,
+        },
+    }) catch |err| return mapWorkspaceViewSpawnError(err);
+    return .{
+        .pid = spawned.agent_bootstrap_pid,
+        .allocator = std.heap.page_allocator,
+        .workspace_view_daemon_pid = spawned.daemon_pid,
+    };
+}
+
+fn mapWorkspaceViewSpawnError(err: anyerror) SpawnError {
+    return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.Unsupported => error.Unsupported,
+        error.ForkFailed => error.ForkFailed,
+        error.ProfileHashMismatch => error.ProfileHashMismatch,
+        error.Timeout, error.HandshakeTimeout => error.HandshakeTimeout,
+        error.FuseDeviceUnavailable => error.FuseDeviceUnavailable,
+        error.ProfileRebuildFailed => error.ProfileRebuildFailed,
+        else => error.ApplyFailed,
+    };
 }
 
 /// Fork, apply Seatbelt SBPL in the child, chdir, preflight, scrub FDs (keep
@@ -753,6 +781,7 @@ test "forkApplyLandlockAndExec is unsupported off Linux" {
             .hash_hex = .{'0'} ** 64,
         },
         null,
+        false,
         &[_][]const u8{"/bin/true"},
         null,
         null,
@@ -795,6 +824,7 @@ test "forkApplyLandlockAndExec applies then execs on Linux with handshake" {
         io,
         &compiled,
         null,
+        false,
         &[_][]const u8{true_path},
         null,
         ws_root,
@@ -838,6 +868,7 @@ test "forkApplyLandlockAndExec fails handshake on bad chdir" {
         io,
         &compiled,
         null,
+        false,
         &[_][]const u8{true_path},
         null,
         "/no/such/orca/cwd/for/handshake/test",
@@ -1050,6 +1081,7 @@ test "preflight fail does not write status_ok (missing exec target)" {
         io,
         &compiled,
         null,
+        false,
         &[_][]const u8{"/no/such/orca/exec/target/for/preflight"},
         null,
         ws_root,
@@ -1132,6 +1164,7 @@ test "planted non-kept FD is closed after successful handshake" {
         io,
         &compiled,
         null,
+        false,
         &[_][]const u8{ sh_path, "-c", check_closed },
         null,
         ws_root,
@@ -1203,6 +1236,7 @@ test "protect-on landlock spawn fails closed without env map (no unprotected fal
         std.testing.io,
         &compiled,
         null,
+        false,
         &[_][]const u8{"/bin/true"},
         null,
         root,

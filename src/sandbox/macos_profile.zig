@@ -489,7 +489,22 @@ fn walkCollectFileIds(
                     .secret_name = secret_name,
                 });
             },
-            else => {},
+            // Fail closed on unclassified kinds (.unknown, sockets, …): skipping
+            // would miss a hardlink alias of a secret-form inode reported oddly.
+            else => {
+                const id = (try fileIdForPath(io, child_path)) orelse return error.ScanOpenFailed;
+                const secret_name = profile.isWorkspaceSecretPath(entry.name);
+                if (secret_name) {
+                    try secret_ids.put(id, {});
+                }
+                const owned = try allocator.dupe(u8, child_path);
+                errdefer allocator.free(owned);
+                try entries.append(allocator, .{
+                    .path = owned,
+                    .id = id,
+                    .secret_name = secret_name,
+                });
+            },
         }
     }
 }

@@ -84,7 +84,7 @@ pub fn applyForRun(
 /// True when `err` is a sandbox child-apply/spawn failure that must not look like a
 /// generic command launch issue.
 pub fn isSandboxSpawnFailure(err: anyerror) bool {
-    return err == error.ApplyFailed or err == error.ForkFailed or err == error.Unsupported or err == error.ExecFailed;
+    return err == error.ApplyFailed or err == error.ForkFailed or err == error.Unsupported or err == error.ExecFailed or err == error.ProfileHashMismatch or err == error.HandshakeTimeout or err == error.FuseDeviceUnavailable or err == error.ProfileRebuildFailed;
 }
 
 /// Operator-facing reason for a failed sandboxed spawn.
@@ -94,6 +94,10 @@ pub fn sandboxSpawnFailReason(err: anyerror) []const u8 {
         error.ForkFailed => "sandbox_fork_failed",
         error.Unsupported => "sandbox_backend_unsupported",
         error.ExecFailed => "sandbox_exec_failed",
+        error.ProfileHashMismatch => "profile_hash_mismatch",
+        error.HandshakeTimeout => "handshake_timeout",
+        error.FuseDeviceUnavailable => "fuse_device_unavailable",
+        error.ProfileRebuildFailed => "profile_rebuild_failed",
         else => "sandbox_spawn_failed",
     };
 }
@@ -200,6 +204,8 @@ test "isSandboxSpawnFailure classifies ApplyFailed ForkFailed Unsupported ExecFa
     try std.testing.expect(isSandboxSpawnFailure(error.ForkFailed));
     try std.testing.expect(isSandboxSpawnFailure(error.Unsupported));
     try std.testing.expect(isSandboxSpawnFailure(error.ExecFailed));
+    try std.testing.expect(isSandboxSpawnFailure(error.ProfileHashMismatch));
+    try std.testing.expect(isSandboxSpawnFailure(error.HandshakeTimeout));
     try std.testing.expect(!isSandboxSpawnFailure(error.FileNotFound));
 }
 
@@ -208,6 +214,10 @@ test "sandboxSpawnFailReason maps classified spawn errors" {
     try std.testing.expectEqualStrings("sandbox_fork_failed", sandboxSpawnFailReason(error.ForkFailed));
     try std.testing.expectEqualStrings("sandbox_backend_unsupported", sandboxSpawnFailReason(error.Unsupported));
     try std.testing.expectEqualStrings("sandbox_exec_failed", sandboxSpawnFailReason(error.ExecFailed));
+    try std.testing.expectEqualStrings("profile_hash_mismatch", sandboxSpawnFailReason(error.ProfileHashMismatch));
+    try std.testing.expectEqualStrings("handshake_timeout", sandboxSpawnFailReason(error.HandshakeTimeout));
+    try std.testing.expectEqualStrings("fuse_device_unavailable", sandboxSpawnFailReason(error.FuseDeviceUnavailable));
+    try std.testing.expectEqualStrings("profile_rebuild_failed", sandboxSpawnFailReason(error.ProfileRebuildFailed));
     // Unrelated errors fall through to a generic reason (not classified true above).
     try std.testing.expectEqualStrings("sandbox_spawn_failed", sandboxSpawnFailReason(error.FileNotFound));
 }

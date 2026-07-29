@@ -551,16 +551,11 @@ pub fn isWorkspaceSecretPath(path: []const u8) bool {
     return isWorkspaceSecretBasename(std.fs.path.basename(path));
 }
 
-/// Pure simulator of the Seatbelt deny regex + template `require-not` for a
-/// basename. Must stay identical to `isWorkspaceSecretBasename` — enforced by
-/// dual-path tests. Used so Mac SBPL intent is proven without running sandbox_init.
+/// Alias of `isWorkspaceSecretBasename` for call sites that document SBPL intent.
+/// SBPL emission uses `appendWorkspaceSecretSbplRegexPredicates` (shared fragments);
+/// live denial is proven by process canaries, not a second pure simulator.
 pub fn sbplWouldDenyWorkspaceSecretBasename(name: []const u8) bool {
-    // Form regex: `/[.]env($|/|[.][^/]*($|/))` on a path ending with `/name` or `name`.
-    // On a bare basename: match `.env` or `.env.` + non-slash run.
-    if (!isWorkspaceSecretFormShape(name)) return false;
-    // require-not: `/[.]env[.](alt)$` for exact safe templates.
-    if (isWorkspaceSecretSafeTemplateName(name)) return false;
-    return true;
+    return isWorkspaceSecretBasename(name);
 }
 
 /// Append the SBPL regex predicates for protect-on secret deny (form match +
@@ -585,7 +580,7 @@ pub fn appendWorkspaceSecretSbplRegexPredicates(
 pub fn hasWorkspaceSecretComponent(path: []const u8) bool {
     var components = std.mem.splitScalar(u8, path, '/');
     while (components.next()) |component| {
-        if (component.len != 0 and isWorkspaceSecretPath(component)) return true;
+        if (component.len != 0 and isWorkspaceSecretBasename(component)) return true;
     }
     return false;
 }
