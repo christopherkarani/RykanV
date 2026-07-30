@@ -617,37 +617,14 @@ test "launch allowlist keeps TLS trust and strips SSH_AUTH_SOCK" {
     try std.testing.expect(!isLaunchAllowlisted("SSH_AUTH_SOCK"));
 }
 
-test "shouldRetainLaunchEnv rejects untrusted secret reference shapes" {
-    const rejected = [_]struct {
-        name: []const u8,
-        value: []const u8,
-    }{
-        .{ .name = "SMUGGLE", .value = "orca-secret://" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://evil/env/SMUGGLE/deadbeef" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://x/SMUGGLED_RAW" },
-        .{ .name = "SMUGGLE2", .value = "orca-secret://local-dummy/env/FAKE/aaaaaaaa" },
-        .{ .name = "TOKEN", .value = "orca-secret://local-dummy/env/MYTOKEN/deadbeef" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/abcdef0" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/abcdef012" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/DEADBEEF" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/ghijklmn" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/deadbeef/extra" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/deadbeef?query" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/deadbeef#fragment" },
-    };
-
-    for (rejected) |case| {
-        try std.testing.expect(!shouldRetainLaunchEnv(case.name, case.value));
-    }
-}
-
-test "shouldRetainLaunchEnv is allowlist-only (no local-dummy retention)" {
+test "shouldRetainLaunchEnv is allowlist-only (value shape ignored)" {
+    // Retention is allowlist + optional mint table only; untrusted keys reject
+    // regardless of orca-secret:// value shape (no local-dummy matrix).
     try std.testing.expect(!shouldRetainLaunchEnv(
         "GITHUB_TOKEN",
         "orca-secret://local-dummy/env/GITHUB_TOKEN/d1c2f8b4",
     ));
+    try std.testing.expect(!shouldRetainLaunchEnv("SMUGGLE", "orca-secret://evil/env/X/deadbeef"));
     try std.testing.expect(shouldRetainLaunchEnv("PATH", "orca-secret://evil"));
     try std.testing.expect(!shouldRetainLaunchEnv("OPENAI_API_KEY", "sk-raw-synthetic"));
 }

@@ -112,13 +112,15 @@ ryk codex
 Use `ryk run --secretless -- <command>` to apply the same boundary to a custom command.
 
 In this mode:
-- The child env is **public host keys only** (PATH, locale, display, proxy surface, etc.) — secret-like names and values are not passed through
+- The child env is **public host keys only** from the launch exact allowlist (PATH, HOME, TERM, display, selected proxy/TLS trust keys, etc.) — secret-like names and values are not passed through. Prefix families such as `LC_*` / `XDG_*` are **not** automatically retained unless listed exactly
 - Granted `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` values are replaced with session-minted `orca-secret://session/...` phantoms; free-form references are rejected
 - A ryk-owned loopback provider gateway sets `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` and swaps an exact phantom for raw bytes only on the fixed provider upstream
-- There is **no** `orca-secret://local-dummy/...` substitution
+- There is **no** `orca-secret://local-dummy/...` substitution into the child env
 - Raw secret values are never written to policy, audit, or replay artifacts
 - An **active OS sandbox is required** (`--os-sandbox off` is rejected; `auto` promotes to required on)
 - When OS attach succeeds, workspace `.env` / `.env.*` secret forms are denied at the OS layer (exact safe templates `.env.example` / `.env.sample` / `.env.template` remain readable)
+  - **macOS:** basename path-regex deny plus a prepare-time multi-nlink path deny for non-secret names under the workspace (covers outside secret-form inodes hardlinked in under ordinary names). No runtime inode taint after `sandbox_init` (single-writer residual)
+  - **Linux protect-on:** FUSE workspace view hides secret basenames and multi-nlink regulars lazily on lookup/open/readdir
 
 **Day-1 agent readiness (read carefully):**
 

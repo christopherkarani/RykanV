@@ -527,9 +527,9 @@ pub fn isWorkspaceSecretSafeTemplateName(name: []const u8) bool {
 }
 
 /// True when a path component matches the secret-form *shape* (exact `.env` or
-/// starts with `.env.`), before template allowlist. Shared by Zig classify and
-/// the pure SBPL-intent simulator. Aligns with SBPL `workspace_secret_form_sbpl_regex`
-/// (`[^/]*` may be empty after `.env.`).
+/// starts with `.env.`), before template allowlist. Canonical for Zig classify;
+/// SBPL emission embeds `workspace_secret_form_sbpl_regex` (keep hand-maintained
+/// regex aligned — live denial is process-canary proven).
 pub fn isWorkspaceSecretFormShape(name: []const u8) bool {
     if (std.mem.eql(u8, name, ".env")) return true;
     if (std.mem.startsWith(u8, name, ".env.")) return true;
@@ -549,13 +549,6 @@ pub fn isWorkspaceSecretBasename(name: []const u8) bool {
 /// The caller is responsible for scoping the path to the workspace grant.
 pub fn isWorkspaceSecretPath(path: []const u8) bool {
     return isWorkspaceSecretBasename(std.fs.path.basename(path));
-}
-
-/// Alias of `isWorkspaceSecretBasename` for call sites that document SBPL intent.
-/// SBPL emission uses `appendWorkspaceSecretSbplRegexPredicates` (shared fragments);
-/// live denial is proven by process canaries, not a second pure simulator.
-pub fn sbplWouldDenyWorkspaceSecretBasename(name: []const u8) bool {
-    return isWorkspaceSecretBasename(name);
 }
 
 /// Append the SBPL regex predicates for protect-on secret deny (form match +

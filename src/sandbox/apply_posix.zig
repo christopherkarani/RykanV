@@ -47,6 +47,18 @@ pub const SpawnError = error{
     FuseDeviceUnavailable,
     /// Workspace-view bootstrap: profile recompile failed.
     ProfileRebuildFailed,
+    /// Workspace-view: FUSE mount / daemon / init failures (distinct from generic ApplyFailed).
+    FuseMountFailed,
+    FuseDaemonStartFailed,
+    FuseInitFailed,
+    /// Workspace-view: namespace / Landlock / capability / mount-verify bootstrap.
+    NamespaceSetupFailed,
+    LandlockUnavailable,
+    LandlockAttachFailed,
+    CapabilityLockdownFailed,
+    MountVerificationFailed,
+    /// Parent sealed more `.exec` grants than the wire limit.
+    TooManyExecPaths,
 };
 
 /// Match core.process.StdioBehavior without importing core (module boundary).
@@ -230,6 +242,15 @@ fn mapWorkspaceViewSpawnError(err: anyerror) SpawnError {
         error.Timeout, error.HandshakeTimeout => error.HandshakeTimeout,
         error.FuseDeviceUnavailable => error.FuseDeviceUnavailable,
         error.ProfileRebuildFailed => error.ProfileRebuildFailed,
+        error.FuseMountFailed => error.FuseMountFailed,
+        error.FuseDaemonStartFailed => error.FuseDaemonStartFailed,
+        error.FuseInitFailed => error.FuseInitFailed,
+        error.NamespaceSetupFailed => error.NamespaceSetupFailed,
+        error.LandlockUnavailable => error.LandlockUnavailable,
+        error.LandlockAttachFailed => error.LandlockAttachFailed,
+        error.CapabilityLockdownFailed => error.CapabilityLockdownFailed,
+        error.MountVerificationFailed => error.MountVerificationFailed,
+        error.TooManyExecPaths => error.TooManyExecPaths,
         else => error.ApplyFailed,
     };
 }

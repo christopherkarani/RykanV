@@ -88,7 +88,27 @@ pub fn applyForRun(
 /// True when `err` is a sandbox child-apply/spawn failure that must not look like a
 /// generic command launch issue.
 pub fn isSandboxSpawnFailure(err: anyerror) bool {
-    return err == error.ApplyFailed or err == error.ForkFailed or err == error.Unsupported or err == error.ExecFailed or err == error.ProfileHashMismatch or err == error.HandshakeTimeout or err == error.FuseDeviceUnavailable or err == error.ProfileRebuildFailed;
+    return switch (err) {
+        error.ApplyFailed,
+        error.ForkFailed,
+        error.Unsupported,
+        error.ExecFailed,
+        error.ProfileHashMismatch,
+        error.HandshakeTimeout,
+        error.FuseDeviceUnavailable,
+        error.ProfileRebuildFailed,
+        error.FuseMountFailed,
+        error.FuseDaemonStartFailed,
+        error.FuseInitFailed,
+        error.NamespaceSetupFailed,
+        error.LandlockUnavailable,
+        error.LandlockAttachFailed,
+        error.CapabilityLockdownFailed,
+        error.MountVerificationFailed,
+        error.TooManyExecPaths,
+        => true,
+        else => false,
+    };
 }
 
 /// Operator-facing reason for a failed sandboxed spawn.
@@ -102,6 +122,15 @@ pub fn sandboxSpawnFailReason(err: anyerror) []const u8 {
         error.HandshakeTimeout => "handshake_timeout",
         error.FuseDeviceUnavailable => "fuse_device_unavailable",
         error.ProfileRebuildFailed => "profile_rebuild_failed",
+        error.FuseMountFailed => "fuse_mount_failed",
+        error.FuseDaemonStartFailed => "fuse_daemon_start_failed",
+        error.FuseInitFailed => "fuse_init_failed",
+        error.NamespaceSetupFailed => "namespace_setup_failed",
+        error.LandlockUnavailable => "landlock_unavailable",
+        error.LandlockAttachFailed => "landlock_attach_failed",
+        error.CapabilityLockdownFailed => "capability_lockdown_failed",
+        error.MountVerificationFailed => "mount_verification_failed",
+        error.TooManyExecPaths => "too_many_exec_paths",
         else => "sandbox_spawn_failed",
     };
 }
@@ -228,6 +257,9 @@ test "isSandboxSpawnFailure classifies ApplyFailed ForkFailed Unsupported ExecFa
     try std.testing.expect(isSandboxSpawnFailure(error.ExecFailed));
     try std.testing.expect(isSandboxSpawnFailure(error.ProfileHashMismatch));
     try std.testing.expect(isSandboxSpawnFailure(error.HandshakeTimeout));
+    try std.testing.expect(isSandboxSpawnFailure(error.FuseMountFailed));
+    try std.testing.expect(isSandboxSpawnFailure(error.LandlockAttachFailed));
+    try std.testing.expect(isSandboxSpawnFailure(error.TooManyExecPaths));
     try std.testing.expect(!isSandboxSpawnFailure(error.FileNotFound));
 }
 
@@ -240,6 +272,9 @@ test "sandboxSpawnFailReason maps classified spawn errors" {
     try std.testing.expectEqualStrings("handshake_timeout", sandboxSpawnFailReason(error.HandshakeTimeout));
     try std.testing.expectEqualStrings("fuse_device_unavailable", sandboxSpawnFailReason(error.FuseDeviceUnavailable));
     try std.testing.expectEqualStrings("profile_rebuild_failed", sandboxSpawnFailReason(error.ProfileRebuildFailed));
+    try std.testing.expectEqualStrings("fuse_mount_failed", sandboxSpawnFailReason(error.FuseMountFailed));
+    try std.testing.expectEqualStrings("landlock_attach_failed", sandboxSpawnFailReason(error.LandlockAttachFailed));
+    try std.testing.expectEqualStrings("too_many_exec_paths", sandboxSpawnFailReason(error.TooManyExecPaths));
     // Unrelated errors fall through to a generic reason (not classified true above).
     try std.testing.expectEqualStrings("sandbox_spawn_failed", sandboxSpawnFailReason(error.FileNotFound));
 }

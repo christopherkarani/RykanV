@@ -127,8 +127,8 @@ fn runLinux(allocator: std.mem.Allocator, fds: BootstrapFds) !void {
     applyBootstrapStdio(request.stdio) catch return response.fail(.stdio_setup_failed);
 
     // Rebuild with the same CompileOptions the parent hashed (including launch
-    // .exec grants). Hard-coding protect-on is intentional: this bootstrap is
-    // only used for secret-boundary protect-on; still honor request flag when set.
+    // .exec grants). Protect-on is required by the wire protocol; the rebuild
+    // mirrors sealed options including the request flag and profile hash check.
     var compiled = profile.compileProfile(allocator, .{
         .workspace_root = request.workspace_root,
         .control_roots = request.profile.control_roots,
