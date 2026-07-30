@@ -29,6 +29,8 @@ pub fn applyForRun(
     mode: sandbox.posture.OsSandboxMode,
     workspace_root: []const u8,
     env_map: *std.process.Environ.Map,
+    minted_env_lookup: ?sandbox.env_scrub.MintedEnvLookup,
+    with_host_secrets: bool,
     network_proxy_port: ?u16,
     require_network_route_forcing: bool,
     seatbelt_profile: sandbox.posture.SeatbeltProfileGrade,
@@ -50,6 +52,8 @@ pub fn applyForRun(
         .mode = mode,
         .workspace_root = workspace_root,
         .env_map = env_map,
+        .minted_env_lookup = minted_env_lookup,
+        .with_host_secrets = with_host_secrets,
         .launch_exec_paths = launch_exec_paths,
         .network_proxy_port = network_proxy_port,
         .require_network_route_forcing = require_network_route_forcing,
@@ -84,7 +88,27 @@ pub fn applyForRun(
 /// True when `err` is a sandbox child-apply/spawn failure that must not look like a
 /// generic command launch issue.
 pub fn isSandboxSpawnFailure(err: anyerror) bool {
-    return err == error.ApplyFailed or err == error.ForkFailed or err == error.Unsupported or err == error.ExecFailed or err == error.ProfileHashMismatch or err == error.HandshakeTimeout or err == error.FuseDeviceUnavailable or err == error.ProfileRebuildFailed;
+    return switch (err) {
+        error.ApplyFailed,
+        error.ForkFailed,
+        error.Unsupported,
+        error.ExecFailed,
+        error.ProfileHashMismatch,
+        error.HandshakeTimeout,
+        error.FuseDeviceUnavailable,
+        error.ProfileRebuildFailed,
+        error.FuseMountFailed,
+        error.FuseDaemonStartFailed,
+        error.FuseInitFailed,
+        error.NamespaceSetupFailed,
+        error.LandlockUnavailable,
+        error.LandlockAttachFailed,
+        error.CapabilityLockdownFailed,
+        error.MountVerificationFailed,
+        error.TooManyExecPaths,
+        => true,
+        else => false,
+    };
 }
 
 /// Operator-facing reason for a failed sandboxed spawn.
@@ -98,6 +122,15 @@ pub fn sandboxSpawnFailReason(err: anyerror) []const u8 {
         error.HandshakeTimeout => "handshake_timeout",
         error.FuseDeviceUnavailable => "fuse_device_unavailable",
         error.ProfileRebuildFailed => "profile_rebuild_failed",
+        error.FuseMountFailed => "fuse_mount_failed",
+        error.FuseDaemonStartFailed => "fuse_daemon_start_failed",
+        error.FuseInitFailed => "fuse_init_failed",
+        error.NamespaceSetupFailed => "namespace_setup_failed",
+        error.LandlockUnavailable => "landlock_unavailable",
+        error.LandlockAttachFailed => "landlock_attach_failed",
+        error.CapabilityLockdownFailed => "capability_lockdown_failed",
+        error.MountVerificationFailed => "mount_verification_failed",
+        error.TooManyExecPaths => "too_many_exec_paths",
         else => "sandbox_spawn_failed",
     };
 }
@@ -187,9 +220,27 @@ pub fn auditSandboxPosture(
 }
 
 /// Format mechanism-neutral OS sandbox banner line for session start.
-pub fn formatOsSandboxBannerLine(buf: []u8, receipt: sandbox.posture.AttachReceipt) []const u8 {
+pub fn formatOsSandboxBannerLine(
+    buf: []u8,
+    receipt: sandbox.posture.AttachReceipt,
+    with_host_secrets: bool,
+) []const u8 {
     // Thin wrapper: on format overflow, keep the receipt posture tag only.
     // Never invent "unavailable" for an active/disabled/failed receipt.
+    if (with_host_secrets and receipt.posture == .active) {
+        return if (receipt.seatbelt_profile) |grade|
+            std.fmt.bufPrint(
+                buf,
+                "OS sandbox: active (filesystem: {s}; network: {s}; seatbelt_profile={s}; credentials: host environment retained (explicit escape); tools: wrapper-mediated)",
+                .{ receipt.fs_scope, receipt.network_scope, grade.toString() },
+            ) catch "OS sandbox: active (credentials: host environment retained; explicit escape)"
+        else
+            std.fmt.bufPrint(
+                buf,
+                "OS sandbox: active (filesystem: {s}; network: {s}; credentials: host environment retained (explicit escape); tools: wrapper-mediated)",
+                .{ receipt.fs_scope, receipt.network_scope },
+            ) catch "OS sandbox: active (credentials: host environment retained; explicit escape)";
+    }
     return sandbox.posture.formatSessionBanner(buf, receipt) catch switch (receipt.posture) {
         .active => "OS sandbox: active",
         .prepared => "OS sandbox: prepared",
@@ -206,6 +257,9 @@ test "isSandboxSpawnFailure classifies ApplyFailed ForkFailed Unsupported ExecFa
     try std.testing.expect(isSandboxSpawnFailure(error.ExecFailed));
     try std.testing.expect(isSandboxSpawnFailure(error.ProfileHashMismatch));
     try std.testing.expect(isSandboxSpawnFailure(error.HandshakeTimeout));
+    try std.testing.expect(isSandboxSpawnFailure(error.FuseMountFailed));
+    try std.testing.expect(isSandboxSpawnFailure(error.LandlockAttachFailed));
+    try std.testing.expect(isSandboxSpawnFailure(error.TooManyExecPaths));
     try std.testing.expect(!isSandboxSpawnFailure(error.FileNotFound));
 }
 
@@ -218,6 +272,9 @@ test "sandboxSpawnFailReason maps classified spawn errors" {
     try std.testing.expectEqualStrings("handshake_timeout", sandboxSpawnFailReason(error.HandshakeTimeout));
     try std.testing.expectEqualStrings("fuse_device_unavailable", sandboxSpawnFailReason(error.FuseDeviceUnavailable));
     try std.testing.expectEqualStrings("profile_rebuild_failed", sandboxSpawnFailReason(error.ProfileRebuildFailed));
+    try std.testing.expectEqualStrings("fuse_mount_failed", sandboxSpawnFailReason(error.FuseMountFailed));
+    try std.testing.expectEqualStrings("landlock_attach_failed", sandboxSpawnFailReason(error.LandlockAttachFailed));
+    try std.testing.expectEqualStrings("too_many_exec_paths", sandboxSpawnFailReason(error.TooManyExecPaths));
     // Unrelated errors fall through to a generic reason (not classified true above).
     try std.testing.expectEqualStrings("sandbox_spawn_failed", sandboxSpawnFailReason(error.FileNotFound));
 }
@@ -231,10 +288,23 @@ test "formatOsSandboxBannerLine does not invent unavailable for active on format
         "workspace child RW, root RO, system RO, platform tmp RW, no home",
     );
     try std.testing.expect(active.posture == .active);
-    const line = formatOsSandboxBannerLine(&tiny, active);
+    const line = formatOsSandboxBannerLine(&tiny, active, false);
     try std.testing.expect(std.mem.indexOf(u8, line, "unavailable") == null);
     try std.testing.expect(std.mem.indexOf(u8, line, "active") != null);
     try std.testing.expect(std.mem.startsWith(u8, line, "OS sandbox:"));
+}
+
+test "formatOsSandboxBannerLine attests explicit host-secret escape" {
+    var buf: [512]u8 = undefined;
+    const active = try sandbox.posture.activeReceipt(
+        .landlock,
+        "abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123",
+        "workspace child RW, root RO, system RO, no home",
+    );
+    const line = formatOsSandboxBannerLine(&buf, active, true);
+    try std.testing.expect(std.mem.indexOf(u8, line, "host environment retained") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line, "explicit escape") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line, "secrets stripped") == null);
 }
 
 test "warnAutoDegrade is silent for disabled posture (mode off materials)" {

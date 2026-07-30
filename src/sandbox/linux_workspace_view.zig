@@ -18,16 +18,16 @@ const errno_proto: u16 = 71;
 const errno_opnotsupp: u16 = 95;
 
 const o_access_mode: u32 = 0x3;
-const o_readonly: u32 = 0;
-const o_readwrite: u32 = 2;
-const o_create: u32 = 0x40;
-const o_exclusive: u32 = 0x80;
-const o_truncate: u32 = 0x200;
-const o_directory: u32 = 0x10000;
-const o_nofollow: u32 = 0x20000;
-const o_cloexec: u32 = 0x80000;
-const o_path: u32 = 0x200000;
-const o_tmpfile_bit: u32 = 0x400000;
+const o_readonly: u32 = @bitCast(std.os.linux.O{ .ACCMODE = .RDONLY });
+const o_readwrite: u32 = @bitCast(std.os.linux.O{ .ACCMODE = .RDWR });
+const o_create: u32 = @bitCast(std.os.linux.O{ .CREAT = true });
+const o_exclusive: u32 = @bitCast(std.os.linux.O{ .EXCL = true });
+const o_truncate: u32 = @bitCast(std.os.linux.O{ .TRUNC = true });
+const o_directory: u32 = @bitCast(std.os.linux.O{ .DIRECTORY = true });
+const o_nofollow: u32 = @bitCast(std.os.linux.O{ .NOFOLLOW = true });
+const o_cloexec: u32 = @bitCast(std.os.linux.O{ .CLOEXEC = true });
+const o_path: u32 = @bitCast(std.os.linux.O{ .PATH = true });
+const o_tmpfile_bit: u32 = @bitCast(std.os.linux.O{ .TMPFILE = true });
 
 const mode_type_mask: u32 = 0o170000;
 const mode_fifo: u32 = 0o010000;
@@ -1614,6 +1614,15 @@ pub const DaemonState = struct {
 
 /// Runs one raw-FUSE daemon until `DESTROY`, EOF, or a fatal protocol/I/O error.
 /// Takes ownership of `fuse_fd` and `backing_root_fd`.
+///
+/// **No full-tree pre-ready taint scan:** handshake must not wait on walking up
+/// to `max_scan_entries` / depth before FUSE INIT ready. Name policy hides
+/// secret basenames; multi-nlink regulars are tainted lazily in
+/// `shouldHideIdentity` on lookup/open/readdir. Under the single-writer model
+/// this covers agent-visible secret aliases without blocking the parent
+/// handshake; concurrent host renames of single-link secrets after ready remain
+/// an accepted multi-writer residual (document, do not claim full pre-scan
+/// equivalence).
 pub fn serve(
     allocator: std.mem.Allocator,
     fuse_fd: i32,
@@ -1629,7 +1638,6 @@ pub fn serve(
         return err;
     };
     defer state.deinit();
-    try state.scanTaintedTree();
 
     const request_buffer = try allocator.alloc(u8, limits.max_request_bytes);
     defer allocator.free(request_buffer);
@@ -2339,7 +2347,7 @@ fn scanDirectoryWork(
             const identity = identityFromStat(child_stat);
             const protected = work.taint_all or profile.isWorkspaceSecretPath(entry.name);
 
-            if (protected or nodeKind(child_stat.mode) == .file and child_stat.nlink > 1) {
+            if (protected or (nodeKind(child_stat.mode) == .file and child_stat.nlink > 1)) {
                 try state.tables.markTainted(identity);
             }
             if (nodeKind(child_stat.mode) == .directory) {
@@ -2700,6 +2708,52 @@ test "Linux daemon dispatch surface compiles through the real handler table" {
     state.tables.deinit();
 }
 
+test "Linux lazy taint hides multi-nlink alias without pre-scan" {
+    // Production serve() no longer pre-scans; prove shouldHideIdentity alone
+    // hides secret hardlink aliases (nlink > 1) and secret basenames (name policy).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "safe.txt", .data = "safe-data" });
+    try tmp.dir.writeFile(io, .{ .sub_path = ".env", .data = "SYNTHETIC_SECRET_CANARY" });
+    const link_result = std.os.linux.linkat(tmp.dir.handle, ".env", tmp.dir.handle, "secret-alias", 0);
+    try std.testing.expectEqual(@as(?u16, null), errnoFromResult(link_result));
+
+    const root_dup = try linuxDup(tmp.dir.handle);
+    errdefer linuxClose(root_dup);
+    const fuse_dup = try linuxDup(tmp.dir.handle);
+    var state = try DaemonState.init(std.testing.allocator, fuse_dup, root_dup, .{
+        .max_nodes = 16,
+        .max_file_handles = 8,
+        .max_dir_handles = 4,
+        .max_tainted_identities = 16,
+        .max_scan_entries = 32,
+    });
+    defer state.deinit();
+    // Intentionally no scanTaintedTree() — production serve path.
+    state.initialized = true;
+
+    var output: [256]u8 = undefined;
+    for ([_][]const u8{ "safe.txt\x00", ".env\x00", "secret-alias\x00" }) |body| {
+        const result = try state.dispatch(.{
+            .header = testRequestHeader(.lookup, uapi.root_id),
+            .opcode = .lookup,
+            .body = body,
+        }, &output);
+        const reply = switch (result) {
+            .reply => |r| r,
+            else => return error.UnexpectedDispatchResult,
+        };
+        const err_code = std.mem.bytesToValue(uapi.OutHeader, reply).err;
+        if (std.mem.eql(u8, body, "safe.txt\x00")) {
+            try std.testing.expectEqual(@as(i32, 0), err_code);
+        } else {
+            try std.testing.expectEqual(-@as(i32, uapi.errno_noent), err_code);
+        }
+    }
+}
+
 test "Linux backing dispatcher reads safe files and hides secret hardlink aliases" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const io = std.testing.io;
@@ -2930,6 +2984,23 @@ test "Linux backing dispatcher reads safe files and hides secret hardlink aliase
         .reply => |reply| std.mem.bytesToValue(uapi.OutHeader, reply).err,
         else => return error.UnexpectedDispatchResult,
     });
+}
+
+test "Linux pinned directory reopens as a readable data descriptor" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const stat = linuxStatFd(tmp.dir.handle) orelse return error.UnexpectedStatFailure;
+    const reopened = linuxOpenDataNode(
+        tmp.dir.handle,
+        o_readonly | o_directory,
+        identityFromStat(stat),
+    );
+    switch (reopened) {
+        .fd => |fd| linuxClose(fd),
+        .errno => |errno| try std.testing.expectEqual(@as(u16, 0), errno),
+    }
 }
 
 test "Linux startup scan rejects excessive depth without recursive stack growth" {

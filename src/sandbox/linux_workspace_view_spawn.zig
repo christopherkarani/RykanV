@@ -26,14 +26,18 @@ pub const ProfileInputs = struct {
 
 /// Collect absolute `.exec` grant paths from a parent-compiled profile so the
 /// bootstrap rebuild can seal the same launch grants into the wire request.
+///
+/// Errors with `error.TooManyExecPaths` when the profile has more `.exec` grants
+/// than `buffer.len` (must match `ipc.Limits.max_exec_paths`) so overflow is not
+/// silently truncated into a later `ProfileHashMismatch`.
 pub fn execPathsFromCompiled(
     compiled: *const profile_mod.CompiledProfile,
     buffer: [][]const u8,
-) []const []const u8 {
+) error{TooManyExecPaths}![]const []const u8 {
     var count: usize = 0;
     for (compiled.grants) |grant| {
         if (grant.mode != .exec) continue;
-        if (count >= buffer.len) break;
+        if (count >= buffer.len) return error.TooManyExecPaths;
         buffer[count] = grant.path;
         count += 1;
     }
@@ -113,9 +117,9 @@ fn spawnWithOperations(request: LaunchRequest, operations: Operations) !SpawnedW
     std.crypto.hash.sha2.Sha256.hash(request.compiled.canonical_bytes, &profile_hash, .{});
 
     // Seal parent `.exec` grants so bootstrap rebuild matches expected_profile_hash.
-    // Cap matches ipc.Limits.max_exec_paths (64).
+    // Cap matches default ipc.Limits.max_exec_paths (64).
     var exec_path_buf: [64][]const u8 = undefined;
-    const exec_paths = execPathsFromCompiled(request.compiled, exec_path_buf[0..]);
+    const exec_paths = try execPathsFromCompiled(request.compiled, exec_path_buf[0..]);
 
     var frame = try ipc.encodeRequestAlloc(request.allocator, .{
         .cookie = cookie,
@@ -787,7 +791,22 @@ test "execPathsFromCompiled collects only .exec grants" {
     });
     defer compiled.deinit();
     var buf: [8][]const u8 = undefined;
-    const got = execPathsFromCompiled(&compiled, &buf);
+    const got = try execPathsFromCompiled(&compiled, &buf);
     try std.testing.expectEqual(@as(usize, 1), got.len);
     try std.testing.expectEqualStrings("/opt/agents/tool", got[0]);
+}
+
+test "execPathsFromCompiled errors when buffer cannot hold all .exec grants" {
+    const allocator = std.testing.allocator;
+    const exec_paths = [_][]const u8{ "/a", "/b", "/c" };
+    var compiled = try profile_mod.compileProfile(allocator, .{
+        .workspace_root = "/work",
+        .include_tmp = false,
+        .exec_paths = &exec_paths,
+        .protect_workspace_secrets = true,
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+    });
+    defer compiled.deinit();
+    var buf: [2][]const u8 = undefined;
+    try std.testing.expectError(error.TooManyExecPaths, execPathsFromCompiled(&compiled, &buf));
 }

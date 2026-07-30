@@ -22,7 +22,8 @@ pub fn isHostLaunchAlias(name: []const u8) bool {
 
 /// Builds argv for `run_command.command`: `["--", host] ++ rest`.
 /// Caller owns and must free the returned slice (not the pointed-to strings).
-/// Does not inject `--secretless` or network flags — Phase 2 defaults apply via bare run.
+/// Does not inject security flags: the run-level agent-primary default selects
+/// empty backpack after parsing, so flags after the host remain agent argv.
 pub fn buildRunArgv(allocator: std.mem.Allocator, host: []const u8, rest: []const []const u8) ![]const []const u8 {
     const out = try allocator.alloc([]const u8, rest.len + 2);
     out[0] = "--";
@@ -40,13 +41,14 @@ pub fn tryDispatch(
     rest: []const []const u8,
     comptime runFn: anytype,
     io: std.Io,
+    environ_map: *const std.process.Environ.Map,
     stdout: anytype,
     stderr: anytype,
 ) !?u8 {
     if (!isHostLaunchAlias(command)) return null;
     const run_argv = try buildRunArgv(allocator, command, rest);
     defer allocator.free(run_argv);
-    return try runFn(io, run_argv, stdout, stderr);
+    return try runFn(io, environ_map, run_argv, stdout, stderr);
 }
 
 test "isHostLaunchAlias exact allowlist only" {
@@ -62,7 +64,7 @@ test "isHostLaunchAlias exact allowlist only" {
     try std.testing.expect(!isHostLaunchAlias("pi2"));
 }
 
-test "buildRunArgv is equivalent to bare run -- host rest without ryk flags" {
+test "buildRunArgv delegates security defaults to run and preserves host argv" {
     const allocator = std.testing.allocator;
 
     {
@@ -118,12 +120,21 @@ test "buildRunArgv is equivalent to bare run -- host rest without ryk flags" {
 
 test "tryDispatch returns null for non-aliases and rewrites aliases" {
     const allocator = std.testing.allocator;
+    var environ_map = std.process.Environ.Map.init(allocator);
+    defer environ_map.deinit();
+    try environ_map.put("HOST_LAUNCH_ENV_CANARY", "forwarded");
 
     const null_code = try tryDispatch(allocator, "notanagent", &.{}, struct {
-        fn run(_: std.Io, _: []const []const u8, _: anytype, _: anytype) !u8 {
+        fn run(
+            _: std.Io,
+            _: *const std.process.Environ.Map,
+            _: []const []const u8,
+            _: anytype,
+            _: anytype,
+        ) !u8 {
             return error.ShouldNotRun;
         }
-    }.run, std.testing.io, {}, {});
+    }.run, std.testing.io, &environ_map, {}, {});
     try std.testing.expect(null_code == null);
 
     const Capture = struct {
@@ -132,7 +143,18 @@ test "tryDispatch returns null for non-aliases and rewrites aliases" {
         var seen1: []const u8 = "";
         var seen2: []const u8 = "";
 
-        fn run(_: std.Io, argv: []const []const u8, _: anytype, _: anytype) !u8 {
+        fn run(
+            _: std.Io,
+            environment: *const std.process.Environ.Map,
+            argv: []const []const u8,
+            _: anytype,
+            _: anytype,
+        ) !u8 {
+            if (!std.mem.eql(
+                u8,
+                environment.get("HOST_LAUNCH_ENV_CANARY") orelse "",
+                "forwarded",
+            )) return error.EnvironmentNotForwarded;
             seen_len = argv.len;
             seen0 = argv[0];
             seen1 = argv[1];
@@ -142,7 +164,16 @@ test "tryDispatch returns null for non-aliases and rewrites aliases" {
     };
     Capture.seen_len = 0;
 
-    const code = try tryDispatch(allocator, "pi", &.{"--help"}, Capture.run, std.testing.io, {}, {});
+    const code = try tryDispatch(
+        allocator,
+        "pi",
+        &.{"--help"},
+        Capture.run,
+        std.testing.io,
+        &environ_map,
+        {},
+        {},
+    );
     try std.testing.expectEqual(@as(u8, 42), code.?);
     try std.testing.expectEqual(@as(usize, 3), Capture.seen_len);
     try std.testing.expectEqualStrings("--", Capture.seen0);

@@ -100,50 +100,53 @@ Before launching the agent process, Orca filters the environment variables based
 | `ask` | Removes secret-like vars unless explicitly allowed. Prompts for risky ones. |
 | `observe` | Passes all vars through but records redactions for audit. |
 
-### Secretless Mode (empty backpack)
+### Secret Boundary (empty backpack)
 
-Run with `--secretless` for the **empty-backpack** secret boundary (breaking change from older local-dummy rewrite behavior):
+Agent-primary host launches enter the **empty-backpack** secret boundary by default:
 
 ```bash
-ryk run --secretless -- <command>
+ryk claude
+ryk codex
 ```
 
+Use `ryk run --secretless -- <command>` to apply the same boundary to a custom command.
+
 In this mode:
-- The child env is **public host keys only** (PATH, locale, display, proxy surface, etc.) — secret-like names and values are not passed through
-- There is **no** `orca-secret://local-dummy/...` substitution and no readiness rewrite warning for dummy refs
+- The child env is **public host keys only** from the launch exact allowlist (PATH, HOME, TERM, display, selected proxy/TLS trust keys, etc.) — secret-like names and values are not passed through. Prefix families such as `LC_*` / `XDG_*` are **not** automatically retained unless listed exactly
+- Granted `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` values are replaced with session-minted `orca-secret://session/...` phantoms; free-form references are rejected
+- A ryk-owned loopback provider gateway sets `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` and swaps an exact phantom for raw bytes only on the fixed provider upstream
+- There is **no** `orca-secret://local-dummy/...` substitution into the child env
 - Raw secret values are never written to policy, audit, or replay artifacts
 - An **active OS sandbox is required** (`--os-sandbox off` is rejected; `auto` promotes to required on)
 - When OS attach succeeds, workspace `.env` / `.env.*` secret forms are denied at the OS layer (exact safe templates `.env.example` / `.env.sample` / `.env.template` remain readable)
+  - **macOS:** basename path-regex deny plus a prepare-time multi-nlink path deny for non-secret names under the workspace (covers outside secret-form inodes hardlinked in under ordinary names). No runtime inode taint after `sandbox_init` (single-writer residual)
+  - **Linux protect-on:** FUSE workspace view hides secret basenames and multi-nlink regulars lazily on lookup/open/readdir
 
 **Day-1 agent readiness (read carefully):**
 
 | Fact | Detail |
 |------|--------|
-| Env contract | Public-only constructed child env — not broker substitution |
-| Claude / Pi / Codex / OpenCode | Expect real provider credentials (env API keys or host login stores). Empty backpack removes those env keys. |
-| Broker resolve APIs | `ryk credentials check` / policy `credentials.refs` resolve configured refs for **check** boundaries — they are **not** wired into secretless spawn env |
-| Network proxy | Does **not** mint or inject model API keys into agent HTTP requests |
+| Env contract | Public-only constructed child env plus exact session phantoms for granted model keys |
+| Claude / Pi / Codex / OpenCode | Host login remains preferred; Anthropic/OpenAI env-key clients that honor their base-URL variables use the loopback gateway |
+| Broker resolve APIs | `source: broker` grants resolve in the parent session store; only the minted phantom reaches the child |
+| Provider gateway | Fixed upstream hosts only; absolute-form/caller-selected destinations and unminted phantoms are denied |
+| Network proxy | CONNECT policy proxy is separate; current route-forced proxy + provider gateway combination fails closed |
 | OS sandbox | Required for empty backpack; Linux protect-on uses a FUSE workspace view + Landlock |
 
-**Not ready — do not default.** Do **not** treat `--secretless` as a safe default for day-1 agent launches that authenticate via `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`, or similar env vars. Those launches lose usable keys and typically fail with provider auth errors.
+The default applies only to the agent-primary aliases (`claude`, `codex`, `pi`, `opencode`, `openclaw`, and `hermes`). Generic `ryk run` commands remain unchanged unless `--secretless` is explicit. Unrelated raw credentials such as `GITHUB_TOKEN` remain absent inside the boundary.
 
 **Recommended day-1 agent path (usable credentials):**
 
 ```bash
-# Prefer host login / non-env credential stores when available (e.g. Claude Code login).
-# For env-based model keys, omit --secretless so the filtered child env can still carry raw keys
-# subject to policy mode (observe inherits; strict/ci strip secrets unless allowlisted).
-ryk run -- <agent-command>
+# Prefer host login / non-env credential stores when available.
+# Agent-primary aliases enter the empty backpack automatically.
+ryk claude
+
+# Loud, self-contained escape: disables empty-backpack and may expose host secrets.
+ryk run --with-host-secrets -- claude
 ```
 
-**Opt-in secretless path (leak resistance / secret-boundary demos, not model-key auth):**
-
-```bash
-ryk credentials check
-ryk run --secretless --network-backend proxy -- <command>
-```
-
-Use secretless when you intentionally want raw secret-like env **out** of the child and OS deny of workspace secret files. Expect model providers that read those env names to fail auth until a product path injects usable credentials into the agent.
+Clients using env keys must honor the injected Anthropic/OpenAI base URL. Otherwise use host login; use `--with-host-secrets` only as a visible escape.
 
 ### Redaction Records
 
@@ -167,7 +170,7 @@ Orca supports multiple credential brokers for secure secret resolution. The brok
 
 | Broker | Type | Description |
 |--------|------|-------------|
-| `local-dummy` | Reference-only | Creates `orca-secret://` references without resolving values. Used for testing and secretless mode. |
+| `local-dummy` | Reference-only | Creates non-authoritative references for legacy testing; not used by the empty-backpack provider path. |
 | `env-file-dev` | File-based | Reads from `.orca/*.env` files. Local development only. |
 | `1password-cli` | CLI integration | Resolves via `op read` command. Requires 1Password CLI. |
 | `macos-keychain` | OS integration | Resolves via `/usr/bin/security` command. macOS only. |

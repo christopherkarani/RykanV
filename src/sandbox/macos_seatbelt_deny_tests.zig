@@ -1092,7 +1092,7 @@ test "real FS deny: hardlink alias of workspace .env denied under protect" {
     try std.testing.expectEqual(.prepared, prepared.status);
     const sbpl = prepared.sbpl_z.?;
     // Prepare scan must emit an explicit deny for the alias path.
-    try std.testing.expect(std.mem.indexOf(u8, sbpl, "hardlink aliases of secret-form inodes") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "multi-nlink non-secret basenames") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "notes.txt") != null);
 
     const alias_z = try allocator.dupeZ(u8, alias_path);

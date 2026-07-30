@@ -47,6 +47,18 @@ pub const SpawnError = error{
     FuseDeviceUnavailable,
     /// Workspace-view bootstrap: profile recompile failed.
     ProfileRebuildFailed,
+    /// Workspace-view: FUSE mount / daemon / init failures (distinct from generic ApplyFailed).
+    FuseMountFailed,
+    FuseDaemonStartFailed,
+    FuseInitFailed,
+    /// Workspace-view: namespace / Landlock / capability / mount-verify bootstrap.
+    NamespaceSetupFailed,
+    LandlockUnavailable,
+    LandlockAttachFailed,
+    CapabilityLockdownFailed,
+    MountVerificationFailed,
+    /// Parent sealed more `.exec` grants than the wire limit.
+    TooManyExecPaths,
 };
 
 /// Match core.process.StdioBehavior without importing core (module boundary).
@@ -230,6 +242,15 @@ fn mapWorkspaceViewSpawnError(err: anyerror) SpawnError {
         error.Timeout, error.HandshakeTimeout => error.HandshakeTimeout,
         error.FuseDeviceUnavailable => error.FuseDeviceUnavailable,
         error.ProfileRebuildFailed => error.ProfileRebuildFailed,
+        error.FuseMountFailed => error.FuseMountFailed,
+        error.FuseDaemonStartFailed => error.FuseDaemonStartFailed,
+        error.FuseInitFailed => error.FuseInitFailed,
+        error.NamespaceSetupFailed => error.NamespaceSetupFailed,
+        error.LandlockUnavailable => error.LandlockUnavailable,
+        error.LandlockAttachFailed => error.LandlockAttachFailed,
+        error.CapabilityLockdownFailed => error.CapabilityLockdownFailed,
+        error.MountVerificationFailed => error.MountVerificationFailed,
+        error.TooManyExecPaths => error.TooManyExecPaths,
         else => error.ApplyFailed,
     };
 }
@@ -747,7 +768,14 @@ pub fn resolveArgv0(
             allocator.free(candidate);
             continue;
         };
-        return .{ .path = candidate, .owned = true };
+        const canonical_z = std.Io.Dir.cwd().realPathFileAlloc(io, candidate, allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return .{ .path = candidate, .owned = true },
+        };
+        defer freeDupeZ(allocator, canonical_z.ptr);
+        const canonical = allocator.dupe(u8, canonical_z) catch return error.OutOfMemory;
+        allocator.free(candidate);
+        return .{ .path = canonical, .owned = true };
     }
     return error.FileNotFound;
 }
@@ -1009,6 +1037,44 @@ test "resolveArgv0 prefers PATH from env_map over process" {
     const abs = try resolveArgv0(std.testing.io, std.testing.allocator, "/bin/sh", &map);
     try std.testing.expect(!abs.owned);
     try std.testing.expectEqualStrings("/bin/sh", abs.path);
+}
+
+test "resolveArgv0 canonicalizes PATH directory symlinks before sandbox exec" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDir(std.testing.io, "real", .default_dir);
+    {
+        const file = try tmp.dir.createFile(std.testing.io, "real/agent", .{});
+        defer file.close(std.testing.io);
+    }
+    tmp.dir.symLink(std.testing.io, "real", "alias", .{ .is_directory = true }) catch
+        return error.SkipZigTest;
+    const alias_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(alias_path);
+    const path_value = try std.fs.path.join(std.testing.allocator, &.{ alias_path, "alias" });
+    defer std.testing.allocator.free(path_value);
+    var map = std.process.Environ.Map.init(std.testing.allocator);
+    defer map.deinit();
+    try map.put("PATH", path_value);
+
+    const resolved = try resolveArgv0(std.testing.io, std.testing.allocator, "agent", &map);
+    defer if (resolved.owned) std.testing.allocator.free(resolved.path);
+    const expected = try std.fs.path.join(std.testing.allocator, &.{ alias_path, "real", "agent" });
+    defer std.testing.allocator.free(expected);
+    try std.testing.expectEqualStrings(expected, resolved.path);
+}
+
+test "resolveArgv0 cleans every PATH allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, resolveArgv0AllocationFailureProbe, .{});
+}
+
+fn resolveArgv0AllocationFailureProbe(allocator: std.mem.Allocator) !void {
+    var map = std.process.Environ.Map.init(allocator);
+    defer map.deinit();
+    try map.put("PATH", "/bin:/usr/bin");
+
+    const resolved = try resolveArgv0(std.testing.io, allocator, "sh", &map);
+    defer if (resolved.owned) allocator.free(resolved.path);
 }
 
 test "forkApplySeatbeltAndExec fails handshake on bad chdir" {

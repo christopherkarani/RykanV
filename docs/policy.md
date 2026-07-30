@@ -448,7 +448,7 @@ CI never prompts. `ask` decisions become `deny`.
 
 ## Secretless Runtime
 
-`ryk run --secretless -- <agent-command>` enables the **empty backpack** secret boundary: public host env only (no raw secrets, no `orca-secret://` rewrite), OS sandbox required, and workspace `.env` / `.env.*` forms denied at the OS layer when attach succeeds. Orca does not store raw secrets and does not inject raw secrets into the child environment or into model-provider HTTP. Coding agents that need env API keys will not authenticate under secretless; **do not default** agent launches to `--secretless` until a product path supplies usable credentials. See [credentials.md](credentials.md) § Secretless Mode and [agent-recipes.md](agent-recipes.md).
+Agent-primary aliases such as `ryk claude` and `ryk codex` enable the **empty backpack** secret boundary by default. Generic commands use `ryk run --secretless -- <command>` explicitly. The boundary provides public host env plus exact session phantoms for granted Anthropic/OpenAI keys, requires an OS sandbox, and denies workspace `.env` / `.env.*` forms at the OS layer. Raw values remain in the parent store; a provider-specific loopback gateway swaps exact mints only for fixed upstream hosts. Use `ryk run --with-host-secrets -- <agent-command>` as the loud escape. See [credentials.md](credentials.md) and [agent-recipes.md](agent-recipes.md).
 
 ```yaml
 credentials:

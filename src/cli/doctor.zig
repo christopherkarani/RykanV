@@ -240,6 +240,14 @@ fn daemonStatusSummary(status: onboarding.DaemonHealthStatus) []const u8 {
     };
 }
 
+fn secretBoundaryCapability(backend_report: sandbox.backend.ReportSet) []const u8 {
+    const level = doctorDisplayLevel(.strong_sandbox, backend_report.get(.strong_sandbox).level);
+    return switch (level) {
+        .unavailable, .unsupported, .failed => "unavailable (empty-backpack requires live OS attach)",
+        else => "available (live session attestation required; Anthropic/OpenAI gateway compiled)",
+    };
+}
+
 fn daemonDetailFromError(allocator: std.mem.Allocator, err: anyerror) !DaemonHealth {
     return .{
         .status = cli.daemon.errors.doctorHealthStatus(err),
@@ -301,6 +309,7 @@ fn writeReport(io: std.Io, stdout: anytype, os: core.platform.Os, backend_report
     try writePacksSection(io, stdout, context);
     try writeHermesFailOpenWarning(io, stdout, context);
     try writePiNote(stdout);
+    try stdout.print("Secret boundary: {s}\n\n", .{secretBoundaryCapability(backend_report)});
     try stdout.writeAll("Capabilities:\n");
     for (doctor_capabilities) |item| {
         if (item.feature) |feature| {
@@ -371,13 +380,14 @@ fn writeDefaultPanels(
     policy_status: []const u8,
     counts: anytype,
 ) !void {
-    var health_storage: [5][96]u8 = undefined;
+    var health_storage: [6][128]u8 = undefined;
     const health_lines = [_][]const u8{
         try std.fmt.bufPrint(&health_storage[0], "Platform       {s}", .{os.toString()}),
         try std.fmt.bufPrint(&health_storage[1], "Policy         {s}", .{policy_status}),
         try std.fmt.bufPrint(&health_storage[2], "Daemon         {s}", .{daemonStatusSummary(context.daemon_health)}),
         try std.fmt.bufPrint(&health_storage[3], "Capabilities   {d} active · {d} limited", .{ counts.active, counts.limited }),
         try std.fmt.bufPrint(&health_storage[4], "Unavailable    {d}", .{counts.unavailable}),
+        try std.fmt.bufPrint(&health_storage[5], "Secret boundary {s}", .{secretBoundaryCapability(backend_report)}),
     };
     try tui.render.panel(io, stdout, "System health", &health_lines);
     try stdout.writeByte('\n');
@@ -932,15 +942,16 @@ fn detectShell(allocator: std.mem.Allocator) ![]const u8 {
     return try allocator.dupe(u8, "unknown");
 }
 
-test "doctor prints OS and planned capabilities" {
+test "doctor renders verbose OS and planned capabilities from an injected context" {
     var stdout_buf: [32768]u8 = undefined;
-    var stderr_buf: [256]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const os = core.platform.detectOs();
+    const report = sandbox.backend.detect(os);
+    var context = try testContext(std.testing.allocator, .{});
+    defer context.deinit();
 
-    const code = try command(std.testing.io, &.{"--verbose"}, &stdout_writer, &stderr_writer);
+    try writeReport(std.testing.io, &stdout_writer, os, report, context, true);
 
-    try std.testing.expectEqual(exit_codes.success, code);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "ryk Doctor") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Integration checks:") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "OS:") != null);
@@ -951,7 +962,8 @@ test "doctor prints OS and planned capabilities" {
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Backend:") != null or std.mem.indexOf(u8, stdout_writer.buffered(), "Linux backend:") != null or std.mem.indexOf(u8, stdout_writer.buffered(), "macOS backend:") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "env filtering: active") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "strong sandbox:") != null);
-    try std.testing.expectEqualStrings("", stderr_writer.buffered());
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Secret boundary:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Secret boundary: active") == null);
 }
 
 test "doctor can render Linux backend details from an injected report" {
@@ -1122,31 +1134,32 @@ test "doctor reports invalid policy clearly without printing synthetic secrets" 
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 
-test "doctor prints summary line" {
+test "doctor renders a compact summary from an injected context" {
     var stdout_buf: [32768]u8 = undefined;
-    var stderr_buf: [256]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const os = core.platform.detectOs();
+    const report = sandbox.backend.detect(os);
+    var context = try testContext(std.testing.allocator, .{});
+    defer context.deinit();
 
-    const code = try command(std.testing.io, &.{}, &stdout_writer, &stderr_writer);
-    try std.testing.expectEqual(exit_codes.success, code);
+    try writeReport(std.testing.io, &stdout_writer, os, report, context, false);
 
     const output = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "Summary:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "active") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Recommended next step:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Capabilities:") == null);
-    try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 
-test "doctor --verbose prints full report" {
+test "doctor renders a full report from an injected context" {
     var stdout_buf: [32768]u8 = undefined;
-    var stderr_buf: [256]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const os = core.platform.detectOs();
+    const report = sandbox.backend.detect(os);
+    var context = try testContext(std.testing.allocator, .{});
+    defer context.deinit();
 
-    const code = try command(std.testing.io, &.{"--verbose"}, &stdout_writer, &stderr_writer);
-    try std.testing.expectEqual(exit_codes.success, code);
+    try writeReport(std.testing.io, &stdout_writer, os, report, context, true);
 
     const output = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "Summary:") != null);
@@ -1156,7 +1169,6 @@ test "doctor --verbose prints full report" {
     try std.testing.expect(std.mem.indexOf(u8, output, "daemon health:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "fallback mode:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Recommended next step:") != null);
-    try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 
 test "doctor integration collection returns allocator failures instead of panicking" {
@@ -1272,7 +1284,7 @@ test "doctor integration report warns on world-writable ORCA_DAEMON path" {
     try writeReport(std.testing.io, &stdout_writer, .linux, report, context, true);
     const written = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, written, "daemon binary trust: world-writable ORCA_DAEMON path") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "Unset `ORCA_DAEMON` or point it at a non-world-writable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_DAEMON points at a world-writable path.") != null);
 }
 
 test "doctor recommendations prioritize daemon remediation over missing policy" {
@@ -1330,11 +1342,11 @@ test "doctor host table lists managed hosts and shell gates" {
     try std.testing.expect(std.mem.indexOf(u8, written, "extension-managed (smoke not run)") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "SMOKE ALLOW") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "SMOKE DENY") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "Pi: not managed by") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "Pi: bundled extension setup is managed by `ryk start`") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "ryk run -- pi") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "pi …") == null);
     try std.testing.expect(std.mem.indexOf(u8, written, "fix pi:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "plugin install") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "run ryk start to install the bundled extension") != null);
 }
 
 test "doctor warns when Hermes is installed with fail-open default" {

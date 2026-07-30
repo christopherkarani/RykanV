@@ -354,10 +354,57 @@ pub const CredentialRefPolicy = struct {
     }
 };
 
+pub const CredentialProvider = enum {
+    anthropic,
+    openai,
+
+    pub fn parse(value: []const u8) ?CredentialProvider {
+        if (std.mem.eql(u8, value, "anthropic")) return .anthropic;
+        if (std.mem.eql(u8, value, "openai")) return .openai;
+        return null;
+    }
+
+    pub fn toString(self: CredentialProvider) []const u8 {
+        return @tagName(self);
+    }
+};
+
+pub const CredentialGrantSource = enum {
+    host_env,
+    broker,
+
+    pub fn parse(value: []const u8) ?CredentialGrantSource {
+        if (std.mem.eql(u8, value, "host_env")) return .host_env;
+        if (std.mem.eql(u8, value, "broker")) return .broker;
+        return null;
+    }
+
+    pub fn toString(self: CredentialGrantSource) []const u8 {
+        return @tagName(self);
+    }
+};
+
+pub const CredentialGrantPolicy = struct {
+    name: []const u8,
+    env_var: []const u8,
+    provider: CredentialProvider,
+    source: CredentialGrantSource,
+    credential_ref: ?[]const u8 = null,
+    allowed_hosts: []const []const u8 = &.{},
+
+    pub fn deinit(self: CredentialGrantPolicy, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.env_var);
+        if (self.credential_ref) |value| allocator.free(value);
+        freeStringList(allocator, self.allowed_hosts);
+    }
+};
+
 pub const CredentialsPolicy = struct {
     default_broker: ?[]const u8 = null,
     brokers: []const CredentialBrokerPolicy = &.{},
     refs: []const CredentialRefPolicy = &.{},
+    grants: []const CredentialGrantPolicy = &.{},
 
     pub fn deinit(self: CredentialsPolicy, allocator: std.mem.Allocator) void {
         if (self.default_broker) |value| allocator.free(value);
@@ -365,6 +412,8 @@ pub const CredentialsPolicy = struct {
         if (self.brokers.len > 0) allocator.free(self.brokers);
         for (self.refs) |credential_ref| credential_ref.deinit(allocator);
         if (self.refs.len > 0) allocator.free(self.refs);
+        for (self.grants) |grant| grant.deinit(allocator);
+        if (self.grants.len > 0) allocator.free(self.grants);
     }
 };
 

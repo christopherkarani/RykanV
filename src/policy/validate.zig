@@ -89,6 +89,36 @@ fn validateCredentials(credentials: schema.CredentialsPolicy) !void {
         }
         try validateSafePolicyValue("credentials.refs.ref", credential_ref.ref, core.limits.max_event_field_len);
     }
+    for (credentials.grants, 0..) |grant, index| {
+        try validateCredentialReference(grant.name);
+        try validatePortableEnvName(grant.env_var);
+        for (credentials.grants[0..index]) |previous| {
+            if (std.ascii.eqlIgnoreCase(previous.name, grant.name)) return error.InvalidPolicy;
+            if (std.ascii.eqlIgnoreCase(previous.env_var, grant.env_var)) return error.InvalidPolicy;
+        }
+
+        const required_host = switch (grant.provider) {
+            .anthropic => "api.anthropic.com",
+            .openai => "api.openai.com",
+        };
+        if (grant.allowed_hosts.len == 0) return error.InvalidPolicy;
+        for (grant.allowed_hosts, 0..) |host, host_index| {
+            try validateString("credentials.grants.allowed_hosts", host, core.limits.max_url_len);
+            if (!std.mem.eql(u8, host, required_host)) return error.InvalidPolicy;
+            for (grant.allowed_hosts[0..host_index]) |previous| {
+                if (std.ascii.eqlIgnoreCase(previous, host)) return error.InvalidPolicy;
+            }
+        }
+
+        switch (grant.source) {
+            .host_env => if (grant.credential_ref != null) return error.InvalidPolicy,
+            .broker => {
+                const credential_ref = grant.credential_ref orelse return error.InvalidPolicy;
+                try validateCredentialReference(credential_ref);
+                if (!hasCredentialRef(credentials, credential_ref)) return error.InvalidPolicy;
+            },
+        }
+    }
 }
 
 fn validateServices(services: []const schema.ServicePolicy, credentials: schema.CredentialsPolicy) !void {
@@ -137,6 +167,14 @@ fn validateCredentialReference(value: []const u8) !void {
             '_', '-', '.', ':', '@' => continue,
             else => return error.InvalidPolicy,
         }
+    }
+}
+
+fn validatePortableEnvName(value: []const u8) !void {
+    try validateString("credentials.grants.env_var", value, core.limits.max_env_name_len);
+    if (!(std.ascii.isAlphabetic(value[0]) or value[0] == '_')) return error.InvalidPolicy;
+    for (value[1..]) |char| {
+        if (!(std.ascii.isAlphanumeric(char) or char == '_')) return error.InvalidPolicy;
     }
 }
 
@@ -302,6 +340,128 @@ test "duplicate credential brokers and refs are rejected" {
         \\      ref: "OTHER_PAT"
     ;
     try std.testing.expectError(error.InvalidPolicy, load.parseFromSlice(std.testing.allocator, duplicate_refs, "duplicate-refs.yaml"));
+}
+
+test "credential grants reject duplicates invalid hosts and nonportable env names" {
+    const load = @import("load.zig");
+    const bad_policies = [_][]const u8{
+        \\version: 1
+        \\mode: strict
+        \\credentials:
+        \\  grants:
+        \\    anthropic:
+        \\      env_var: ANTHROPIC_API_KEY
+        \\      provider: anthropic
+        \\      source: host_env
+        \\      allowed_hosts:
+        \\        - api.anthropic.com
+        \\    Anthropic:
+        \\      env_var: OTHER_ANTHROPIC_KEY
+        \\      provider: anthropic
+        \\      source: host_env
+        \\      allowed_hosts:
+        \\        - api.anthropic.com
+        ,
+        \\{"version":1,"mode":"strict","credentials":{"grants":{"anthropic":{"env_var":"MODEL_API_KEY","provider":"anthropic","source":"host_env","allowed_hosts":["api.anthropic.com"]},"openai":{"env_var":"MODEL_API_KEY","provider":"openai","source":"host_env","allowed_hosts":["api.openai.com"]}}}}
+        ,
+        \\version: 1
+        \\mode: strict
+        \\credentials:
+        \\  grants:
+        \\    anthropic:
+        \\      env_var: ANTHROPIC_API_KEY
+        \\      provider: anthropic
+        \\      source: host_env
+        \\      allowed_hosts:
+        ,
+        \\version: 1
+        \\mode: strict
+        \\credentials:
+        \\  grants:
+        \\    anthropic:
+        \\      env_var: ANTHROPIC_API_KEY
+        \\      provider: anthropic
+        \\      source: host_env
+        \\      allowed_hosts:
+        \\        - api.openai.com
+        ,
+        \\version: 1
+        \\mode: strict
+        \\credentials:
+        \\  grants:
+        \\    openai:
+        \\      env_var: OPENAI_API_KEY
+        \\      provider: openai
+        \\      source: host_env
+        \\      allowed_hosts:
+        \\        - "*.openai.com"
+        ,
+        \\version: 1
+        \\mode: strict
+        \\credentials:
+        \\  grants:
+        \\    openai:
+        \\      env_var: 9OPENAI_API_KEY
+        \\      provider: openai
+        \\      source: host_env
+        \\      allowed_hosts:
+        \\        - api.openai.com
+        ,
+    };
+    for (bad_policies, 0..) |bad, index| {
+        const source = try std.fmt.allocPrint(std.testing.allocator, "bad-grant-{d}.yaml", .{index});
+        defer std.testing.allocator.free(source);
+        try std.testing.expectError(error.InvalidPolicy, load.parseFromSlice(std.testing.allocator, bad, source));
+    }
+}
+
+test "credential grant sources enforce credential reference contracts" {
+    const load = @import("load.zig");
+    const bad_policies = [_][]const u8{
+        \\version: 1
+        \\mode: strict
+        \\credentials:
+        \\  grants:
+        \\    anthropic:
+        \\      env_var: ANTHROPIC_API_KEY
+        \\      provider: anthropic
+        \\      source: broker
+        \\      allowed_hosts:
+        \\        - api.anthropic.com
+        ,
+        \\version: 1
+        \\mode: strict
+        \\credentials:
+        \\  grants:
+        \\    anthropic:
+        \\      env_var: ANTHROPIC_API_KEY
+        \\      provider: anthropic
+        \\      source: broker
+        \\      credential_ref: missing
+        \\      allowed_hosts:
+        \\        - api.anthropic.com
+        ,
+        \\version: 1
+        \\mode: strict
+        \\credentials:
+        \\  refs:
+        \\    anthropic_key:
+        \\      ref: ANTHROPIC_API_KEY
+        \\  grants:
+        \\    anthropic:
+        \\      env_var: ANTHROPIC_API_KEY
+        \\      provider: anthropic
+        \\      source: host_env
+        \\      credential_ref: anthropic_key
+        \\      allowed_hosts:
+        \\        - api.anthropic.com
+        ,
+    };
+    for (bad_policies, 0..) |bad, index| {
+        const source = try std.fmt.allocPrint(std.testing.allocator, "bad-grant-source-{d}.yaml", .{index});
+        defer std.testing.allocator.free(source);
+        try std.testing.expectError(error.InvalidPolicy, load.parseFromSlice(std.testing.allocator, bad, source));
+    }
 }
 
 test "literal bracketed policy paths validate and match literally" {

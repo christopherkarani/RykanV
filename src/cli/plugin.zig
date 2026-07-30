@@ -2514,7 +2514,7 @@ test "plugin doctor hermes shows hermes-specific section" {
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 
-test "plugin doctor does not print raw env values or secrets" {
+test "plugin doctor does not print recognizable raw credential prefixes" {
     var stdout_buf: [16384]u8 = undefined;
     var stderr_buf: [256]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
@@ -2524,11 +2524,12 @@ test "plugin doctor does not print raw env values or secrets" {
     try std.testing.expectEqual(exit_codes.success, code);
 
     const output = stdout_writer.buffered();
-    // Should not contain any obviously secret-looking values
+    // `cwd` is intentionally diagnostic output and can legitimately include words such
+    // as "secretless". Check credential prefixes rather than treating a path component
+    // as evidence of a raw secret leak.
     try std.testing.expect(std.mem.indexOf(u8, output, "ghp_") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "sk-") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "password") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "secret") == null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 

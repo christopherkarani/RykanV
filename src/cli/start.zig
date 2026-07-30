@@ -643,7 +643,7 @@ test "start auto mode with mock daemon completes in temp workspace" {
     try std.testing.expect(std.mem.indexOf(u8, output, "\u{1F6E1}  ryk") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Ask on risk") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "You're now protected by ryk") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "verification skipped") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Verification skipped (--skip-verify).") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Daemon") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Policy") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Hosts") != null);

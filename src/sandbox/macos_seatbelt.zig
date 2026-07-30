@@ -229,17 +229,18 @@ pub fn prepareForChildApplyWithOptions(
         };
     }
 
-    // Protect-on: discover pre-planted hardlink aliases of secret-form inodes so
-    // path-regex deny cannot be bypassed via a non-.env basename (Linux FUSE
-    // taints; Seatbelt needs explicit last-match path denies). Missing workspace
-    // yields an empty list (regex still applies). Open/capacity/depth failures
-    // fail closed. OOM uses seatbelt_profile_oom (hard OutOfMemory at apply);
-    // other scan errors use seatbelt_secret_hardlink_scan_failed.
+    // Protect-on: discover multi-nlink non-secret basenames under the workspace
+    // so path-regex deny cannot be bypassed via a non-.env hardlink alias (Linux
+    // FUSE taints multi-nlink; Seatbelt needs explicit last-match path denies).
+    // Missing workspace yields an empty list (regex still applies). Open /
+    // capacity / depth failures fail closed with distinct reason codes.
+    // OOM uses seatbelt_profile_oom (hard OutOfMemory at apply).
     //
     // Accepted residual (single-writer threat model): the scan is prepare-time
     // only. Concurrent post-prepare hardlinks or agent-created link(.env→alias)
     // after sandbox_init are not rescanned; Seatbelt has no runtime inode taint.
-    // Pre-planted aliases are covered by process canaries.
+    // Pre-planted multi-nlink aliases (including outside secret-form inodes
+    // linked under non-secret names) are covered by process canaries.
     var hardlink_aliases: ?[]const []const u8 = null;
     defer if (hardlink_aliases) |paths| macos_profile.freeHardlinkAliasPaths(allocator, paths);
     if (compiled.protect_workspace_secrets) {
@@ -250,13 +251,17 @@ pub fn prepareForChildApplyWithOptions(
             io,
             compiled.workspace_root,
         ) catch |err| {
+            const reason: []const u8 = switch (err) {
+                error.OutOfMemory => "seatbelt_profile_oom",
+                error.ScanCapacity => "seatbelt_secret_hardlink_scan_capacity",
+                error.ScanDepthExceeded => "seatbelt_secret_hardlink_scan_depth",
+                error.ScanOpenFailed => "seatbelt_secret_hardlink_scan_open",
+                else => "seatbelt_secret_hardlink_scan_failed",
+            };
             return .{
                 .status = .failed,
                 .mechanism = .none,
-                .reason_code = if (err == error.OutOfMemory)
-                    "seatbelt_profile_oom"
-                else
-                    "seatbelt_secret_hardlink_scan_failed",
+                .reason_code = reason,
             };
         };
     }
@@ -556,7 +561,7 @@ test "prepare hardlink scan OOM maps to seatbelt_profile_oom" {
     try std.testing.expect(failing.has_induced_failure);
 }
 
-test "prepare hardlink scan open failure maps to seatbelt_secret_hardlink_scan_failed" {
+test "prepare hardlink scan open failure maps to seatbelt_secret_hardlink_scan_open" {
     // M-1: mode-000 nested dir with secret + hardlink alias → scan fail closed,
     // never prepared with incomplete alias denies.
     if (builtin.os.tag != .macos) return error.SkipZigTest;
@@ -589,11 +594,6 @@ test "prepare hardlink scan open failure maps to seatbelt_secret_hardlink_scan_f
     const out = prepareForChildApplyWith(allocator, &compiled, .supported);
     defer if (out.sbpl_z) |p| allocator.free(p);
     try std.testing.expectEqual(.failed, out.status);
-    try std.testing.expectEqualStrings("seatbelt_secret_hardlink_scan_failed", out.reason_code);
+    try std.testing.expectEqualStrings("seatbelt_secret_hardlink_scan_open", out.reason_code);
     try std.testing.expect(out.sbpl_z == null);
-}
-
-// Real-FS deny / canary integration tests live in macos_seatbelt_deny_tests.zig.
-test {
-    _ = @import("macos_seatbelt_deny_tests.zig");
 }

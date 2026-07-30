@@ -84,7 +84,7 @@ Policy edits are saved only after Orca parses and validates the submitted YAML. 
 
 ## Secretless View
 
-The Secretless tab is an operator surface for the optional Secretless Agent Runtime.
+The Secretless tab is the operator surface for the Secret Boundary runtime.
 
 It includes:
 
@@ -92,7 +92,7 @@ It includes:
 - Credential reference rows derived from policy without raw values
 - Broker check cards for configured brokers
 - Proxy backend status, bind behavior, and HTTPS host/port-only limitation
-- A generated `orca run --secretless --network-backend proxy -- <agent-command>` command
+- A generated `ryk run --secretless --network-backend proxy -- <custom-command>` command
 - A GitHub service-policy template covering hosts, methods, allowed paths, denied paths, credential references, and `unmatched: deny`
 - Fixed verification actions for credential checks, proxy smoke, policy check/explain, and replay verification
 - A capability matrix for env replacement, broker checks, service policy, proxy backend, and transparent-interception status

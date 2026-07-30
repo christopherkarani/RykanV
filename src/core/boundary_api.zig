@@ -239,6 +239,8 @@ pub const EventType = enum {
     mcp_sampling_request,
     mcp_unknown_method,
     secret_redacted,
+    phantom_swap,
+    phantom_denied,
     user_approval,
     user_denial,
 };
@@ -561,6 +563,8 @@ fn toCoreEventType(value: EventType) core_mod.event.EventType {
         .mcp_sampling_request => .mcp_sampling_request,
         .mcp_unknown_method => .mcp_unknown_method,
         .secret_redacted => .secret_redacted,
+        .phantom_swap => .phantom_swap,
+        .phantom_denied => .phantom_denied,
         .user_approval => .user_approval,
         .user_denial => .user_denial,
     };
@@ -608,6 +612,8 @@ pub fn fromCoreEventType(value: core_mod.event.EventType) EventType {
         .mcp_sampling_request => .mcp_sampling_request,
         .mcp_unknown_method => .mcp_unknown_method,
         .secret_redacted => .secret_redacted,
+        .phantom_swap => .phantom_swap,
+        .phantom_denied => .phantom_denied,
         .user_approval => .user_approval,
         .user_denial => .user_denial,
     };

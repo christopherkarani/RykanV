@@ -128,6 +128,10 @@ pub const launch_allow_exact = [_][]const u8{
     "CURL_CA_BUNDLE",
     "NODE_EXTRA_CA_CERTS",
     "GIT_SSL_CAINFO",
+    // Ryk-owned provider gateway endpoints. Empty-backpack filtering rejects
+    // host-supplied values; run injects loopback values only after binding.
+    "ANTHROPIC_BASE_URL",
+    "OPENAI_BASE_URL",
     // SSH_AUTH_SOCK intentionally omitted: host SSH agent socket is stripped
     // on the default attach allowlist (M-10). Opt-in re-allow is residual.
 };
@@ -212,11 +216,34 @@ pub fn isLaunchAllowlisted(name: []const u8) bool {
     return false;
 }
 
+/// Narrow capability used by the launch allowlist to retain session-minted
+/// phantom values without importing the intercept layer into the sandbox.
+/// The callback must perform exact name-and-value membership, not prefix or
+/// shape validation.
+pub const MintedEnvLookup = struct {
+    context: *const anyopaque,
+    containsFn: *const fn (context: *const anyopaque, name: []const u8, value: []const u8) bool,
+
+    pub fn contains(self: MintedEnvLookup, name: []const u8, value: []const u8) bool {
+        return self.containsFn(self.context, name, value);
+    }
+};
+
 /// True when a key/value pair is retained for sandboxed launch.
 /// Allowlist-only: empty backpack does not emit `orca-secret://` local-dummy refs.
 pub fn shouldRetainLaunchEnv(name: []const u8, value: []const u8) bool {
-    _ = value;
-    return isLaunchAllowlisted(name);
+    return shouldRetainLaunchEnvWithMints(name, value, null);
+}
+
+/// Launch allowlist plus exact, session-owned phantom membership.
+pub fn shouldRetainLaunchEnvWithMints(
+    name: []const u8,
+    value: []const u8,
+    minted_env_lookup: ?MintedEnvLookup,
+) bool {
+    if (isLaunchAllowlisted(name)) return true;
+    const lookup = minted_env_lookup orelse return false;
+    return lookup.contains(name, value);
 }
 
 /// Build a new map with scrubbed keys removed. Source is not modified.
@@ -283,6 +310,15 @@ pub fn scrubEnvMapInPlace(env_map: *std.process.Environ.Map) error{OutOfMemory}!
 /// After removals, retained proxy URL values have userinfo stripped so host
 /// proxy credentials cannot pass into the sandboxed child (M-3).
 pub fn applyLaunchAllowlistInPlace(env_map: *std.process.Environ.Map) error{OutOfMemory}!usize {
+    return applyLaunchAllowlistInPlaceWithMints(env_map, null);
+}
+
+/// Apply the launch allowlist while retaining only exact phantoms recognized
+/// by the session mint table.
+pub fn applyLaunchAllowlistInPlaceWithMints(
+    env_map: *std.process.Environ.Map,
+    minted_env_lookup: ?MintedEnvLookup,
+) error{OutOfMemory}!usize {
     var to_remove: std.ArrayList([]u8) = .empty;
     defer {
         for (to_remove.items) |key| env_map.allocator.free(key);
@@ -294,7 +330,7 @@ pub fn applyLaunchAllowlistInPlace(env_map: *std.process.Environ.Map) error{OutO
     while (it.next()) |entry| {
         const name = entry.key_ptr.*;
         const value = entry.value_ptr.*;
-        if (shouldRetainLaunchEnv(name, value)) continue;
+        if (shouldRetainLaunchEnvWithMints(name, value, minted_env_lookup)) continue;
         const owned = env_map.allocator.dupe(u8, name) catch {
             incomplete = true;
             break;
@@ -581,39 +617,49 @@ test "launch allowlist keeps TLS trust and strips SSH_AUTH_SOCK" {
     try std.testing.expect(!isLaunchAllowlisted("SSH_AUTH_SOCK"));
 }
 
-test "shouldRetainLaunchEnv rejects untrusted secret reference shapes" {
-    const rejected = [_]struct {
-        name: []const u8,
-        value: []const u8,
-    }{
-        .{ .name = "SMUGGLE", .value = "orca-secret://" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://evil/env/SMUGGLE/deadbeef" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://x/SMUGGLED_RAW" },
-        .{ .name = "SMUGGLE2", .value = "orca-secret://local-dummy/env/FAKE/aaaaaaaa" },
-        .{ .name = "TOKEN", .value = "orca-secret://local-dummy/env/MYTOKEN/deadbeef" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/abcdef0" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/abcdef012" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/DEADBEEF" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/ghijklmn" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/deadbeef/extra" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/deadbeef?query" },
-        .{ .name = "SMUGGLE", .value = "orca-secret://local-dummy/env/SMUGGLE/deadbeef#fragment" },
-    };
-
-    for (rejected) |case| {
-        try std.testing.expect(!shouldRetainLaunchEnv(case.name, case.value));
-    }
-}
-
-test "shouldRetainLaunchEnv is allowlist-only (no local-dummy retention)" {
+test "shouldRetainLaunchEnv is allowlist-only (value shape ignored)" {
+    // Retention is allowlist + optional mint table only; untrusted keys reject
+    // regardless of orca-secret:// value shape (no local-dummy matrix).
     try std.testing.expect(!shouldRetainLaunchEnv(
         "GITHUB_TOKEN",
         "orca-secret://local-dummy/env/GITHUB_TOKEN/d1c2f8b4",
     ));
+    try std.testing.expect(!shouldRetainLaunchEnv("SMUGGLE", "orca-secret://evil/env/X/deadbeef"));
     try std.testing.expect(shouldRetainLaunchEnv("PATH", "orca-secret://evil"));
     try std.testing.expect(!shouldRetainLaunchEnv("OPENAI_API_KEY", "sk-raw-synthetic"));
+}
+
+test "launch allowlist retains only exact mint-table phantom pairs" {
+    const MintFixture = struct {
+        fn contains(
+            context: *const anyopaque,
+            name: []const u8,
+            value: []const u8,
+        ) bool {
+            _ = context;
+            return std.mem.eql(u8, name, "ANTHROPIC_API_KEY") and
+                std.mem.eql(
+                    u8,
+                    value,
+                    "orca-secret://session/0123456789abcdef0123456789abcdef/ANTHROPIC_API_KEY/0123456789abcdef",
+                );
+        }
+    };
+    const sentinel: u8 = 0;
+    const lookup: MintedEnvLookup = .{
+        .context = &sentinel,
+        .containsFn = MintFixture.contains,
+    };
+    const minted = "orca-secret://session/0123456789abcdef0123456789abcdef/ANTHROPIC_API_KEY/0123456789abcdef";
+
+    try std.testing.expect(shouldRetainLaunchEnvWithMints("ANTHROPIC_API_KEY", minted, lookup));
+    try std.testing.expect(!shouldRetainLaunchEnvWithMints("OPENAI_API_KEY", minted, lookup));
+    try std.testing.expect(!shouldRetainLaunchEnvWithMints(
+        "ANTHROPIC_API_KEY",
+        "orca-secret://session/evil/ANTHROPIC_API_KEY/0123456789abcdef",
+        lookup,
+    ));
+    try std.testing.expect(!shouldRetainLaunchEnvWithMints("ANTHROPIC_API_KEY", "sk-ant-raw", lookup));
 }
 
 test "applyLaunchAllowlistInPlace strips non-allowlisted keys" {
