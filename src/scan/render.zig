@@ -2,6 +2,7 @@
 const std = @import("std");
 const types = @import("types.zig");
 const risk = @import("risk.zig");
+const present = @import("present.zig");
 const theme = @import("../tui/theme.zig");
 const tui_render = @import("../tui/render.zig");
 const terminal_text = @import("../tui/terminal_text.zig");
@@ -82,42 +83,72 @@ pub fn writeHuman(io: std.Io, writer: anytype, result: types.ScanResult) !void {
     try writer.writeAll(")\n\n");
 
     for (result.findings, 0..) |f, i| {
+        var sentence_buf: [200]u8 = undefined;
+        var why_buf: [160]u8 = undefined;
+        var next_buf: [120]u8 = undefined;
+        var title_buf: [96]u8 = undefined;
+
         try writer.print("  {d}. ", .{i + 1});
         try theme.paintBold(io, writer, severityToken(f.severity), risk.severityShort(f.severity));
         try writer.writeAll(" ");
-        try theme.paint(io, writer, .text, risk.kindLabel(f.kind));
+        try theme.paint(io, writer, .text, present.kindHuman(f.kind));
         try writer.writeAll("  ");
         try theme.paint(io, writer, .info, f.host.toString());
+        if (f.occurrence_count > 1) {
+            try writer.print("  ×{d}", .{f.occurrence_count});
+        }
         try writer.writeAll("\n");
+
         try writer.writeAll("     ");
-        try terminal_text.write(writer, f.title, .single_line);
+        try terminal_text.write(writer, present.plainSentence(f, &sentence_buf), .single_line);
         try writer.writeAll("\n");
+
         try writer.writeAll("     ");
-        // Sanitize session-derived detail (CSI/OSC) — never write raw session text.
-        try terminal_text.write(writer, f.detail, .single_line);
+        try theme.paint(io, writer, severityToken(f.severity), present.severityWords(f.severity));
+        try writer.writeAll("  ·  ");
+        try theme.paint(io, writer, .muted, present.listTitle(f, &title_buf));
         try writer.writeAll("\n");
+
+        try writer.writeAll("     ");
+        try theme.paint(io, writer, .warn, "Do: ");
+        try terminal_text.write(writer, present.actionLine(f), .single_line);
+        try writer.writeAll("\n");
+
+        try writer.writeAll("     ");
+        try theme.paint(io, writer, .muted, "Why: ");
+        try terminal_text.write(writer, present.whyFired(f, &why_buf), .single_line);
+        try writer.writeAll("\n");
+
         if (f.secret_label) |label| {
             try writer.writeAll("     ");
-            try theme.paint(io, writer, .muted, "label=");
-            try theme.paint(io, writer, .warn, label);
+            try theme.paint(io, writer, .muted, "Type: ");
+            try theme.paint(io, writer, .warn, present.humanSecretLabel(label));
             if (f.secret_fingerprint) |fp| {
                 try writer.writeAll("  ");
-                try theme.paint(io, writer, .muted, "fp=");
+                try theme.paint(io, writer, .muted, "id=");
                 try theme.paint(io, writer, .muted, fp);
             }
             try writer.writeAll("\n");
-        }
-        try writer.writeAll("     ");
-        try theme.paint(io, writer, .muted, "session=");
-        try terminal_text.write(writer, f.session_id, .single_line);
-        try writer.writeAll("\n");
-        if (f.host == .ryk) {
+        } else {
             try writer.writeAll("     ");
-            try theme.paint(io, writer, .info, "hint: ryk replay --session ");
-            try terminal_text.write(writer, f.session_id, .single_line);
+            try theme.paint(io, writer, .muted, "Cmd: ");
+            try terminal_text.write(writer, present.cleanHiddenDisplay(f.detail), .single_line);
             try writer.writeAll("\n");
         }
+
+        try writer.writeAll("     ");
+        try theme.paint(io, writer, .muted, "Session: ");
+        try terminal_text.write(writer, present.shortId(f.session_id), .single_line);
         try writer.writeAll("\n");
+
+        try writer.writeAll("     ");
+        try theme.paint(io, writer, .muted, "File: ");
+        try terminal_text.write(writer, f.evidence_ref, .single_line);
+        try writer.writeAll("\n");
+
+        try writer.writeAll("     ");
+        try theme.paint(io, writer, .info, present.hostNextStep(f.host, f.session_id, &next_buf));
+        try writer.writeAll("\n\n");
     }
 }
 
@@ -350,5 +381,7 @@ test "human render risk headline for danger findings" {
     const out = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, out, "Attention needed") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "HIGH") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "risky command") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "Risky command") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "Do:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "Worth reviewing") != null or std.mem.indexOf(u8, out, "Urgent") != null);
 }

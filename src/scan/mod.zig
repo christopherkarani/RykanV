@@ -13,6 +13,7 @@ pub const discover = @import("discover.zig");
 pub const engine = @import("engine.zig");
 pub const render = @import("render.zig");
 pub const risk = @import("risk.zig");
+pub const present = @import("present.zig");
 pub const tui_view = @import("tui_view.zig");
 
 pub const Finding = types.Finding;
@@ -35,5 +36,6 @@ test {
     _ = engine;
     _ = render;
     _ = risk;
+    _ = present;
     _ = tui_view;
 }

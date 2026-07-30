@@ -49,6 +49,8 @@ pub const Finding = struct {
     secret_label: ?[]const u8 = null,
     secret_fingerprint: ?[]const u8 = null,
     evidence_ref: []const u8,
+    /// How many raw hits were collapsed into this row (fingerprint dedupe).
+    occurrence_count: usize = 1,
 
     pub fn deinit(self: *Finding, allocator: std.mem.Allocator) void {
         allocator.free(self.session_id);

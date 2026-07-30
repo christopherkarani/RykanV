@@ -6,6 +6,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const types = @import("types.zig");
 const risk = @import("risk.zig");
+const present = @import("present.zig");
 const theme = @import("../tui/theme.zig");
 const vaxis = @import("vaxis");
 
@@ -154,11 +155,13 @@ pub fn renderFrame(
             try theme.paint(io, stdout, sev_tok, risk.severityShort(f.severity));
         }
         try stdout.writeAll(" ");
-        try theme.paint(io, stdout, if (is_sel) .text_bright else .muted, risk.kindLabel(f.kind));
+        try theme.paint(io, stdout, if (is_sel) .text_bright else .muted, present.kindHuman(f.kind));
         try stdout.writeAll("  ");
         try theme.paint(io, stdout, .info, f.host.toString());
         try stdout.writeAll("  ");
-        try writeTrunc(stdout, f.title, 42);
+        var title_buf: [96]u8 = undefined;
+        const list_title = present.listTitle(f, &title_buf);
+        try writeTrunc(stdout, list_title, 40);
         try stdout.writeAll(line_ending);
         written += 1;
     }
@@ -173,7 +176,7 @@ pub fn renderFrame(
     try writeRule(io, stdout, line_ending);
     written += 1;
 
-    // ── Detail pane ─────────────────────────────────────────────────────────
+    // ── Detail pane (new-user oriented) ─────────────────────────────────────
     try stdout.writeAll("  ");
     try theme.paintBold(io, stdout, .text_bright, "Detail");
     try stdout.writeAll(line_ending);
@@ -181,65 +184,92 @@ pub fn renderFrame(
 
     if (total_shown > 0) {
         const f = result.findings[sel];
+        var sentence_buf: [200]u8 = undefined;
+        var why_buf: [160]u8 = undefined;
+        var next_buf: [120]u8 = undefined;
+        var title_buf: [96]u8 = undefined;
+
+        // Plain sentence first.
         try stdout.writeAll("  ");
-        try theme.paint(io, stdout, .muted, "kind");
-        try stdout.writeAll(" ");
-        try theme.paint(io, stdout, .text, f.kind.toString());
+        try theme.paint(io, stdout, .text, present.plainSentence(f, &sentence_buf));
+        try stdout.writeAll(line_ending);
+        written += 1;
+
+        // Severity words + host + type chip.
         try stdout.writeAll("  ");
-        try theme.paint(io, stdout, .muted, "severity");
-        try stdout.writeAll(" ");
-        try theme.paint(io, stdout, severityToken(f.severity), f.severity.toString());
-        try stdout.writeAll("  ");
-        try theme.paint(io, stdout, .muted, "host");
-        try stdout.writeAll(" ");
+        try theme.paintBold(io, stdout, severityToken(f.severity), present.severityWords(f.severity));
+        try stdout.writeAll("  ·  ");
         try theme.paint(io, stdout, .info, f.host.toString());
+        try stdout.writeAll("  ·  ");
+        try theme.paint(io, stdout, .muted, present.kindHuman(f.kind));
+        if (f.occurrence_count > 1) {
+            var cnt_buf: [24]u8 = undefined;
+            const cnt = std.fmt.bufPrint(&cnt_buf, "  ·  seen ×{d}", .{f.occurrence_count}) catch "";
+            try theme.paint(io, stdout, .muted, cnt);
+        }
         try stdout.writeAll(line_ending);
         written += 1;
 
+        // Action.
         try stdout.writeAll("  ");
-        try theme.paint(io, stdout, .muted, "what");
+        try theme.paint(io, stdout, .warn, "Do");
         try stdout.writeAll("  ");
-        try writeTrunc(stdout, f.detail, 72);
+        try writeTrunc(stdout, present.actionLine(f), 72);
         try stdout.writeAll(line_ending);
         written += 1;
 
+        // Why.
+        try stdout.writeAll("  ");
+        try theme.paint(io, stdout, .muted, "Why");
+        try stdout.writeAll(" ");
+        try writeTrunc(stdout, present.whyFired(f, &why_buf), 70);
+        try stdout.writeAll(line_ending);
+        written += 1;
+
+        // Type + fingerprint (no nested REDACTED "what").
         if (f.secret_label) |label| {
             try stdout.writeAll("  ");
-            try theme.paint(io, stdout, .muted, "label");
+            try theme.paint(io, stdout, .muted, "Type");
             try stdout.writeAll(" ");
-            try theme.paint(io, stdout, .warn, label);
+            try theme.paint(io, stdout, .warn, present.humanSecretLabel(label));
             if (f.secret_fingerprint) |fp| {
                 try stdout.writeAll("  ");
-                try theme.paint(io, stdout, .muted, "fp");
+                try theme.paint(io, stdout, .muted, "id");
                 try stdout.writeAll(" ");
                 try theme.paint(io, stdout, .muted, fp);
             }
             try stdout.writeAll(line_ending);
             written += 1;
-        }
-
-        try stdout.writeAll("  ");
-        try theme.paint(io, stdout, .muted, "session");
-        try stdout.writeAll(" ");
-        try writeTrunc(stdout, f.session_id, 56);
-        try stdout.writeAll(line_ending);
-        written += 1;
-
-        try stdout.writeAll("  ");
-        try theme.paint(io, stdout, .muted, "ref");
-        try stdout.writeAll("     ");
-        try writeTrunc(stdout, f.evidence_ref, 64);
-        try stdout.writeAll(line_ending);
-        written += 1;
-
-        if (f.host == .ryk) {
+        } else if (f.kind == .danger or f.kind == .secret_access) {
             try stdout.writeAll("  ");
-            try theme.paint(io, stdout, .info, "hint");
-            try stdout.writeAll("   ryk replay --session ");
-            try writeTrunc(stdout, f.session_id, 40);
+            try theme.paint(io, stdout, .muted, "Cmd");
+            try stdout.writeAll("  ");
+            try writeTrunc(stdout, present.cleanHiddenDisplay(f.detail), 70);
             try stdout.writeAll(line_ending);
             written += 1;
         }
+
+        // Session short id + path secondary.
+        try stdout.writeAll("  ");
+        try theme.paint(io, stdout, .muted, "Session");
+        try stdout.writeAll(" ");
+        try writeTrunc(stdout, present.shortId(f.session_id), 28);
+        try stdout.writeAll("  ");
+        try theme.paint(io, stdout, .muted, present.listTitle(f, &title_buf));
+        try stdout.writeAll(line_ending);
+        written += 1;
+
+        try stdout.writeAll("  ");
+        try theme.paint(io, stdout, .muted, "File");
+        try stdout.writeAll("    ");
+        try writeTrunc(stdout, f.evidence_ref, 62);
+        try stdout.writeAll(line_ending);
+        written += 1;
+
+        try stdout.writeAll("  ");
+        try theme.paint(io, stdout, .info, present.hostNextStep(f.host, f.session_id, &next_buf));
+        try stdout.writeAll(line_ending);
+        written += 1;
     }
 
     // Footer
@@ -682,7 +712,11 @@ test "scan tui frame: redacted secret never shows raw token" {
     _ = try renderFrame(std.testing.io, &w, &result, 0, 0, 6, "\n");
     const out = w.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "Secrets appeared") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "secret:github_token") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "GitHub token") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "Value hidden") != null or std.mem.indexOf(u8, out, "hidden") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "Worth reviewing") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "Do") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "[REDACTED:secret:[REDACTED]") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "ghp_") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "sk-") == null);
 }

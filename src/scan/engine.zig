@@ -78,6 +78,9 @@ pub fn runScan(io: std.Io, allocator: std.mem.Allocator, options: ScanOptions) !
     }
 
     rank.sortFindings(findings.items);
+    // Collapse repeated secret fingerprints so the list is scannable (scorecard
+    // still reflects raw material_count from discovery).
+    rank.collapseSecretFingerprints(allocator, &findings);
     const total = findings.items.len;
     const shown_slice = rank.applyCap(findings.items, options.show_all, options.list_cap);
 
@@ -181,9 +184,10 @@ fn processMaterialDedup(
         return err;
     };
 
-    const title = try allocator.dupe(u8, "Secret material in session");
+    // Title/detail stay free of nested REDACTED blobs — present layer maps label.
+    const title = try allocator.dupe(u8, "Secret-like value in session");
     errdefer allocator.free(title);
-    const detail = try secrets.safeDetail(allocator, material.redacted);
+    const detail = try allocator.dupe(u8, "Value hidden");
     errdefer allocator.free(detail);
     const label = try allocator.dupe(u8, material.label);
     errdefer allocator.free(label);
