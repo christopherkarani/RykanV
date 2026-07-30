@@ -6,6 +6,7 @@
 #   SuperSecretPass99
 #   ghp_fake
 #   proxypass
+#   sk-fakeProviderCanary99
 #   CANARY_ENVFILE_BODY_99
 #
 # Cases:
@@ -124,6 +125,7 @@ FORBIDDEN_SUBSTRINGS=(
   "SuperSecretPass99"
   "ghp_fake"
   "proxypass"
+  "sk-fakeProviderCanary99"
   "CANARY_ENVFILE_BODY_99"
 )
 
@@ -209,6 +211,7 @@ run_with_canaries() {
     MYSQL_PWD='SuperSecretPass99' \
     DATABASE_URL='postgres://synthetic:SuperSecretPass99@db.invalid/app' \
     GITHUB_TOKEN='ghp_fakeSyntheticTokenValue1234567890' \
+    OPENAI_API_KEY='sk-fakeProviderCanary99' \
     HTTP_PROXY='http://synthetic:proxypass@proxy.invalid:8080' \
     RANDOM_HOST_CANARY='SuperSecretPass99-random-host' \
     UNMINTED_SECRET_REF="$UNMINTED_REF" \
@@ -272,6 +275,10 @@ elif ! attests_latest_session_active; then
   fail_case 'A env canary dump lacked active sandbox_posture audit with profile hash'
 elif contains_forbidden "$A_STDOUT" || contains_forbidden "$A_STDERR"; then
   fail_case 'A env canary dump exposed a forbidden synthetic substring'
+elif ! grep -Eq '^OPENAI_API_KEY=orca-secret://session/[^/]+/OPENAI_API_KEY/[0-9a-f]{16}$' "$A_STDOUT"; then
+  fail_case 'A provider key was not replaced with an exact session-minted phantom'
+elif ! grep -Eq '^OPENAI_BASE_URL=http://127[.]0[.]0[.]1:[0-9]+/v1$' "$A_STDOUT"; then
+  fail_case 'A provider gateway loopback base URL was not injected'
 else
   ATTACH_STATE=active
   pass_case 'A env canary dump omitted host canaries under active sandbox'
@@ -337,7 +344,7 @@ else
   C_STATUS=$?
 fi
 if [[ "$C_STATUS" -eq 2 ]] \
-  && grep -Fq 'cannot combine --secretless with --os-sandbox off' "$C_STDERR" \
+  && grep -Fq 'empty-backpack secret boundary requires an active OS sandbox' "$C_STDERR" \
   && [[ ! -e "$C_MARKER" ]]; then
   pass_case 'C sandbox-off conflict exited 2 before child launch'
 else
@@ -369,7 +376,7 @@ else
   fi
 fi
 
-# Case E: P1-6 / explicit escape is loud and can inherit with sandbox off.
+# Case E: P1-6 / explicit escape is loud and self-sufficient.
 E_STDOUT="$OUTPUT_DIR/case-e.stdout"
 E_STDERR="$OUTPUT_DIR/case-e.stderr"
 if [[ "$PHASE_1E_PRESENT" != true ]]; then
@@ -379,7 +386,7 @@ elif [[ "$SKIP_ESCAPE" == true ]]; then
 else
   if run_with_canaries \
     "$BINARY" run --workspace "$WORKSPACE" --policy "$POLICY" \
-    --with-host-secrets --inherit-env --os-sandbox off --network off -- /usr/bin/env \
+    --with-host-secrets --os-sandbox off --network off -- /usr/bin/env \
     >"$E_STDOUT" 2>"$E_STDERR"; then
     E_STATUS=0
   else
@@ -391,7 +398,7 @@ else
     if contains_forbidden "$E_STDERR"; then
       fail_case 'E escape stderr exposed a forbidden synthetic substring'
     else
-      pass_case 'E escape warning emitted and synthetic canary inherited with sandbox off'
+      pass_case 'E escape warning emitted and synthetic canary inherited without extra env flags'
     fi
   else
     fail_case "E escape warning/canary proof failed with status $E_STATUS"

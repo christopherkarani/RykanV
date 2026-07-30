@@ -1,14 +1,11 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const session_secrets = @import("session_secrets.zig");
+const protocol = @import("provider_gateway_protocol.zig");
 
 pub const Provider = session_secrets.Provider;
-pub const Limits = struct {
-    request_head: usize = 32 * 1024,
-    request_body: usize = 32 * 1024 * 1024,
-    response_head: usize = 32 * 1024,
-    response_body: usize = 64 * 1024 * 1024,
-};
+pub const Limits = protocol.Limits;
+const ParsedInbound = protocol.ParsedInbound;
 pub const AuditKind = enum { phantom_swap, phantom_denied };
 pub const AuditEvent = struct {
     kind: AuditKind,
@@ -95,9 +92,11 @@ pub const Runtime = struct {
         wake(io, state.bind_port);
         if (state.thread_started) state.thread.join();
         state.server.deinit(io);
+        state.shutdownConnections(io);
         while (state.active_connections.load(.acquire) > 0)
             std.Io.sleep(io, std.Io.Duration.fromNanoseconds(10 * std.time.ns_per_ms), .awake) catch {};
         state.http_client.deinit();
+        state.active_streams.deinit(state.allocator);
         state.audit_events.deinit(state.allocator);
         state.allocator.free(state.bind_url);
         state.allocator.free(state.upstream_origin);
@@ -105,6 +104,25 @@ pub const Runtime = struct {
         self.* = undefined;
     }
 };
+
+/// Narrow test seam for loopback integration harnesses. Production callers use
+/// `listen`/`start`; tests may substitute a synthetic upstream origin and
+/// observe only the aggregate connection count.
+pub const testing = if (builtin.is_test) struct {
+    pub fn listenWithOrigin(
+        allocator: std.mem.Allocator,
+        store: *const session_secrets.Store,
+        provider: Provider,
+        limits: Limits,
+        upstream_origin: []const u8,
+    ) !Runtime {
+        return providerGatewayListenWithOrigin(allocator, store, provider, limits, upstream_origin);
+    }
+
+    pub fn activeConnectionCount(runtime: Runtime) usize {
+        return runtime.state.active_connections.load(.acquire);
+    }
+} else struct {};
 
 const State = struct {
     allocator: std.mem.Allocator,
@@ -121,6 +139,8 @@ const State = struct {
     failed: std.atomic.Value(bool) = .init(false),
     serving: std.atomic.Value(bool) = .init(false),
     active_connections: std.atomic.Value(usize) = .init(0),
+    connections_mutex: std.Io.Mutex = .init,
+    active_streams: std.ArrayList(std.Io.net.Stream) = .empty,
     audit_mutex: std.Io.Mutex = .init,
     audit_events: std.ArrayList(AuditEvent) = .empty,
     thread: std.Thread = undefined,
@@ -138,6 +158,30 @@ const State = struct {
             .reason_code = reason_code,
         });
     }
+
+    fn registerConnection(self: *State, io: std.Io, stream: std.Io.net.Stream) !void {
+        try self.connections_mutex.lock(io);
+        defer self.connections_mutex.unlock(io);
+        try self.active_streams.append(self.allocator, stream);
+    }
+
+    fn unregisterConnection(self: *State, io: std.Io, handle: std.Io.net.Socket.Handle) void {
+        self.connections_mutex.lock(io) catch return;
+        defer self.connections_mutex.unlock(io);
+        for (self.active_streams.items, 0..) |stream, index| {
+            if (stream.socket.handle != handle) continue;
+            _ = self.active_streams.swapRemove(index);
+            return;
+        }
+    }
+
+    fn shutdownConnections(self: *State, io: std.Io) void {
+        self.connections_mutex.lock(io) catch return;
+        defer self.connections_mutex.unlock(io);
+        for (self.active_streams.items) |stream| {
+            stream.shutdown(io, .both) catch {};
+        }
+    }
 };
 
 pub fn listen(
@@ -146,7 +190,13 @@ pub fn listen(
     provider: Provider,
     limits: Limits,
 ) !Runtime {
-    return listenWithOrigin(allocator, store, provider, limits, ProviderConfig.get(provider).production_origin);
+    return providerGatewayListenWithOrigin(
+        allocator,
+        store,
+        provider,
+        limits,
+        ProviderConfig.get(provider).production_origin,
+    );
 }
 
 pub fn start(
@@ -161,7 +211,7 @@ pub fn start(
     return runtime;
 }
 
-fn listenWithOrigin(
+fn providerGatewayListenWithOrigin(
     allocator: std.mem.Allocator,
     store: *const session_secrets.Store,
     provider: Provider,
@@ -169,7 +219,10 @@ fn listenWithOrigin(
     upstream_origin: []const u8,
 ) !Runtime {
     if (!store.hasProvider(provider)) return error.ProviderGrantMissing;
-    if (limits.request_head < 1024 or limits.response_head < 1024) return error.InvalidLimits;
+    if (limits.request_head < 1024 or limits.response_head < 1024 or
+        limits.io_timeout_ms == 0 or limits.io_timeout_ms > std.math.maxInt(i32) or
+        limits.upstream_timeout_ms == 0)
+        return error.InvalidLimits;
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();
     const address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
@@ -226,9 +279,15 @@ fn serverLoop(state: *State) void {
             stream.close(io);
             continue;
         };
+        state.registerConnection(io, stream) catch {
+            stream.close(io);
+            state.allocator.destroy(context);
+            continue;
+        };
         context.* = .{ .state = state, .client = stream };
         _ = state.active_connections.fetchAdd(1, .acq_rel);
         const thread = std.Thread.spawn(.{}, connectionLoop, .{context}) catch {
+            state.unregisterConnection(io, stream.socket.handle);
             _ = state.active_connections.fetchSub(1, .acq_rel);
             stream.close(io);
             state.allocator.destroy(context);
@@ -244,36 +303,30 @@ fn connectionLoop(context: *ConnectionContext) void {
     const io = state.threaded.io();
     defer {
         const allocator = context.state.allocator;
+        context.state.unregisterConnection(io, context.client.socket.handle);
+        context.client.close(io);
         _ = context.state.active_connections.fetchSub(1, .acq_rel);
         allocator.destroy(context);
     }
     handleConnection(state, io, context.client) catch {};
 }
 
-const ParsedInbound = struct {
-    method: std.http.Method,
-    target: []const u8,
-    headers_end: usize,
-    content_length: usize,
-    forwarded_headers: std.ArrayList(std.http.Header),
-    phantom: []const u8,
-    fn deinit(self: *ParsedInbound, allocator: std.mem.Allocator) void {
-        self.forwarded_headers.deinit(allocator);
-    }
-};
-
 fn handleConnection(state: *State, io: std.Io, client: std.Io.net.Stream) !void {
-    defer client.close(io);
     const head_buffer = try state.allocator.alloc(u8, state.limits.request_head);
     defer state.allocator.free(head_buffer);
-    const read_len = readHeaders(client, head_buffer) catch |err| {
+    const read_len = readHeaders(state, io, client, head_buffer) catch |err| {
         const status: u16 = if (err == error.RequestTooLarge) 431 else 400;
         writeError(io, client, status, if (status == 431) "Request Header Fields Too Large" else "Bad Request") catch {};
         return;
     };
-    var parsed = parseInbound(state.allocator, state.provider, head_buffer[0..read_len], state.limits) catch |err| {
-        state.record(.phantom_denied, denialReason(err)) catch {};
-        const status: u16 = if (err == error.RequestBodyTooLarge) 413 else if (isAuthorizationError(err)) 403 else 400;
+    var parsed = protocol.parseInbound(
+        state.allocator,
+        state.provider,
+        head_buffer[0..read_len],
+        state.limits,
+    ) catch |err| {
+        state.record(.phantom_denied, protocol.denialReason(err)) catch {};
+        const status: u16 = if (err == error.RequestBodyTooLarge) 413 else if (protocol.isAuthorizationError(err)) 403 else 400;
         writeError(io, client, status, if (status == 403) "Forbidden" else if (status == 413) "Payload Too Large" else "Bad Request") catch {};
         return;
     };
@@ -289,164 +342,141 @@ fn handleConnection(state: *State, io: std.Io, client: std.Io.net.Stream) !void 
         try writeError(io, client, 403, "Forbidden");
         return;
     };
-    const body = try readBody(
-        state.allocator,
-        client,
-        head_buffer[parsed.headers_end..read_len],
-        parsed.content_length,
-        state.limits.request_body,
-    );
-    defer state.allocator.free(body);
     state.record(.phantom_swap, "authorized") catch {
         try writeError(io, client, 503, "Service Unavailable");
         return;
     };
-    forwardRequest(state, io, client, &parsed, body, authorized.raw) catch {
-        writeError(io, client, 502, "Bad Gateway") catch {};
+    var downstream_started = false;
+    forwardRequestWithTimeout(
+        state,
+        io,
+        client,
+        &parsed,
+        head_buffer[parsed.headers_end..read_len],
+        authorized.raw,
+        &downstream_started,
+    ) catch {
+        if (!downstream_started) writeError(io, client, 502, "Bad Gateway") catch {};
     };
 }
 
-fn readHeaders(stream: std.Io.net.Stream, buffer: []u8) !usize {
-    var total: usize = 0;
-    var idle_ms: usize = 0;
-    while (total < buffer.len) {
-        var descriptor = [_]std.posix.pollfd{.{
-            .fd = stream.socket.handle,
-            .events = std.posix.POLL.IN,
-            .revents = 0,
-        }};
-        const ready = try std.posix.poll(&descriptor, 100);
-        if (ready == 0) {
-            idle_ms += 100;
-            if (idle_ms >= 5000) return error.RequestTimeout;
-            continue;
+fn forwardRequestWithTimeout(
+    state: *State,
+    io: std.Io,
+    downstream: std.Io.net.Stream,
+    inbound: *const ParsedInbound,
+    initial_body: []const u8,
+    raw: []const u8,
+    downstream_started: *bool,
+) !void {
+    const deadline_ns = @as(i128, std.Io.Clock.Timestamp.now(io, .awake).raw.nanoseconds) +
+        @as(i128, state.limits.upstream_timeout_ms) * std.time.ns_per_ms;
+    const Task = struct {
+        fn run(
+            task_state: *State,
+            task_io: std.Io,
+            task_downstream: std.Io.net.Stream,
+            task_inbound: *const ParsedInbound,
+            task_initial_body: []const u8,
+            task_raw: []const u8,
+            task_downstream_started: *bool,
+            task_deadline_ns: i128,
+            result: *?anyerror,
+            done: *std.Io.Event,
+        ) void {
+            defer done.set(task_io);
+            forwardRequest(
+                task_state,
+                task_io,
+                task_downstream,
+                task_inbound,
+                task_initial_body,
+                task_raw,
+                task_downstream_started,
+                task_deadline_ns,
+            ) catch |err| {
+                result.* = err;
+            };
         }
-        const n = std.posix.read(stream.socket.handle, buffer[total..]) catch |err| switch (err) {
-            error.WouldBlock => continue,
-            else => return err,
+    };
+
+    var result: ?anyerror = null;
+    var done: std.Io.Event = .unset;
+    var future = io.async(Task.run, .{
+        state,
+        io,
+        downstream,
+        inbound,
+        initial_body,
+        raw,
+        downstream_started,
+        deadline_ns,
+        &result,
+        &done,
+    });
+    while (true) {
+        done.waitTimeout(io, .{
+            .duration = .{
+                .raw = std.Io.Duration.fromMilliseconds(@min(state.limits.upstream_timeout_ms, 10)),
+                .clock = .awake,
+            },
+        }) catch |err| switch (err) {
+            error.Timeout => {
+                if (state.stop.load(.acquire)) {
+                    _ = future.cancel(io);
+                    return error.Canceled;
+                }
+                if (std.Io.Clock.Timestamp.now(io, .awake).raw.nanoseconds >= deadline_ns) {
+                    _ = future.cancel(io);
+                    return error.UpstreamTimeout;
+                }
+                continue;
+            },
+            error.Canceled => {
+                _ = future.cancel(io);
+                return error.Canceled;
+            },
         };
+        break;
+    }
+    future.await(io);
+    if (result) |err| return err;
+}
+
+fn readHeaders(state: *const State, io: std.Io, stream: std.Io.net.Stream, buffer: []u8) !usize {
+    const deadline_ns = @as(i128, std.Io.Clock.Timestamp.now(io, .awake).raw.nanoseconds) +
+        @as(i128, state.limits.io_timeout_ms) * std.time.ns_per_ms;
+    var total: usize = 0;
+    while (total < buffer.len) {
+        if (state.stop.load(.acquire)) return error.Canceled;
+        const now_ns = std.Io.Clock.Timestamp.now(io, .awake).raw.nanoseconds;
+        if (now_ns >= deadline_ns) return error.RequestTimeout;
+        const remaining_ns = deadline_ns - now_ns;
+        const remaining_ms = @divTrunc(remaining_ns + std.time.ns_per_ms - 1, std.time.ns_per_ms);
+        const n = try readSocketChunk(
+            stream.socket.handle,
+            buffer[total..],
+            @intCast(@min(remaining_ms, state.limits.io_timeout_ms)),
+        );
         if (n == 0) return error.InvalidRequest;
-        idle_ms = 0;
         total += n;
         if (std.mem.indexOf(u8, buffer[0..total], "\r\n\r\n") != null) return total;
     }
     return error.RequestTooLarge;
 }
 
-fn parseInbound(
-    allocator: std.mem.Allocator,
-    provider: Provider,
-    bytes: []const u8,
-    limits: Limits,
-) !ParsedInbound {
-    const headers_end = (std.mem.indexOf(u8, bytes, "\r\n\r\n") orelse return error.InvalidRequest) + 4;
-    const line_end = std.mem.indexOf(u8, bytes[0..headers_end], "\r\n") orelse return error.InvalidRequest;
-    var parts = std.mem.splitScalar(u8, bytes[0..line_end], ' ');
-    const method_text = parts.next() orelse return error.InvalidRequest;
-    const target = parts.next() orelse return error.InvalidRequest;
-    const version = parts.next() orelse return error.InvalidRequest;
-    if (parts.next() != null or !std.mem.eql(u8, version, "HTTP/1.1")) return error.InvalidRequest;
-    const method = std.meta.stringToEnum(std.http.Method, method_text) orelse return error.UnsupportedMethod;
-    if (method == .CONNECT or target.len == 0 or target[0] != '/' or
-        std.mem.indexOf(u8, target, "://") != null or std.mem.indexOfScalar(u8, target, '#') != null)
-        return error.InvalidTarget;
-
-    var forwarded: std.ArrayList(std.http.Header) = .empty;
-    errdefer forwarded.deinit(allocator);
-    var content_length: ?usize = null;
-    var phantom: ?[]const u8 = null;
-    var saw_host = false;
-    var lines = std.mem.splitSequence(u8, bytes[line_end + 2 .. headers_end - 2], "\r\n");
-    while (lines.next()) |line| {
-        if (line.len == 0) continue;
-        const colon = std.mem.indexOfScalar(u8, line, ':') orelse return error.InvalidHeader;
-        if (colon == 0) return error.InvalidHeader;
-        const name = line[0..colon];
-        const value = std.mem.trim(u8, line[colon + 1 ..], " \t");
-        if (std.ascii.eqlIgnoreCase(name, "host")) {
-            if (saw_host) return error.DuplicateHeader;
-            saw_host = true;
-            continue;
-        }
-        if (std.ascii.eqlIgnoreCase(name, "content-length")) {
-            if (content_length != null) return error.DuplicateHeader;
-            content_length = std.fmt.parseInt(usize, value, 10) catch return error.InvalidHeader;
-            if (content_length.? > limits.request_body) return error.RequestBodyTooLarge;
-            continue;
-        }
-        if (std.ascii.eqlIgnoreCase(name, "transfer-encoding")) return error.UnsupportedTransferEncoding;
-        if (isHopByHop(name) or std.ascii.eqlIgnoreCase(name, "accept-encoding")) continue;
-        const anthropic_auth = std.ascii.eqlIgnoreCase(name, "x-api-key");
-        const authorization = std.ascii.eqlIgnoreCase(name, "authorization");
-        switch (provider) {
-            .anthropic => {
-                if (authorization) return error.UnexpectedAuthorizationHeader;
-                if (anthropic_auth) {
-                    if (phantom != null) return error.DuplicateAuthorizationHeader;
-                    phantom = value;
-                    continue;
-                }
-            },
-            .openai => {
-                if (anthropic_auth) return error.UnexpectedAuthorizationHeader;
-                if (authorization) {
-                    if (phantom != null) return error.DuplicateAuthorizationHeader;
-                    if (!std.mem.startsWith(u8, value, "Bearer ")) return error.InvalidAuthorizationScheme;
-                    phantom = value["Bearer ".len..];
-                    if (phantom.?.len == 0) return error.InvalidAuthorizationScheme;
-                    continue;
-                }
-            },
-        }
-        if (std.mem.indexOf(u8, value, "orca-secret://") != null) return error.PhantomInUnexpectedHeader;
-        try forwarded.append(allocator, .{ .name = name, .value = value });
-    }
-    if (!saw_host) return error.MissingHost;
-    return .{
-        .method = method,
-        .target = target,
-        .headers_end = headers_end,
-        .content_length = content_length orelse 0,
-        .forwarded_headers = forwarded,
-        .phantom = phantom orelse return error.MissingAuthorization,
+fn readSocketChunk(handle: std.Io.net.Socket.Handle, buffer: []u8, timeout_ms: u32) !usize {
+    var descriptor = [_]std.posix.pollfd{.{
+        .fd = handle,
+        .events = std.posix.POLL.IN,
+        .revents = 0,
+    }};
+    const ready = try std.posix.poll(&descriptor, @intCast(timeout_ms));
+    if (ready == 0) return error.RequestTimeout;
+    return std.posix.read(handle, buffer) catch |err| switch (err) {
+        error.WouldBlock => error.RequestTimeout,
+        else => |e| e,
     };
-}
-
-fn readBody(
-    allocator: std.mem.Allocator,
-    client: std.Io.net.Stream,
-    initial: []const u8,
-    content_length: usize,
-    max_body: usize,
-) ![]u8 {
-    if (content_length > max_body) return error.RequestBodyTooLarge;
-    const body = try allocator.alloc(u8, content_length);
-    errdefer allocator.free(body);
-    const copied = @min(initial.len, body.len);
-    @memcpy(body[0..copied], initial[0..copied]);
-    var offset = copied;
-    var idle_ms: usize = 0;
-    while (offset < body.len) {
-        var descriptor = [_]std.posix.pollfd{.{
-            .fd = client.socket.handle,
-            .events = std.posix.POLL.IN,
-            .revents = 0,
-        }};
-        const ready = try std.posix.poll(&descriptor, 100);
-        if (ready == 0) {
-            idle_ms += 100;
-            if (idle_ms >= 5000) return error.RequestTimeout;
-            continue;
-        }
-        const n = std.posix.read(client.socket.handle, body[offset..]) catch |err| switch (err) {
-            error.WouldBlock => continue,
-            else => return err,
-        };
-        if (n == 0) return error.IncompleteBody;
-        idle_ms = 0;
-        offset += n;
-    }
-    return body;
 }
 
 fn forwardRequest(
@@ -454,9 +484,12 @@ fn forwardRequest(
     io: std.Io,
     downstream: std.Io.net.Stream,
     inbound: *const ParsedInbound,
-    body: []const u8,
+    initial_body: []const u8,
     raw: []const u8,
+    downstream_started: *bool,
+    deadline_ns: i128,
 ) !void {
+    if (initial_body.len > inbound.content_length) return error.UnexpectedExtraRequestBytes;
     const uri_text = try std.fmt.allocPrint(state.allocator, "{s}{s}", .{ state.upstream_origin, inbound.target });
     defer state.allocator.free(uri_text);
     const uri = try std.Uri.parse(uri_text);
@@ -486,90 +519,117 @@ fn forwardRequest(
         .extra_headers = extra_headers.items,
     });
     defer request.deinit();
+    var watchdog: UpstreamWatchdog = .{
+        .io = io,
+        .stream = request.connection.?.stream_reader.stream,
+        .deadline_ns = deadline_ns,
+    };
+    const watchdog_thread = try std.Thread.spawn(.{}, UpstreamWatchdog.run, .{&watchdog});
+    defer {
+        watchdog.done.store(true, .release);
+        watchdog_thread.join();
+    }
     if (inbound.method.requestHasBody()) {
-        request.transfer_encoding = .{ .content_length = body.len };
+        request.transfer_encoding = .{ .content_length = inbound.content_length };
         var write_buffer: [16 * 1024]u8 = undefined;
         var body_writer = try request.sendBody(&write_buffer);
-        try body_writer.writer.writeAll(body);
+        try copyRequestBody(
+            downstream,
+            initial_body,
+            inbound.content_length,
+            state.limits.io_timeout_ms,
+            &body_writer,
+        );
         try body_writer.end();
     } else {
-        if (body.len != 0) return error.BodyNotAllowed;
+        if (inbound.content_length != 0) return error.BodyNotAllowed;
         try request.sendBodiless();
     }
     var response = try request.receiveHead(&.{});
     const status = response.head.status;
     const reason = try state.allocator.dupe(u8, response.head.reason);
     defer state.allocator.free(reason);
-    const response_headers = try copyResponseHeaders(state.allocator, response.head, state.limits.response_head);
-    defer freeHeaders(state.allocator, response_headers);
-    var output: std.Io.Writer.Allocating = .init(state.allocator);
-    defer output.deinit();
+    const response_headers = try protocol.copyResponseHeaders(state.allocator, response.head, state.limits.response_head);
+    defer protocol.freeHeaders(state.allocator, response_headers);
+    const response_content_length = try protocol.boundedResponseContentLength(
+        response.head.content_length,
+        state.limits.response_body,
+    );
+    var downstream_buffer: [16 * 1024]u8 = undefined;
+    var downstream_writer = downstream.writer(io, &downstream_buffer);
+    const chunked = response_content_length == null;
+    try protocol.writeResponseHead(
+        &downstream_writer.interface,
+        @intFromEnum(status),
+        reason,
+        response_headers,
+        response_content_length,
+        chunked,
+    );
+    downstream_started.* = true;
     var transfer_buffer: [16 * 1024]u8 = undefined;
     const reader = response.reader(&transfer_buffer);
     var chunk: [16 * 1024]u8 = undefined;
+    var total: usize = 0;
     while (true) {
-        const n = try reader.readSliceShort(&chunk);
-        if (n == 0) break;
-        if (output.writer.end + n > state.limits.response_body) return error.ResponseBodyTooLarge;
-        try output.writer.writeAll(chunk[0..n]);
+        var chunk_writer = std.Io.Writer.fixed(&chunk);
+        const n = reader.stream(&chunk_writer, .limited(chunk.len)) catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => |e| return e,
+        };
+        if (n == 0) return error.IncompleteResponse;
+        if (n > state.limits.response_body -| total) return error.ResponseBodyTooLarge;
+        total += n;
+        if (chunked) try downstream_writer.interface.print("{x}\r\n", .{n});
+        try downstream_writer.interface.writeAll(chunk_writer.buffered());
+        if (chunked) try downstream_writer.interface.writeAll("\r\n");
+        try downstream_writer.interface.flush();
     }
-    const response_body = try output.toOwnedSlice();
-    defer state.allocator.free(response_body);
-    try writeResponse(io, downstream, @intFromEnum(status), reason, response_headers, response_body);
+    if (chunked) {
+        try downstream_writer.interface.writeAll("0\r\n\r\n");
+        try downstream_writer.interface.flush();
+    }
 }
 
-fn copyResponseHeaders(
-    allocator: std.mem.Allocator,
-    head: std.http.Client.Response.Head,
-    max_bytes: usize,
-) ![]std.http.Header {
-    var headers: std.ArrayList(std.http.Header) = .empty;
-    errdefer freeHeaderList(allocator, &headers);
-    var total: usize = 0;
-    var iterator = head.iterateHeaders();
-    while (iterator.next()) |header| {
-        if (isHopByHop(header.name) or std.ascii.eqlIgnoreCase(header.name, "content-length") or
-            std.ascii.eqlIgnoreCase(header.name, "transfer-encoding")) continue;
-        total += header.name.len + header.value.len + 4;
-        if (total > max_bytes) return error.ResponseHeadersTooLarge;
-        const name = try allocator.dupe(u8, header.name);
-        errdefer allocator.free(name);
-        const value = try allocator.dupe(u8, header.value);
-        errdefer allocator.free(value);
-        try headers.append(allocator, .{ .name = name, .value = value });
-    }
-    return try headers.toOwnedSlice(allocator);
-}
-fn freeHeaderList(allocator: std.mem.Allocator, headers: *std.ArrayList(std.http.Header)) void {
-    for (headers.items) |header| {
-        allocator.free(header.name);
-        allocator.free(header.value);
-    }
-    headers.deinit(allocator);
-}
-fn freeHeaders(allocator: std.mem.Allocator, headers: []std.http.Header) void {
-    for (headers) |header| {
-        allocator.free(header.name);
-        allocator.free(header.value);
-    }
-    allocator.free(headers);
-}
-fn writeResponse(
+const UpstreamWatchdog = struct {
     io: std.Io,
     stream: std.Io.net.Stream,
-    status: u16,
-    reason: []const u8,
-    headers: []const std.http.Header,
-    body: []const u8,
+    deadline_ns: i128,
+    done: std.atomic.Value(bool) = .init(false),
+
+    fn run(self: *UpstreamWatchdog) void {
+        while (!self.done.load(.acquire)) {
+            const now_ns = std.Io.Clock.Timestamp.now(self.io, .awake).raw.nanoseconds;
+            if (now_ns >= self.deadline_ns) {
+                self.stream.shutdown(self.io, .both) catch {};
+                return;
+            }
+            std.Io.sleep(self.io, std.Io.Duration.fromNanoseconds(std.time.ns_per_ms), .awake) catch return;
+        }
+    }
+};
+
+fn copyRequestBody(
+    downstream: std.Io.net.Stream,
+    initial: []const u8,
+    content_length: usize,
+    timeout_ms: u32,
+    upstream: *std.http.BodyWriter,
 ) !void {
-    var buffer: [16 * 1024]u8 = undefined;
-    var writer = stream.writer(io, &buffer);
-    try writer.interface.print("HTTP/1.1 {d} {s}\r\n", .{ status, reason });
-    for (headers) |header| try writer.interface.print("{s}: {s}\r\n", .{ header.name, header.value });
-    try writer.interface.print("Content-Length: {d}\r\nConnection: close\r\n\r\n", .{body.len});
-    try writer.interface.writeAll(body);
-    try writer.interface.flush();
+    if (initial.len > content_length) return error.UnexpectedExtraRequestBytes;
+    try upstream.writer.writeAll(initial);
+    try upstream.flush();
+    var remaining = content_length - initial.len;
+    var chunk: [16 * 1024]u8 = undefined;
+    while (remaining > 0) {
+        const n = try readSocketChunk(downstream.socket.handle, chunk[0..@min(chunk.len, remaining)], timeout_ms);
+        if (n == 0) return error.IncompleteBody;
+        try upstream.writer.writeAll(chunk[0..n]);
+        try upstream.flush();
+        remaining -= n;
+    }
 }
+
 fn writeError(io: std.Io, stream: std.Io.net.Stream, status: u16, reason: []const u8) !void {
     var buffer: [512]u8 = undefined;
     var writer = stream.writer(io, &buffer);
@@ -578,26 +638,6 @@ fn writeError(io: std.Io, stream: std.Io.net.Stream, status: u16, reason: []cons
         .{ status, reason },
     );
     try writer.interface.flush();
-}
-fn isHopByHop(name: []const u8) bool {
-    return std.ascii.eqlIgnoreCase(name, "connection") or std.ascii.eqlIgnoreCase(name, "keep-alive") or
-        std.ascii.eqlIgnoreCase(name, "proxy-authenticate") or
-        std.ascii.eqlIgnoreCase(name, "proxy-authorization") or std.ascii.eqlIgnoreCase(name, "te") or
-        std.ascii.eqlIgnoreCase(name, "trailer") or std.ascii.eqlIgnoreCase(name, "upgrade");
-}
-fn isAuthorizationError(err: anyerror) bool {
-    return err == error.MissingAuthorization or err == error.DuplicateAuthorizationHeader or
-        err == error.UnexpectedAuthorizationHeader or err == error.InvalidAuthorizationScheme or
-        err == error.PhantomInUnexpectedHeader;
-}
-fn denialReason(err: anyerror) []const u8 {
-    if (isAuthorizationError(err)) return "invalid_auth";
-    return switch (err) {
-        error.RequestBodyTooLarge => "request_body_too_large",
-        error.InvalidTarget => "invalid_target",
-        error.UnsupportedTransferEncoding => "unsupported_transfer_encoding",
-        else => "invalid_request",
-    };
 }
 fn authorizationReason(err: session_secrets.AuthorizationError) []const u8 {
     return switch (err) {
@@ -615,199 +655,4 @@ fn wake(io: std.Io, port: u16) void {
     const address = std.Io.net.IpAddress.parse("127.0.0.1", port) catch return;
     var stream = address.connect(io, .{ .mode = .stream }) catch return;
     stream.close(io);
-}
-
-test "gateway parser accepts exact Anthropic phantom and rejects phantom smuggling" {
-    const phantom = "orca-secret://session/0123456789abcdef0123456789abcdef/ANTHROPIC_API_KEY/0123456789abcdef";
-    const request = try std.fmt.allocPrint(std.testing.allocator, "POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1\r\nx-api-key: {s}\r\ncontent-type: application/json\r\ncontent-length: 2\r\n\r\n{{}}", .{phantom});
-    defer std.testing.allocator.free(request);
-    var parsed = try parseInbound(std.testing.allocator, .anthropic, request, .{});
-    defer parsed.deinit(std.testing.allocator);
-    try std.testing.expectEqualStrings(phantom, parsed.phantom);
-    try std.testing.expectEqual(@as(usize, 2), parsed.content_length);
-    const smuggled = try std.fmt.allocPrint(std.testing.allocator, "POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1\r\nx-api-key: {s}\r\nx-extra: orca-secret://evil\r\n\r\n", .{phantom});
-    defer std.testing.allocator.free(smuggled);
-    try std.testing.expectError(
-        error.PhantomInUnexpectedHeader,
-        parseInbound(std.testing.allocator, .anthropic, smuggled, .{}),
-    );
-}
-
-test "gateway swaps an exact phantom for fixed synthetic upstream and denies unminted token" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
-    const io = std.testing.io;
-    const raw_secret = "sk-ant-gateway-wire-canary";
-    var host_env = std.process.Environ.Map.init(std.testing.allocator);
-    defer host_env.deinit();
-    try host_env.put("ANTHROPIC_API_KEY", raw_secret);
-    var store = try session_secrets.Store.init(io, std.testing.allocator);
-    defer store.deinit();
-    const phantom = switch (try store.captureHostEnv(&host_env, .{
-        .env_var = "ANTHROPIC_API_KEY",
-        .provider = .anthropic,
-        .allowed_hosts = &.{"api.anthropic.com"},
-    })) {
-        .minted => |value| value,
-        else => return error.TestUnexpectedResult,
-    };
-
-    const upstream_address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
-    var upstream = try upstream_address.listen(io, .{ .reuse_address = true });
-    defer upstream.deinit(io);
-    var upstream_state: TestUpstreamState = .{
-        .io = io,
-        .server = &upstream,
-        .expected_raw = raw_secret,
-    };
-    const upstream_thread = try std.Thread.spawn(.{}, testUpstream, .{&upstream_state});
-    defer upstream_thread.join();
-    const origin = try std.fmt.allocPrint(
-        std.testing.allocator,
-        "http://127.0.0.1:{d}",
-        .{upstream.socket.address.getPort()},
-    );
-    defer std.testing.allocator.free(origin);
-
-    var runtime = try listenWithOrigin(std.testing.allocator, &store, .anthropic, .{}, origin);
-    defer runtime.deinit();
-    try runtime.startServing();
-
-    const allowed = try std.fmt.allocPrint(
-        std.testing.allocator,
-        "POST /v1/messages HTTP/1.1\r\nHost: localhost\r\nx-api-key: {s}\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{{}}",
-        .{phantom},
-    );
-    defer std.testing.allocator.free(allowed);
-    const allowed_response = try gatewayExchange(io, runtime.bindPort(), allowed);
-    try std.testing.expect(std.mem.indexOf(u8, &allowed_response, "200 OK") != null);
-    try std.testing.expect(std.mem.indexOf(u8, &allowed_response, "synthetic-ok") != null);
-
-    const wrong_host = try std.fmt.allocPrint(
-        std.testing.allocator,
-        "POST http://evil.invalid/v1/messages HTTP/1.1\r\nHost: evil.invalid\r\nx-api-key: {s}\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{{}}",
-        .{phantom},
-    );
-    defer std.testing.allocator.free(wrong_host);
-    const wrong_host_response = try gatewayExchange(io, runtime.bindPort(), wrong_host);
-    try std.testing.expect(std.mem.indexOf(u8, &wrong_host_response, "400 Bad Request") != null);
-
-    const denied =
-        "POST /v1/messages HTTP/1.1\r\n" ++
-        "Host: localhost\r\n" ++
-        "x-api-key: orca-secret://session/evil/ANTHROPIC_API_KEY/0000000000000000\r\n" ++
-        "content-length: 2\r\nconnection: close\r\n\r\n{}";
-    const denied_response = try gatewayExchange(io, runtime.bindPort(), denied);
-    try std.testing.expect(std.mem.indexOf(u8, &denied_response, "403 Forbidden") != null);
-
-    try runtime.waitForIdle(2 * std.time.ns_per_s);
-    const events = try runtime.snapshotAuditEvents(std.testing.allocator);
-    defer runtime.freeAuditEvents(std.testing.allocator, events);
-    try std.testing.expectEqual(@as(usize, 3), events.len);
-    try std.testing.expectEqual(AuditKind.phantom_swap, events[0].kind);
-    try std.testing.expectEqual(AuditKind.phantom_denied, events[1].kind);
-    try std.testing.expectEqualStrings("invalid_target", events[1].reason_code);
-    try std.testing.expectEqual(AuditKind.phantom_denied, events[2].kind);
-    for (events) |event| {
-        try std.testing.expect(std.mem.indexOf(u8, event.env_var, raw_secret) == null);
-        try std.testing.expect(std.mem.indexOf(u8, event.reason_code, raw_secret) == null);
-        try std.testing.expect(std.mem.indexOf(u8, event.reason_code, phantom) == null);
-    }
-    try std.testing.expect(upstream_state.saw_raw);
-    try std.testing.expect(!upstream_state.saw_phantom);
-}
-
-test "OpenAI gateway swaps only exact Bearer phantom" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
-    const io = std.testing.io;
-    const raw_secret = "sk-openai-gateway-wire-canary";
-    var host_env = std.process.Environ.Map.init(std.testing.allocator);
-    defer host_env.deinit();
-    try host_env.put("OPENAI_API_KEY", raw_secret);
-    var store = try session_secrets.Store.init(io, std.testing.allocator);
-    defer store.deinit();
-    const phantom = switch (try store.captureHostEnv(&host_env, .{
-        .env_var = "OPENAI_API_KEY",
-        .provider = .openai,
-        .allowed_hosts = &.{"api.openai.com"},
-    })) {
-        .minted => |value| value,
-        else => return error.TestUnexpectedResult,
-    };
-    const upstream_address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
-    var upstream = try upstream_address.listen(io, .{ .reuse_address = true });
-    defer upstream.deinit(io);
-    var upstream_state: TestUpstreamState = .{
-        .io = io,
-        .server = &upstream,
-        .expected_raw = raw_secret,
-    };
-    const upstream_thread = try std.Thread.spawn(.{}, testUpstream, .{&upstream_state});
-    defer upstream_thread.join();
-    const origin = try std.fmt.allocPrint(
-        std.testing.allocator,
-        "http://127.0.0.1:{d}",
-        .{upstream.socket.address.getPort()},
-    );
-    defer std.testing.allocator.free(origin);
-    var runtime = try listenWithOrigin(std.testing.allocator, &store, .openai, .{}, origin);
-    defer runtime.deinit();
-    try runtime.startServing();
-    const request = try std.fmt.allocPrint(
-        std.testing.allocator,
-        "POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {s}\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{{}}",
-        .{phantom},
-    );
-    defer std.testing.allocator.free(request);
-    const response = try gatewayExchange(io, runtime.bindPort(), request);
-    try std.testing.expect(std.mem.indexOf(u8, &response, "200 OK") != null);
-    try runtime.waitForIdle(2 * std.time.ns_per_s);
-    try std.testing.expect(upstream_state.saw_raw);
-    try std.testing.expect(!upstream_state.saw_phantom);
-}
-
-const TestUpstreamState = struct {
-    io: std.Io,
-    server: *std.Io.net.Server,
-    expected_raw: []const u8,
-    saw_raw: bool = false,
-    saw_phantom: bool = false,
-};
-
-fn testUpstream(state: *TestUpstreamState) void {
-    var stream = state.server.accept(state.io) catch return;
-    defer stream.close(state.io);
-    var request: [4096]u8 = undefined;
-    var total: usize = 0;
-    while (total < request.len) {
-        const n = std.posix.read(stream.socket.handle, request[total..]) catch return;
-        if (n == 0) break;
-        total += n;
-        if (std.mem.indexOf(u8, request[0..total], "\r\n\r\n{}") != null) break;
-    }
-    state.saw_raw = std.mem.indexOf(u8, request[0..total], state.expected_raw) != null;
-    state.saw_phantom = std.mem.indexOf(u8, request[0..total], "orca-secret://") != null;
-    var writer_buffer: [512]u8 = undefined;
-    var writer = stream.writer(state.io, &writer_buffer);
-    writer.interface.writeAll(
-        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 12\r\nconnection: close\r\n\r\nsynthetic-ok",
-    ) catch return;
-    writer.interface.flush() catch return;
-}
-
-fn gatewayExchange(io: std.Io, port: u16, request: []const u8) ![4096]u8 {
-    const address = try std.Io.net.IpAddress.parse("127.0.0.1", port);
-    var stream = try address.connect(io, .{ .mode = .stream });
-    defer stream.close(io);
-    var writer_buffer: [4096]u8 = undefined;
-    var writer = stream.writer(io, &writer_buffer);
-    try writer.interface.writeAll(request);
-    try writer.interface.flush();
-    var response: [4096]u8 = @splat(0);
-    var total: usize = 0;
-    while (total < response.len) {
-        const n = try std.posix.read(stream.socket.handle, response[total..]);
-        if (n == 0) break;
-        total += n;
-    }
-    return response;
 }

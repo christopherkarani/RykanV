@@ -112,6 +112,9 @@ pub const ApplyBoundary = struct {
     env_map: ?*std.process.Environ.Map = null,
     /// Optional exact session-mint membership for provider phantoms.
     minted_env_lookup: ?env_scrub.MintedEnvLookup = null,
+    /// Explicit loud escape. Loader/startup injection scrub still runs, but
+    /// the attach-time launch allowlist must not remove host credentials.
+    with_host_secrets: bool = false,
     /// Extra profile options.
     include_tmp: bool = false,
     control_roots: []const []const u8 = &.{},
@@ -800,14 +803,16 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
         }
         if (boundary.env_map) |env_map| {
             // Allowlist/TMPDIR OOM must stay OutOfMemory (not lossy RequireFailed).
-            const allow_removed = env_scrub.applyLaunchAllowlistInPlaceWithMints(
-                env_map,
-                boundary.minted_env_lookup,
-            ) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-            };
-            removed += allow_removed;
-            allowlisted = true;
+            if (!boundary.with_host_secrets) {
+                const allow_removed = env_scrub.applyLaunchAllowlistInPlaceWithMints(
+                    env_map,
+                    boundary.minted_env_lookup,
+                ) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                };
+                removed += allow_removed;
+                allowlisted = true;
+            }
             // After allowlist keeps TMPDIR key, point it at workspace session temp.
             _ = rewriteTempEnvForAttach(boundary.allocator, env_map, boundary.workspace_root) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,

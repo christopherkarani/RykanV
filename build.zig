@@ -218,6 +218,7 @@ pub fn build(b: *std.Build) void {
         }),
         .filters = test_filters,
     });
+    core_contract_tests.root_module.link_libc = true;
     const run_core_contract_tests = addRunTestTerminal(b, core_contract_tests);
     const run_core_contract_tests_only = addRunTestTerminal(b, core_contract_tests);
 
@@ -249,6 +250,7 @@ pub fn build(b: *std.Build) void {
         }),
         .filters = test_filters,
     });
+    intercept_tests.root_module.link_libc = true;
     const run_intercept_tests = addRunTestTerminal(b, intercept_tests);
 
     const shell_engine_tests = b.addTest(.{

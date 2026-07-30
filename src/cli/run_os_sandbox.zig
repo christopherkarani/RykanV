@@ -30,6 +30,7 @@ pub fn applyForRun(
     workspace_root: []const u8,
     env_map: *std.process.Environ.Map,
     minted_env_lookup: ?sandbox.env_scrub.MintedEnvLookup,
+    with_host_secrets: bool,
     network_proxy_port: ?u16,
     require_network_route_forcing: bool,
     seatbelt_profile: sandbox.posture.SeatbeltProfileGrade,
@@ -52,6 +53,7 @@ pub fn applyForRun(
         .workspace_root = workspace_root,
         .env_map = env_map,
         .minted_env_lookup = minted_env_lookup,
+        .with_host_secrets = with_host_secrets,
         .launch_exec_paths = launch_exec_paths,
         .network_proxy_port = network_proxy_port,
         .require_network_route_forcing = require_network_route_forcing,
@@ -189,9 +191,27 @@ pub fn auditSandboxPosture(
 }
 
 /// Format mechanism-neutral OS sandbox banner line for session start.
-pub fn formatOsSandboxBannerLine(buf: []u8, receipt: sandbox.posture.AttachReceipt) []const u8 {
+pub fn formatOsSandboxBannerLine(
+    buf: []u8,
+    receipt: sandbox.posture.AttachReceipt,
+    with_host_secrets: bool,
+) []const u8 {
     // Thin wrapper: on format overflow, keep the receipt posture tag only.
     // Never invent "unavailable" for an active/disabled/failed receipt.
+    if (with_host_secrets and receipt.posture == .active) {
+        return if (receipt.seatbelt_profile) |grade|
+            std.fmt.bufPrint(
+                buf,
+                "OS sandbox: active (filesystem: {s}; network: {s}; seatbelt_profile={s}; credentials: host environment retained (explicit escape); tools: wrapper-mediated)",
+                .{ receipt.fs_scope, receipt.network_scope, grade.toString() },
+            ) catch "OS sandbox: active (credentials: host environment retained; explicit escape)"
+        else
+            std.fmt.bufPrint(
+                buf,
+                "OS sandbox: active (filesystem: {s}; network: {s}; credentials: host environment retained (explicit escape); tools: wrapper-mediated)",
+                .{ receipt.fs_scope, receipt.network_scope },
+            ) catch "OS sandbox: active (credentials: host environment retained; explicit escape)";
+    }
     return sandbox.posture.formatSessionBanner(buf, receipt) catch switch (receipt.posture) {
         .active => "OS sandbox: active",
         .prepared => "OS sandbox: prepared",
@@ -233,10 +253,23 @@ test "formatOsSandboxBannerLine does not invent unavailable for active on format
         "workspace child RW, root RO, system RO, platform tmp RW, no home",
     );
     try std.testing.expect(active.posture == .active);
-    const line = formatOsSandboxBannerLine(&tiny, active);
+    const line = formatOsSandboxBannerLine(&tiny, active, false);
     try std.testing.expect(std.mem.indexOf(u8, line, "unavailable") == null);
     try std.testing.expect(std.mem.indexOf(u8, line, "active") != null);
     try std.testing.expect(std.mem.startsWith(u8, line, "OS sandbox:"));
+}
+
+test "formatOsSandboxBannerLine attests explicit host-secret escape" {
+    var buf: [512]u8 = undefined;
+    const active = try sandbox.posture.activeReceipt(
+        .landlock,
+        "abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123",
+        "workspace child RW, root RO, system RO, no home",
+    );
+    const line = formatOsSandboxBannerLine(&buf, active, true);
+    try std.testing.expect(std.mem.indexOf(u8, line, "host environment retained") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line, "explicit escape") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line, "secrets stripped") == null);
 }
 
 test "warnAutoDegrade is silent for disabled posture (mode off materials)" {

@@ -11,6 +11,7 @@ const sandbox = @import("../sandbox/mod.zig");
 const brand = @import("brand.zig");
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
+const host_launch = @import("host_launch.zig");
 const style = @import("style.zig");
 const shell_eval = @import("shell_eval.zig");
 const rust_visibility = @import("rust_visibility.zig");
@@ -71,6 +72,7 @@ fn captureSessionGrants(
     host_env: *const std.process.Environ.Map,
     selected_policy: *const policy.schema.Policy,
     workspace_root: []const u8,
+    env_schema: ?*const intercept.env_schema.Schema,
 ) !void {
     for (selected_policy.credentials.grants) |grant| {
         const spec: intercept.session_secrets.GrantSpec = .{
@@ -94,6 +96,11 @@ fn captureSessionGrants(
     }
     for (default_session_grants) |grant| {
         if (store.hasEnvVar(grant.env_var)) continue;
+        if (env_schema) |schema| {
+            if (schema.find(grant.env_var)) |variable| {
+                if (variable.grant == null) continue;
+            }
+        }
         _ = try store.captureHostEnv(host_env, grant);
     }
 }
@@ -120,6 +127,20 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     return commandWithStdio(io, argv, stdout, stderr, .inherit, true);
 }
 
+/// Production entry point. Zig 0.16 supplies the authoritative process
+/// environment through `std.process.Init`; callers must preserve that map
+/// instead of reconstructing it from libc (which is empty on some Linux
+/// startup paths).
+pub fn commandWithEnv(
+    io: std.Io,
+    current_env: *const std.process.Environ.Map,
+    argv: []const []const u8,
+    stdout: anytype,
+    stderr: anytype,
+) !u8 {
+    return commandWithStdioAndEnv(io, argv, stdout, stderr, .inherit, true, current_env, null);
+}
+
 fn commandWithStdio(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype, stdio: supervisor.StdioBehavior, audit_enabled: bool) !u8 {
     return commandWithStdioAndEnv(io, argv, stdout, stderr, stdio, audit_enabled, null, null);
 }
@@ -140,11 +161,12 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         try stderr.writeAll("ryk run: cannot combine --secretless with --with-host-secrets.\n");
         return exit_codes.usage;
     }
-    const secret_boundary: intercept.env.SecretBoundary = if (options.secretless) .empty_backpack else .off;
+    const secret_boundary = effectiveSecretBoundary(options);
+    const boundary_active = secret_boundary == .empty_backpack;
     const effective_os_sandbox = effectiveOsSandboxMode(secret_boundary, options.os_sandbox) catch {
         try stderr.writeAll(
-            "ryk run: cannot combine --secretless with --os-sandbox off; " ++
-                "empty-backpack requires an active OS sandbox.\n",
+            "ryk run: empty-backpack secret boundary requires an active OS sandbox; " ++
+                "remove --os-sandbox off.\n",
         );
         return exit_codes.usage;
     };
@@ -196,6 +218,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         .no_secrets = options.no_secrets,
         .secret_boundary = secret_boundary,
         .inherit_env = options.inherit_env,
+        .with_host_secrets = options.with_host_secrets,
         .schema = if (project_env_schema) |*schema_value| schema_value else null,
     };
     var owned_current_env: ?std.process.Environ.Map = null;
@@ -234,6 +257,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
             current_env,
             loaded_policy.innerPtr(),
             workspace_root_for_policy,
+            if (project_env_schema) |*schema_value| schema_value else null,
         ) catch |err| {
             try stderr.print("ryk run: secret boundary grant capture failed closed: {s}\n", .{@errorName(err)});
             return exit_codes.general;
@@ -315,6 +339,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         workspace_root_for_policy,
         &filtered_env.env_map,
         minted_env_lookup,
+        options.with_host_secrets,
         if (proxy_runtime) |runtime| runtime.bindPort() else null,
         requiresBackend(options, .network_enforce),
         options.seatbelt_profile,
@@ -461,7 +486,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         .io = io,
         .writer = stdout,
         .network_mode = cliNetworkMode(options),
-        .secretless = options.secretless,
+        .secretless = boundary_active,
         .with_host_secrets = options.with_host_secrets,
         .anthropic_gateway = anthropic_gateway != null,
         .openai_gateway = openai_gateway != null,
@@ -1063,7 +1088,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     }
 
     const protected_session =
-        options.secretless and apply_result.receipt.posture == .active and !boundary_backend_failed;
+        boundary_active and apply_result.receipt.posture == .active and !boundary_backend_failed;
     try printSessionEnd(io, stdout, result, is_first_session, protected_session);
 
     if (required_proxy_failed) {
@@ -1090,6 +1115,36 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
             return exit_codes.child_failure;
         },
     };
+}
+
+test "schema-sensitive provider variables require an explicit grant before capture" {
+    var schema = try intercept.env_schema.parseFromSlice(std.testing.allocator,
+        \\defaults:
+        \\  unknown: omit
+        \\vars:
+        \\  OPENAI_API_KEY:
+        \\    class: sensitive
+    );
+    defer schema.deinit();
+
+    var host_env = std.process.Environ.Map.init(std.testing.allocator);
+    defer host_env.deinit();
+    try host_env.put("OPENAI_API_KEY", "sk-fake-schema-no-grant-canary");
+
+    var store = try intercept.session_secrets.Store.init(std.testing.io, std.testing.allocator);
+    defer store.deinit();
+    const selected_policy: policy.schema.Policy = .{ .allocator = std.testing.allocator };
+    try captureSessionGrants(
+        std.testing.allocator,
+        &store,
+        &host_env,
+        &selected_policy,
+        ".",
+        &schema,
+    );
+
+    try std.testing.expect(!store.hasEnvVar("OPENAI_API_KEY"));
+    try std.testing.expect(!store.hasProvider(.openai));
 }
 
 fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !RunOptions {
@@ -1261,6 +1316,14 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
 /// Secretless is intentionally not defaulted here (Phase 1 SECRETLESS_DEFAULT_GO: no).
 fn cliNetworkMode(options: RunOptions) policy.schema.NetworkMode {
     return options.network_mode orelse .ask;
+}
+
+fn effectiveSecretBoundary(options: RunOptions) intercept.env.SecretBoundary {
+    if (options.with_host_secrets) return .off;
+    if (options.secretless) return .empty_backpack;
+    if (options.command_argv.len == 0) return .off;
+    const command_name = std.fs.path.basename(options.command_argv[0]);
+    return if (host_launch.isHostLaunchAlias(command_name)) .empty_backpack else .off;
 }
 
 fn applyNetworkOverlay(allocator: std.mem.Allocator, selected_policy: *policy.schema.Policy, options: RunOptions) !void {
@@ -1450,7 +1513,11 @@ fn printSessionStart(
     // Mechanism-neutral OS sandbox line (S-GLO-03) — never "Seatbelt"/"Landlock" here.
     // Sized for longest production landlock route-forced banner (see posture.session_banner_buf_len).
     var os_line_buf: [sandbox.posture.session_banner_buf_len]u8 = undefined;
-    const os_line = run_os_sandbox.formatOsSandboxBannerLine(&os_line_buf, os_receipt);
+    const os_line = run_os_sandbox.formatOsSandboxBannerLine(
+        &os_line_buf,
+        os_receipt,
+        with_host_secrets,
+    );
     try stdout.print("{s}\n", .{os_line});
     try stdout.writeAll("\n");
 }
@@ -1787,7 +1854,11 @@ test "run rejects secretless with os sandbox off before child launch" {
     );
     try std.testing.expectEqual(exit_codes.usage, code);
     try std.testing.expect(
-        std.mem.indexOf(u8, stderr_writer.buffered(), "cannot combine --secretless with --os-sandbox off") != null,
+        std.mem.indexOf(
+            u8,
+            stderr_writer.buffered(),
+            "empty-backpack secret boundary requires an active OS sandbox",
+        ) != null,
     );
     try std.testing.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "child-started", .{}));
 }
@@ -1844,8 +1915,9 @@ test "run rejects secretless with with-host-secrets before child launch" {
     try std.testing.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "child-started", .{}));
 }
 
-test "run with-host-secrets warns and inherits host canary with sandbox off" {
+test "run with-host-secrets is loud and retains host canary through sandbox attach" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
+    try skipUnlessOsSandboxBackend();
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1858,7 +1930,7 @@ test "run with-host-secrets warns and inherits host canary with sandbox off" {
             \\version: 1
             \\mode: observe
             \\env:
-            \\  inherit: true
+            \\  inherit: false
             \\commands:
             \\  allow:
             \\    - "/bin/sh *"
@@ -1879,7 +1951,7 @@ test "run with-host-secrets warns and inherits host canary with sandbox off" {
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
     const code = try commandForTestWithEnvAndShellEvaluator(
-        &.{ "--workspace", root, "--policy", policy_path, "--with-host-secrets", "--inherit-env", "--os-sandbox", "off", "--", "/bin/sh", "-c", "printf '%s' \"$MYSQL_PWD\" > child-env.txt" },
+        &.{ "--workspace", root, "--policy", policy_path, "--with-host-secrets", "--", "/bin/sh", "-c", "printf '%s' \"$MYSQL_PWD\" > child-env.txt" },
         &stdout_writer,
         &stderr_writer,
         .ignore,
@@ -1890,6 +1962,9 @@ test "run with-host-secrets warns and inherits host canary with sandbox off" {
     const stderr_out = stderr_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, stderr_out, "WARNING: --with-host-secrets disables empty-backpack") != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_out, "docs/credentials.md") != null);
+    try std.testing.expect(
+        std.mem.indexOf(u8, stdout_writer.buffered(), "host environment retained (explicit escape)") != null,
+    );
 
     const child_env = try tmp.dir.readFileAlloc(std.testing.io, "child-env.txt", std.testing.allocator, .limited(128));
     defer std.testing.allocator.free(child_env);
@@ -1897,6 +1972,10 @@ test "run with-host-secrets warns and inherits host canary with sandbox off" {
 }
 
 test "run secretless injects a minted provider phantom and keeps raw secrets out of child and audit" {
+    // Linux protected launches self-exec /proc/self/exe into the hidden
+    // workspace-view bootstrap. A Zig unit-test image is a test runner, not
+    // the ryk CLI image; the real Debug-binary canary covers this end to end.
+    if (builtin.os.tag == .linux) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
@@ -1981,6 +2060,9 @@ test "run secretless injects a minted provider phantom and keeps raw secrets out
 }
 
 test "run secretless resolves broker grant in parent and injects phantom only" {
+    // See the sibling host-grant test above. Linux coverage lives in the real
+    // Debug-binary canary plus the workspace-view and session-store unit tests.
+    if (builtin.os.tag == .linux) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
@@ -2110,7 +2192,7 @@ test "run command guard allows safe command and creates session shim directory" 
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
     // Default --os-sandbox auto (omit flag) to exercise attach + shim orchestration.
-    const code = try commandForGuardTestWithShellEvaluator(&.{ "--workspace", root, "--", "/usr/bin/true" }, &stdout_writer, &stderr_writer, .inherit, shell_eval.mockDaemonAllowEvaluator);
+    const code = try commandForGuardTestWithShellEvaluator(&.{ "--workspace", root, "--", "true" }, &stdout_writer, &stderr_writer, .inherit, shell_eval.mockDaemonAllowEvaluator);
     try std.testing.expectEqual(exit_codes.success, code);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "OS sandbox: active") != null);
@@ -2189,10 +2271,11 @@ test "run no-network sets network mode off and audits denied network state" {
     try std.testing.expect(std.mem.indexOf(u8, events, "network mode off") != null);
 }
 
-test "cliNetworkMode defaults to ask; explicit flags win; secretless stays off by default" {
+test "run defaults host agents to empty backpack and keeps generic commands unchanged" {
     const defaults: RunOptions = .{};
     try std.testing.expectEqual(policy.schema.NetworkMode.ask, cliNetworkMode(defaults));
     try std.testing.expect(!defaults.secretless);
+    try std.testing.expectEqual(intercept.env.SecretBoundary.off, effectiveSecretBoundary(defaults));
 
     const modes = [_]policy.schema.NetworkMode{ .open, .allowlist, .observe, .off, .ask };
     for (modes) |mode| {
@@ -2203,6 +2286,79 @@ test "cliNetworkMode defaults to ask; explicit flags win; secretless stays off b
     try std.testing.expectEqual(policy.schema.NetworkMode.off, cliNetworkMode(.{ .network_mode = .off }));
     const secretless_on: RunOptions = .{ .secretless = true };
     try std.testing.expect(secretless_on.secretless);
+    try std.testing.expectEqual(intercept.env.SecretBoundary.empty_backpack, effectiveSecretBoundary(secretless_on));
+
+    for (host_launch.host_launch_aliases) |host| {
+        try std.testing.expectEqual(
+            intercept.env.SecretBoundary.empty_backpack,
+            effectiveSecretBoundary(.{ .command_argv = &.{host} }),
+        );
+    }
+    try std.testing.expectEqual(
+        intercept.env.SecretBoundary.empty_backpack,
+        effectiveSecretBoundary(.{ .command_argv = &.{"/usr/local/bin/claude"} }),
+    );
+    try std.testing.expectEqual(
+        intercept.env.SecretBoundary.off,
+        effectiveSecretBoundary(.{
+            .with_host_secrets = true,
+            .command_argv = &.{"claude"},
+        }),
+    );
+    try std.testing.expectEqual(
+        intercept.env.SecretBoundary.off,
+        effectiveSecretBoundary(.{ .command_argv = &.{"/bin/sh"} }),
+    );
+}
+
+test "agent-primary host launch enters empty backpack without secretless flag" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    try skipUnlessOsSandboxBackend();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+    {
+        const script = try tmp.dir.createFile(std.testing.io, "claude", .{});
+        defer script.close(std.testing.io);
+        try script.writeStreamingAll(std.testing.io,
+            \\#!/bin/sh
+            \\printf '%s' "${MYSQL_PWD-unset}" > child-env.txt
+            \\
+        );
+        try tmp.dir.setFilePermissions(std.testing.io, "claude", @enumFromInt(0o755), .{});
+    }
+    var current = std.process.Environ.Map.init(std.testing.allocator);
+    defer current.deinit();
+    const path_env = if (std.c.getenv("PATH")) |path| std.mem.span(path) else "/usr/bin:/bin:/usr/sbin:/sbin";
+    try current.put("PATH", path_env);
+    try current.put("MYSQL_PWD", "SuperSecretPass99");
+
+    var stdout_buf: [8192]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try commandForTestWithEnvAndShellEvaluator(
+        &.{ "--workspace", root, "--mode", "observe", "--", "./claude" },
+        &stdout_writer,
+        &stderr_writer,
+        .ignore,
+        &current,
+        shell_eval.mockDaemonAllowEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.success, code);
+    const child_env = try tmp.dir.readFileAlloc(std.testing.io, "child-env.txt", std.testing.allocator, .limited(64));
+    defer std.testing.allocator.free(child_env);
+    try std.testing.expectEqualStrings("unset", child_env);
+    try std.testing.expect(
+        std.mem.indexOf(
+            u8,
+            stdout_writer.buffered(),
+            "Posture: secret-boundary=on sandbox=active gateway=off escape=none",
+        ) != null,
+    );
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "SuperSecretPass99") == null);
 }
 
 test "writeSessionPosture attests boundary sandbox gateway and escape truthfully" {
@@ -2606,7 +2762,7 @@ test "approval presentation redacts argv while evaluation and execution retain o
     var stderr_buf: [2048]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-    const code = try commandForGuardTestWithShellEvaluator(&.{ "--workspace", root, "--", "./capture-argv.sh", child_arg }, &stdout_writer, &stderr_writer, .ignore, shell_eval.mockDaemonAllowEvaluator);
+    const code = try commandForGuardTestWithShellEvaluator(&.{ "--workspace", root, "--mode", "observe", "--", "./capture-argv.sh", child_arg }, &stdout_writer, &stderr_writer, .ignore, shell_eval.mockDaemonAllowEvaluator);
     try std.testing.expectEqual(exit_codes.success, code);
     try std.testing.expect(std.mem.indexOf(u8, shell_eval.test_last_evaluate_command.?, sentinel) != null);
 

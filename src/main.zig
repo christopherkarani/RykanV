@@ -27,8 +27,11 @@ pub fn main(init: std.process.Init) !u8 {
 
     var stdout_buffer: [4096]u8 = undefined;
     var stderr_buffer: [4096]u8 = undefined;
-    var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
-    var stderr_writer = std.Io.File.stderr().writer(io, &stderr_buffer);
+    // The agent child inherits these descriptors. Positional writers retain a
+    // private offset and can overwrite child output when stdout/stderr are
+    // redirected to regular files; streaming writers share the kernel offset.
+    var stdout_writer = std.Io.File.stdout().writerStreaming(io, &stdout_buffer);
+    var stderr_writer = std.Io.File.stderr().writerStreaming(io, &stderr_buffer);
 
     _ = orca.cli.style.useColor(io, &stdout_writer.interface);
 

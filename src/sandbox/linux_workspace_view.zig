@@ -18,16 +18,16 @@ const errno_proto: u16 = 71;
 const errno_opnotsupp: u16 = 95;
 
 const o_access_mode: u32 = 0x3;
-const o_readonly: u32 = 0;
-const o_readwrite: u32 = 2;
-const o_create: u32 = 0x40;
-const o_exclusive: u32 = 0x80;
-const o_truncate: u32 = 0x200;
-const o_directory: u32 = 0x10000;
-const o_nofollow: u32 = 0x20000;
-const o_cloexec: u32 = 0x80000;
-const o_path: u32 = 0x200000;
-const o_tmpfile_bit: u32 = 0x400000;
+const o_readonly: u32 = @bitCast(std.os.linux.O{ .ACCMODE = .RDONLY });
+const o_readwrite: u32 = @bitCast(std.os.linux.O{ .ACCMODE = .RDWR });
+const o_create: u32 = @bitCast(std.os.linux.O{ .CREAT = true });
+const o_exclusive: u32 = @bitCast(std.os.linux.O{ .EXCL = true });
+const o_truncate: u32 = @bitCast(std.os.linux.O{ .TRUNC = true });
+const o_directory: u32 = @bitCast(std.os.linux.O{ .DIRECTORY = true });
+const o_nofollow: u32 = @bitCast(std.os.linux.O{ .NOFOLLOW = true });
+const o_cloexec: u32 = @bitCast(std.os.linux.O{ .CLOEXEC = true });
+const o_path: u32 = @bitCast(std.os.linux.O{ .PATH = true });
+const o_tmpfile_bit: u32 = @bitCast(std.os.linux.O{ .TMPFILE = true });
 
 const mode_type_mask: u32 = 0o170000;
 const mode_fifo: u32 = 0o010000;
@@ -2930,6 +2930,23 @@ test "Linux backing dispatcher reads safe files and hides secret hardlink aliase
         .reply => |reply| std.mem.bytesToValue(uapi.OutHeader, reply).err,
         else => return error.UnexpectedDispatchResult,
     });
+}
+
+test "Linux pinned directory reopens as a readable data descriptor" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const stat = linuxStatFd(tmp.dir.handle) orelse return error.UnexpectedStatFailure;
+    const reopened = linuxOpenDataNode(
+        tmp.dir.handle,
+        o_readonly | o_directory,
+        identityFromStat(stat),
+    );
+    switch (reopened) {
+        .fd => |fd| linuxClose(fd),
+        .errno => |errno| try std.testing.expectEqual(@as(u16, 0), errno),
+    }
 }
 
 test "Linux startup scan rejects excessive depth without recursive stack growth" {

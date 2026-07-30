@@ -46,6 +46,12 @@ const usage_text =
 
 /// Top-level `ryk allow-once …` (argv after the verb).
 pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
+    var now_buf: [32]u8 = undefined;
+    const now_iso = try core.time.Timestamp.now(io).formatIso(&now_buf);
+    return commandAt(io, argv, now_iso, stdout, stderr);
+}
+
+fn commandAt(io: std.Io, argv: []const []const u8, now_iso: []const u8, stdout: anytype, stderr: anytype) !u8 {
     if (argv.len == 0) {
         try stderr.writeAll(usage_text);
         return exit_codes.usage;
@@ -58,9 +64,6 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_state.deinit();
     const gpa = gpa_state.allocator();
-
-    var now_buf: [32]u8 = undefined;
-    const now_iso = try core.time.Timestamp.now(io).formatIso(&now_buf);
 
     const data_dir = try resolveOrcaDataDir(gpa) orelse {
         try stderr.writeAll("ryk allow-once: cannot resolve data directory (set XDG_DATA_HOME or HOME)\n");
@@ -556,11 +559,13 @@ const SOnceCliEnv = struct {
     prev_data: ?[:0]u8,
     prev_home: ?[:0]u8,
     prev_operator: ?[:0]u8,
+    prev_ryk_operator: ?[:0]u8,
 
     fn deinit(self: *@This()) void {
         sOnceCliRestoreEnv("XDG_DATA_HOME", self.prev_data);
         sOnceCliRestoreEnv("HOME", self.prev_home);
         sOnceCliRestoreEnv("ORCA_OPERATOR", self.prev_operator);
+        sOnceCliRestoreEnv("RYK_OPERATOR", self.prev_ryk_operator);
         std.testing.allocator.free(self.data_root);
         self.data_tmp.cleanup();
     }
@@ -583,6 +588,8 @@ fn sOnceCliIsolateXdg() !SOnceCliEnv {
     errdefer if (prev_home) |p| std.testing.allocator.free(p);
     const prev_operator = try sOnceCliDupEnvZ("ORCA_OPERATOR");
     errdefer if (prev_operator) |p| std.testing.allocator.free(p);
+    const prev_ryk_operator = try sOnceCliDupEnvZ("RYK_OPERATOR");
+    errdefer if (prev_ryk_operator) |p| std.testing.allocator.free(p);
 
     const data_z0 = try std.testing.allocator.dupeZ(u8, data_root);
     defer std.testing.allocator.free(data_z0);
@@ -598,17 +605,15 @@ fn sOnceCliIsolateXdg() !SOnceCliEnv {
         .prev_data = prev_data,
         .prev_home = prev_home,
         .prev_operator = prev_operator,
+        .prev_ryk_operator = prev_ryk_operator,
     };
 }
 
 const SOnceCliWorkspace = struct {
     tmp: std.testing.TmpDir,
     root: []u8,
-    prev_cwd: [:0]u8,
 
     fn deinit(self: *@This()) void {
-        std.process.setCurrentPath(std.testing.io, self.prev_cwd) catch {};
-        std.testing.allocator.free(self.prev_cwd);
         std.testing.allocator.free(self.root);
         self.tmp.cleanup();
     }
@@ -625,14 +630,9 @@ fn sOnceCliWorkspace() !SOnceCliWorkspace {
     const root = try std.testing.allocator.dupe(u8, root_z);
     errdefer std.testing.allocator.free(root);
 
-    const prev_cwd = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
-    errdefer std.testing.allocator.free(prev_cwd);
-    try std.process.setCurrentDir(std.testing.io, tmp.dir);
-
     return .{
         .tmp = tmp,
         .root = root,
-        .prev_cwd = prev_cwd,
     };
 }
 
@@ -694,7 +694,7 @@ fn sOnceCliRun(argv: []const []const u8) !struct { code: u8, stdout: []u8, stder
     errdefer stdout_alloc.deinit();
     var stderr_alloc: std.Io.Writer.Allocating = .init(std.testing.allocator);
     errdefer stderr_alloc.deinit();
-    const code = try command(std.testing.io, argv, &stdout_alloc.writer, &stderr_alloc.writer);
+    const code = try commandAt(std.testing.io, argv, s_once_cli_now, &stdout_alloc.writer, &stderr_alloc.writer);
     return .{
         .code = code,
         .stdout = try stdout_alloc.toOwnedSlice(),
@@ -1272,11 +1272,12 @@ test "s-once-cli: redeem --scope project allows evaluate from subdirectory" {
     const once_path = try sOnceCliAllowOncePath(xdg.data_root);
     defer std.testing.allocator.free(once_path);
 
-    // Subdirectory under project root must match project-scope grant.
-    // Workspace helper already chdir'd into project root.
-    try std.Io.Dir.cwd().createDirPath(std.testing.io, "nested-sub");
+    // Subdirectory under project root must match project-scope grant. Keep the
+    // test process cwd untouched so unrelated CLI tests cannot inherit this
+    // temporary workspace.
     const sub_cwd = try sOnceCliJoin(&.{ ws.root, "nested-sub" });
     defer std.testing.allocator.free(sub_cwd);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, sub_cwd);
 
     {
         var first = try shell_engine.evaluateCommand(std.testing.allocator, cmd_text, .{

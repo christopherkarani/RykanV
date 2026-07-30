@@ -100,13 +100,16 @@ Before launching the agent process, Orca filters the environment variables based
 | `ask` | Removes secret-like vars unless explicitly allowed. Prompts for risky ones. |
 | `observe` | Passes all vars through but records redactions for audit. |
 
-### Secretless Mode (empty backpack)
+### Secret Boundary (empty backpack)
 
-Run with `--secretless` for the **empty-backpack** secret boundary (breaking change from older local-dummy rewrite behavior):
+Agent-primary host launches enter the **empty-backpack** secret boundary by default:
 
 ```bash
-ryk run --secretless -- <command>
+ryk claude
+ryk codex
 ```
+
+Use `ryk run --secretless -- <command>` to apply the same boundary to a custom command.
 
 In this mode:
 - The child env is **public host keys only** (PATH, locale, display, proxy surface, etc.) — secret-like names and values are not passed through
@@ -123,32 +126,25 @@ In this mode:
 |------|--------|
 | Env contract | Public-only constructed child env plus exact session phantoms for granted model keys |
 | Claude / Pi / Codex / OpenCode | Host login remains preferred; Anthropic/OpenAI env-key clients that honor their base-URL variables use the loopback gateway |
-| Broker resolve APIs | `ryk credentials check` / policy `credentials.refs` resolve configured refs for **check** boundaries — they are **not** wired into secretless spawn env |
+| Broker resolve APIs | `source: broker` grants resolve in the parent session store; only the minted phantom reaches the child |
 | Provider gateway | Fixed upstream hosts only; absolute-form/caller-selected destinations and unminted phantoms are denied |
 | Network proxy | CONNECT policy proxy is separate; current route-forced proxy + provider gateway combination fails closed |
 | OS sandbox | Required for empty backpack; Linux protect-on uses a FUSE workspace view + Landlock |
 
-`--secretless` remains explicit until the default-on flip checklist is complete. It supports the default Anthropic/OpenAI env-key path through the gateway; unrelated raw credentials such as `GITHUB_TOKEN` remain absent.
+The default applies only to the agent-primary aliases (`claude`, `codex`, `pi`, `opencode`, `openclaw`, and `hermes`). Generic `ryk run` commands remain unchanged unless `--secretless` is explicit. Unrelated raw credentials such as `GITHUB_TOKEN` remain absent inside the boundary.
 
 **Recommended day-1 agent path (usable credentials):**
 
 ```bash
-# Prefer host login / non-env credential stores when available (e.g. Claude Code login).
-# Explicit empty-backpack path with provider gateway.
-ryk run --secretless -- <agent-command>
+# Prefer host login / non-env credential stores when available.
+# Agent-primary aliases enter the empty backpack automatically.
+ryk claude
 
-# Loud escape: disables empty-backpack and may expose host secrets to the child.
-ryk run --with-host-secrets -- <agent-command>
+# Loud, self-contained escape: disables empty-backpack and may expose host secrets.
+ryk run --with-host-secrets -- claude
 ```
 
-**Opt-in empty-backpack path:**
-
-```bash
-ryk credentials check
-ryk run --secretless -- <command>
-```
-
-Use secretless when you want raw secret-like env **out** of the child and OS denial of workspace secret files. Clients must honor the injected Anthropic/OpenAI base URL. Otherwise use host login; use `--with-host-secrets` only as a visible escape.
+Clients using env keys must honor the injected Anthropic/OpenAI base URL. Otherwise use host login; use `--with-host-secrets` only as a visible escape.
 
 ### Redaction Records
 

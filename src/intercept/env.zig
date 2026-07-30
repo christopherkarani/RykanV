@@ -18,6 +18,10 @@ pub const Request = struct {
     no_secrets: bool = false,
     secret_boundary: SecretBoundary = .off,
     inherit_env: bool = false,
+    /// Explicit loud escape: retain the host environment regardless of policy
+    /// inheritance and secret classification. The sandbox seam still strips
+    /// loader/startup injection variables before exec.
+    with_host_secrets: bool = false,
     schema: ?*const env_schema.Schema = null,
 };
 
@@ -59,7 +63,8 @@ pub fn filterMap(
     effective_mode: policy.schema.Mode,
     request: Request,
 ) !FilteredEnv {
-    if (request.inherit_env and !selected_policy.env.inherit) return error.InheritEnvDenied;
+    if (request.inherit_env and !request.with_host_secrets and !selected_policy.env.inherit)
+        return error.InheritEnvDenied;
 
     var env_map = std.process.Environ.Map.init(allocator);
     errdefer env_map.deinit();
@@ -73,7 +78,7 @@ pub fn filterMap(
         redactions.deinit(allocator);
     }
 
-    const inherit_source = selected_policy.env.inherit or request.inherit_env;
+    const inherit_source = request.with_host_secrets or selected_policy.env.inherit or request.inherit_env;
     const minimal = !inherit_source or isEnforcingNoSecretsMode(effective_mode);
     const boundary_active = request.secret_boundary == .empty_backpack;
     const force_no_secrets = request.no_secrets or (isEnforcingNoSecretsMode(effective_mode) and !boundary_active);
@@ -97,6 +102,10 @@ pub fn filterMap(
         }
 
         const secret_like = name_secret or value_match != null;
+        if (request.with_host_secrets) {
+            try env_map.put(name, value);
+            continue;
+        }
         if (boundary_active) {
             if (request.schema) |schema| {
                 if (schema.find(name)) |variable| {
@@ -124,6 +133,34 @@ pub fn filterMap(
         .use_custom_env = true,
         .redactions = try redactions.toOwnedSlice(allocator),
     };
+}
+
+test "with-host-secrets retains raw host values without inherit policy" {
+    var current = std.process.Environ.Map.init(std.testing.allocator);
+    defer current.deinit();
+    try current.put("PATH", "/usr/bin");
+    try current.put("ANTHROPIC_API_KEY", "sk-ant-synthetic-explicit-escape");
+    try current.put("MYSQL_PWD", "synthetic-explicit-escape-password");
+
+    var selected = policy.schema.Policy{ .allocator = std.testing.allocator };
+    selected.env.inherit = false;
+    var filtered = try filterMap(
+        std.testing.allocator,
+        &current,
+        &selected,
+        .strict,
+        .{ .with_host_secrets = true },
+    );
+    defer filtered.deinit();
+
+    try std.testing.expectEqualStrings(
+        "sk-ant-synthetic-explicit-escape",
+        filtered.env_map.get("ANTHROPIC_API_KEY").?,
+    );
+    try std.testing.expectEqualStrings(
+        "synthetic-explicit-escape-password",
+        filtered.env_map.get("MYSQL_PWD").?,
+    );
 }
 
 test "empty backpack env schema passes declared public and omits unknown and sensitive" {

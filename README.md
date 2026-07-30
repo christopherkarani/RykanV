@@ -515,11 +515,14 @@ private keys
 high-entropy tokens
 ```
 
-Secretless mode constructs an empty-backpack child environment. Granted Anthropic/OpenAI keys become session-only phantoms and a ryk-owned loopback gateway performs the fixed-host swap outside the agent. Host login remains preferred; the loud escape is `ryk run --with-host-secrets -- <command>`. See [docs/credentials.md](docs/credentials.md).
+Agent-primary launches (`ryk claude`, `ryk codex`, `ryk pi`, `ryk opencode`, `ryk openclaw`, and `ryk hermes`) default to an empty-backpack child environment. Granted Anthropic/OpenAI keys become session-only phantoms and a ryk-owned loopback gateway performs the fixed-host swap outside the agent. Host login remains preferred. Custom commands can opt in explicitly, and the host-secret escape is loud:
 
 ```bash
-orca run --secretless -- <custom-command>
+ryk run --secretless -- <custom-command>
+ryk run --with-host-secrets -- claude
 ```
+
+See [docs/credentials.md](docs/credentials.md).
 
 ---
 

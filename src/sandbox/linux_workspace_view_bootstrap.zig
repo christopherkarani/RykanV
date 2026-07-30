@@ -447,9 +447,11 @@ fn redirectDaemonStdio() !void {
 fn waitForFuseReady(read_fd: i32, daemon_pid: i32) bool {
     // One remaining-deadline budget (do not restart a full 10s on EINTR).
     const deadline_ms: i64 = 10_000;
-    const start_ms = std.time.milliTimestamp();
+    const start_ms = fuseReadyMonotonicMs() orelse return false;
     while (true) {
-        const elapsed = std.time.milliTimestamp() - start_ms;
+        const now_ms = fuseReadyMonotonicMs() orelse return false;
+        if (now_ms < start_ms) return false;
+        const elapsed = now_ms - start_ms;
         if (elapsed >= deadline_ms) return false;
         const remaining: i32 = @intCast(deadline_ms - elapsed);
         var poll_fds = [_]std.posix.pollfd{.{
@@ -457,10 +459,12 @@ fn waitForFuseReady(read_fd: i32, daemon_pid: i32) bool {
             .events = std.posix.POLL.IN,
             .revents = 0,
         }};
-        const ready = std.posix.poll(&poll_fds, remaining) catch |err| switch (err) {
-            error.Interrupted => continue,
-            else => return false,
-        };
+        const ready_rc = std.c.poll(poll_fds[0..].ptr, poll_fds.len, remaining);
+        if (ready_rc < 0) {
+            if (std.c.errno(ready_rc) == .INTR) continue;
+            return false;
+        }
+        const ready: usize = @intCast(ready_rc);
         if (ready == 0) return false;
         if (ready != 1) return false;
 
@@ -474,6 +478,13 @@ fn waitForFuseReady(read_fd: i32, daemon_pid: i32) bool {
     }
 }
 
+fn fuseReadyMonotonicMs() ?i64 {
+    var ts: std.c.timespec = undefined;
+    if (std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts) != 0) return null;
+    return @as(i64, @intCast(ts.sec)) * std.time.ms_per_s +
+        @divTrunc(@as(i64, @intCast(ts.nsec)), std.time.ns_per_ms);
+}
+
 fn processIsAlive(pid: i32) bool {
     if (pid <= 0 or builtin.os.tag != .linux) return false;
     const linux = std.os.linux;
@@ -482,6 +493,13 @@ fn processIsAlive(pid: i32) bool {
         .SUCCESS, .PERM => true,
         else => false,
     };
+}
+
+test "Linux FUSE readiness clock is monotonic and available" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const first = fuseReadyMonotonicMs() orelse return error.TestUnexpectedResult;
+    const second = fuseReadyMonotonicMs() orelse return error.TestUnexpectedResult;
+    try std.testing.expect(second >= first);
 }
 
 const OpenHow = extern struct {

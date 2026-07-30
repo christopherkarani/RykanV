@@ -476,7 +476,9 @@ fn runWithCwdUsing(
         return exit_codes.success;
     }
 
-    if (std.mem.eql(u8, command, "run")) return run_command.command(io, argv[1..], stdout, stderr);
+    if (std.mem.eql(u8, command, "run")) {
+        return run_command.commandWithEnv(io, environ_map, argv[1..], stdout, stderr);
+    }
     if (std.mem.eql(u8, command, "start")) return start.command(io, cwd, argv[1..], stdout, stderr);
     // Hard-remove public onboarding peers: single door is `ryk start`.
     if (std.mem.eql(u8, command, "quickstart") or std.mem.eql(u8, command, "setup")) {
@@ -511,7 +513,16 @@ fn runWithCwdUsing(
     if (std.mem.eql(u8, command, "shutdown")) return shutdown.command(io, argv[1..], stdout, stderr);
 
     // Host launch aliases after real ryk commands (ryk wins on name collision).
-    if (try host_launch.tryDispatch(allocator, command, argv[1..], run_command.command, io, stdout, stderr)) |code| {
+    if (try host_launch.tryDispatch(
+        allocator,
+        command,
+        argv[1..],
+        run_command.commandWithEnv,
+        io,
+        environ_map,
+        stdout,
+        stderr,
+    )) |code| {
         return code;
     }
 

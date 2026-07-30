@@ -1091,7 +1091,7 @@ fn appendFixtureEvent(
     try core_api.appendAuditEvent(writer, event);
 }
 
-test "status json exposes daemon health and rust shell decisions feed" {
+test "status json exposes daemon health and Zig shell decisions feed" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
@@ -1121,7 +1121,7 @@ test "status json exposes daemon health and rust shell decisions feed" {
 
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"daemon_health\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"rust_shell_decisions\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"decision_source\":\"rust-daemon\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"decision_source\":\"zig-native\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"pack_id\":\"git\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"severity\":\"Critical\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "shell command (redacted)") != null);
