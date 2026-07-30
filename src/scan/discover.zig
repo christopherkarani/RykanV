@@ -4,6 +4,7 @@ const types = @import("types.zig");
 const paths = @import("paths.zig");
 const time_window = @import("time_window.zig");
 const jsonl = @import("jsonl.zig");
+const opencode_db = @import("opencode_db.zig");
 
 pub const DiscoveredFile = struct {
     host: types.Host,
@@ -82,21 +83,68 @@ pub fn freeDiscoveries(allocator: std.mem.Allocator, items: []HostDiscovery) voi
 }
 
 fn discoverOpenCode(io: std.Io, allocator: std.mem.Allocator, options: DiscoveryOptions, host: *HostDiscovery) !void {
-    // Soft-skip: SQLite store. Account presence only.
-    const root = try paths.resolveXdgDataRoot(allocator, options.home, options.xdg_data_home, "/opencode");
+    // Known XDG path only — never crawl $HOME. DB is opened read-only by opencode_db.
+    const xdg_rel: []const u8 = blk: {
+        for (paths.host_path_table) |spec| {
+            if (spec.host == .opencode and spec.xdg_data_relative.len > 0) break :blk spec.xdg_data_relative[0];
+        }
+        break :blk "/opencode";
+    };
+    const root = try paths.resolveXdgDataRoot(allocator, options.home, options.xdg_data_home, xdg_rel);
     defer allocator.free(root);
     const db_path = try std.fs.path.join(allocator, &.{ root, "opencode.db" });
     defer allocator.free(db_path);
 
-    if (pathExists(io, db_path)) {
-        host.status = .unsupported;
-        host.note = "OpenCode SQLite store present; session parse soft-skipped in v1";
-    } else if (pathExists(io, root)) {
-        host.status = .unsupported;
-        host.note = "OpenCode data dir present without opencode.db; unsupported layout";
+    if (!pathExists(io, db_path)) {
+        if (pathExists(io, root)) {
+            host.status = .empty;
+            host.note = "OpenCode data dir present without opencode.db";
+        } else {
+            host.status = .not_found;
+            host.note = "OpenCode data dir not found";
+        }
+        return;
+    }
+
+    switch (opencode_db.probeDb(io, allocator, db_path)) {
+        .no_sqlite => {
+            host.status = .unsupported;
+            host.note = "sqlite3 CLI not available; OpenCode DB not parsed";
+            return;
+        },
+        .unreadable => {
+            host.status = .unreadable;
+            host.note = "OpenCode opencode.db present but unreadable (locked or permission denied)";
+            return;
+        },
+        .schema_mismatch => {
+            host.status = .unsupported;
+            host.note = "OpenCode DB schema mismatch (session/part tables missing)";
+            return;
+        },
+        .ok => {},
+    }
+
+    const sessions = opencode_db.listSessions(io, allocator, db_path, options.window, types.max_sessions_per_host) catch {
+        host.status = .unreadable;
+        host.note = "OpenCode DB query failed (locked or corrupt)";
+        return;
+    };
+    defer opencode_db.freeSessionRefs(allocator, sessions);
+
+    for (sessions) |s| {
+        if (host.files.items.len >= types.max_sessions_per_host) break;
+        // Own a copy of the db path per session entry (appendFile consumes path).
+        const path_owned = try allocator.dupe(u8, db_path);
+        try appendFile(allocator, &host.files, .opencode, path_owned, s.id, s.timestamp_secs);
+    }
+
+    if (host.files.items.len > 0) {
+        host.status = .ok;
+        host.note = "OpenCode SQLite sessions (read-only)";
     } else {
-        host.status = .not_found;
-        host.note = "OpenCode data dir not found";
+        host.status = .empty;
+        host.note = "OpenCode DB present; no sessions in time window";
     }
 }
 
@@ -433,12 +481,46 @@ test "discover missing home roots is not_found not crash" {
     try std.testing.expect(items.len >= 5);
     for (items) |h| {
         if (h.host == .opencode) {
-            try std.testing.expect(h.status == .not_found or h.status == .unsupported);
+            try std.testing.expect(h.status == .not_found);
         } else {
             try std.testing.expect(h.status == .not_found or h.status == .empty);
         }
         try std.testing.expectEqual(@as(usize, 0), h.files.items.len);
     }
+}
+
+test "discover opencode fixture flips status to ok with sessions" {
+    const io = std.testing.io;
+    if (!opencode_db.sqlite3Available(io, std.testing.allocator)) return error.SkipZigTest;
+
+    const now: i64 = 1_785_143_897;
+    const home = try std.fmt.allocPrint(std.testing.allocator, "zig-cache/tmp-scan-oc-discover-{d}", .{std.Io.Timestamp.now(io, .real).toSeconds()});
+    defer std.testing.allocator.free(home);
+    defer std.Io.Dir.cwd().deleteTree(io, home) catch {};
+
+    const xdg = try std.fs.path.join(std.testing.allocator, &.{ home, "share" });
+    defer std.testing.allocator.free(xdg);
+    const oc_dir = try std.fs.path.join(std.testing.allocator, &.{ xdg, "opencode" });
+    defer std.testing.allocator.free(oc_dir);
+    try std.Io.Dir.cwd().createDirPath(io, oc_dir);
+    const db_path = try std.fs.path.join(std.testing.allocator, &.{ oc_dir, "opencode.db" });
+    defer std.testing.allocator.free(db_path);
+    try opencode_db.writeSyntheticFixtureDb(io, std.testing.allocator, db_path, now);
+
+    const window = time_window.resolveWindow(now, 30, false);
+    const items = try discoverAll(io, std.testing.allocator, .{
+        .home = home,
+        .xdg_data_home = xdg,
+        .window = window,
+        .only_host = .opencode,
+    });
+    defer freeDiscoveries(std.testing.allocator, items);
+    try std.testing.expectEqual(@as(usize, 1), items.len);
+    try std.testing.expect(items[0].status == .ok);
+    try std.testing.expect(items[0].files.items.len >= 1);
+    try std.testing.expectEqualStrings("ses_inwindow01", items[0].files.items[0].session_id);
+    // Must not be the old soft-skip note.
+    try std.testing.expect(std.mem.indexOf(u8, items[0].note, "soft-skipped") == null);
 }
 
 test "discover claude fixture jsonl end-to-end path" {

@@ -35,10 +35,10 @@ pub const host_path_table = [_]HostPathSpec{
     },
     .{
         .host = .opencode,
-        // OpenCode: ~/.local/share/opencode/opencode.db (SQLite) — soft-skip parse v1
+        // OpenCode: ~/.local/share/opencode/opencode.db (SQLite, read-only via sqlite3 CLI)
         .home_relative = &.{},
         .xdg_data_relative = &.{"/opencode"},
-        .note = "OpenCode SQLite store (layout noted; parse soft-skipped in v1)",
+        .note = "OpenCode SQLite store (opencode.db, read-only)",
     },
     .{
         .host = .grok,

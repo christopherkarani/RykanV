@@ -68,8 +68,9 @@ pub fn writeHuman(io: std.Io, writer: anytype, result: types.ScanResult) !void {
             "No findings to list";
         try tui_render.callout(io, writer, kind, title, "Use an agent, then re-run ryk scan. Existing ryk users: ryk replay.");
         for (sc.hosts) |h| {
-            if (h.host == .opencode and h.status == .unsupported) {
-                try tui_render.callout(io, writer, .warn, "OpenCode soft-skipped", "SQLite session store is present but not parsed in v1.");
+            if (h.host == .opencode and (h.status == .unsupported or h.status == .unreadable)) {
+                const oc_title = if (h.status == .unreadable) "OpenCode unreadable" else "OpenCode not parsed";
+                try tui_render.callout(io, writer, .warn, oc_title, if (h.note.len > 0) h.note else "OpenCode session store not available");
                 break;
             }
         }
@@ -338,14 +339,14 @@ test "human render guided empty for no sessions" {
         .shown_cap = 20,
         .allocator = std.testing.allocator,
     };
-    result.scorecard.setHost(.opencode, .unsupported, 0, "OpenCode SQLite soft-skipped");
+    result.scorecard.setHost(.opencode, .unsupported, 0, "sqlite3 CLI not available; OpenCode DB not parsed");
     var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer aw.deinit();
     try writeHuman(std.testing.io, &aw.writer, result);
     const out = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, out, "Nothing to scan yet") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "session scan") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "OpenCode soft-skipped") != null or std.mem.indexOf(u8, out, "OpenCode") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "OpenCode") != null);
 }
 
 test "human render risk headline for danger findings" {

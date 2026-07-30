@@ -9,6 +9,7 @@ pub const rank = @import("rank.zig");
 pub const paths = @import("paths.zig");
 pub const extract = @import("extract.zig");
 pub const jsonl = @import("jsonl.zig");
+pub const opencode_db = @import("opencode_db.zig");
 pub const discover = @import("discover.zig");
 pub const engine = @import("engine.zig");
 pub const render = @import("render.zig");
@@ -32,6 +33,7 @@ test {
     _ = paths;
     _ = extract;
     _ = jsonl;
+    _ = opencode_db;
     _ = discover;
     _ = engine;
     _ = render;

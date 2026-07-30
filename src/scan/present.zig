@@ -115,7 +115,7 @@ pub fn hostNextStep(host: types.Host, session_id: []const u8, buf: []u8) []const
         .claude => "Next: open the Claude Code transcript (path below) if you need context",
         .grok => "Next: open the Grok session chat_history (path below) if you need context",
         .pi => "Next: open the Pi session.jsonl (path below) if you need context",
-        .opencode => "Next: OpenCode parse is soft-skipped in v1",
+        .opencode => "Next: open the OpenCode session in the OpenCode app if you need full context",
     };
 }
 

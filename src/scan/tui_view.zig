@@ -326,12 +326,13 @@ fn renderEmptyGuidance(
     try stdout.writeAll(line_ending);
     written += 1;
 
-    // Soft-skip callout for OpenCode when present-but-unsupported.
+    // Residual note when OpenCode is unsupported (no sqlite3 / schema) or unreadable (lock).
     for (result.scorecard.hosts) |h| {
-        if (h.host == .opencode and h.status == .unsupported) {
+        if (h.host == .opencode and (h.status == .unsupported or h.status == .unreadable)) {
             try stdout.writeAll("  ");
             try theme.paint(io, stdout, .warn, "Note:");
-            try stdout.writeAll(" OpenCode SQLite store is soft-skipped in v1 (not parsed yet).");
+            try stdout.writeAll(" OpenCode: ");
+            try stdout.writeAll(if (h.note.len > 0) h.note else "session store not available");
             try stdout.writeAll(line_ending);
             written += 1;
             break;
@@ -610,7 +611,7 @@ fn testResult(findings: []types.Finding, sessions: usize, danger: usize, materia
     sc.setHost(.claude, .ok, 1, "Claude Code project transcripts (*.jsonl)");
     sc.setHost(.codex, .empty, 0, "Codex rollout JSONL under date partitions");
     sc.setHost(.pi, .not_found, 0, "Pi agent session.jsonl trees");
-    sc.setHost(.opencode, .unsupported, 0, "OpenCode SQLite soft-skipped");
+    sc.setHost(.opencode, .unsupported, 0, "sqlite3 CLI not available; OpenCode DB not parsed");
     sc.setHost(.grok, .ok, 2, "Grok Build session chat_history.jsonl");
     sc.setHost(.ryk, .empty, 0, "ryk sessions");
     return .{

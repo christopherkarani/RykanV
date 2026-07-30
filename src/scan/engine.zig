@@ -4,6 +4,7 @@ const types = @import("types.zig");
 const time_window = @import("time_window.zig");
 const discover = @import("discover.zig");
 const jsonl = @import("jsonl.zig");
+const opencode_db = @import("opencode_db.zig");
 const danger = @import("danger.zig");
 const secrets = @import("secrets.zig");
 const rank = @import("rank.zig");
@@ -53,16 +54,27 @@ pub fn runScan(io: std.Io, allocator: std.mem.Allocator, options: ScanOptions) !
         scorecard.setHost(h.host, h.status, h.files.items.len, h.note);
         for (h.files.items) |file| {
             scorecard.sessions_scanned += 1;
-            var parsed = jsonl.parseJsonlFile(io, allocator, file.path, file.mtime_secs) catch continue;
+
+            var parsed = if (h.host == .opencode)
+                opencode_db.parseSession(io, allocator, file.path, file.session_id, file.mtime_secs) catch continue
+            else
+                jsonl.parseJsonlFile(io, allocator, file.path, file.mtime_secs) catch continue;
             defer parsed.deinit(allocator);
 
-            // Prefer JSON timestamp if newer window check needed — already filtered by mtime.
             // Prefer content timestamp when present; drop out-of-window sessions.
             const ts = if (parsed.timestamp_secs != 0) parsed.timestamp_secs else file.mtime_secs;
             if (!time_window.inWindow(ts, window)) continue;
 
+            // OpenCode evidence is session-scoped (DB path alone is not a unique session id).
+            const evidence_owned: ?[]u8 = if (h.host == .opencode)
+                opencode_db.evidenceRef(allocator, file.session_id) catch null
+            else
+                null;
+            defer if (evidence_owned) |e| allocator.free(e);
+            const evidence_path = evidence_owned orelse file.path;
+
             for (parsed.commands.items) |cmd| {
-                try processCommand(allocator, &findings, &scorecard, h.host, file.session_id, file.path, ts, cmd);
+                try processCommand(allocator, &findings, &scorecard, h.host, file.session_id, evidence_path, ts, cmd);
             }
             // Dedup material by fingerprint/label within this session file.
             var seen_material: std.ArrayList([]const u8) = .empty;
@@ -71,7 +83,7 @@ pub fn runScan(io: std.Io, allocator: std.mem.Allocator, options: ScanOptions) !
                 seen_material.deinit(allocator);
             }
             for (parsed.text_blobs.items) |blob| {
-                try processMaterialDedup(allocator, &findings, &scorecard, &seen_material, h.host, file.session_id, file.path, ts, blob);
+                try processMaterialDedup(allocator, &findings, &scorecard, &seen_material, h.host, file.session_id, evidence_path, ts, blob);
             }
         }
         if (options.progress) |pf| pf(options.progress_ctx, h.host, .host_done, h.files.items.len);
@@ -259,6 +271,108 @@ test "engine empty home produces empty scorecard exit-success path data" {
     try std.testing.expectEqual(@as(usize, 0), result.findings.len);
     try std.testing.expectEqual(@as(usize, 0), result.total_findings);
     try std.testing.expectEqual(@as(usize, 0), result.scorecard.sessions_scanned);
+}
+
+test "engine opencode fixture yields danger secret_access redacted material" {
+    const io = std.testing.io;
+    if (!opencode_db.sqlite3Available(io, std.testing.allocator)) return error.SkipZigTest;
+
+    const now: i64 = 1_785_143_897;
+    const home = try std.fmt.allocPrint(std.testing.allocator, "zig-cache/tmp-scan-engine-opencode-{d}", .{std.Io.Timestamp.now(io, .real).toSeconds()});
+    defer std.testing.allocator.free(home);
+    defer std.Io.Dir.cwd().deleteTree(io, home) catch {};
+
+    const xdg = try std.fs.path.join(std.testing.allocator, &.{ home, "share" });
+    defer std.testing.allocator.free(xdg);
+    const oc_dir = try std.fs.path.join(std.testing.allocator, &.{ xdg, "opencode" });
+    defer std.testing.allocator.free(oc_dir);
+    try std.Io.Dir.cwd().createDirPath(io, oc_dir);
+    const db_path = try std.fs.path.join(std.testing.allocator, &.{ oc_dir, "opencode.db" });
+    defer std.testing.allocator.free(db_path);
+    try opencode_db.writeSyntheticFixtureDb(io, std.testing.allocator, db_path, now);
+
+    var result = try runScan(io, std.testing.allocator, .{
+        .home = home,
+        .xdg_data_home = xdg,
+        .now_secs = now,
+        .days = 30,
+        .only_host = .opencode,
+    });
+    defer result.deinit();
+
+    try std.testing.expect(result.scorecard.sessions_scanned >= 1);
+    const oc = result.scorecard.hosts[@intFromEnum(types.Host.opencode)];
+    try std.testing.expect(oc.status == .ok);
+    try std.testing.expect(oc.sessions_seen >= 1);
+
+    var saw_danger = false;
+    var saw_access = false;
+    var saw_material = false;
+    for (result.findings) |f| {
+        try std.testing.expect(std.mem.indexOf(u8, f.detail, "ghp_fake") == null);
+        try std.testing.expect(std.mem.indexOf(u8, f.title, "ghp_fake") == null);
+        try std.testing.expect(std.mem.indexOf(u8, f.evidence_ref, "ghp_fake") == null);
+        try std.testing.expect(std.mem.indexOf(u8, f.evidence_ref, "opencode.db#session/") != null);
+        switch (f.kind) {
+            .danger => saw_danger = true,
+            .secret_access => saw_access = true,
+            .secret_material => saw_material = true,
+        }
+    }
+    try std.testing.expect(saw_danger);
+    try std.testing.expect(saw_access);
+    try std.testing.expect(saw_material);
+    try std.testing.expect(result.total_findings >= 2);
+}
+
+test "engine opencode only_host ignores other hosts" {
+    const io = std.testing.io;
+    if (!opencode_db.sqlite3Available(io, std.testing.allocator)) return error.SkipZigTest;
+
+    const now: i64 = 1_785_143_897;
+    const home = try std.fmt.allocPrint(std.testing.allocator, "zig-cache/tmp-scan-engine-oc-only-{d}", .{std.Io.Timestamp.now(io, .real).toSeconds()});
+    defer std.testing.allocator.free(home);
+    defer std.Io.Dir.cwd().deleteTree(io, home) catch {};
+
+    // Plant Claude session that would yield findings if scanned.
+    const proj = try std.fs.path.join(std.testing.allocator, &.{ home, ".claude", "projects", "demo" });
+    defer std.testing.allocator.free(proj);
+    try std.Io.Dir.cwd().createDirPath(io, proj);
+    const sess = try std.fs.path.join(std.testing.allocator, &.{ proj, "sess1.jsonl" });
+    defer std.testing.allocator.free(sess);
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = sess,
+        .data =
+        \\{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"rm -rf /"}}]}}
+        \\
+        ,
+    });
+
+    const xdg = try std.fs.path.join(std.testing.allocator, &.{ home, "share" });
+    defer std.testing.allocator.free(xdg);
+    const oc_dir = try std.fs.path.join(std.testing.allocator, &.{ xdg, "opencode" });
+    defer std.testing.allocator.free(oc_dir);
+    try std.Io.Dir.cwd().createDirPath(io, oc_dir);
+    const db_path = try std.fs.path.join(std.testing.allocator, &.{ oc_dir, "opencode.db" });
+    defer std.testing.allocator.free(db_path);
+    try opencode_db.writeSyntheticFixtureDb(io, std.testing.allocator, db_path, now);
+
+    var result = try runScan(io, std.testing.allocator, .{
+        .home = home,
+        .xdg_data_home = xdg,
+        .now_secs = now,
+        .days = 30,
+        .only_host = .opencode,
+    });
+    defer result.deinit();
+
+    // Only OpenCode host account should be present in discovery loop results scored;
+    // Claude must not contribute findings.
+    for (result.findings) |f| {
+        try std.testing.expect(f.host == .opencode);
+    }
+    try std.testing.expect(result.scorecard.hosts[@intFromEnum(types.Host.claude)].status == .not_found or
+        result.scorecard.hosts[@intFromEnum(types.Host.claude)].sessions_seen == 0);
 }
 
 test "engine claude fixture yields danger and redacted secret_material" {

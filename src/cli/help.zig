@@ -238,7 +238,7 @@ pub const commands =
                 "On an interactive colour TTY, opens a scorecard + list/detail viewer (libvaxis alt-screen).",
                 "Use --plain for linear rich text; --json for machine output (no TUI). q quits the viewer.",
                 "Exit 0 on successful scan even when findings exist. Existing users: prefer `ryk replay`.",
-                "Hosts: claude | codex | pi | opencode | grok | ryk. OpenCode SQLite is soft-skipped in v1.",
+                "Hosts: claude | codex | pi | opencode | grok | ryk. OpenCode uses opencode.db (read-only; requires sqlite3 CLI).",
             },
         },
         .{
