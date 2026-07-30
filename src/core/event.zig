@@ -53,6 +53,8 @@ pub const EventType = enum {
     mcp_sampling_request,
     mcp_unknown_method,
     secret_redacted,
+    phantom_swap,
+    phantom_denied,
     user_approval,
     user_denial,
 

@@ -515,7 +515,7 @@ private keys
 high-entropy tokens
 ```
 
-Secretless mode (advanced — not day-1) replaces raw values with broker references before the agent sees them. Coding agents that need env API keys often will not authenticate under secretless; prefer Safe Launch unless you know you need it. See [docs/credentials.md](docs/credentials.md).
+Secretless mode constructs an empty-backpack child environment. Granted Anthropic/OpenAI keys become session-only phantoms and a ryk-owned loopback gateway performs the fixed-host swap outside the agent. Host login remains preferred; the loud escape is `ryk run --with-host-secrets -- <command>`. See [docs/credentials.md](docs/credentials.md).
 
 ```bash
 orca run --secretless -- <custom-command>

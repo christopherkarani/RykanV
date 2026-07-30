@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const core = @import("orca_core").core;
 const supervisor = core.supervisor;
 const core_api = @import("orca_core").api;
+const env_util = @import("../env_util.zig");
 const intercept = @import("../intercept/mod.zig");
 const policy = @import("orca_core").policy;
 const sandbox = @import("../sandbox/mod.zig");
@@ -26,6 +27,7 @@ const RunOptions = struct {
     session_name: ?[]const u8 = null,
     no_secrets: bool = false,
     secretless: bool = false,
+    with_host_secrets: bool = false,
     inherit_env: bool = false,
     /// Set by `--network` / `--no-network`. Null means apply agent-primary default (ask).
     network_mode: ?policy.schema.NetworkMode = null,
@@ -50,6 +52,70 @@ const RunOptions = struct {
     }
 };
 
+const default_session_grants = [_]intercept.session_secrets.GrantSpec{
+    .{
+        .env_var = "ANTHROPIC_API_KEY",
+        .provider = .anthropic,
+        .allowed_hosts = &.{"api.anthropic.com"},
+    },
+    .{
+        .env_var = "OPENAI_API_KEY",
+        .provider = .openai,
+        .allowed_hosts = &.{"api.openai.com"},
+    },
+};
+
+fn captureSessionGrants(
+    allocator: std.mem.Allocator,
+    store: *intercept.session_secrets.Store,
+    host_env: *const std.process.Environ.Map,
+    selected_policy: *const policy.schema.Policy,
+    workspace_root: []const u8,
+) !void {
+    for (selected_policy.credentials.grants) |grant| {
+        const spec: intercept.session_secrets.GrantSpec = .{
+            .env_var = grant.env_var,
+            .provider = grant.provider,
+            .allowed_hosts = grant.allowed_hosts,
+        };
+        switch (grant.source) {
+            .host_env => _ = try store.captureHostEnv(host_env, spec),
+            .broker => {
+                var resolved = try intercept.credentials.resolveCredential(
+                    allocator,
+                    selected_policy,
+                    workspace_root,
+                    grant.credential_ref.?,
+                );
+                defer resolved.deinit(allocator);
+                _ = try store.captureResolved(spec, resolved.value);
+            },
+        }
+    }
+    for (default_session_grants) |grant| {
+        if (store.hasEnvVar(grant.env_var)) continue;
+        _ = try store.captureHostEnv(host_env, grant);
+    }
+}
+
+fn validateEnvSchemaGrants(
+    schema: *const intercept.env_schema.Schema,
+    credentials: policy.schema.CredentialsPolicy,
+) !void {
+    for (schema.vars) |variable| {
+        const grant_name = variable.grant orelse continue;
+        if (variable.class != .sensitive) return error.InvalidEnvSchemaGrant;
+        var found = false;
+        for (credentials.grants) |grant| {
+            if (!std.mem.eql(u8, grant.name, grant_name)) continue;
+            if (!std.mem.eql(u8, grant.env_var, variable.name)) return error.InvalidEnvSchemaGrant;
+            found = true;
+            break;
+        }
+        if (!found) return error.InvalidEnvSchemaGrant;
+    }
+}
+
 pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     return commandWithStdio(io, argv, stdout, stderr, .inherit, true);
 }
@@ -64,6 +130,16 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         error.Usage => return exit_codes.usage,
         else => return err,
     };
+    if (options.with_host_secrets) {
+        try stderr.writeAll(
+            "ryk: WARNING: --with-host-secrets disables empty-backpack; child may inherit host secrets.\n" ++
+                "Prefer host login (claude/codex login) or wait for provider gateway. See docs/credentials.md\n",
+        );
+    }
+    if (options.secretless and options.with_host_secrets) {
+        try stderr.writeAll("ryk run: cannot combine --secretless with --with-host-secrets.\n");
+        return exit_codes.usage;
+    }
     const secret_boundary: intercept.env.SecretBoundary = if (options.secretless) .empty_backpack else .off;
     const effective_os_sandbox = effectiveOsSandboxMode(secret_boundary, options.os_sandbox) catch {
         try stderr.writeAll(
@@ -100,15 +176,40 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
 
     try applyNetworkOverlay(allocator, loaded_policy.innerMutPtr(), options);
 
+    var project_env_schema = intercept.env_schema.loadOptional(
+        io,
+        allocator,
+        workspace_root_for_policy,
+    ) catch |err| {
+        try stderr.print("ryk run: invalid .orca/env.schema.yaml: {s}\n", .{@errorName(err)});
+        return exit_codes.general;
+    };
+    defer if (project_env_schema) |*schema_value| schema_value.deinit();
+    if (project_env_schema) |*schema_value| {
+        validateEnvSchemaGrants(schema_value, loaded_policy.innerPtr().credentials) catch |err| {
+            try stderr.print("ryk run: invalid env schema grant binding: {s}\n", .{@errorName(err)});
+            return exit_codes.general;
+        };
+    }
+
     const env_request: intercept.env.Request = .{
         .no_secrets = options.no_secrets,
         .secret_boundary = secret_boundary,
         .inherit_env = options.inherit_env,
+        .schema = if (project_env_schema) |*schema_value| schema_value else null,
     };
-    var filtered_env = (if (current_env_override) |current_env|
-        intercept.env.filterMap(allocator, current_env, loaded_policy.innerPtr(), effective_policy_mode, env_request)
-    else
-        intercept.env.filterCurrent(allocator, loaded_policy.innerPtr(), effective_policy_mode, env_request)) catch |err| switch (err) {
+    var owned_current_env: ?std.process.Environ.Map = null;
+    defer if (owned_current_env) |*env_map| env_map.deinit();
+    if (current_env_override == null) owned_current_env = try env_util.createProcessMap(allocator);
+    const current_env = current_env_override orelse &owned_current_env.?;
+
+    var filtered_env = intercept.env.filterMap(
+        allocator,
+        current_env,
+        loaded_policy.innerPtr(),
+        effective_policy_mode,
+        env_request,
+    ) catch |err| switch (err) {
         error.InheritEnvDenied => {
             try stderr.writeAll("ryk run: --inherit-env is not allowed by the selected policy/mode.\n");
             return exit_codes.general;
@@ -119,10 +220,64 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         },
     };
     defer filtered_env.deinit();
+
+    var secret_store: ?intercept.session_secrets.Store = null;
+    defer if (secret_store) |*store| store.deinit();
+    if (secret_boundary == .empty_backpack) {
+        secret_store = intercept.session_secrets.Store.init(io, allocator) catch |err| {
+            try stderr.print("ryk run: secret boundary session store unavailable: {s}\n", .{@errorName(err)});
+            return exit_codes.unsupported;
+        };
+        captureSessionGrants(
+            allocator,
+            &secret_store.?,
+            current_env,
+            loaded_policy.innerPtr(),
+            workspace_root_for_policy,
+        ) catch |err| {
+            try stderr.print("ryk run: secret boundary grant capture failed closed: {s}\n", .{@errorName(err)});
+            return exit_codes.general;
+        };
+        _ = secret_store.?.injectPhantoms(&filtered_env.env_map) catch |err| {
+            try stderr.print("ryk run: secret boundary phantom injection failed closed: {s}\n", .{@errorName(err)});
+            return exit_codes.general;
+        };
+    }
+    var anthropic_gateway: ?intercept.provider_gateway.Runtime = null;
+    defer if (anthropic_gateway) |*runtime| runtime.deinit();
+    var openai_gateway: ?intercept.provider_gateway.Runtime = null;
+    defer if (openai_gateway) |*runtime| runtime.deinit();
+    if (secret_store) |*store| {
+        if (store.hasProvider(.anthropic)) {
+            anthropic_gateway = intercept.provider_gateway.listen(allocator, store, .anthropic, .{}) catch |err| {
+                try stderr.print("ryk run: required Anthropic provider gateway unavailable: {s}\n", .{@errorName(err)});
+                return exit_codes.unsupported;
+            };
+            try filtered_env.env_map.put("ANTHROPIC_BASE_URL", anthropic_gateway.?.bindUrl());
+        }
+        if (store.hasProvider(.openai)) {
+            openai_gateway = intercept.provider_gateway.listen(allocator, store, .openai, .{}) catch |err| {
+                try stderr.print("ryk run: required OpenAI provider gateway unavailable: {s}\n", .{@errorName(err)});
+                return exit_codes.unsupported;
+            };
+            const openai_base_url = try std.fmt.allocPrint(allocator, "{s}/v1", .{openai_gateway.?.bindUrl()});
+            defer allocator.free(openai_base_url);
+            try filtered_env.env_map.put("OPENAI_BASE_URL", openai_base_url);
+        }
+    }
+    if (secret_boundary == .empty_backpack) {
+        try writeOmittedModelKeyNotes(current_env_override, &filtered_env.env_map, stderr);
+    }
     try installNetworkEnvironment(allocator, &filtered_env.env_map, loaded_policy.innerPtr().network);
     var proxy_runtime: ?intercept.proxy.Runtime = null;
     defer if (proxy_runtime) |*runtime| runtime.deinit();
     const proxy_required_by_backend = loaded_policy.innerPtr().network.effectiveBackend() == .proxy;
+    if (proxy_required_by_backend and (anthropic_gateway != null or openai_gateway != null)) {
+        try stderr.writeAll(
+            "ryk run: provider gateway and route-forced proxy backend cannot share the current single-port sandbox route; failing closed.\n",
+        );
+        return exit_codes.unsupported;
+    }
     if (proxy_required_by_backend) {
         // Bind only (no accept thread) so Seatbelt fork stays single-threaded.
         // startServing runs after the agent child is forked (after_process_spawn).
@@ -150,11 +305,16 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     // Pass argv0 so agents installed under $HOME (e.g. ~/.local/share/claude) get
     // narrow .exec grants — without this, child preflight fails with child_apply_failed.
     const launch_argv0: ?[]const u8 = if (options.command_argv.len > 0) options.command_argv[0] else null;
+    const minted_env_lookup: ?sandbox.env_scrub.MintedEnvLookup = if (secret_store) |*store| .{
+        .context = store,
+        .containsFn = intercept.session_secrets.Store.mintedEnvContains,
+    } else null;
     var apply_result = switch (try run_os_sandbox.applyForRun(
         allocator,
         effective_os_sandbox,
         workspace_root_for_policy,
         &filtered_env.env_map,
+        minted_env_lookup,
         if (proxy_runtime) |runtime| runtime.bindPort() else null,
         requiresBackend(options, .network_enforce),
         options.seatbelt_profile,
@@ -249,6 +409,9 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         writer: @TypeOf(stdout),
         network_mode: policy.schema.NetworkMode,
         secretless: bool,
+        with_host_secrets: bool,
+        anthropic_gateway: bool,
+        openai_gateway: bool,
         apply_result: *const sandbox.apply.ApplyResult,
         audit_context: *AuditContext,
 
@@ -259,17 +422,38 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
             // activate from materials alone. Residual: status_ok is pre-exec only —
             // agent binary may still fail after attach (see post-run note on non-zero exit).
             try run_os_sandbox.auditSandboxPosture(self.audit_context, session, self.apply_result.receipt);
-            try printSessionStart(self.io, self.writer, session, self.network_mode, self.secretless, self.apply_result.receipt);
+            try printSessionStart(
+                self.io,
+                self.writer,
+                session,
+                self.network_mode,
+                self.secretless,
+                self.with_host_secrets,
+                self.anthropic_gateway,
+                self.openai_gateway,
+                self.apply_result.receipt,
+            );
             try flushIfSupported(self.writer);
         }
     };
 
-    const ProxyHealthContext = struct {
-        runtime: *intercept.proxy.Runtime,
+    const BoundaryHealthContext = struct {
+        proxy: ?*intercept.proxy.Runtime,
+        anthropic: ?*intercept.provider_gateway.Runtime,
+        openai: ?*intercept.provider_gateway.Runtime,
 
         pub fn healthy(context: *anyopaque) bool {
             const self: *@This() = @ptrCast(@alignCast(context));
-            return self.runtime.isHealthy();
+            if (self.proxy) |runtime| {
+                if (!runtime.isHealthy()) return false;
+            }
+            if (self.anthropic) |runtime| {
+                if (!runtime.isHealthy()) return false;
+            }
+            if (self.openai) |runtime| {
+                if (!runtime.isHealthy()) return false;
+            }
+            return true;
         }
     };
 
@@ -278,6 +462,9 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         .writer = stdout,
         .network_mode = cliNetworkMode(options),
         .secretless = options.secretless,
+        .with_host_secrets = options.with_host_secrets,
+        .anthropic_gateway = anthropic_gateway != null,
+        .openai_gateway = openai_gateway != null,
         .apply_result = &apply_result,
         .audit_context = &audit_context,
     };
@@ -612,12 +799,17 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     // session is route-forced onto the proxy port (M-7).
     const proxy_fail_closed = proxy_runtime != null and ((proxy_required_by_backend and (effective_policy_mode == .strict or effective_policy_mode == .ci or requiresBackend(options, .network_proxy_enforce))) or
         apply_result.network_route_forced);
-    var proxy_health_context: ProxyHealthContext = undefined;
-    const health_monitor: ?supervisor.HealthMonitor = if (proxy_fail_closed) blk: {
-        proxy_health_context = .{ .runtime = &proxy_runtime.? };
+    const gateway_required = anthropic_gateway != null or openai_gateway != null;
+    var boundary_health_context: BoundaryHealthContext = undefined;
+    const health_monitor: ?supervisor.HealthMonitor = if (proxy_fail_closed or gateway_required) blk: {
+        boundary_health_context = .{
+            .proxy = if (proxy_fail_closed) &proxy_runtime.? else null,
+            .anthropic = if (anthropic_gateway != null) &anthropic_gateway.? else null,
+            .openai = if (openai_gateway != null) &openai_gateway.? else null,
+        };
         break :blk .{
-            .context = &proxy_health_context,
-            .callback = ProxyHealthContext.healthy,
+            .context = &boundary_health_context,
+            .callback = BoundaryHealthContext.healthy,
         };
     } else null;
 
@@ -634,17 +826,23 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     var sandbox_spawn_ctx: run_os_sandbox.SandboxSpawnCtx = undefined;
     const os_child_apply = run_os_sandbox.buildOsChildApply(&apply_result, &sandbox_spawn_ctx);
 
-    // Start proxy accept loop only after the agent child is forked.
-    const ProxyServeCtx = struct {
-        runtime: ?*intercept.proxy.Runtime,
+    // Start network mediation accept loops only after the agent child is forked.
+    const NetworkServeCtx = struct {
+        proxy: ?*intercept.proxy.Runtime,
+        anthropic: ?*intercept.provider_gateway.Runtime,
+        openai: ?*intercept.provider_gateway.Runtime,
         pub fn afterSpawn(context: *anyopaque, _: core.session.Session) !void {
             const self: *@This() = @ptrCast(@alignCast(context));
-            if (self.runtime) |rt| {
-                try rt.startServing();
-            }
+            if (self.proxy) |runtime| try runtime.startServing();
+            if (self.anthropic) |runtime| try runtime.startServing();
+            if (self.openai) |runtime| try runtime.startServing();
         }
     };
-    var proxy_serve_ctx: ProxyServeCtx = .{ .runtime = if (proxy_runtime != null) &proxy_runtime.? else null };
+    var network_serve_ctx: NetworkServeCtx = .{
+        .proxy = if (proxy_runtime != null) &proxy_runtime.? else null,
+        .anthropic = if (anthropic_gateway != null) &anthropic_gateway.? else null,
+        .openai = if (openai_gateway != null) &openai_gateway.? else null,
+    };
 
     var result = supervisor.run(io, allocator, .{
         .command = options.command_argv[0],
@@ -662,9 +860,9 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
             .context = &command_guard_context,
             .callback = CommandGuardContext.beforeProcessLaunch,
         } else null,
-        .after_process_spawn = if (proxy_runtime != null) supervisor.StartHook{
-            .context = &proxy_serve_ctx,
-            .callback = ProxyServeCtx.afterSpawn,
+        .after_process_spawn = if (proxy_runtime != null or gateway_required) supervisor.StartHook{
+            .context = &network_serve_ctx,
+            .callback = NetworkServeCtx.afterSpawn,
         } else null,
         .on_session_start = .{
             .context = &start_printer,
@@ -749,12 +947,19 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     defer result.deinit();
 
     const required_proxy_failed = proxy_fail_closed and if (proxy_runtime) |runtime| runtime.failed() else false;
-    const final_status: core.process.ChildStatus = if (required_proxy_failed) .{ .exited = exit_codes.unsupported } else result.status;
+    const required_gateway_failed =
+        (if (anthropic_gateway) |runtime| runtime.failed() else false) or
+        (if (openai_gateway) |runtime| runtime.failed() else false);
+    const boundary_backend_failed = required_proxy_failed or required_gateway_failed;
+    const final_status: core.process.ChildStatus = if (boundary_backend_failed)
+        .{ .exited = exit_codes.unsupported }
+    else
+        result.status;
 
     // M-20 partial-ok: pre-exec handshake proves apply, not agent entry. When attach
     // succeeded but the agent process ends non-zero, say so explicitly so operators
     // do not read "OS sandbox: active" as "agent ran successfully under the box".
-    if (apply_result.receipt.isActive() and !required_proxy_failed) {
+    if (apply_result.receipt.isActive() and !boundary_backend_failed) {
         const agent_failed = switch (result.status) {
             .exited => |code| code != 0,
             .signal, .stopped, .unknown => true,
@@ -816,6 +1021,34 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 };
                 try core_api.appendAuditEvent(writer, ev);
             }
+            const gateways = [_]?*intercept.provider_gateway.Runtime{
+                if (anthropic_gateway != null) &anthropic_gateway.? else null,
+                if (openai_gateway != null) &openai_gateway.? else null,
+            };
+            for (gateways) |maybe_gateway| {
+                const runtime = maybe_gateway orelse continue;
+                runtime.waitForIdle(1 * std.time.ns_per_s) catch {};
+                const gateway_events = try runtime.snapshotAuditEvents(allocator);
+                defer runtime.freeAuditEvents(allocator, gateway_events);
+                for (gateway_events) |gateway_event| {
+                    const event_ts = core.time.Timestamp.now(audit_context.io);
+                    const allowed = gateway_event.kind == .phantom_swap;
+                    const ev: core.event.Event = .{
+                        .session_id = session.id,
+                        .event_id = try core.event.generateEventId(event_ts),
+                        .timestamp = event_ts,
+                        .event_type = if (allowed) .phantom_swap else .phantom_denied,
+                        .actor = .{ .kind = .orca, .display = "ryk" },
+                        .target = .{ .kind = .env_var, .value = gateway_event.env_var },
+                        .decision = .{
+                            .result = if (allowed) .allow else .deny,
+                            .reason = gateway_event.reason_code,
+                            .ci_may_proceed = allowed,
+                        },
+                    };
+                    try core_api.appendAuditEvent(writer, ev);
+                }
+            }
         }
         const final_hash = writer.finalHash() orelse "";
         try core_api.writeAuditSummary(allocator, writer.session_dir_path, .{
@@ -829,10 +1062,16 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         try writer.writeLastPointer();
     }
 
-    try printSessionEnd(io, stdout, result, is_first_session);
+    const protected_session =
+        options.secretless and apply_result.receipt.posture == .active and !boundary_backend_failed;
+    try printSessionEnd(io, stdout, result, is_first_session, protected_session);
 
     if (required_proxy_failed) {
         try stderr.writeAll("ryk run: required proxy backend failed during child run; child was terminated.\n");
+        return exit_codes.unsupported;
+    }
+    if (required_gateway_failed) {
+        try stderr.writeAll("ryk run: required provider gateway failed during child run; child was terminated.\n");
         return exit_codes.unsupported;
     }
 
@@ -919,6 +1158,8 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
             options.no_secrets = true;
         } else if (std.mem.eql(u8, arg, "--secretless")) {
             options.secretless = true;
+        } else if (std.mem.eql(u8, arg, "--with-host-secrets")) {
+            options.with_host_secrets = true;
         } else if (std.mem.eql(u8, arg, "--inherit-env")) {
             options.inherit_env = true;
         } else if (std.mem.eql(u8, arg, "--no-network")) {
@@ -991,7 +1232,7 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
             };
             options.required_backend_count += 1;
         } else if (std.mem.startsWith(u8, arg, "-")) {
-            try suggestions.writeUnknownOption(stderr, "ryk run", arg, &.{ "--workspace", "--mode", "--policy", "--session-name", "--no-secrets", "--secretless", "--inherit-env", "--no-network", "--allow-network", "--network", "--network-backend", "--os-sandbox", "--seatbelt-profile", "--require-backend", "--help", "-h" }, "run");
+            try suggestions.writeUnknownOption(stderr, "ryk run", arg, &.{ "--workspace", "--mode", "--policy", "--session-name", "--no-secrets", "--secretless", "--with-host-secrets", "--inherit-env", "--no-network", "--allow-network", "--network", "--network-backend", "--os-sandbox", "--seatbelt-profile", "--require-backend", "--help", "-h" }, "run");
             return error.Usage;
         } else {
             try stderr.writeAll("ryk run: expected '--' before the command you want to run.\n" ++
@@ -1120,10 +1361,54 @@ fn effectiveOsSandboxMode(
     return .on;
 }
 
-fn writeSessionPosture(stdout: anytype, network_mode: policy.schema.NetworkMode, secretless: bool) !void {
+fn writeOmittedModelKeyNotes(
+    current_env_override: ?*const std.process.Environ.Map,
+    child_env: *const std.process.Environ.Map,
+    stderr: anytype,
+) !void {
+    const model_key_names = [_][:0]const u8{
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+    };
+    for (model_key_names) |name| {
+        const host_has_key = if (current_env_override) |current_env|
+            current_env.get(name) != null
+        else
+            std.c.getenv(name) != null;
+        if (host_has_key and child_env.get(name) == null) {
+            try stderr.print(
+                "ryk run: Host had {s}; child will not. Use host login or --with-host-secrets.\n",
+                .{name},
+            );
+        }
+    }
+}
+
+fn gatewayPostureLabel(anthropic: bool, openai: bool) []const u8 {
+    if (anthropic and openai) return "anthropic+openai";
+    if (anthropic) return "anthropic";
+    if (openai) return "openai";
+    return "off";
+}
+
+fn writeSessionPosture(
+    stdout: anytype,
+    network_mode: policy.schema.NetworkMode,
+    secretless: bool,
+    with_host_secrets: bool,
+    sandbox_posture: sandbox.posture.SessionPosture,
+    anthropic_gateway: bool,
+    openai_gateway: bool,
+) !void {
     try stdout.print(
-        "Posture: network={s} secretless={s}  (override: --network … | --no-network | --secretless)\n",
-        .{ network_mode.toString(), if (secretless) "on" else "off" },
+        "Posture: secret-boundary={s} sandbox={s} gateway={s} escape={s} network={s}\n",
+        .{
+            if (secretless) "on" else "off",
+            @tagName(sandbox_posture),
+            gatewayPostureLabel(anthropic_gateway, openai_gateway),
+            if (with_host_secrets) "host-secrets" else "none",
+            network_mode.toString(),
+        },
     );
 }
 
@@ -1133,6 +1418,9 @@ fn printSessionStart(
     session: core.session.Session,
     network_mode: policy.schema.NetworkMode,
     secretless: bool,
+    with_host_secrets: bool,
+    anthropic_gateway: bool,
+    openai_gateway: bool,
     os_receipt: sandbox.posture.AttachReceipt,
 ) !void {
     // Compact brand banner + Session / Workspace / Mode / Name grid. Celebration stays in printSessionEnd.
@@ -1150,7 +1438,15 @@ fn printSessionStart(
         count = 4;
     }
     try tui.render.keyValue(io, stdout, rows[0..count]);
-    try writeSessionPosture(stdout, network_mode, secretless);
+    try writeSessionPosture(
+        stdout,
+        network_mode,
+        secretless,
+        with_host_secrets,
+        os_receipt.posture,
+        anthropic_gateway,
+        openai_gateway,
+    );
     // Mechanism-neutral OS sandbox line (S-GLO-03) — never "Seatbelt"/"Landlock" here.
     // Sized for longest production landlock route-forced banner (see posture.session_banner_buf_len).
     var os_line_buf: [sandbox.posture.session_banner_buf_len]u8 = undefined;
@@ -1159,7 +1455,13 @@ fn printSessionStart(
     try stdout.writeAll("\n");
 }
 
-fn printSessionEnd(io: std.Io, stdout: anytype, result: supervisor.SessionResult, is_first_session: bool) !void {
+fn printSessionEnd(
+    io: std.Io,
+    stdout: anytype,
+    result: supervisor.SessionResult,
+    is_first_session: bool,
+    protected_session: bool,
+) !void {
     const code = result.exitCode();
     if (code == 0) {
         // Dynamic success line: explicit gated pattern (no alloc, respects useColor).
@@ -1175,7 +1477,7 @@ fn printSessionEnd(io: std.Io, stdout: anytype, result: supervisor.SessionResult
     } else {
         try stdout.print("\n{s} Session ended with exit code {d}\n", .{ style.Glyph.cross, code });
     }
-    if (is_first_session and code == 0) {
+    if (is_first_session and protected_session and code == 0) {
         // Phase 7: elevate the first-run celebration into a branded moment.
         // A celebratory brand banner (shield + version + status) opens the
         // moment, followed by a warm welcome line and a "Next steps" hint list
@@ -1490,7 +1792,111 @@ test "run rejects secretless with os sandbox off before child launch" {
     try std.testing.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "child-started", .{}));
 }
 
-test "run secretless constructs child env and keeps raw secrets out of audit artifacts" {
+test "run parses with-host-secrets and suggests the escape flag" {
+    var stdout_buf: [1024]u8 = undefined;
+    var stderr_buf: [2048]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const defaults = try parseOptions(std.testing.io, &.{ "--", "true" }, &stdout_writer, &stderr_writer);
+    try std.testing.expect(!defaults.with_host_secrets);
+
+    const escape = try parseOptions(
+        std.testing.io,
+        &.{ "--with-host-secrets", "--", "true" },
+        &stdout_writer,
+        &stderr_writer,
+    );
+    try std.testing.expect(escape.with_host_secrets);
+
+    stdout_writer = .fixed(&stdout_buf);
+    stderr_writer = .fixed(&stderr_buf);
+    const code = try commandForTest(
+        &.{ "--with-host-secret", "--", "true" },
+        &stdout_writer,
+        &stderr_writer,
+        .ignore,
+    );
+    try std.testing.expectEqual(exit_codes.usage, code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "--with-host-secrets") != null);
+}
+
+test "run rejects secretless with with-host-secrets before child launch" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var stdout_buf: [1024]u8 = undefined;
+    var stderr_buf: [2048]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try commandForTestWithShellEvaluator(
+        &.{ "--workspace", root, "--secretless", "--with-host-secrets", "--", "/bin/sh", "-c", "touch child-started" },
+        &stdout_writer,
+        &stderr_writer,
+        .ignore,
+        shell_eval.mockDaemonAllowEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.usage, code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "cannot combine --secretless with --with-host-secrets") != null);
+    try std.testing.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "child-started", .{}));
+}
+
+test "run with-host-secrets warns and inherits host canary with sandbox off" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+    {
+        const policy_file = try tmp.dir.createFile(std.testing.io, "policy.yaml", .{});
+        defer policy_file.close(std.testing.io);
+        try policy_file.writeStreamingAll(std.testing.io,
+            \\version: 1
+            \\mode: observe
+            \\env:
+            \\  inherit: true
+            \\commands:
+            \\  allow:
+            \\    - "/bin/sh *"
+        );
+    }
+    const policy_path = try tmp.dir.realPathFileAlloc(std.testing.io, "policy.yaml", std.testing.allocator);
+    defer std.testing.allocator.free(policy_path);
+
+    var current = std.process.Environ.Map.init(std.testing.allocator);
+    defer current.deinit();
+    const path_env = if (std.c.getenv("PATH")) |path| std.mem.span(path) else "/usr/bin:/bin:/usr/sbin:/sbin";
+    try current.put("PATH", path_env);
+    try current.put("MYSQL_PWD", "SuperSecretPass99");
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try commandForTestWithEnvAndShellEvaluator(
+        &.{ "--workspace", root, "--policy", policy_path, "--with-host-secrets", "--inherit-env", "--os-sandbox", "off", "--", "/bin/sh", "-c", "printf '%s' \"$MYSQL_PWD\" > child-env.txt" },
+        &stdout_writer,
+        &stderr_writer,
+        .ignore,
+        &current,
+        shell_eval.mockDaemonAllowEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.success, code);
+    const stderr_out = stderr_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, stderr_out, "WARNING: --with-host-secrets disables empty-backpack") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_out, "docs/credentials.md") != null);
+
+    const child_env = try tmp.dir.readFileAlloc(std.testing.io, "child-env.txt", std.testing.allocator, .limited(128));
+    defer std.testing.allocator.free(child_env);
+    try std.testing.expectEqualStrings("SuperSecretPass99", child_env);
+}
+
+test "run secretless injects a minted provider phantom and keeps raw secrets out of child and audit" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
@@ -1512,8 +1918,8 @@ test "run secretless constructs child env and keeps raw secrets out of audit art
         defer script.close(std.testing.io);
         try script.writeStreamingAll(std.testing.io,
             \\#!/bin/sh
-            \\printf '%s|%s|%s|%s' \
-            \\  "$GITHUB_TOKEN" "$DATABASE_URL" "$MYSQL_PWD" "$RANDOM_HOST_VALUE" \
+            \\printf '%s|%s|%s|%s|%s|%s' \
+            \\  "$GITHUB_TOKEN" "$DATABASE_URL" "$MYSQL_PWD" "$OPENAI_API_KEY" "$RANDOM_HOST_VALUE" "$OPENAI_BASE_URL" \
             \\  > child-env.txt
             \\
         );
@@ -1527,6 +1933,7 @@ test "run secretless constructs child env and keeps raw secrets out of audit art
     try current.put("GITHUB_TOKEN", "ghp_fakeSyntheticTokenValue1234567890");
     try current.put("DATABASE_URL", "postgres://synthetic:SuperSecretPass99@db.invalid/app");
     try current.put("MYSQL_PWD", "SuperSecretPass99");
+    try current.put("OPENAI_API_KEY", "sk-fakeSyntheticOpenAIKey1234567890");
     try current.put("RANDOM_HOST_VALUE", "must-not-survive");
     try current.put("TOKEN_ghp_fakeSyntheticNameCanary1234567890", "ordinary");
 
@@ -1543,11 +1950,26 @@ test "run secretless constructs child env and keeps raw secrets out of audit art
     try std.testing.expect(std.mem.indexOf(u8, stderr_out, "ghp_fakeSyntheticTokenValue") == null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_out, "ghp_fakeSyntheticNameCanary") == null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_out, "SuperSecretPass99") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_out, "Host had OPENAI_API_KEY; child will not") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_out, "sk-fakeSyntheticOpenAIKey1234567890") == null);
 
     const child_env = try tmp.dir.readFileAlloc(std.testing.io, "child-env.txt", std.testing.allocator, .limited(512));
     defer std.testing.allocator.free(child_env);
-    try std.testing.expectEqualStrings("|||", child_env);
-    try std.testing.expect(std.mem.indexOf(u8, child_env, "orca-secret://") == null);
+    var fields = std.mem.splitScalar(u8, child_env, '|');
+    try std.testing.expectEqualStrings("", fields.next().?);
+    try std.testing.expectEqualStrings("", fields.next().?);
+    try std.testing.expectEqualStrings("", fields.next().?);
+    const openai_phantom = fields.next().?;
+    try std.testing.expect(std.mem.startsWith(u8, openai_phantom, "orca-secret://session/"));
+    const name_marker = "/OPENAI_API_KEY/";
+    const marker_index = std.mem.indexOf(u8, openai_phantom, name_marker) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 16), openai_phantom.len - marker_index - name_marker.len);
+    try std.testing.expectEqualStrings("", fields.next().?);
+    const openai_base_url = fields.next().?;
+    try std.testing.expect(std.mem.startsWith(u8, openai_base_url, "http://127.0.0.1:"));
+    try std.testing.expect(std.mem.endsWith(u8, openai_base_url, "/v1"));
+    try std.testing.expect(fields.next() == null);
+    try std.testing.expect(std.mem.indexOf(u8, child_env, "sk-fakeSyntheticOpenAIKey1234567890") == null);
 
     const events = try readLastEvents(std.testing.allocator, root);
     defer std.testing.allocator.free(events);
@@ -1555,6 +1977,95 @@ test "run secretless constructs child env and keeps raw secrets out of audit art
     try std.testing.expect(std.mem.indexOf(u8, events, "ghp_fakeSyntheticTokenValue") == null);
     try std.testing.expect(std.mem.indexOf(u8, events, "ghp_fakeSyntheticNameCanary") == null);
     try std.testing.expect(std.mem.indexOf(u8, events, "SuperSecretPass99") == null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "sk-fakeSyntheticOpenAIKey1234567890") == null);
+}
+
+test "run secretless resolves broker grant in parent and injects phantom only" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+    try tmp.dir.createDir(std.testing.io, ".orca", .default_dir);
+    {
+        const secret_file = try tmp.dir.createFile(std.testing.io, ".orca/dev-secrets.env", .{});
+        defer secret_file.close(std.testing.io);
+        try secret_file.writeStreamingAll(std.testing.io, "OPENAI_BROKER_KEY=sk-openai-broker-parent-canary\n");
+    }
+    {
+        const schema_file = try tmp.dir.createFile(std.testing.io, ".orca/env.schema.yaml", .{});
+        defer schema_file.close(std.testing.io);
+        try schema_file.writeStreamingAll(std.testing.io,
+            \\defaults:
+            \\  unknown: omit
+            \\vars:
+            \\  OPENAI_API_KEY:
+            \\    class: sensitive
+            \\    grant: openai
+            \\
+        );
+    }
+    {
+        const policy_file = try tmp.dir.createFile(std.testing.io, "policy.yaml", .{});
+        defer policy_file.close(std.testing.io);
+        try policy_file.writeStreamingAll(std.testing.io,
+            \\version: 1
+            \\mode: observe
+            \\credentials:
+            \\  brokers:
+            \\    env_dev:
+            \\      type: env-file-dev
+            \\      path: .orca/dev-secrets.env
+            \\  refs:
+            \\    openai_key:
+            \\      broker: env_dev
+            \\      ref: OPENAI_BROKER_KEY
+            \\  grants:
+            \\    openai:
+            \\      env_var: OPENAI_API_KEY
+            \\      provider: openai
+            \\      source: broker
+            \\      credential_ref: openai_key
+            \\      allowed_hosts:
+            \\        - api.openai.com
+            \\
+        );
+    }
+    {
+        const script = try tmp.dir.createFile(std.testing.io, "dump-env.sh", .{});
+        defer script.close(std.testing.io);
+        try script.writeStreamingAll(std.testing.io,
+            \\#!/bin/sh
+            \\printf '%s|%s' "$OPENAI_API_KEY" "$OPENAI_BASE_URL" > child-env.txt
+            \\
+        );
+        try tmp.dir.setFilePermissions(std.testing.io, "dump-env.sh", @enumFromInt(0o755), .{});
+    }
+    const policy_path = try tmp.dir.realPathFileAlloc(std.testing.io, "policy.yaml", std.testing.allocator);
+    defer std.testing.allocator.free(policy_path);
+    var current = std.process.Environ.Map.init(std.testing.allocator);
+    defer current.deinit();
+    const path_env = if (std.c.getenv("PATH")) |path| std.mem.span(path) else "/usr/bin:/bin:/usr/sbin:/sbin";
+    try current.put("PATH", path_env);
+    var stdout_buffer: [2048]u8 = undefined;
+    var stderr_buffer: [2048]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buffer);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buffer);
+    const code = try commandForTestWithEnv(
+        &.{ "--workspace", root, "--policy", policy_path, "--secretless", "--", "./dump-env.sh" },
+        &stdout_writer,
+        &stderr_writer,
+        .ignore,
+        &current,
+    );
+    try std.testing.expectEqual(exit_codes.success, code);
+    const child_env = try tmp.dir.readFileAlloc(std.testing.io, "child-env.txt", std.testing.allocator, .limited(1024));
+    defer std.testing.allocator.free(child_env);
+    try std.testing.expect(std.mem.startsWith(u8, child_env, "orca-secret://session/"));
+    try std.testing.expect(std.mem.indexOf(u8, child_env, "sk-openai-broker-parent-canary") == null);
+    try std.testing.expect(std.mem.indexOf(u8, child_env, "|http://127.0.0.1:") != null);
+    const events = try readLastEvents(std.testing.allocator, root);
+    defer std.testing.allocator.free(events);
+    try std.testing.expect(std.mem.indexOf(u8, events, "sk-openai-broker-parent-canary") == null);
 }
 
 test "run command guard denies ci ask without prompting and audits command events" {
@@ -1694,19 +2205,26 @@ test "cliNetworkMode defaults to ask; explicit flags win; secretless stays off b
     try std.testing.expect(secretless_on.secretless);
 }
 
-test "writeSessionPosture formats network and secretless with override hint" {
+test "writeSessionPosture attests boundary sandbox gateway and escape truthfully" {
     var buf: [256]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buf);
-    try writeSessionPosture(&writer, .ask, false);
+    try writeSessionPosture(&writer, .ask, false, false, .disabled, false, false);
     try std.testing.expectEqualStrings(
-        "Posture: network=ask secretless=off  (override: --network … | --no-network | --secretless)\n",
+        "Posture: secret-boundary=off sandbox=disabled gateway=off escape=none network=ask\n",
         writer.buffered(),
     );
 
     writer = .fixed(&buf);
-    try writeSessionPosture(&writer, .allowlist, true);
+    try writeSessionPosture(&writer, .allowlist, true, false, .active, true, true);
     try std.testing.expectEqualStrings(
-        "Posture: network=allowlist secretless=on  (override: --network … | --no-network | --secretless)\n",
+        "Posture: secret-boundary=on sandbox=active gateway=anthropic+openai escape=none network=allowlist\n",
+        writer.buffered(),
+    );
+
+    writer = .fixed(&buf);
+    try writeSessionPosture(&writer, .open, false, true, .disabled, false, false);
+    try std.testing.expectEqualStrings(
+        "Posture: secret-boundary=off sandbox=disabled gateway=off escape=host-secrets network=open\n",
         writer.buffered(),
     );
 }
@@ -1772,7 +2290,8 @@ test "run defaults to network ask, secretless off, posture line; noninteractive 
 
     const code = try commandForTestWithEnvAndShellEvaluator(&.{ "--workspace", root, "--policy", policy_path, "--os-sandbox", "off", "--", "/bin/sh", "-c", "env > default-env.txt" }, &stdout_writer, &stderr_writer, .ignore, &current, shell_eval.mockDaemonAllowEvaluator);
     try std.testing.expectEqual(exit_codes.success, code);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Posture: network=ask secretless=off") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Posture: secret-boundary=off") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "escape=none") != null);
 
     const written = try tmp.dir.readFileAlloc(std.testing.io, "default-env.txt", std.testing.allocator, .limited(16384));
     defer std.testing.allocator.free(written);
@@ -1786,7 +2305,7 @@ test "run defaults to network ask, secretless off, posture line; noninteractive 
     stderr_writer = .fixed(&stderr_buf);
     const ci_code = try commandForGuardTestWithShellEvaluator(&.{ "--workspace", root, "--mode", "ci", "--os-sandbox", "off", "--", "true" }, &stdout_writer, &stderr_writer, .ignore, shell_eval.mockDaemonAllowEvaluator);
     try std.testing.expectEqual(exit_codes.success, ci_code);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Posture: network=ask secretless=off") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Posture: secret-boundary=off") != null);
 }
 
 test "run allow-network adds temporary allow rule and redacts URL secrets in audit" {
@@ -2185,6 +2704,9 @@ fn writeLastPointerNoMakePath(allocator: std.mem.Allocator, workspace_root: []co
 // ---------------------------------------------------------------------------
 
 test "first successful run prints celebration" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    try skipUnlessOsSandboxBackend();
+
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
@@ -2196,7 +2718,13 @@ test "first successful run prints celebration" {
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
-    const code = try commandForTestWithShellEvaluator(&.{ "--workspace", root, "--os-sandbox", "off", "--", "echo", "hi-from-first" }, &stdout_writer, &stderr_writer, .inherit, shell_eval.mockDaemonAllowEvaluator);
+    const code = try commandForTestWithShellEvaluator(
+        &.{ "--workspace", root, "--mode", "observe", "--secretless", "--", "/bin/echo", "hi-from-first" },
+        &stdout_writer,
+        &stderr_writer,
+        .inherit,
+        shell_eval.mockDaemonAllowEvaluator,
+    );
     try std.testing.expectEqual(exit_codes.success, code);
     const out = stdout_writer.buffered();
     // Phase 7: elevated branded moment — brand shield + warm welcome + next-step hints.
@@ -2209,14 +2737,11 @@ test "first successful run prints celebration" {
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 
-test "subsequent runs do not print celebration" {
+test "boundary-off runs do not print protected celebration" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-
-    // Pre-create a fake prior session dir inside the temp workspace
-    try tmp.dir.createDirPath(std.testing.io, ".orca/sessions/2026-01-01T00-00-00Z_aaaa");
 
     var stdout_buf: [2048]u8 = undefined;
     var stderr_buf: [512]u8 = undefined;
@@ -2226,10 +2751,9 @@ test "subsequent runs do not print celebration" {
     const code = try commandForTestWithShellEvaluator(&.{ "--workspace", root, "--os-sandbox", "off", "--", "echo", "hi-from-second" }, &stdout_writer, &stderr_writer, .inherit, shell_eval.mockDaemonAllowEvaluator);
     try std.testing.expectEqual(exit_codes.success, code);
     const out = stdout_writer.buffered();
-    // Celebration-specific strings must be absent. (The session-start banner's
-    // shield may still appear, so we key on the celebration's welcome line and
-    // its dedicated 'Next steps' section rather than the shield glyph.)
+    try std.testing.expect(std.mem.indexOf(u8, out, "secret-boundary=off") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Welcome to ryk!") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "first protected session complete") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Next steps") == null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
@@ -2890,7 +3414,7 @@ test "session start banner is mechanism-neutral for disabled OS sandbox" {
         .mode = .observe,
         .platform = core.platform.detectOs(),
     };
-    try printSessionStart(std.testing.io, &writer, session, .ask, false, sandbox.posture.disabledReceipt());
+    try printSessionStart(std.testing.io, &writer, session, .ask, false, false, false, false, sandbox.posture.disabledReceipt());
     const out = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "OS sandbox: disabled") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Seatbelt") == null);
@@ -2898,8 +3422,25 @@ test "session start banner is mechanism-neutral for disabled OS sandbox" {
 
     writer = .fixed(&buf);
     const active_hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    try printSessionStart(std.testing.io, &writer, session, .ask, false, try sandbox.posture.activeReceipt(.seatbelt, active_hash, "workspace RW, system RO, platform tmp RW, no home"));
+    try printSessionStart(
+        std.testing.io,
+        &writer,
+        session,
+        .ask,
+        true,
+        false,
+        true,
+        false,
+        try sandbox.posture.activeReceipt(
+            .seatbelt,
+            active_hash,
+            "workspace RW, system RO, platform tmp RW, no home",
+        ),
+    );
     const active_out = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, active_out, "secret-boundary=on") != null);
+    try std.testing.expect(std.mem.indexOf(u8, active_out, "sandbox=active") != null);
+    try std.testing.expect(std.mem.indexOf(u8, active_out, "gateway=anthropic") != null);
     try std.testing.expect(std.mem.indexOf(u8, active_out, "OS sandbox: active") != null);
     try std.testing.expect(std.mem.indexOf(u8, active_out, "Seatbelt") == null);
     try std.testing.expect(std.mem.indexOf(u8, active_out, "network: unrestricted") != null);

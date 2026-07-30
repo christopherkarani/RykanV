@@ -68,16 +68,19 @@ This updates Orca network policy decisions and environment metadata. It is not t
 
 ## Secretless Runtime (empty backpack, opt-in only)
 
-**Not ready — do not default** for day-1 agent launches that need model API keys from the environment. `--secretless` is **empty backpack**: public host env only (no raw secrets, no `orca-secret://` rewrite), OS sandbox required, and workspace `.env` secret forms denied at the OS layer when attach succeeds. Claude, Pi, Codex, and similar hosts that expect env API keys will fail auth — see [credentials.md](credentials.md) § Secretless Mode.
+`--secretless` is **empty backpack**: public host env plus exact session phantoms for granted Anthropic/OpenAI keys, OS sandbox required, and workspace `.env` secret forms denied at the OS layer. A loopback gateway swaps only exact mints for fixed provider hosts. The flag remains explicit until the default-on checklist is complete.
 
 ```sh
-./zig-out/bin/ryk credentials check
-./zig-out/bin/ryk run --secretless --network-backend proxy -- <command>
+./zig-out/bin/ryk run --secretless -- <command>
 ```
 
-This constructs a public-only child environment and requires OS FS isolation. Orca records policy, redaction, and proxy request decision evidence, but it is not a vault and does **not** inject usable credentials into the child environment or into HTTPS to model providers. Proxy mode is explicit and loopback-only; HTTPS policy is host/port-only unless a cooperative hook supplies method/path metadata.
+This constructs the boundary environment and requires OS FS isolation. The CONNECT policy proxy and provider gateway are separate; route-forced proxy plus gateway currently fails closed.
 
-Use secretless for deliberate leak-resistance / secret-boundary demos, not as the default agent launch path until a product path supplies usable credentials.
+Prefer host login when the agent supports it. The explicit escape is loud:
+
+```sh
+./zig-out/bin/ryk run --with-host-secrets -- <command>
+```
 
 ## CI Mode
 

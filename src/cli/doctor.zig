@@ -240,6 +240,14 @@ fn daemonStatusSummary(status: onboarding.DaemonHealthStatus) []const u8 {
     };
 }
 
+fn secretBoundaryCapability(backend_report: sandbox.backend.ReportSet) []const u8 {
+    const level = doctorDisplayLevel(.strong_sandbox, backend_report.get(.strong_sandbox).level);
+    return switch (level) {
+        .unavailable, .unsupported, .failed => "unavailable (empty-backpack requires live OS attach)",
+        else => "available (live session attestation required; Anthropic/OpenAI gateway compiled)",
+    };
+}
+
 fn daemonDetailFromError(allocator: std.mem.Allocator, err: anyerror) !DaemonHealth {
     return .{
         .status = cli.daemon.errors.doctorHealthStatus(err),
@@ -301,6 +309,7 @@ fn writeReport(io: std.Io, stdout: anytype, os: core.platform.Os, backend_report
     try writePacksSection(io, stdout, context);
     try writeHermesFailOpenWarning(io, stdout, context);
     try writePiNote(stdout);
+    try stdout.print("Secret boundary: {s}\n\n", .{secretBoundaryCapability(backend_report)});
     try stdout.writeAll("Capabilities:\n");
     for (doctor_capabilities) |item| {
         if (item.feature) |feature| {
@@ -371,13 +380,14 @@ fn writeDefaultPanels(
     policy_status: []const u8,
     counts: anytype,
 ) !void {
-    var health_storage: [5][96]u8 = undefined;
+    var health_storage: [6][128]u8 = undefined;
     const health_lines = [_][]const u8{
         try std.fmt.bufPrint(&health_storage[0], "Platform       {s}", .{os.toString()}),
         try std.fmt.bufPrint(&health_storage[1], "Policy         {s}", .{policy_status}),
         try std.fmt.bufPrint(&health_storage[2], "Daemon         {s}", .{daemonStatusSummary(context.daemon_health)}),
         try std.fmt.bufPrint(&health_storage[3], "Capabilities   {d} active · {d} limited", .{ counts.active, counts.limited }),
         try std.fmt.bufPrint(&health_storage[4], "Unavailable    {d}", .{counts.unavailable}),
+        try std.fmt.bufPrint(&health_storage[5], "Secret boundary {s}", .{secretBoundaryCapability(backend_report)}),
     };
     try tui.render.panel(io, stdout, "System health", &health_lines);
     try stdout.writeByte('\n');
@@ -951,6 +961,8 @@ test "doctor prints OS and planned capabilities" {
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Backend:") != null or std.mem.indexOf(u8, stdout_writer.buffered(), "Linux backend:") != null or std.mem.indexOf(u8, stdout_writer.buffered(), "macOS backend:") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "env filtering: active") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "strong sandbox:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Secret boundary:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Secret boundary: active") == null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 

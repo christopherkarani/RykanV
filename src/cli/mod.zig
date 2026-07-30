@@ -8,6 +8,7 @@ pub const exit_codes = @import("exit_codes.zig");
 pub const help = @import("help.zig");
 pub const run_command = @import("run.zig");
 pub const run_os_sandbox = @import("run_os_sandbox.zig");
+pub const env_schema_command = @import("env_schema.zig");
 pub const host_launch = @import("host_launch.zig");
 pub const init = @import("init.zig");
 pub const doctor = @import("doctor.zig");
@@ -117,6 +118,7 @@ test {
     _ = danger_confirmation;
     _ = run_command;
     _ = run_os_sandbox;
+    _ = env_schema_command;
     // Surfaces touched by production-readiness hardening (M1–M4).
     _ = completions;
     _ = dashboard_command;
@@ -469,6 +471,7 @@ fn runWithCwdUsing(
         return exit_codes.success;
     }
     if (std.mem.eql(u8, command, "env")) {
+        if (argv.len > 1) return env_schema_command.command(io, argv[1..], stdout, stderr);
         try writeInstallEnv(io, stdout);
         return exit_codes.success;
     }

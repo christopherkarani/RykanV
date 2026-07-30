@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const env_util = @import("../env_util.zig");
+const env_schema = @import("env_schema.zig");
 const sandbox_env = @import("../sandbox/env_scrub.zig");
 const audit = @import("orca_core").audit;
 const core = @import("orca_core").core;
@@ -17,6 +18,7 @@ pub const Request = struct {
     no_secrets: bool = false,
     secret_boundary: SecretBoundary = .off,
     inherit_env: bool = false,
+    schema: ?*const env_schema.Schema = null,
 };
 
 pub const RedactionRecord = core.process.EnvRedactionRecord;
@@ -96,6 +98,14 @@ pub fn filterMap(
 
         const secret_like = name_secret or value_match != null;
         if (boundary_active) {
+            if (request.schema) |schema| {
+                if (schema.find(name)) |variable| {
+                    if (variable.class == .sensitive) continue;
+                    if (secret_like or matchesAnyPattern(selected_policy.env.deny_patterns, name)) continue;
+                    try env_map.put(name, value);
+                    continue;
+                }
+            }
             if (secret_like) continue;
             if (!isBoundaryPublicHostEnv(name)) continue;
             if (matchesAnyPattern(selected_policy.env.deny_patterns, name)) continue;
@@ -116,8 +126,47 @@ pub fn filterMap(
     };
 }
 
+test "empty backpack env schema passes declared public and omits unknown and sensitive" {
+    var current = std.process.Environ.Map.init(std.testing.allocator);
+    defer current.deinit();
+    try current.put("PATH", "/usr/bin");
+    try current.put("API_URL", "https://api.example.test");
+    try current.put("UNDECLARED_PUBLIC", "ordinary");
+    try current.put("DATABASE_URL", "postgres://synthetic:password@example.test/db");
+
+    var schema = try env_schema.parseFromSlice(std.testing.allocator,
+        \\defaults:
+        \\  unknown: omit
+        \\vars:
+        \\  API_URL:
+        \\    class: public
+        \\  DATABASE_URL:
+        \\    class: sensitive
+        \\    grant: database
+    );
+    defer schema.deinit();
+    var selected = policy.schema.Policy{ .allocator = std.testing.allocator };
+    var filtered = try filterMap(
+        std.testing.allocator,
+        &current,
+        &selected,
+        .observe,
+        .{ .secret_boundary = .empty_backpack, .schema = &schema },
+    );
+    defer filtered.deinit();
+    try std.testing.expectEqualStrings("https://api.example.test", filtered.env_map.get("API_URL").?);
+    try std.testing.expect(filtered.env_map.get("UNDECLARED_PUBLIC") == null);
+    try std.testing.expect(filtered.env_map.get("DATABASE_URL") == null);
+    try std.testing.expectEqualStrings("/usr/bin", filtered.env_map.get("PATH").?);
+}
+
 fn isBoundaryPublicHostEnv(name: []const u8) bool {
     if (sandbox_env.isProxyEnvKey(name)) return false;
+    if (std.mem.eql(u8, name, "ANTHROPIC_BASE_URL") or
+        std.mem.eql(u8, name, "OPENAI_BASE_URL"))
+    {
+        return false;
+    }
     for (sandbox_env.launch_allow_exact) |allowed| {
         if (std.mem.eql(u8, name, allowed)) return true;
     }

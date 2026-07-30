@@ -32,6 +32,8 @@ const Section = enum {
     credentials_broker,
     credentials_refs,
     credentials_ref,
+    credentials_grants,
+    credentials_grant,
     services,
     service,
     service_paths,
@@ -62,6 +64,7 @@ const ListTarget = enum {
     network_allow,
     network_deny,
     network_ask,
+    credential_grant_allowed_hosts,
     service_hosts,
     service_methods,
     service_path_allow,
@@ -134,11 +137,19 @@ const CredentialBrokerBuilder = struct {
     }
 
     fn toPolicy(self: *CredentialBrokerBuilder, allocator: std.mem.Allocator) !schema.CredentialBrokerPolicy {
+        const kind = self.kind orelse return error.InvalidPolicy;
+        const owned_name = try allocator.dupe(u8, self.name);
+        errdefer allocator.free(owned_name);
+        const owned_account = if (self.account) |value| try allocator.dupe(u8, value) else null;
+        errdefer if (owned_account) |value| allocator.free(value);
+        const owned_path = if (self.path) |value| try allocator.dupe(u8, value) else null;
+        errdefer if (owned_path) |value| allocator.free(value);
+
         return .{
-            .name = try allocator.dupe(u8, self.name),
-            .kind = self.kind orelse return error.InvalidPolicy,
-            .account = if (self.account) |value| try allocator.dupe(u8, value) else null,
-            .path = if (self.path) |value| try allocator.dupe(u8, value) else null,
+            .name = owned_name,
+            .kind = kind,
+            .account = owned_account,
+            .path = owned_path,
         };
     }
 };
@@ -156,10 +167,72 @@ const CredentialRefBuilder = struct {
     }
 
     fn toPolicy(self: *CredentialRefBuilder, allocator: std.mem.Allocator) !schema.CredentialRefPolicy {
+        const ref = self.ref orelse return error.InvalidPolicy;
+        const owned_name = try allocator.dupe(u8, self.name);
+        errdefer allocator.free(owned_name);
+        const owned_broker = if (self.broker) |value| try allocator.dupe(u8, value) else null;
+        errdefer if (owned_broker) |value| allocator.free(value);
+        const owned_ref = try allocator.dupe(u8, ref);
+        errdefer allocator.free(owned_ref);
+
         return .{
-            .name = try allocator.dupe(u8, self.name),
-            .broker = if (self.broker) |value| try allocator.dupe(u8, value) else null,
-            .ref = if (self.ref) |value| try allocator.dupe(u8, value) else return error.InvalidPolicy,
+            .name = owned_name,
+            .broker = owned_broker,
+            .ref = owned_ref,
+        };
+    }
+};
+
+const CredentialGrantBuilder = struct {
+    name: []const u8,
+    env_var: ?[]const u8 = null,
+    provider: ?schema.CredentialProvider = null,
+    source: ?schema.CredentialGrantSource = null,
+    credential_ref: ?[]const u8 = null,
+    saw_credential_ref: bool = false,
+    allowed_hosts: std.ArrayList([]const u8) = .empty,
+
+    fn deinit(self: *CredentialGrantBuilder, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        if (self.env_var) |value| allocator.free(value);
+        if (self.credential_ref) |value| allocator.free(value);
+        freeList(allocator, &self.allowed_hosts);
+        self.* = undefined;
+    }
+
+    fn setCredentialRef(self: *CredentialGrantBuilder, allocator: std.mem.Allocator, value: []const u8) !void {
+        if (self.saw_credential_ref) return error.InvalidPolicy;
+        self.credential_ref = try allocator.dupe(u8, value);
+        self.saw_credential_ref = true;
+    }
+
+    fn appendAllowedHost(self: *CredentialGrantBuilder, allocator: std.mem.Allocator, value: []const u8) !void {
+        const owned = try allocator.dupe(u8, value);
+        errdefer allocator.free(owned);
+        try self.allowed_hosts.append(allocator, owned);
+    }
+
+    fn toPolicy(self: *CredentialGrantBuilder, allocator: std.mem.Allocator) !schema.CredentialGrantPolicy {
+        const env_var = self.env_var orelse return error.InvalidPolicy;
+        const provider = self.provider orelse return error.InvalidPolicy;
+        const source = self.source orelse return error.InvalidPolicy;
+
+        const owned_name = try allocator.dupe(u8, self.name);
+        errdefer allocator.free(owned_name);
+        const owned_env_var = try allocator.dupe(u8, env_var);
+        errdefer allocator.free(owned_env_var);
+        const owned_credential_ref = if (self.credential_ref) |value| try allocator.dupe(u8, value) else null;
+        errdefer if (owned_credential_ref) |value| allocator.free(value);
+        const owned_allowed_hosts = try duplicateListFromArray(allocator, self.allowed_hosts.items);
+        errdefer schema.freeStringList(allocator, owned_allowed_hosts);
+
+        return .{
+            .name = owned_name,
+            .env_var = owned_env_var,
+            .provider = provider,
+            .source = source,
+            .credential_ref = owned_credential_ref,
+            .allowed_hosts = owned_allowed_hosts,
         };
     }
 };
@@ -201,6 +274,8 @@ const Builder = struct {
     active_credential_broker_index: ?usize = null,
     credential_refs: std.ArrayList(CredentialRefBuilder) = .empty,
     active_credential_ref_index: ?usize = null,
+    credential_grants: std.ArrayList(CredentialGrantBuilder) = .empty,
+    active_credential_grant_index: ?usize = null,
     services: std.ArrayList(ServiceBuilder) = .empty,
     active_service_index: ?usize = null,
     mcp_allow: std.ArrayList([]const u8) = .empty,
@@ -244,6 +319,8 @@ const Builder = struct {
         self.credential_brokers.deinit(self.allocator);
         for (self.credential_refs.items) |*credential_ref| credential_ref.deinit(self.allocator);
         self.credential_refs.deinit(self.allocator);
+        for (self.credential_grants.items) |*grant| grant.deinit(self.allocator);
+        self.credential_grants.deinit(self.allocator);
         for (self.services.items) |*service| service.deinit(self.allocator);
         self.services.deinit(self.allocator);
         freeList(self.allocator, &self.mcp_allow);
@@ -256,6 +333,11 @@ const Builder = struct {
     }
 
     fn append(self: *Builder, target: ListTarget, value: []const u8) !void {
+        if (target == .credential_grant_allowed_hosts) {
+            const grant = self.activeCredentialGrant() orelse return error.InvalidPolicy;
+            try grant.appendAllowedHost(self.allocator, value);
+            return;
+        }
         if (target == .service_hosts or target == .service_methods or target == .service_path_allow or target == .service_path_deny) {
             const service = self.activeService() orelse return error.InvalidPolicy;
             try service.append(self.allocator, target, value);
@@ -282,6 +364,7 @@ const Builder = struct {
             .network_allow => try self.network_allow.append(self.allocator, owned),
             .network_deny => try self.network_deny.append(self.allocator, owned),
             .network_ask => try self.network_ask.append(self.allocator, owned),
+            .credential_grant_allowed_hosts => unreachable,
             .service_hosts, .service_methods, .service_path_allow, .service_path_deny => unreachable,
             .mcp_allow => try self.mcp_allow.append(self.allocator, owned),
             .mcp_deny => try self.mcp_deny.append(self.allocator, owned),
@@ -324,6 +407,19 @@ const Builder = struct {
         const index = self.active_credential_ref_index orelse return null;
         if (index >= self.credential_refs.items.len) return null;
         return &self.credential_refs.items[index];
+    }
+
+    fn startCredentialGrant(self: *Builder, name: []const u8) !void {
+        const owned = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned);
+        try self.credential_grants.append(self.allocator, .{ .name = owned });
+        self.active_credential_grant_index = self.credential_grants.items.len - 1;
+    }
+
+    fn activeCredentialGrant(self: *Builder) ?*CredentialGrantBuilder {
+        const index = self.active_credential_grant_index orelse return null;
+        if (index >= self.credential_grants.items.len) return null;
+        return &self.credential_grants.items[index];
     }
 
     fn activeService(self: *Builder) ?*ServiceBuilder {
@@ -384,6 +480,7 @@ const Builder = struct {
         policy.credentials.default_broker = if (self.credentials_default_broker) |value| try self.allocator.dupe(u8, value) else null;
         policy.credentials.brokers = try self.toOwnedCredentialBrokerPolicies();
         policy.credentials.refs = try self.toOwnedCredentialRefPolicies();
+        policy.credentials.grants = try self.toOwnedCredentialGrantPolicies();
         policy.services = try self.toOwnedServicePolicies();
         policy.mcp.allow = try self.mcp_allow.toOwnedSlice(self.allocator);
         policy.mcp.deny = try self.mcp_deny.toOwnedSlice(self.allocator);
@@ -436,6 +533,21 @@ const Builder = struct {
         }
         for (self.credential_refs.items, 0..) |*credential_ref, index| {
             out[index] = try credential_ref.toPolicy(self.allocator);
+            initialized += 1;
+        }
+        return out;
+    }
+
+    fn toOwnedCredentialGrantPolicies(self: *Builder) ![]const schema.CredentialGrantPolicy {
+        if (self.credential_grants.items.len == 0) return &.{};
+        var out = try self.allocator.alloc(schema.CredentialGrantPolicy, self.credential_grants.items.len);
+        var initialized: usize = 0;
+        errdefer {
+            for (out[0..initialized]) |grant| grant.deinit(self.allocator);
+            self.allocator.free(out);
+        }
+        for (self.credential_grants.items, 0..) |*grant, index| {
+            out[index] = try grant.toPolicy(self.allocator);
             initialized += 1;
         }
         return out;
@@ -597,7 +709,7 @@ fn parseYaml(allocator: std.mem.Allocator, text: []const u8, source_path: ?[]con
             continue;
         }
 
-        if (indent == 2 and (section == .credentials_broker or section == .credentials_ref)) {
+        if (indent == 2 and (section == .credentials_broker or section == .credentials_ref or section == .credentials_grant or section == .credentials_grants)) {
             section = .credentials;
         }
 
@@ -611,6 +723,9 @@ fn parseYaml(allocator: std.mem.Allocator, text: []const u8, source_path: ?[]con
             } else if (std.mem.eql(u8, key, "refs")) {
                 try requireEmptyGroupingValue(value);
                 section = .credentials_refs;
+            } else if (std.mem.eql(u8, key, "grants")) {
+                try requireEmptyGroupingValue(value);
+                section = .credentials_grants;
             } else return error.InvalidPolicy;
             continue;
         }
@@ -651,6 +766,35 @@ fn parseYaml(allocator: std.mem.Allocator, text: []const u8, source_path: ?[]con
             } else if (std.mem.eql(u8, key, "ref")) {
                 if (credential_ref.ref) |old| builder.allocator.free(old);
                 credential_ref.ref = try builder.allocator.dupe(u8, try parseScalar(value));
+            } else return error.InvalidPolicy;
+            continue;
+        }
+
+        if (indent == 4 and section == .credentials_grant) {
+            section = .credentials_grants;
+        }
+
+        if (indent == 4 and section == .credentials_grants) {
+            try requireEmptyGroupingValue(value);
+            try builder.startCredentialGrant(key);
+            section = .credentials_grant;
+            continue;
+        }
+
+        if (indent == 6 and section == .credentials_grant) {
+            const grant = builder.activeCredentialGrant() orelse return error.InvalidPolicy;
+            if (std.mem.eql(u8, key, "env_var")) {
+                if (grant.env_var) |old| builder.allocator.free(old);
+                grant.env_var = try builder.allocator.dupe(u8, try parseScalar(value));
+            } else if (std.mem.eql(u8, key, "provider")) {
+                grant.provider = schema.CredentialProvider.parse(try parseScalar(value)) orelse return error.InvalidPolicy;
+            } else if (std.mem.eql(u8, key, "source")) {
+                grant.source = schema.CredentialGrantSource.parse(try parseScalar(value)) orelse return error.InvalidPolicy;
+            } else if (std.mem.eql(u8, key, "credential_ref") or std.mem.eql(u8, key, "ref")) {
+                try grant.setCredentialRef(builder.allocator, try parseScalar(value));
+            } else if (std.mem.eql(u8, key, "allowed_hosts")) {
+                try requireEmptyGroupingValue(value);
+                list_target = .credential_grant_allowed_hosts;
             } else return error.InvalidPolicy;
             continue;
         }
@@ -967,7 +1111,7 @@ fn parseJsonNetwork(builder: *Builder, value: std.json.Value) !void {
 fn parseJsonCredentials(builder: *Builder, value: std.json.Value) !void {
     if (value != .object) return error.InvalidPolicy;
     const object = value.object;
-    try rejectUnknownKeys(object, &.{ "default_broker", "brokers", "refs" });
+    try rejectUnknownKeys(object, &.{ "default_broker", "brokers", "refs", "grants" });
     if (object.get("default_broker")) |default_broker| {
         if (builder.credentials_default_broker) |old| builder.allocator.free(old);
         builder.credentials_default_broker = try builder.allocator.dupe(u8, try expectString(default_broker));
@@ -997,6 +1141,34 @@ fn parseJsonCredentials(builder: *Builder, value: std.json.Value) !void {
             if (entry.value_ptr.*.object.get("broker")) |broker| credential_ref.broker = try builder.allocator.dupe(u8, try expectString(broker));
             const ref_value = entry.value_ptr.*.object.get("ref") orelse return error.InvalidPolicy;
             credential_ref.ref = try builder.allocator.dupe(u8, try expectString(ref_value));
+        }
+    }
+    if (object.get("grants")) |grants| {
+        if (grants != .object) return error.InvalidPolicy;
+        var it = grants.object.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.* != .object) return error.InvalidPolicy;
+            const grant_object = entry.value_ptr.*.object;
+            try rejectUnknownKeys(grant_object, &.{ "env_var", "provider", "source", "credential_ref", "ref", "allowed_hosts" });
+            try builder.startCredentialGrant(entry.key_ptr.*);
+            const grant = builder.activeCredentialGrant() orelse return error.InvalidPolicy;
+            const env_var = grant_object.get("env_var") orelse return error.InvalidPolicy;
+            grant.env_var = try builder.allocator.dupe(u8, try expectString(env_var));
+            const provider = grant_object.get("provider") orelse return error.InvalidPolicy;
+            grant.provider = schema.CredentialProvider.parse(try expectString(provider)) orelse return error.InvalidPolicy;
+            const source = grant_object.get("source") orelse return error.InvalidPolicy;
+            grant.source = schema.CredentialGrantSource.parse(try expectString(source)) orelse return error.InvalidPolicy;
+            if (grant_object.get("credential_ref")) |credential_ref| {
+                try grant.setCredentialRef(builder.allocator, try expectString(credential_ref));
+            }
+            if (grant_object.get("ref")) |credential_ref| {
+                try grant.setCredentialRef(builder.allocator, try expectString(credential_ref));
+            }
+            const allowed_hosts = grant_object.get("allowed_hosts") orelse return error.InvalidPolicy;
+            if (allowed_hosts != .array) return error.InvalidPolicy;
+            for (allowed_hosts.array.items) |host| {
+                try grant.appendAllowedHost(builder.allocator, try expectString(host));
+            }
         }
     }
 }
@@ -1307,6 +1479,78 @@ test "credential broker config parses YAML and JSON" {
     try std.testing.expectEqualStrings("github_pat", json_policy.credentials.refs[0].name);
 }
 
+test "credential grants parse YAML and JSON mapping shapes" {
+    var yaml_policy = try parseFromSlice(std.testing.allocator,
+        \\version: 1
+        \\mode: strict
+        \\credentials:
+        \\  refs:
+        \\    openai_key:
+        \\      ref: OPENAI_API_KEY
+        \\  grants:
+        \\    anthropic:
+        \\      env_var: ANTHROPIC_API_KEY
+        \\      provider: anthropic
+        \\      source: host_env
+        \\      allowed_hosts:
+        \\        - api.anthropic.com
+        \\    openai:
+        \\      env_var: OPENAI_API_KEY
+        \\      provider: openai
+        \\      source: broker
+        \\      ref: openai_key
+        \\      allowed_hosts:
+        \\        - api.openai.com
+    , "credential-grants.yaml");
+    defer yaml_policy.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), yaml_policy.credentials.grants.len);
+    try std.testing.expectEqualStrings("anthropic", yaml_policy.credentials.grants[0].name);
+    try std.testing.expectEqualStrings("ANTHROPIC_API_KEY", yaml_policy.credentials.grants[0].env_var);
+    try std.testing.expectEqual(schema.CredentialProvider.anthropic, yaml_policy.credentials.grants[0].provider);
+    try std.testing.expectEqual(schema.CredentialGrantSource.host_env, yaml_policy.credentials.grants[0].source);
+    try std.testing.expectEqual(@as(?[]const u8, null), yaml_policy.credentials.grants[0].credential_ref);
+    try std.testing.expectEqualStrings("api.anthropic.com", yaml_policy.credentials.grants[0].allowed_hosts[0]);
+    try std.testing.expectEqualStrings("openai_key", yaml_policy.credentials.grants[1].credential_ref.?);
+
+    var json_policy = try parseFromSlice(std.testing.allocator,
+        \\{"version":1,"mode":"strict","credentials":{"refs":{"anthropic_key":{"ref":"ANTHROPIC_API_KEY"}},"grants":{"anthropic":{"env_var":"ANTHROPIC_API_KEY","provider":"anthropic","source":"broker","credential_ref":"anthropic_key","allowed_hosts":["api.anthropic.com"]},"openai":{"env_var":"OPENAI_API_KEY","provider":"openai","source":"host_env","allowed_hosts":["api.openai.com"]}}}}
+    , "credential-grants.json");
+    defer json_policy.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), json_policy.credentials.grants.len);
+    try std.testing.expectEqualStrings("anthropic_key", json_policy.credentials.grants[0].credential_ref.?);
+    try std.testing.expectEqual(schema.CredentialProvider.openai, json_policy.credentials.grants[1].provider);
+    try std.testing.expectEqual(schema.CredentialGrantSource.host_env, json_policy.credentials.grants[1].source);
+}
+
+test "credential grant parsers reject malformed shapes and unknown keys" {
+    try std.testing.expectError(error.InvalidPolicy, parseFromSlice(std.testing.allocator,
+        \\version: 1
+        \\mode: strict
+        \\credentials:
+        \\  grants: anthropic
+    , "grant-scalar.yaml"));
+
+    try std.testing.expectError(error.InvalidPolicy, parseFromSlice(std.testing.allocator,
+        \\version: 1
+        \\mode: strict
+        \\credentials:
+        \\  grants:
+        \\    anthropic:
+        \\      env_var: ANTHROPIC_API_KEY
+        \\      provider: anthropic
+        \\      source: host_env
+        \\      allowed_hosts:
+        \\        - api.anthropic.com
+        \\      allow_host: api.anthropic.com
+    , "grant-unknown.yaml"));
+
+    try std.testing.expectError(error.InvalidPolicy, parseFromSlice(std.testing.allocator,
+        \\{"version":1,"mode":"strict","credentials":{"grants":{"openai":{"env_var":"OPENAI_API_KEY","provider":"openai","source":"host_env","allowed_hosts":["api.openai.com"],"allow_host":"api.openai.com"}}}}
+    , "grant-unknown.json"));
+}
+
 test "YAML policies reject scalar values on object-only grouping keys" {
     try std.testing.expectError(error.InvalidPolicy, parseFromSlice(std.testing.allocator,
         \\version: 1
@@ -1447,6 +1691,18 @@ fn parsePolicyAllocationFailureProbe(allocator: std.mem.Allocator) !void {
         \\  ask:
         \\    - "*.internal"
         \\  default: ask
+        \\credentials:
+        \\  refs:
+        \\    anthropic_key:
+        \\      ref: ANTHROPIC_API_KEY
+        \\  grants:
+        \\    anthropic:
+        \\      env_var: ANTHROPIC_API_KEY
+        \\      provider: anthropic
+        \\      source: broker
+        \\      credential_ref: anthropic_key
+        \\      allowed_hosts:
+        \\        - api.anthropic.com
         \\mcp:
         \\  default: ask
         \\  servers:
