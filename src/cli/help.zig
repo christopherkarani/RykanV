@@ -217,18 +217,28 @@ pub const commands =
         },
         .{
             .name = "scan",
-            .summary = "Scan files for destructive commands",
-            .usage = "ryk scan [--staged|--paths <path>...] [options]",
-            .category = .core_workflow,
-            // Unavailable daemon-backed ports stay hidden (not product surface).
-            .hidden = true,
+            .summary = "Scan past agent sessions for risky commands and secret exposure",
+            .usage = "ryk scan [--days N|--all-time] [--all] [--json] [--plain] [--host <name>]",
+            .category = .getting_started,
+            .public = true,
+            .hidden = false,
+            .additional_completion_flags = &.{ "--days", "--all-time", "--all", "--json", "--plain", "--host" },
             .examples = &.{
-                "ryk scan --staged",
-                "ryk scan --paths scripts/deploy.sh --format json",
+                "ryk scan",
+                "ryk scan --days 7",
+                "ryk scan --json",
+                "ryk scan --plain",
+                "ryk scan --host claude --all",
             },
             .details = &.{
-                "Proxies to the Rust daemon for CI and pre-commit scanning.",
-                "Use 'ryk scan --help' for the full Rust-backed option set.",
+                "Free offline session forensics for new ryk users. Scans known host session stores only",
+                "(Claude Code, Codex, Pi, OpenCode, Grok Build) plus a thin ryk bridge — no $HOME crawl.",
+                "Reports dangerous shell/tool commands (high+medium via shell_engine) and secret material/access.",
+                "Never prints raw secrets. Default window is 30 days; default list cap is ~20 (use --all).",
+                "On an interactive colour TTY, opens a scorecard + list/detail viewer (libvaxis alt-screen).",
+                "Use --plain for linear rich text; --json for machine output (no TUI). q quits the viewer.",
+                "Exit 0 on successful scan even when findings exist. Existing users: prefer `ryk replay`.",
+                "Hosts: claude | codex | pi | opencode | grok | ryk. OpenCode SQLite is soft-skipped in v1.",
             },
         },
         .{
@@ -730,7 +740,7 @@ pub const commands =
 /// Prefix of Safe Launch teaching order (host aliases inserted after stop).
 const public_help_prefix = [_][]const u8{ "start", "stop" };
 /// Suffix of Safe Launch teaching order (after host aliases).
-const public_help_suffix = [_][]const u8{ "status", "replay", "explain" };
+const public_help_suffix = [_][]const u8{ "status", "replay", "scan", "explain" };
 
 pub const WriteMode = enum {
     /// Safe Launch surface only (default `ryk` / `ryk help`).
@@ -1121,7 +1131,8 @@ test "help --all lists full advanced command surface" {
     try std.testing.expect(!helpListsPeerCommand(all, "setup"));
     // Unavailable ports are not product surface.
     try std.testing.expect(!helpListsPeerCommand(all, "history"));
-    try std.testing.expect(!helpListsPeerCommand(all, "scan"));
+    // scan is public Zig session forensics (not the old daemon file scan).
+    try std.testing.expect(helpListsPeerCommand(all, "scan"));
     // Live P0: packs, allow-once, permanent allowlist writers.
     try std.testing.expect(helpListsPeerCommand(all, "packs"));
     try std.testing.expect(helpListsPeerCommand(all, "allow-once"));
@@ -1154,8 +1165,8 @@ test "help setup and quickstart print removal notice pointing at start" {
 // ---------------------------------------------------------------------------
 
 /// Unavailable daemon-stub ports (plan hide-list). Not product surface.
+/// `scan` was removed — it is now live Zig session forensics.
 const p0_honesty_hide_list = [_][]const u8{
-    "scan",
     "precommit",
     "simulate",
     "classify",

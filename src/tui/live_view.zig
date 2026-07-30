@@ -272,7 +272,12 @@ fn readKey(tty: *vaxis.tty.Tty, decoder: *Decoder) !KeyAction {
     configureReadTimeout(tty);
     var buf: [256]u8 = undefined;
     while (true) {
-        const n = try tty.read(&buf);
+        // libvaxis `Tty.read` maps VMIN=0/VTIME idle to error.EndOfStream; that
+        // would quit the viewer on the first idle tick. Read the fd directly.
+        const n = std.posix.read(tty.fd.handle, &buf) catch |err| switch (err) {
+            error.WouldBlock => 0,
+            else => return err,
+        };
         if (n == 0) {
             if (decoder.interByteTimeout()) |action| return action;
             continue;

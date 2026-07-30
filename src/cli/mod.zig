@@ -15,6 +15,7 @@ pub const doctor = @import("doctor.zig");
 pub const policy = @import("policy.zig");
 pub const credentials_command = @import("credentials.zig");
 pub const replay = @import("replay.zig");
+pub const scan_command = @import("scan.zig");
 pub const diff = @import("diff.zig");
 pub const apply = @import("apply.zig");
 pub const discard = @import("discard.zig");
@@ -97,6 +98,7 @@ test {
     _ = daemon.errors;
     _ = shutdown;
     _ = shell_eval;
+    _ = scan_command;
     // Pull hook.zig tests (daemon evaluate → HookResponse, strict refuse, redaction).
     _ = hook;
     _ = shell_test;
@@ -454,7 +456,8 @@ fn runWithCwdUsing(
     if (isDaemonLocalMutatingInvocation(command, argv[1..])) {
         return rust_legacy_stub.unavailable(command, stderr);
     }
-    // Former ExecuteCli proxies (scan/simulate/classify/…) — unavailable product verbs.
+    // Former ExecuteCli proxies (simulate/classify/…) — unavailable product verbs.
+    // `scan` is Zig-native (session forensics); not routed here.
     if (isDaemonProxyCommand(command)) {
         return rust_legacy_stub.unavailable(command, stderr);
     }
@@ -491,6 +494,7 @@ fn runWithCwdUsing(
     if (std.mem.eql(u8, command, "policy")) return policy.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "credentials")) return credentials_command.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "replay")) return replay.command(io, argv[1..], stdout, stderr);
+    if (std.mem.eql(u8, command, "scan")) return scan_command.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "diff")) return diff.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "apply")) return apply.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "discard")) return discard.command(io, argv[1..], stdout, stderr);
@@ -576,8 +580,8 @@ fn proxyVersionCommand(comptime execute_cli: anytype, io: std.Io, stdout: anytyp
 /// `test` / `explain` are Zig-native; remaining entries stub until ported or dropped.
 fn isDaemonProxyCommand(command: []const u8) bool {
     // allowlist is live Zig (s-allowlist-cli); no longer a daemon proxy surface.
-    return std.mem.eql(u8, command, "scan") or
-        std.mem.eql(u8, command, "precommit") or
+    // `scan` is Zig-native session forensics (not the old Rust file/pre-commit scan).
+    return std.mem.eql(u8, command, "precommit") or
         std.mem.eql(u8, command, "classify") or
         std.mem.eql(u8, command, "suggest-allowlist") or
         std.mem.eql(u8, command, "simulate");
@@ -1420,7 +1424,6 @@ test "history live human rejection gets a banner while machine conflict stays ra
 test "daemon passthrough and robot surfaces have no top-level presentation bytes" {
     const raw_invocations = [_]struct { command: []const u8, argv: []const []const u8 }{
         .{ .command = "test", .argv = &.{ "test", "git status" } },
-        .{ .command = "scan", .argv = &.{ "scan", "." } },
         .{ .command = "precommit", .argv = &.{"precommit"} },
         .{ .command = "packs", .argv = &.{ "packs", "--robot" } },
         .{ .command = "history", .argv = &.{ "history", "export", "--format", "jsonl" } },
@@ -1520,15 +1523,34 @@ fn expectShortUnavailable(
 }
 
 test "P0 honesty: hide-list command yields short not-available and usage exit" {
-    // Representative hide-list port via isDaemonProxyCommand (`scan`).
+    // Representative hide-list port via isDaemonProxyCommand (`precommit`).
     var stdout_buf: [512]u8 = undefined;
     var stderr_buf: [1024]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
-    const code = try testRun(&.{"scan"}, &stdout_writer, &stderr_writer);
+    const code = try testRun(&.{"precommit"}, &stdout_writer, &stderr_writer);
     // Proxy path is raw-passthrough → no brand banner → empty stdout.
-    try expectShortUnavailable("scan", code, stdout_writer.buffered(), stderr_writer.buffered(), true);
+    try expectShortUnavailable("precommit", code, stdout_writer.buffered(), stderr_writer.buffered(), true);
+}
+
+test "scan dispatches Zig session forensics not daemon unavailable stub" {
+    var stdout_buf: [64 * 1024]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try testRun(&.{"scan", "--help"}, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, code);
+    const combined = try std.fmt.allocPrint(std.testing.allocator, "{s}{s}", .{
+        stdout_writer.buffered(),
+        stderr_writer.buffered(),
+    });
+    defer std.testing.allocator.free(combined);
+    try std.testing.expect(std.mem.indexOf(u8, combined, "not available") == null);
+    try std.testing.expect(std.mem.indexOf(u8, combined, "session") != null or
+        std.mem.indexOf(u8, combined, "forensics") != null or
+        std.mem.indexOf(u8, combined, "secret") != null);
 }
 
 test "P0 honesty: live packs dispatches (not short not-available)" {
