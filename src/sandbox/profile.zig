@@ -84,6 +84,9 @@ pub const CompiledProfile = struct {
     control_roots: []const []const u8,
     /// Whether backends must carve workspace secret-form files out of grants.
     protect_workspace_secrets: bool = false,
+    /// True when at least one narrow host-agent config tree was compiled as RW
+    /// (e.g. `$HOME/.claude`). Not bare `$HOME`. Used for FS scope honesty.
+    has_host_config_rw: bool = false,
     /// Deterministic serialization used for hashing (owned).
     canonical_bytes: []const u8,
     /// Lowercase hex SHA-256 of `canonical_bytes`.
@@ -154,8 +157,10 @@ pub const CompiledProfile = struct {
     /// content-readable under the parent workspace grant in the pure model
     /// (Landlock RO expand / Seatbelt write-deny carve-out) — honesty says
     /// "control write-deny (readable)", not full control isolation.
-    /// `landlock`: workspace child RW, root RO, system RO, platform tmp when granted, no home.
-    /// `seatbelt`: workspace RW, system RO, platform tmp when granted, no home, mach-lookup residual.
+    /// `landlock`: workspace child RW, root RO, system RO, platform tmp when granted, no bare home.
+    /// `seatbelt`: workspace RW, system RO, platform tmp when granted, no bare home, mach-lookup residual.
+    /// When host-config RW trees are granted, summary says
+    /// `narrow host-config RW, no bare home` instead of bare `no home`.
     pub fn effectiveFsScopeSummary(self: *const CompiledProfile, backend: enum { landlock, seatbelt }) []const u8 {
         const has_tmp = blk: {
             for (self.grants) |g| {
@@ -165,7 +170,20 @@ pub const CompiledProfile = struct {
         };
         // Protect-on carves secret-form names (and hardlink aliases on macOS
         // prepare / Linux FUSE) out of the workspace RW grant — surface that.
+        // Static string literals keep receipt bytes stable across backends.
         if (self.protect_workspace_secrets) {
+            if (self.has_host_config_rw) {
+                return switch (backend) {
+                    .landlock => if (has_tmp)
+                        "workspace child RW (env secret forms denied), root RO, system RO, platform tmp RW, narrow host-config RW, no bare home, control write-deny (readable)"
+                    else
+                        "workspace child RW (env secret forms denied), root RO, system RO, narrow host-config RW, no bare home, control write-deny (readable)",
+                    .seatbelt => if (has_tmp)
+                        "workspace RW (env secret forms denied), system RO, platform tmp RW, narrow host-config RW, no bare home, control write-deny (readable), mach-lookup residual"
+                    else
+                        "workspace RW (env secret forms denied), system RO, narrow host-config RW, no bare home, control write-deny (readable), mach-lookup residual",
+                };
+            }
             return switch (backend) {
                 .landlock => if (has_tmp)
                     "workspace child RW (env secret forms denied), root RO, system RO, platform tmp RW, no home, control write-deny (readable)"
@@ -175,6 +193,18 @@ pub const CompiledProfile = struct {
                     "workspace RW (env secret forms denied), system RO, platform tmp RW, no home, control write-deny (readable), mach-lookup residual"
                 else
                     "workspace RW (env secret forms denied), system RO, no home, control write-deny (readable), mach-lookup residual",
+            };
+        }
+        if (self.has_host_config_rw) {
+            return switch (backend) {
+                .landlock => if (has_tmp)
+                    "workspace child RW, root RO, system RO, platform tmp RW, narrow host-config RW, no bare home, control write-deny (readable)"
+                else
+                    "workspace child RW, root RO, system RO, narrow host-config RW, no bare home, control write-deny (readable)",
+                .seatbelt => if (has_tmp)
+                    "workspace RW, system RO, platform tmp RW, narrow host-config RW, no bare home, control write-deny (readable), mach-lookup residual"
+                else
+                    "workspace RW, system RO, narrow host-config RW, no bare home, control write-deny (readable), mach-lookup residual",
             };
         }
         return switch (backend) {
@@ -411,9 +441,11 @@ pub fn compileProfile(allocator: std.mem.Allocator, options: CompileOptions) !Co
     }
 
     // Host-agent config RW trees (e.g. $HOME/.claude) — never bare HOME or `/`.
-    // Dedup against existing workspace RW is handled by appendUniqueRwGrant.
+    // Dedup against existing workspace RW is handled by appendUniqueHostRwGrant.
+    var has_host_config_rw = false;
     for (options.host_rw_paths) |raw_rw| {
         try appendUniqueHostRwGrant(&grants_list, allocator, raw_rw);
+        has_host_config_rw = true;
     }
 
     // Control roots: always workspace/.orca plus any listed roots.
@@ -486,6 +518,7 @@ pub fn compileProfile(allocator: std.mem.Allocator, options: CompileOptions) !Co
         .grants = grants,
         .control_roots = control_roots,
         .protect_workspace_secrets = options.protect_workspace_secrets,
+        .has_host_config_rw = has_host_config_rw,
         .canonical_bytes = canonical_bytes,
         .hash_hex = hash_hex,
     };
@@ -929,6 +962,27 @@ test "host config host_rw_paths compile as RW without HOME or ssh" {
     try std.testing.expect(!compiled.isAgentWritable("/Users/dev/Library"));
     try std.testing.expect(compiled.isGrantedReadable(claude_cfg));
     try std.testing.expect(compiled.isGrantedReadable("/Users/dev/.claude/settings.json"));
+    try std.testing.expect(compiled.has_host_config_rw);
+    const seatbelt_scope = compiled.effectiveFsScopeSummary(.seatbelt);
+    try std.testing.expect(std.mem.indexOf(u8, seatbelt_scope, "narrow host-config RW, no bare home") != null);
+    try std.testing.expect(std.mem.indexOf(u8, seatbelt_scope, "no home,") == null or
+        std.mem.indexOf(u8, seatbelt_scope, "no bare home") != null);
+    // Bare "no home" without "bare" must not appear as the only home phrase.
+    try std.testing.expect(std.mem.indexOf(u8, seatbelt_scope, "no bare home") != null);
+}
+
+test "effectiveFsScopeSummary without host grants still says no home" {
+    const allocator = std.testing.allocator;
+    var compiled = try compileProfile(allocator, .{
+        .workspace_root = "/Users/dev/projects/app",
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+        .include_tmp = false,
+    });
+    defer compiled.deinit();
+    try std.testing.expect(!compiled.has_host_config_rw);
+    const scope = compiled.effectiveFsScopeSummary(.seatbelt);
+    try std.testing.expect(std.mem.indexOf(u8, scope, "no home") != null);
+    try std.testing.expect(std.mem.indexOf(u8, scope, "narrow host-config RW") == null);
 }
 
 test "host config host_rw_paths reject filesystem root" {

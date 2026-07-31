@@ -161,10 +161,10 @@ pub fn applyForRun(
 
     const home_for_config: []const u8 = if (env_map.get("HOME")) |h| h else "";
     const launch_host_rw_paths: []const []const u8 = if (launch_argv0) |argv0|
-        try sandbox.host_config_grants.collectHostConfigRoPaths(launch_io, allocator, argv0, home_for_config)
+        try sandbox.host_config_grants.collectHostConfigPaths(launch_io, allocator, argv0, home_for_config)
     else
         &.{};
-    defer if (launch_argv0 != null) sandbox.host_config_grants.freeHostConfigRoPaths(allocator, launch_host_rw_paths);
+    defer if (launch_argv0 != null) sandbox.host_config_grants.freeHostConfigPaths(allocator, launch_host_rw_paths);
 
     const result = sandbox.apply.applyBeforeExec(.{
         .allocator = allocator,

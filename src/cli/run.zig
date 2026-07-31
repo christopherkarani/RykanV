@@ -362,23 +362,42 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     }
     try run_os_sandbox.warnAutoDegrade(effective_os_sandbox, &apply_result, stderr);
 
-    // Empty backpack + known agent host: require host config root or a *relevant*
-    // provider gateway (claude→Anthropic, codex→OpenAI). Without either, agents
-    // blank-hang after sandbox=active (HOME env set, home FS denied). Fail closed.
+    // Empty backpack + known agent host: require usable login material or a
+    // *relevant* provider gateway (claude→Anthropic, codex→OpenAI). Config dir
+    // alone is not enough for hosts with login markers (e.g. Claude credentials).
+    // Without either, agents blank-hang after sandbox=active. Fail closed.
+    // Help/version-only launches skip both missing-auth and stale-OAuth checks so
+    // `ryk claude --help` works without login (self-contained binary).
+    // Stale access-token fail-closed is intentional even if a refresh token exists:
+    // on this product path expired access + no gateway blank-hangs; force re-login
+    // or gateway rather than waiting forever (refresh success under the box is not
+    // guaranteed and is not proven here).
     if (secret_boundary == .empty_backpack and options.command_argv.len > 0) {
         const argv0 = options.command_argv[0];
         const host = sandbox.host_config_grants.hostBasename(argv0);
         if (sandbox.host_config_grants.specForHost(host) != null) {
+            const help_only = sandbox.host_config_grants.isAgentHelpOrVersionOnly(options.command_argv);
             const home = filtered_env.env_map.get("HOME") orelse "";
-            const has_config = sandbox.host_config_grants.hostConfigPresent(io, argv0, home);
-            if (sandbox.host_config_grants.shouldFailClosedMissingAuth(
-                host,
-                anthropic_gateway != null,
-                openai_gateway != null,
-                has_config,
-            )) {
-                try stderr.writeAll(sandbox.host_config_grants.missing_config_fail_closed_message);
-                return exit_codes.unsupported;
+            if (!help_only) {
+                const has_usable = sandbox.host_config_grants.hostUsableAuthPresent(io, argv0, home);
+                if (sandbox.host_config_grants.shouldFailClosedMissingAuth(
+                    host,
+                    anthropic_gateway != null,
+                    openai_gateway != null,
+                    has_usable,
+                )) {
+                    try stderr.writeAll(sandbox.host_config_grants.missing_config_fail_closed_message);
+                    return exit_codes.unsupported;
+                }
+                if (sandbox.host_config_grants.shouldFailClosedStaleClaudeLogin(
+                    io,
+                    options.command_argv,
+                    home,
+                    anthropic_gateway != null,
+                )) {
+                    try stderr.writeAll(sandbox.host_config_grants.stale_login_fail_closed_message);
+                    return exit_codes.unsupported;
+                }
             }
         }
     }
@@ -1030,6 +1049,9 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                     "ryk run: note: OS sandbox attach succeeded; agent ended with unknown status {d} (pre-exec handshake residual).\n",
                     .{st},
                 ),
+            }
+            if (secret_boundary == .empty_backpack) {
+                try stderr.writeAll(sandbox.host_config_grants.empty_backpack_agent_exit_tip);
             }
         }
     }
@@ -2342,10 +2364,15 @@ test "agent-primary host launch enters empty backpack without secretless flag" {
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    // Fake HOME with agent config so empty-backpack fail-closed does not fire.
+    // Fake HOME with Claude login material so empty-backpack fail-closed does not fire.
     var home_tmp = std.testing.tmpDir(.{});
     defer home_tmp.cleanup();
     try home_tmp.dir.createDirPath(std.testing.io, ".claude");
+    try home_tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = ".claude/.credentials.json",
+        // Far-future expiresAt so freshness preflight does not fail closed.
+        .data = "{\"claudeAiOauth\":{\"accessToken\":\"test\",\"expiresAt\":9999999999999}}\n",
+    });
     const fake_home = try home_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(fake_home);
     {
@@ -3585,6 +3612,236 @@ test "ryk run default auto attaches when backend available" {
     try std.testing.expect(std.mem.indexOf(u8, out, "OS sandbox: active") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Seatbelt") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Landlock") == null);
+}
+
+test "empty backpack fails closed when claude has config dir but no credentials" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    try skipUnlessOsSandboxBackend();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    // Config root only — no .credentials.json (R4).
+    try home_tmp.dir.createDirPath(std.testing.io, ".claude");
+    const fake_home = try home_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(fake_home);
+
+    {
+        const script = try tmp.dir.createFile(std.testing.io, "claude", .{});
+        defer script.close(std.testing.io);
+        try script.writeStreamingAll(std.testing.io,
+            \\#!/bin/sh
+            \\exit 0
+            \\
+        );
+        try tmp.dir.setFilePermissions(std.testing.io, "claude", @enumFromInt(0o755), .{});
+    }
+
+    var current = std.process.Environ.Map.init(std.testing.allocator);
+    defer current.deinit();
+    const path_env = if (std.c.getenv("PATH")) |path| std.mem.span(path) else "/usr/bin:/bin:/usr/sbin:/sbin";
+    try current.put("PATH", path_env);
+    try current.put("HOME", fake_home);
+    // No ANTHROPIC_API_KEY → no gateway substitute.
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try commandForTestWithEnvAndShellEvaluator(
+        &.{ "--workspace", root, "--mode", "observe", "--", "./claude" },
+        &stdout_writer,
+        &stderr_writer,
+        .ignore,
+        &current,
+        shell_eval.mockDaemonAllowEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.unsupported, code);
+    const err = stderr_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, err, "usable host login material") != null or
+        std.mem.indexOf(u8, err, ".credentials.json") != null);
+}
+
+test "empty backpack fails closed when claude OAuth access token is expired" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    try skipUnlessOsSandboxBackend();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    try home_tmp.dir.createDirPath(std.testing.io, ".claude");
+    try home_tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = ".claude/.credentials.json",
+        .data = "{\"claudeAiOauth\":{\"expiresAt\":1}}\n",
+    });
+    const fake_home = try home_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(fake_home);
+
+    {
+        const script = try tmp.dir.createFile(std.testing.io, "claude", .{});
+        defer script.close(std.testing.io);
+        try script.writeStreamingAll(std.testing.io, "#!/bin/sh\nexit 0\n");
+        try tmp.dir.setFilePermissions(std.testing.io, "claude", @enumFromInt(0o755), .{});
+    }
+
+    var current = std.process.Environ.Map.init(std.testing.allocator);
+    defer current.deinit();
+    const path_env = if (std.c.getenv("PATH")) |path| std.mem.span(path) else "/usr/bin:/bin:/usr/sbin:/sbin";
+    try current.put("PATH", path_env);
+    try current.put("HOME", fake_home);
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try commandForTestWithEnvAndShellEvaluator(
+        &.{ "--workspace", root, "--mode", "observe", "--", "./claude" },
+        &stdout_writer,
+        &stderr_writer,
+        .ignore,
+        &current,
+        shell_eval.mockDaemonAllowEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.unsupported, code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "expired") != null);
+}
+
+test "empty backpack allows claude --help with expired credentials" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    try skipUnlessOsSandboxBackend();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    try home_tmp.dir.createDirPath(std.testing.io, ".claude");
+    try home_tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = ".claude/.credentials.json",
+        .data = "{\"claudeAiOauth\":{\"expiresAt\":1}}\n",
+    });
+    const fake_home = try home_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(fake_home);
+
+    {
+        const script = try tmp.dir.createFile(std.testing.io, "claude", .{});
+        defer script.close(std.testing.io);
+        try script.writeStreamingAll(std.testing.io, "#!/bin/sh\necho help-ok\n");
+        try tmp.dir.setFilePermissions(std.testing.io, "claude", @enumFromInt(0o755), .{});
+    }
+
+    var current = std.process.Environ.Map.init(std.testing.allocator);
+    defer current.deinit();
+    const path_env = if (std.c.getenv("PATH")) |path| std.mem.span(path) else "/usr/bin:/bin:/usr/sbin:/sbin";
+    try current.put("PATH", path_env);
+    try current.put("HOME", fake_home);
+
+    var stdout_buf: [8192]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try commandForTestWithEnvAndShellEvaluator(
+        &.{ "--workspace", root, "--mode", "observe", "--", "./claude", "--help" },
+        &stdout_writer,
+        &stderr_writer,
+        .ignore,
+        &current,
+        shell_eval.mockDaemonAllowEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.success, code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "expired") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "usable host login material") == null);
+}
+
+test "empty backpack allows claude --help with no credentials at all" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    try skipUnlessOsSandboxBackend();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    // No .claude at all.
+    const fake_home = try home_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(fake_home);
+
+    {
+        const script = try tmp.dir.createFile(std.testing.io, "claude", .{});
+        defer script.close(std.testing.io);
+        try script.writeStreamingAll(std.testing.io, "#!/bin/sh\necho help-ok\n");
+        try tmp.dir.setFilePermissions(std.testing.io, "claude", @enumFromInt(0o755), .{});
+    }
+
+    var current = std.process.Environ.Map.init(std.testing.allocator);
+    defer current.deinit();
+    const path_env = if (std.c.getenv("PATH")) |path| std.mem.span(path) else "/usr/bin:/bin:/usr/sbin:/sbin";
+    try current.put("PATH", path_env);
+    try current.put("HOME", fake_home);
+
+    var stdout_buf: [8192]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try commandForTestWithEnvAndShellEvaluator(
+        &.{ "--workspace", root, "--mode", "observe", "--", "./claude", "--help" },
+        &stdout_writer,
+        &stderr_writer,
+        .ignore,
+        &current,
+        shell_eval.mockDaemonAllowEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.success, code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "usable host login material") == null);
+}
+
+test "empty backpack non-host binary does not fail closed for missing claude config" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    try skipUnlessOsSandboxBackend();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    const fake_home = try home_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(fake_home);
+
+    var current = std.process.Environ.Map.init(std.testing.allocator);
+    defer current.deinit();
+    const path_env = if (std.c.getenv("PATH")) |path| std.mem.span(path) else "/usr/bin:/bin:/usr/sbin:/sbin";
+    try current.put("PATH", path_env);
+    try current.put("HOME", fake_home);
+
+    var stdout_buf: [8192]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    // /bin/echo is not a known host — no fail-closed for missing agent config.
+    const code = try commandForTestWithEnvAndShellEvaluator(
+        &.{ "--workspace", root, "--mode", "observe", "--secretless", "--", "/bin/echo", "ok" },
+        &stdout_writer,
+        &stderr_writer,
+        .ignore,
+        &current,
+        shell_eval.mockDaemonAllowEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.success, code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "usable host login material") == null);
 }
 
 test "session start banner is mechanism-neutral for disabled OS sandbox" {

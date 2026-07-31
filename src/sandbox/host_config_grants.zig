@@ -18,11 +18,15 @@ pub const HostConfigSpec = struct {
     host: []const u8,
     /// Directory roots under `$HOME` (no leading `/`).
     home_rel_dirs: []const []const u8,
+    /// Home-relative files that count as usable login material (any one non-empty).
+    /// Empty list → directory presence alone is enough (weaker, host-specific).
+    login_markers: []const []const u8 = &.{},
 };
 
 /// Authoritative grant table for host-launch aliases that need host login stores.
 /// Keep this tighter than scan session discovery (full config root, not only
 /// `projects/` / `sessions/` leaves).
+/// Paths compile as **RW** (session write under the agent root) — never bare `$HOME`.
 pub const host_config_table = [_]HostConfigSpec{
     .{
         .host = "claude",
@@ -35,10 +39,14 @@ pub const host_config_table = [_]HostConfigSpec{
             "Library/Application Support/claude-cli-nodejs",
             "Library/Caches/claude-cli-nodejs",
         },
+        // OAuth / CLI login blob. Expired tokens are still "present" — hang residual
+        // is host auth/network, not missing config (see empty-backpack tip on agent exit).
+        .login_markers = &.{".claude/.credentials.json"},
     },
     .{
         .host = "codex",
         .home_rel_dirs = &.{".codex"},
+        .login_markers = &.{".codex/auth.json", ".codex/config.toml"},
     },
     .{
         .host = "pi",
@@ -123,8 +131,8 @@ pub fn isForbiddenHostConfigPath(path: []const u8, home: []const u8) bool {
 /// - Never returns bare HOME or `.ssh`.
 /// - Callers compile these as `.rw` (session write) — still narrow trees only.
 ///
-/// Caller frees with `freeHostConfigRoPaths`.
-pub fn collectHostConfigRoPaths(
+/// Caller frees with `freeHostConfigPaths`.
+pub fn collectHostConfigPaths(
     io: std.Io,
     allocator: std.mem.Allocator,
     argv0: []const u8,
@@ -177,7 +185,7 @@ pub fn collectHostConfigRoPaths(
     return try list.toOwnedSlice(allocator);
 }
 
-pub fn freeHostConfigRoPaths(allocator: std.mem.Allocator, paths: []const []const u8) void {
+pub fn freeHostConfigPaths(allocator: std.mem.Allocator, paths: []const []const u8) void {
     for (paths) |p| allocator.free(p);
     allocator.free(paths);
 }
@@ -201,6 +209,127 @@ pub fn hostConfigPresent(
     return false;
 }
 
+/// True when a non-empty login marker file is readable, or (if the host has no
+/// markers) when a config root exists. Config dir alone is not enough for Claude.
+pub fn hostLoginMaterialPresent(
+    io: std.Io,
+    argv0: []const u8,
+    home: []const u8,
+) bool {
+    const host = hostBasename(argv0);
+    const spec = specForHost(host) orelse return false;
+    if (home.len == 0 or !std.fs.path.isAbsolute(home)) return false;
+    if (spec.login_markers.len == 0) return hostConfigPresent(io, argv0, home);
+    for (spec.login_markers) |rel| {
+        if (rel.len == 0 or relHasUnsafeComponents(rel)) continue;
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const joined = std.fmt.bufPrint(&buf, "{s}/{s}", .{ home, rel }) catch continue;
+        if (isForbiddenHostConfigPath(joined, home)) continue;
+        if (nonEmptyFileExists(io, joined)) return true;
+    }
+    return false;
+}
+
+fn nonEmptyFileExists(io: std.Io, path: []const u8) bool {
+    if (path.len == 0) return false;
+    const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return false;
+    defer file.close(io);
+    const st = file.stat(io) catch return false;
+    return st.size > 0;
+}
+
+/// Claude OAuth access-token expiry when readable. Other hosts always `.unknown`.
+/// Does not log or return token bytes — only the freshness class.
+pub const LoginFreshness = enum {
+    /// No marker / unreadable / not applicable.
+    unknown,
+    /// Marker present; no expiry field or not yet expired.
+    fresh,
+    /// `claudeAiOauth.expiresAt` (unix ms) is in the past.
+    expired,
+};
+
+/// Best-effort Claude credential freshness. Never loads secrets into the return value.
+pub fn claudeLoginFreshness(io: std.Io, home: []const u8) LoginFreshness {
+    if (home.len == 0 or !std.fs.path.isAbsolute(home)) return .unknown;
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "{s}/.claude/.credentials.json", .{home}) catch return .unknown;
+    if (isForbiddenHostConfigPath(path, home)) return .unknown;
+
+    // Bound read — credentials files are small; never log body contents.
+    const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return .unknown;
+    defer file.close(io);
+    var buf: [64 * 1024]u8 = undefined;
+    const n = file.readPositionalAll(io, &buf, 0) catch return .unknown;
+    if (n == 0) return .unknown;
+    const body = buf[0..n];
+
+    // Minimal structural parse: find "expiresAt" numeric (ms since epoch).
+    const key = "\"expiresAt\"";
+    const key_at = std.mem.indexOf(u8, body, key) orelse return .fresh; // present file, no field
+    var i = key_at + key.len;
+    while (i < body.len and (body[i] == ' ' or body[i] == '\t' or body[i] == '\n' or body[i] == '\r' or body[i] == ':')) : (i += 1) {}
+    if (i >= body.len or body[i] < '0' or body[i] > '9') return .fresh;
+    var exp: u64 = 0;
+    while (i < body.len and body[i] >= '0' and body[i] <= '9') : (i += 1) {
+        const digit: u64 = body[i] - '0';
+        exp = exp *% 10 +% digit;
+    }
+    if (exp == 0) return .fresh;
+    // expiresAt is milliseconds; Io wall clock is seconds.
+    const now_s = std.Io.Timestamp.now(io, .real).toSeconds();
+    if (now_s < 0) return .fresh;
+    const now_ms: u64 = @as(u64, @intCast(now_s)) * 1000;
+    if (exp < now_ms) return .expired;
+    return .fresh;
+}
+
+/// Usable auth markers present (non-empty login files / config roots). Does **not**
+/// reject expired OAuth — use `claudeLoginFreshness` + `isAgentHelpOrVersionOnly`
+/// so `--help` still works under empty backpack with stale credentials.
+pub fn hostUsableAuthPresent(
+    io: std.Io,
+    argv0: []const u8,
+    home: []const u8,
+) bool {
+    return hostLoginMaterialPresent(io, argv0, home);
+}
+
+/// True when argv after the binary is only help/version flags (no prompt / -p).
+/// Bare interactive (`claude` alone) is **not** help-only.
+pub fn isAgentHelpOrVersionOnly(command_argv: []const []const u8) bool {
+    if (command_argv.len < 2) return false;
+    for (command_argv[1..]) |arg| {
+        if (std.mem.eql(u8, arg, "--help") or
+            std.mem.eql(u8, arg, "-h") or
+            std.mem.eql(u8, arg, "help") or
+            std.mem.eql(u8, arg, "--version") or
+            std.mem.eql(u8, arg, "-v") or
+            std.mem.eql(u8, arg, "version") or
+            std.mem.eql(u8, arg, "-V"))
+        {
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
+
+/// True when Claude OAuth is known-expired and the launch is not help/version-only.
+/// Call only after marker presence has already passed.
+pub fn shouldFailClosedStaleClaudeLogin(
+    io: std.Io,
+    command_argv: []const []const u8,
+    home: []const u8,
+    has_anthropic_gateway: bool,
+) bool {
+    if (has_anthropic_gateway) return false;
+    if (command_argv.len == 0) return false;
+    if (!std.mem.eql(u8, hostBasename(command_argv[0]), "claude")) return false;
+    if (isAgentHelpOrVersionOnly(command_argv)) return false;
+    return claudeLoginFreshness(io, home) == .expired;
+}
+
 /// True when `path` exists as a directory or regular openable file.
 fn pathExists(io: std.Io, path: []const u8) bool {
     if (path.len == 0) return false;
@@ -216,7 +345,7 @@ fn pathExists(io: std.Io, path: []const u8) bool {
 /// Static stderr guidance when empty backpack cannot offer host login or gateway.
 pub const missing_config_fail_closed_message =
     \\ryk run: empty-backpack OS sandbox cannot read host agent login/config under $HOME.
-    \\No agent config directory was found (for example ~/.claude) and no matching provider gateway is active.
+    \\No usable host login material was found (for example ~/.claude/.credentials.json) and no matching provider gateway is active.
     \\Fix one of:
     \\  • run the agent once outside ryk to create host login (e.g. `claude` then login), then retry
     \\  • for Claude: export ANTHROPIC_API_KEY; for Codex: export OPENAI_API_KEY (host-matched gateway)
@@ -224,6 +353,40 @@ pub const missing_config_fail_closed_message =
     \\See docs/credentials.md
     \\
 ;
+
+/// When Claude credentials exist but the OAuth access token is past expiresAt.
+pub const stale_login_fail_closed_message =
+    \\ryk run: empty-backpack found Claude login material, but the OAuth access token is expired (expiresAt in the past).
+    \\Without a host-matched Anthropic gateway this often blank-hangs after sandbox=active.
+    \\Fix one of:
+    \\  • re-login outside ryk (`claude` then login) so ~/.claude/.credentials.json is fresh
+    \\  • export ANTHROPIC_API_KEY (host-matched gateway under empty backpack)
+    \\  • escape with `ryk run --with-host-secrets -- claude` (loud; may expose host secrets)
+    \\See docs/credentials.md
+    \\
+;
+
+/// Extra tip when the agent exits non-zero after a successful sandbox attach under empty backpack.
+pub const empty_backpack_agent_exit_tip =
+    \\ryk run: empty-backpack tip: re-login outside ryk if auth is stale; export a host-matched API key for gateway; or use --with-host-secrets (loud). Redirected stdio into /tmp or /var/folders can hit Seatbelt fstat denials — capture under the workspace instead. Keychain FS is not granted (by design).
+    \\
+;
+
+/// Choose the fail-closed stderr blob for a known host with unusable auth.
+pub fn failClosedMessageFor(
+    io: std.Io,
+    argv0: []const u8,
+    home: []const u8,
+) []const u8 {
+    const host = hostBasename(argv0);
+    if (std.mem.eql(u8, host, "claude") and
+        hostLoginMaterialPresent(io, argv0, home) and
+        claudeLoginFreshness(io, home) == .expired)
+    {
+        return stale_login_fail_closed_message;
+    }
+    return missing_config_fail_closed_message;
+}
 
 /// Which loopback provider gateway can substitute host login for this agent.
 pub const GatewayKind = enum {
@@ -240,15 +403,17 @@ pub fn gatewayKindForHost(host: []const u8) GatewayKind {
     return .none;
 }
 
-/// Empty-backpack agent launch without host config and without a **relevant**
-/// provider gateway would blank-hang. Call only for known host-config agents.
+/// Empty-backpack agent launch without usable login material and without a
+/// **relevant** provider gateway would blank-hang. Call only for known hosts.
+/// `has_usable_auth` is typically `hostUsableAuthPresent` (login markers when
+/// defined, else config-root presence).
 pub fn shouldFailClosedMissingAuth(
     host: []const u8,
     has_anthropic_gateway: bool,
     has_openai_gateway: bool,
-    has_host_config: bool,
+    has_usable_auth: bool,
 ) bool {
-    if (has_host_config) return false;
+    if (has_usable_auth) return false;
     return switch (gatewayKindForHost(host)) {
         .anthropic => !has_anthropic_gateway,
         .openai => !has_openai_gateway,
@@ -281,7 +446,7 @@ test "isForbiddenHostConfigPath rejects root home and ssh" {
     try std.testing.expect(!isForbiddenHostConfigPath("/Users/dev/.local/share/claude", home));
 }
 
-test "collectHostConfigRoPaths grants existing claude roots and skips missing" {
+test "collectHostConfigPaths grants existing claude roots and skips missing" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -299,23 +464,23 @@ test "collectHostConfigRoPaths grants existing claude roots and skips missing" {
     // Prove the fixture is visible before collect (isolates collector bugs).
     try std.testing.expect(pathExists(io, want_claude));
 
-    const paths = try collectHostConfigRoPaths(io, allocator, "claude", home);
-    defer freeHostConfigRoPaths(allocator, paths);
+    const paths = try collectHostConfigPaths(io, allocator, "claude", home);
+    defer freeHostConfigPaths(allocator, paths);
 
     try std.testing.expectEqual(@as(usize, 1), paths.len);
     try std.testing.expectEqualStrings(want_claude, paths[0]);
 
     // Sibling secret tree never granted even if present.
     try home_tmp.dir.createDirPath(io, ".ssh");
-    const paths2 = try collectHostConfigRoPaths(io, allocator, "claude", home);
-    defer freeHostConfigRoPaths(allocator, paths2);
+    const paths2 = try collectHostConfigPaths(io, allocator, "claude", home);
+    defer freeHostConfigPaths(allocator, paths2);
     for (paths2) |p| {
         try std.testing.expect(std.mem.indexOf(u8, p, ".ssh") == null);
         try std.testing.expect(!std.mem.eql(u8, p, home));
     }
 }
 
-test "collectHostConfigRoPaths empty for non-host and missing config" {
+test "collectHostConfigPaths empty for non-host and missing config" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -325,32 +490,100 @@ test "collectHostConfigRoPaths empty for non-host and missing config" {
     defer allocator.free(home);
 
     {
-        const paths = try collectHostConfigRoPaths(io, allocator, "/bin/echo", home);
-        defer freeHostConfigRoPaths(allocator, paths);
+        const paths = try collectHostConfigPaths(io, allocator, "/bin/echo", home);
+        defer freeHostConfigPaths(allocator, paths);
         try std.testing.expectEqual(@as(usize, 0), paths.len);
     }
     {
         // Known host but no config dir yet.
-        const paths = try collectHostConfigRoPaths(io, allocator, "claude", home);
-        defer freeHostConfigRoPaths(allocator, paths);
+        const paths = try collectHostConfigPaths(io, allocator, "claude", home);
+        defer freeHostConfigPaths(allocator, paths);
         try std.testing.expectEqual(@as(usize, 0), paths.len);
         try std.testing.expect(!hostConfigPresent(io, "claude", home));
     }
 }
 
-test "collectHostConfigRoPaths rejects empty or relative HOME" {
+test "collectHostConfigPaths rejects empty or relative HOME" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     {
-        const paths = try collectHostConfigRoPaths(io, allocator, "claude", "");
-        defer freeHostConfigRoPaths(allocator, paths);
+        const paths = try collectHostConfigPaths(io, allocator, "claude", "");
+        defer freeHostConfigPaths(allocator, paths);
         try std.testing.expectEqual(@as(usize, 0), paths.len);
     }
     {
-        const paths = try collectHostConfigRoPaths(io, allocator, "claude", "relative-home");
-        defer freeHostConfigRoPaths(allocator, paths);
+        const paths = try collectHostConfigPaths(io, allocator, "claude", "relative-home");
+        defer freeHostConfigPaths(allocator, paths);
         try std.testing.expectEqual(@as(usize, 0), paths.len);
     }
+}
+
+test "hostLoginMaterialPresent requires credentials not only config dir for claude" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    const home = try home_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+
+    try home_tmp.dir.createDirPath(io, ".claude");
+    try std.testing.expect(hostConfigPresent(io, "claude", home));
+    try std.testing.expect(!hostLoginMaterialPresent(io, "claude", home));
+    try std.testing.expect(!hostUsableAuthPresent(io, "claude", home));
+
+    // No expiresAt → treat as present/fresh enough for preflight.
+    try home_tmp.dir.writeFile(io, .{ .sub_path = ".claude/.credentials.json", .data = "{\"claudeAiOauth\":{}}\n" });
+    try std.testing.expect(hostLoginMaterialPresent(io, "claude", home));
+    try std.testing.expect(hostUsableAuthPresent(io, "claude", home));
+    try std.testing.expect(claudeLoginFreshness(io, home) == .fresh);
+
+    // Empty credentials file is not usable.
+    try home_tmp.dir.writeFile(io, .{ .sub_path = ".claude/.credentials.json", .data = "" });
+    try std.testing.expect(!hostLoginMaterialPresent(io, "claude", home));
+
+    // Expired access token → material present; stale fail-closed is separate.
+    try home_tmp.dir.writeFile(io, .{
+        .sub_path = ".claude/.credentials.json",
+        .data = "{\"claudeAiOauth\":{\"expiresAt\":1}}\n",
+    });
+    try std.testing.expect(hostLoginMaterialPresent(io, "claude", home));
+    try std.testing.expect(hostUsableAuthPresent(io, "claude", home));
+    try std.testing.expect(claudeLoginFreshness(io, home) == .expired);
+    try std.testing.expect(shouldFailClosedStaleClaudeLogin(io, &.{ "claude", "-p", "hi" }, home, false));
+    try std.testing.expect(!shouldFailClosedStaleClaudeLogin(io, &.{ "claude", "--help" }, home, false));
+    try std.testing.expect(!shouldFailClosedStaleClaudeLogin(io, &.{ "claude", "-p", "hi" }, home, true)); // gateway
+
+    // Far-future expiry remains fresh.
+    try home_tmp.dir.writeFile(io, .{
+        .sub_path = ".claude/.credentials.json",
+        .data = "{\"claudeAiOauth\":{\"expiresAt\":9999999999999}}\n",
+    });
+    try std.testing.expect(claudeLoginFreshness(io, home) == .fresh);
+    try std.testing.expect(!shouldFailClosedStaleClaudeLogin(io, &.{"claude"}, home, false));
+
+    try std.testing.expect(isAgentHelpOrVersionOnly(&.{ "claude", "--help" }));
+    try std.testing.expect(isAgentHelpOrVersionOnly(&.{ "claude", "--version" }));
+    try std.testing.expect(!isAgentHelpOrVersionOnly(&.{"claude"}));
+    try std.testing.expect(!isAgentHelpOrVersionOnly(&.{ "claude", "-p", "x" }));
+
+    // pi has no markers → config dir alone is enough.
+    try home_tmp.dir.createDirPath(io, ".pi");
+    try std.testing.expect(hostLoginMaterialPresent(io, "pi", home));
+}
+
+test "failClosedMessageFor prefers stale when credentials expired" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    const home = try home_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+    try home_tmp.dir.createDirPath(io, ".claude");
+    try home_tmp.dir.writeFile(io, .{
+        .sub_path = ".claude/.credentials.json",
+        .data = "{\"claudeAiOauth\":{\"expiresAt\":1}}\n",
+    });
+    try std.testing.expect(std.mem.indexOf(u8, failClosedMessageFor(io, "claude", home), "expired") != null);
 }
 
 test "shouldFailClosedMissingAuth edge matrix is host-aware" {
@@ -386,7 +619,7 @@ test "isForbiddenHostConfigPath rejects keychains and traversal survivors" {
     try std.testing.expect(!isForbiddenHostConfigPath("/Users/dev/Library/Application Support/Claude", home));
 }
 
-test "collectHostConfigRoPaths on real HOME includes .claude when present" {
+test "collectHostConfigPaths on real HOME includes .claude when present" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     const home_z = std.c.getenv("HOME") orelse return error.SkipZigTest;
@@ -394,8 +627,8 @@ test "collectHostConfigRoPaths on real HOME includes .claude when present" {
     if (!std.fs.path.isAbsolute(home)) return error.SkipZigTest;
     if (!hostConfigPresent(io, "claude", home)) return error.SkipZigTest;
 
-    const paths = try collectHostConfigRoPaths(io, allocator, "claude", home);
-    defer freeHostConfigRoPaths(allocator, paths);
+    const paths = try collectHostConfigPaths(io, allocator, "claude", home);
+    defer freeHostConfigPaths(allocator, paths);
     try std.testing.expect(paths.len >= 1);
     var found_claude = false;
     for (paths) |p| {
@@ -404,4 +637,10 @@ test "collectHostConfigRoPaths on real HOME includes .claude when present" {
         if (std.mem.endsWith(u8, p, "/.claude")) found_claude = true;
     }
     try std.testing.expect(found_claude);
+}
+
+test "missing_config_fail_closed_message names login material" {
+    try std.testing.expect(std.mem.indexOf(u8, missing_config_fail_closed_message, ".credentials.json") != null);
+    try std.testing.expect(std.mem.indexOf(u8, empty_backpack_agent_exit_tip, "var/folders") != null);
+    try std.testing.expect(std.mem.indexOf(u8, empty_backpack_agent_exit_tip, "Keychain") != null);
 }
