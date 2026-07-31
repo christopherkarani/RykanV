@@ -30,8 +30,14 @@ const data_volume_prefix = "/System/Volumes/Data";
 pub const SeatbeltProfileGrade = posture.SeatbeltProfileGrade;
 
 /// Bounds for prepare-time hardlink alias discovery under protect-on.
+///
+/// `max_entries` counts every dirent under the workspace (files + directories),
+/// not only multi-nlink aliases. Align with Linux workspace-view default
+/// (`linux_workspace_view` max_scan_entries = 1_000_000) so monorepos with
+/// dependency trees and build artifacts do not fail closed at prepare with
+/// `seatbelt_secret_hardlink_scan_capacity` while Linux still attaches.
 pub const secret_hardlink_scan_max_depth: u32 = 48;
-pub const secret_hardlink_scan_max_entries: u32 = 50_000;
+pub const secret_hardlink_scan_max_entries: u32 = 1_000_000;
 
 pub const NetworkRouteForcing = struct {
     proxy_port: u16,
@@ -1310,6 +1316,13 @@ test "collectSecretHardlinkAliasPaths missing workspace is empty not ScanOpenFai
     );
     defer freeHardlinkAliasPaths(allocator, aliases);
     try std.testing.expectEqual(@as(usize, 0), aliases.len);
+}
+
+test "secret hardlink scan capacity matches Linux monorepo floor" {
+    // Regression: 50_000 was below typical monorepo dirent counts (node_modules,
+    // vendor checkouts, SPM .build) and blocked protect-on Seatbelt prepare.
+    try std.testing.expect(secret_hardlink_scan_max_entries >= 1_000_000);
+    try std.testing.expect(secret_hardlink_scan_max_depth >= 48);
 }
 
 test "secret policy: SBPL emit embeds profile-owned fragments; path == basename law" {
