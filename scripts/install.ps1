@@ -155,6 +155,12 @@ function Install-RuntimeAssets($ExtractRoot) {
         }
         Copy-Item -LiteralPath $source -Destination $dest -Recurse -Force
     }
+    # Same marker contract as scripts/install.sh so `ryk uninstall` can recognize the runtime.
+    $markerPath = Join-Path $ResourceRoot ".orca-installation"
+    @(
+        "orca-runtime-v1"
+        "version=$Version"
+    ) | Set-Content -LiteralPath $markerPath -Encoding utf8
     New-Item -ItemType Directory -Force -Path $ShareDir | Out-Null
     if (Test-Path -LiteralPath $CurrentLink) {
         Remove-Item -LiteralPath $CurrentLink -Recurse -Force -ErrorAction SilentlyContinue

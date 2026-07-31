@@ -88,6 +88,7 @@ test {
     _ = quickstart;
     _ = help;
     _ = disable;
+    _ = uninstall;
     _ = @import("spinner.zig");
     // Pull daemon UDS/IPC/trust/error tests into the test binary.
     _ = daemon;

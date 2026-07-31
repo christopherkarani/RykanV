@@ -66,7 +66,7 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 | `dashboard` | Local Orca dashboard | `src/cli/dashboard.zig` |
 | `ci` | Local CI readiness checks | `src/cli/ci.zig` |
 | `shutdown` | Stop the background ryk daemon (live Zig) | `src/cli/shutdown.zig` |
-| `uninstall` | Uninstall Orca from this machine | `src/cli/uninstall.zig` |
+| `uninstall` | Uninstall ryk from this machine | `src/cli/uninstall.zig` |
 | `env` | Print install environment for shell activation | `src/cli/mod.zig` |
 | `--print-install-env` | Hidden flag (same as `env`) | `src/cli/mod.zig` |
 
@@ -473,16 +473,19 @@ Disable Orca plugins from host agents without removing the ryk binary or policy 
 
 ### `ryk uninstall`
 
-Completely remove Orca and its integrations from the machine.
+Completely remove ryk and its integrations from the machine (plugins, binaries, runtime, shell activation, config, and local data).
 
-**Usage:** `ryk uninstall [--plugins-only] [--keep-config] [--yes]`
+**Usage:** `ryk uninstall [--plugins-only] [--keep-config] [--dry-run] [--yes]`
 
 **Flags:**
 | Flag | Description |
 |------|-------------|
 | `--plugins-only` | Only remove plugins; keep binary and config |
-| `--keep-config` | Remove plugins and binary but keep `~/.config/orca/` |
+| `--keep-config` | Keep `~/.config/orca/` and allow-once data; still remove runtime + binary |
+| `--dry-run` | Print what would be removed without changing anything |
 | `--yes` | Skip confirmation prompt |
+
+Does **not** remove project workspace `.orca/` dirs. Package-manager installs (brew/scoop/winget) must be uninstalled with those tools.
 
 ---
 
