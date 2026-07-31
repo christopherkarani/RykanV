@@ -99,8 +99,9 @@ pub fn renderSbplWithOptions(
     // Baseline: process lifecycle, signals, sysctl, mach, and optional network.
     // Intentional non-goals (FS confinement only — not process/IPC/network isolation):
     // unfiltered mach-lookup remains on all grades. See docs/platform-macos.md.
-    // Metadata is scoped to root literals + granted trees only — never bare
-    // (allow file-read-metadata) which enables host-wide path discovery.
+    // Metadata is scoped to root literals + grant trees + grant-path *ancestors*
+    // (literal metadata only for path-walk) — never bare (allow file-read-metadata)
+    // which enables host-wide path discovery.
     try appendProcessBaseline(&out, allocator, options.profile_grade);
     try out.appendSlice(allocator,
         \\(allow signal)
@@ -115,6 +116,16 @@ pub fn renderSbplWithOptions(
 
     // Path grants from the portable profile model (Users-form when under Data/Users).
     // `.exec` uses `literal` (file-only) so a mistaken directory path cannot tree-open.
+    //
+    // Ancestor path-walk: Node/realpath and similar call lstat on each path component
+    // (e.g. `/Users` before `/Users/dev/proj`). Grant subpaths do not cover those
+    // parents. Emit metadata-only *literals* on intermediate components so path-walk
+    // succeeds without content grants on bare HOME, `/Users`, or sibling trees.
+    try out.appendSlice(allocator, ";; path-walk ancestor metadata (literal only; no content)\n");
+    for (compiled.grants) |g| {
+        try appendPathAncestorMetadataLiterals(&out, allocator, g.path);
+    }
+
     try out.appendSlice(allocator, ";; compiled path grants\n");
     for (compiled.grants) |g| {
         // Metadata only under granted trees.
@@ -644,6 +655,33 @@ fn appendAllowLiteral(
     try out.appendSlice(allocator, "\"))\n");
 }
 
+/// Emit `file-read-metadata` **literals** for each intermediate path component of
+/// `path` (after Users-form normalization). Enables component-wise path-walk
+/// (Node `realpathSync` / `lstat`) without content grants on ancestors.
+///
+/// For `/Users/dev/proj` emits literals on `/Users` and `/Users/dev` only — not
+/// the leaf (covered by the grant itself) and not bare unrestricted metadata.
+/// Never emits `file-read*` or `subpath` on those ancestors.
+fn appendPathAncestorMetadataLiterals(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    path: []const u8,
+) !void {
+    const emit = sbplEmitPath(path);
+    if (emit.len < 2 or emit[0] != '/') return;
+
+    var idx: usize = 1;
+    while (idx < emit.len) : (idx += 1) {
+        if (emit[idx] != '/') continue;
+        const ancestor = emit[0..idx];
+        // Bootstrap already grants metadata on "/"; skip empty and root-only.
+        if (ancestor.len <= 1) continue;
+        try out.appendSlice(allocator, "(allow file-read-metadata (literal \"");
+        try appendEscaped(out, allocator, ancestor);
+        try out.appendSlice(allocator, "\"))\n");
+    }
+}
+
 fn appendDenySubpath(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
@@ -832,6 +870,71 @@ test "SBPL never emits bare unrestricted file-read-metadata" {
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/\")") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (subpath \"/tmp/orca-sbpl-meta\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (subpath \"/usr\"))") != null);
+}
+
+test "SBPL path-walk ancestor metadata literals for Users-form grants" {
+    const allocator = std.testing.allocator;
+    const ws = "/Users/dev/projects/app";
+    const host_cfg = "/Users/dev/.codex";
+    const launch = "/opt/homebrew/bin/node";
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = ws,
+        .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
+        .host_rw_paths = &.{host_cfg},
+        .exec_paths = &.{launch},
+        .include_tmp = false,
+    });
+    defer compiled.deinit();
+
+    const sbpl = try renderSbpl(allocator, &compiled);
+    defer allocator.free(sbpl);
+
+    // Workspace ancestors: metadata literals only (Node realpath lstat chain).
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/Users\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/Users/dev\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/Users/dev/projects\"))") != null);
+    // Leaf content stays grant-scoped subpath — not ancestor content grants.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/projects/app\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/Users\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/Users/dev\"))") == null);
+    // Host config content remains leaf-only; ancestors are metadata literals (shared with ws).
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/.codex\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/.ssh\"))") == null);
+    // Exec dirname chain: metadata on parents, literal content only on the binary path.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/opt\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/opt/homebrew\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/opt/homebrew/bin\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/opt/homebrew/bin/node\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/opt\"))") == null);
+    // Safety nets from existing product invariants.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata)\n") == null);
+    try std.testing.expect(!sbplGrantsHome(sbpl, "/Users/dev"));
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(subpath \"$HOME\")") == null);
+}
+
+test "SBPL path-walk ancestor metadata for Data-volume Users workspace (M-28)" {
+    const allocator = std.testing.allocator;
+    const ws_data = "/System/Volumes/Data/Users/dev/projects/app";
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = ws_data,
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+        .include_tmp = false,
+    });
+    defer compiled.deinit();
+
+    const sbpl = try renderSbpl(allocator, &compiled);
+    defer allocator.free(sbpl);
+
+    // Emitted as Users-form ancestors after sbplEmitPath.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/Users\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/Users/dev\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/Users/dev/projects\"))") != null);
+    // Must not emit content on Data-form or Users ancestors.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/System/Volumes/Data/Users\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/projects/app\"))") != null);
 }
 
 test "SBPL host config host_rw_paths emit subpath RW without bare HOME" {

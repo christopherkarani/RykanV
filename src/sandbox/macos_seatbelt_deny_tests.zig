@@ -773,7 +773,6 @@ test "hardened profile: open /private/var denied; compatible allows" {
     }
 }
 
-
 // Phase 1d / P1-5: workspace secret-form deny under protect_workspace_secrets.
 // Edge cases exercised under live Seatbelt:
 //   - `.env` canary content never returned (open fails; no partial read)
@@ -1031,7 +1030,6 @@ fn childReadEquals(path_z: [*:0]const u8, expected: []const u8) bool {
 // When prepare fails closed (e.g. scan open error), this test fails at prepare —
 // never observes canary body. Companion unit tests cover mode-000 ScanOpenFailed.
 
-
 // Pre-planted hardlink to a secret-form inode must not return canary content under
 // protect-on. Path-regex alone misses non-.env basenames; prepare-time scan emits
 // last-match path denies for those aliases. Exit: 0=ok, 2=apply, 3=alias readable,
@@ -1241,6 +1239,227 @@ test "real FS: host config RW grant allows .claude and still denies .ssh" {
         4 => return error.SshReadableUnderHostConfigGrant,
         5 => return error.WorkspaceNeighborUnreadable,
         6 => return error.HostConfigClaudeWriteFailed,
+        else => return error.UnexpectedSandboxChildExit,
+    }
+}
+
+// Path-walk residual canary: after Seatbelt attach, lstat each intermediate path
+// component of the workspace grant must succeed (Node realpath / resolveMainPath).
+// Sibling content outside the grant must still be denied (no over-grant).
+// Exit: 0=ok, 2=apply fail, 3=ancestor lstat EPERM, 4=outside readable (leak),
+// 5=workspace file unreadable.
+test "real FS: path-walk lstat of grant ancestors succeeds; outside still denied" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    if (!sandboxInitAvailable()) return error.SkipZigTest;
+    const ver = try detectProductVersion();
+    try std.testing.expect(isMatrixMajor(ver.major));
+    try std.testing.expectEqual(SupportStatus.supported, evaluateSupport());
+
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, "nested/deep");
+    try ws_tmp.dir.writeFile(io, .{ .sub_path = "nested/deep/file.txt", .data = "WS_OK" });
+    const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(ws_root);
+
+    var out_tmp = std.testing.tmpDir(.{});
+    defer out_tmp.cleanup();
+    try out_tmp.dir.writeFile(io, .{ .sub_path = "secret.txt", .data = "OUTSIDE_LEAK" });
+    const out_root = try out_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(out_root);
+
+    const ws_file = try std.fs.path.join(allocator, &.{ ws_root, "nested", "deep", "file.txt" });
+    defer allocator.free(ws_file);
+    const out_file = try std.fs.path.join(allocator, &.{ out_root, "secret.txt" });
+    defer allocator.free(out_file);
+
+    const ws_root_z = try allocator.dupeZ(u8, ws_root);
+    defer allocator.free(ws_root_z);
+    const ws_file_z = try allocator.dupeZ(u8, ws_file);
+    defer allocator.free(ws_file_z);
+    const out_file_z = try allocator.dupeZ(u8, out_file);
+    defer allocator.free(out_file_z);
+
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = ws_root,
+        .include_tmp = false,
+    });
+    defer compiled.deinit();
+
+    const prepared = prepareForChildApply(allocator, &compiled);
+    defer if (prepared.sbpl_z) |p| allocator.free(p);
+    try std.testing.expectEqual(.prepared, prepared.status);
+    const sbpl_z = prepared.sbpl_z.?;
+
+    // Pure model: SBPL must emit the path-walk ancestor section.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl_z, "path-walk ancestor metadata") != null);
+
+    const pid = std.c.fork();
+    if (pid < 0) return error.SkipZigTest;
+    if (pid == 0) {
+        applyInChild(sbpl_z.ptr) catch std.c._exit(2);
+
+        // lstat every prefix component of workspace_root (and the root itself).
+        // Match Node realpath: component-wise lstat, not open/read content.
+        const lstat_fn = struct {
+            extern "c" fn lstat(p: [*:0]const u8, buf: *std.c.Stat) c_int;
+        }.lstat;
+        const path = ws_root_z;
+        var i: usize = 1;
+        while (i <= path.len) : (i += 1) {
+            const at_end = i == path.len;
+            const at_slash = !at_end and path[i] == '/';
+            if (!at_end and !at_slash) continue;
+            if (i <= 1) continue; // skip bare "/"
+            var component_buf: [std.fs.max_path_bytes + 1]u8 = undefined;
+            if (i >= component_buf.len) std.c._exit(3);
+            @memcpy(component_buf[0..i], path[0..i]);
+            component_buf[i] = 0;
+            var st: std.c.Stat = undefined;
+            if (lstat_fn(@ptrCast(&component_buf), &st) != 0) std.c._exit(3);
+            if (at_end) break;
+        }
+
+        const ofd = std.c.open(out_file_z.ptr, .{ .ACCMODE = .RDONLY });
+        if (ofd >= 0) {
+            _ = std.c.close(ofd);
+            std.c._exit(4);
+        }
+
+        const wfd = std.c.open(ws_file_z.ptr, .{ .ACCMODE = .RDONLY });
+        if (wfd < 0) std.c._exit(5);
+        _ = std.c.close(wfd);
+
+        std.c._exit(0);
+    }
+
+    const exit_code = try waitExitCode(pid);
+    switch (exit_code) {
+        0 => {},
+        2 => return error.SeatbeltApplyFailedOnHost,
+        3 => return error.PathWalkAncestorLstatDenied,
+        4 => return error.OutsideReadableUnderPathWalkProfile,
+        5 => return error.WorkspaceFileUnreadable,
+        else => return error.UnexpectedSandboxChildExit,
+    }
+}
+
+// Codex/Node residual: resolveMainPath realpathSync walks install path components
+// under $HOME/.local/... (and lstats /Users first). Product must grant file-only
+// .exec on the entry script and metadata on every ancestor so Seatbelt does not
+// EPERM mid-walk.
+// Exit: 0=ok, 2=apply fail, 3=/Users lstat EPERM, 4=codex component lstat EPERM,
+// 5=codex.js open fail (content/exec residual).
+test "real FS: Users path-walk + codex npm install realpath chain" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    if (!sandboxInitAvailable()) return error.SkipZigTest;
+    const ver = try detectProductVersion();
+    try std.testing.expect(isMatrixMajor(ver.major));
+    try std.testing.expectEqual(SupportStatus.supported, evaluateSupport());
+
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const home_z = std.c.getenv("HOME") orelse return error.SkipZigTest;
+    const home = std.mem.span(home_z);
+    if (!std.mem.startsWith(u8, home, "/Users/")) return error.SkipZigTest;
+
+    const codex_js = try std.fs.path.join(allocator, &.{
+        home,
+        ".local/lib/node_modules/@openai/codex/bin/codex.js",
+    });
+    defer allocator.free(codex_js);
+    std.Io.Dir.cwd().access(io, codex_js, .{}) catch return error.SkipZigTest;
+
+    // Prefer real Users-form product workspace when present; else plant under $HOME.
+    var planted_ws: ?[]u8 = null;
+    defer if (planted_ws) |p| {
+        std.Io.Dir.cwd().deleteTree(io, p) catch {};
+        allocator.free(p);
+    };
+
+    const ws_root: []const u8 = blk: {
+        const candidate = try std.fs.path.join(allocator, &.{ home, "CodingProjects/ryk" });
+        if (std.Io.Dir.cwd().access(io, candidate, .{})) |_| {
+            break :blk candidate;
+        } else |_| {
+            allocator.free(candidate);
+        }
+        const planted = try std.fs.path.join(allocator, &.{ home, ".orca-tmp-pathwalk-probe" });
+        std.Io.Dir.cwd().createDirPath(io, planted) catch {
+            allocator.free(planted);
+            return error.SkipZigTest;
+        };
+        planted_ws = planted;
+        break :blk planted;
+    };
+    defer if (planted_ws == null) allocator.free(ws_root);
+
+    const users_z = try allocator.dupeZ(u8, "/Users");
+    defer allocator.free(users_z);
+    const codex_z = try allocator.dupeZ(u8, codex_js);
+    defer allocator.free(codex_z);
+
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = ws_root,
+        .include_tmp = false,
+        .exec_paths = &.{codex_js},
+    });
+    defer compiled.deinit();
+
+    const prepared = prepareForChildApply(allocator, &compiled);
+    defer if (prepared.sbpl_z) |p| allocator.free(p);
+    try std.testing.expectEqual(.prepared, prepared.status);
+    const sbpl_z = prepared.sbpl_z.?;
+
+    // Model: exec file + Users ancestors must appear.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl_z, "(allow file-read-metadata (literal \"/Users\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl_z, "file-read*") != null);
+
+    const pid = std.c.fork();
+    if (pid < 0) return error.SkipZigTest;
+    if (pid == 0) {
+        applyInChild(sbpl_z.ptr) catch std.c._exit(2);
+
+        const lstat_fn = struct {
+            extern "c" fn lstat(p: [*:0]const u8, buf: *std.c.Stat) c_int;
+        }.lstat;
+        var st: std.c.Stat = undefined;
+        if (lstat_fn(users_z.ptr, &st) != 0) std.c._exit(3);
+
+        // Component walk of codex install path (Node realpath shape).
+        const path = codex_z;
+        var i: usize = 1;
+        while (i <= path.len) : (i += 1) {
+            const at_end = i == path.len;
+            const at_slash = !at_end and path[i] == '/';
+            if (!at_end and !at_slash) continue;
+            if (i <= 1) continue;
+            var component_buf: [std.fs.max_path_bytes + 1]u8 = undefined;
+            if (i >= component_buf.len) std.c._exit(4);
+            @memcpy(component_buf[0..i], path[0..i]);
+            component_buf[i] = 0;
+            if (lstat_fn(@ptrCast(&component_buf), &st) != 0) std.c._exit(4);
+            if (at_end) break;
+        }
+
+        const fd = std.c.open(codex_z.ptr, .{ .ACCMODE = .RDONLY });
+        if (fd < 0) std.c._exit(5);
+        _ = std.c.close(fd);
+        std.c._exit(0);
+    }
+
+    const exit_code = try waitExitCode(pid);
+    switch (exit_code) {
+        0 => {},
+        2 => return error.SeatbeltApplyFailedOnHost,
+        3 => return error.UsersLstatDenied,
+        4 => return error.CodexInstallPathWalkDenied,
+        5 => return error.CodexJsUnreadable,
         else => return error.UnexpectedSandboxChildExit,
     }
 }

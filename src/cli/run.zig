@@ -1060,7 +1060,12 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
             }
             if (secret_boundary == .empty_backpack) {
                 const stdio_risk = sandbox.host_config_grants.parentStdioHasUngrantedHostTmpRisk();
-                try stderr.writeAll(sandbox.host_config_grants.selectEmptyBackpackAgentExitTip(stdio_risk));
+                // Agent stdio is usually inherited (not retained here). Path-walk residual
+                // is classified when agent_output is available; generic tip also names it.
+                try stderr.writeAll(sandbox.host_config_grants.selectEmptyBackpackAgentExitTip(.{
+                    .stdio_host_tmp_risk = stdio_risk,
+                    .agent_output = null,
+                }));
             }
         }
     }

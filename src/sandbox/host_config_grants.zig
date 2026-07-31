@@ -374,9 +374,16 @@ pub const empty_backpack_stdio_fstat_exit_tip =
     \\
 ;
 
-/// Generic tip when empty-backpack agent exits non-zero without detected stdio residual.
+/// Tip when agent output shows Seatbelt path-walk residual (EPERM on lstat/realpath
+/// of path parents). Prefer this over re-login when the stack is clear.
+pub const empty_backpack_pathwalk_exit_tip =
+    \\ryk run: empty-backpack: agent died after sandbox attach — Seatbelt path-walk residual (EPERM on lstat/realpath of a path parent such as /Users). This is an OS-sandbox filesystem residual, not missing host login. If it persists on a current ryk build, report it; do not re-login first. Keychain FS is not granted (by design).
+    \\
+;
+
+/// Generic tip when empty-backpack agent exits non-zero without a more specific residual.
 pub const empty_backpack_agent_exit_tip =
-    \\ryk run: empty-backpack tip: agent exited non-zero after sandbox attach. Common causes: stale host auth (re-login outside ryk), missing host-matched API key for gateway, or --with-host-secrets (loud). Redirected stdio into /tmp or /var/folders can also hit Seatbelt fstat denials — capture under the workspace instead. Keychain FS is not granted (by design).
+    \\ryk run: empty-backpack tip: agent exited non-zero after sandbox attach. Common causes: Seatbelt path-walk EPERM (lstat/realpath on path parents), redirected stdio into /tmp or /var/folders (fstat denials — capture under the workspace), stale host auth (re-login outside ryk), missing host-matched API key for gateway, or --with-host-secrets (loud). Keychain FS is not granted (by design).
     \\
 ;
 
@@ -436,9 +443,37 @@ pub fn parentStdioHasUngrantedHostTmpRisk() bool {
     return false;
 }
 
-/// Pick empty-backpack post-exit tip: stdio/fstat residual first when detected.
-pub fn selectEmptyBackpackAgentExitTip(stdio_host_tmp_risk: bool) []const u8 {
-    if (stdio_host_tmp_risk) return empty_backpack_stdio_fstat_exit_tip;
+/// Inputs for empty-backpack post-exit tip selection (priority order below).
+pub const EmptyBackpackExitTipInput = struct {
+    /// Parent stdout/stderr path under classic ungranted host tmp.
+    stdio_host_tmp_risk: bool = false,
+    /// Captured agent stderr/stdout when available (inherit mode often has none).
+    agent_output: ?[]const u8 = null,
+};
+
+/// True when text looks like Seatbelt path-walk residual (EPERM + lstat/realpath).
+/// Case-insensitive on the operation keywords; used when agent output is retained.
+pub fn stderrLooksLikeSeatbeltPathWalkResidual(text: []const u8) bool {
+    if (text.len == 0) return false;
+    const has_eperm = std.ascii.indexOfIgnoreCase(text, "EPERM") != null or
+        std.ascii.indexOfIgnoreCase(text, "operation not permitted") != null or
+        std.ascii.indexOfIgnoreCase(text, "Permission denied") != null or
+        std.ascii.indexOfIgnoreCase(text, "PermissionError") != null;
+    if (!has_eperm) return false;
+    return std.ascii.indexOfIgnoreCase(text, "lstat") != null or
+        std.ascii.indexOfIgnoreCase(text, "realpath") != null or
+        std.ascii.indexOfIgnoreCase(text, "resolveMainPath") != null;
+}
+
+/// Pick empty-backpack post-exit tip:
+/// 1) stdio/fstat residual when parent FD path is ungranted host tmp
+/// 2) path-walk residual when agent_output matches EPERM + lstat/realpath
+/// 3) generic tip (auth / gateway / remaining residuals)
+pub fn selectEmptyBackpackAgentExitTip(input: EmptyBackpackExitTipInput) []const u8 {
+    if (input.stdio_host_tmp_risk) return empty_backpack_stdio_fstat_exit_tip;
+    if (input.agent_output) |text| {
+        if (stderrLooksLikeSeatbeltPathWalkResidual(text)) return empty_backpack_pathwalk_exit_tip;
+    }
     return empty_backpack_agent_exit_tip;
 }
 
@@ -732,7 +767,7 @@ test "pathIsUngrantedHostTmpContent classifies classic tmp vs workspace" {
 }
 
 test "selectEmptyBackpackAgentExitTip prefers stdio residual over re-login lead" {
-    const stdio_tip = selectEmptyBackpackAgentExitTip(true);
+    const stdio_tip = selectEmptyBackpackAgentExitTip(.{ .stdio_host_tmp_risk = true });
     try std.testing.expect(stdio_tip.ptr == empty_backpack_stdio_fstat_exit_tip.ptr);
     try std.testing.expect(std.mem.indexOf(u8, stdio_tip, "fstat") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdio_tip, "after sandbox attach") != null);
@@ -741,10 +776,45 @@ test "selectEmptyBackpackAgentExitTip prefers stdio residual over re-login lead"
     try std.testing.expect(std.mem.indexOf(u8, stdio_tip, "Do not treat this as missing login first") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdio_tip, "--with-host-secrets") == null);
 
-    const generic_tip = selectEmptyBackpackAgentExitTip(false);
+    const generic_tip = selectEmptyBackpackAgentExitTip(.{});
     try std.testing.expect(generic_tip.ptr == empty_backpack_agent_exit_tip.ptr);
     try std.testing.expect(std.mem.indexOf(u8, generic_tip, "re-login") != null);
     try std.testing.expect(std.mem.indexOf(u8, generic_tip, "var/folders") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generic_tip, "path-walk") != null);
+}
+
+test "selectEmptyBackpackAgentExitTip prefers path-walk residual over re-login lead" {
+    const node_stack =
+        \\Error: EPERM: operation not permitted, lstat '/Users'
+        \\    at Object.realpathSync (node:fs:1234:10)
+        \\    at resolveMainPath (node:internal/modules/cjs/loader:1:1)
+    ;
+    const pathwalk_tip = selectEmptyBackpackAgentExitTip(.{ .agent_output = node_stack });
+    try std.testing.expect(pathwalk_tip.ptr == empty_backpack_pathwalk_exit_tip.ptr);
+    try std.testing.expect(std.mem.indexOf(u8, pathwalk_tip, "path-walk") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pathwalk_tip, "not missing host login") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pathwalk_tip, "re-login first") != null);
+    // Must not lead operators to auth/gateway first.
+    try std.testing.expect(std.mem.indexOf(u8, pathwalk_tip, "API key") == null);
+    try std.testing.expect(std.mem.indexOf(u8, pathwalk_tip, "--with-host-secrets") == null);
+
+    // Stdio residual still wins when both could apply.
+    const stdio_wins = selectEmptyBackpackAgentExitTip(.{
+        .stdio_host_tmp_risk = true,
+        .agent_output = node_stack,
+    });
+    try std.testing.expect(stdio_wins.ptr == empty_backpack_stdio_fstat_exit_tip.ptr);
+
+    try std.testing.expect(stderrLooksLikeSeatbeltPathWalkResidual(node_stack));
+    try std.testing.expect(stderrLooksLikeSeatbeltPathWalkResidual(
+        "PermissionError: [Errno 1] Operation not permitted\n  File \"...\", line 1, in <module>\n    os.lstat('/Users')\n",
+    ));
+    try std.testing.expect(!stderrLooksLikeSeatbeltPathWalkResidual("Error: invalid API key"));
+    try std.testing.expect(!stderrLooksLikeSeatbeltPathWalkResidual("EPERM on fstat of redirected stderr"));
+    try std.testing.expect(!stderrLooksLikeSeatbeltPathWalkResidual(""));
+    try std.testing.expect(!stderrLooksLikeSeatbeltPathWalkResidual(
+        "PermissionError: [Errno 1] Operation not permitted: '/Users'",
+    ));
 }
 
 test "resolveFdPathname round-trips a /tmp file on supported platforms" {
