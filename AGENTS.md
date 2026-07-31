@@ -1,11 +1,24 @@
-# Orca Agent Instructions
+# RykanV Agent Instructions
 
 ## Working Style
 
 - Verify the real checkout and files before changing anything.
 - Use TDD for non-trivial changes.
 - Keep edits surgical and tied to the request.
+- If there any remaining issues at the end of a task fix them
+
+## Response Style
+- Be concise
+- Avoid Techincal jargon
+- explain concepts the way you would to a 16 year old
+- Avoid large dumps of text, always be concise 
+- always point out known unknowns
+
+# Role
+Your an expert zig engineer
+
 - **Act by default** when the task is clear: local edits, tests, implement/fix loops, and sub-agent spawns do not need human approval. Pause only for ambiguity, architecture forks, or irreversible/shared actions (push, force-push, published PR reviews, deletes the user did not ask for, new dependencies, anything that changes shared remote state).
+
 - **Direct work** for small or mechanical tasks (typos, one-liners, pure formatting, trivial renames).
 - **Prefer sub-agents** for non-trivial multi-step work. Also use sub-agents for parallel independent work, blast-radius isolation (worktrees), Zig specialist lanes, or explicit orchestration.
 - When multi-step, keep a short internal plan (todos). That is not a request for human go-ahead.
@@ -15,6 +28,7 @@
 ## Repo Boundaries
 
 - Treat this repository as public-facing by default.
+- ensure to do repo hygene before commiting
 - Keep local planning, handoffs, reviews, and task notes out of tracked docs unless the user explicitly asks to publish them.
 - Keep session-local artifacts in `planning/`; only `planning/README.md` is tracked.
 - Before staging or committing, run:
@@ -25,7 +39,7 @@ git ls-files | rg '(^planning/|^go_to_market/|^customer_pilot/|^tasks/|^reports/
 
 - Never commit generated release archives, SBOMs, checksums, dry-run package output, red-team replay output, customer-pilot templates, SOW/NDA notes, target-account templates, outreach copy, pricing guidance, or task-memory logs.
 
-## Orca Context
+## Rykan V Context
 
 - Zig is the primary (and sole) user-facing CLI and shell evaluator.
 - Shell command security decisions are owned by the in-process Zig `shell_engine`. `ORCA_SHELL_EVAL=rust` is rejected (legacy Rust daemon Evaluate removed); production path is Zig only.
@@ -101,7 +115,7 @@ eval "$(./scripts/ensure-zig-toolchain.sh --export)"   # or: direnv allow
 - Preserve user-owned dirty changes.
 - Verify before calling work complete (with the **narrowest** gate above).
 - **Done gate (substantive code):** after implementation, run the tiered end-of-task adversarial review in [`docs/agents/work-and-review.md`](docs/agents/work-and-review.md). Do not call the work complete while blocking findings remain (unless the user waived them). Auto-fix blockers for at most **2** fix→re-review loops, then escalate.
-- Use conventional commits.
+- Commit regurlary
 - Do not add dependencies without documenting them in `docs/dev/dependencies.md`.
 - Do not introduce SaaS, telemetry, monetization, or cloud dashboards unless the user asks for them.
 - Do not persist raw secrets in logs, fixtures, reports, docs, tests, or snapshots.
@@ -135,7 +149,7 @@ Mandatory control loop for non-trivial code work. Details: [`docs/agents/work-an
 
 ### Issue tracker
 
-Issues live in GitHub Issues for `christopherkarani/rykan` (via `gh`). See `docs/agents/issue-tracker.md`.
+Issues live in GitHub Issues for `christopherkarani/rykanv` (via `gh`). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
