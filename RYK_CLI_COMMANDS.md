@@ -233,15 +233,15 @@ Check Secretless credential broker configuration.
 
 ### `ryk report`
 
-Export a local safety report. Free for all users — no license required.
+Show a local safety report (rich terminal by default). Free for all users — no license required.
 
-**Usage:** `ryk report --session <id|last> --format <format>`
+**Usage:** `ryk report --session <id|last> [--format human|markdown|json]`
 
 **Flags:**
 | Flag | Description |
 |------|-------------|
-| `--session <id\|last>` | Session ID or `last` |
-| `--format markdown\|json` | Output format |
+| `--session <id\|last>` | Session ID or `last` (default: `last`) |
+| `--format human\|markdown\|json` | Output format (default: `human` rich terminal; `markdown`/`json` for export) |
 
 ---
 
