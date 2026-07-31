@@ -10,6 +10,10 @@ const core = @import("orca_core").core;
 const core_api = @import("orca_core").api;
 const sandbox = @import("../sandbox/mod.zig");
 const exit_codes = @import("exit_codes.zig");
+const tui = @import("../tui/mod.zig");
+
+/// ~12 fps — same cadence as `ryk scan` spinner.
+const prepare_spinner_tick = std.Io.Duration.fromNanoseconds(80 * std.time.ns_per_ms);
 
 pub const ApplyForRunOutcome = union(enum) {
     /// `--os-sandbox on` failed closed; already printed reason to stderr.
@@ -18,13 +22,103 @@ pub const ApplyForRunOutcome = union(enum) {
     ok: sandbox.apply.ApplyResult,
 };
 
+/// TTY activity for the long protect-on / platform prepare window so monorepo
+/// hardlink scans do not look hung. No residual success line — the session
+/// banner follows. Spinner thread is joined before return so agent fork stays
+/// free of this ticker (Seatbelt multi-thread residual).
+fn PrepareActivity(comptime Writer: type) type {
+    return struct {
+        const Self = @This();
+
+        io: std.Io,
+        writer: Writer,
+        label: []const u8,
+        spinner: ?tui.spinner.Spinner(Writer) = null,
+        active: bool = false,
+        mutex: std.Io.Mutex = .init,
+        stop_ticker: std.atomic.Value(bool) = .init(true),
+        ticker_thread: ?std.Thread = null,
+
+        fn start(self: *Self) void {
+            if (!tui.theme.active(self.io, self.writer).capability.hasColor()) return;
+            self.spinner = .{
+                .label = self.label,
+                .io = self.io,
+                .stdout = self.writer,
+            };
+            self.spinner.?.start() catch {};
+            self.active = true;
+            self.startTicker();
+        }
+
+        fn startTicker(self: *Self) void {
+            if (tui.theme.reducedMotion(self.io, self.writer)) return;
+            if (!tui.theme.active(self.io, self.writer).capability.hasColor()) return;
+            if (self.ticker_thread != null) return;
+            self.stop_ticker.store(false, .release);
+            self.ticker_thread = std.Thread.spawn(.{}, tickerLoop, .{self}) catch null;
+        }
+
+        fn stopTicker(self: *Self) void {
+            self.stop_ticker.store(true, .release);
+            if (self.ticker_thread) |t| {
+                t.join();
+                self.ticker_thread = null;
+            }
+        }
+
+        fn clear(self: *Self) void {
+            if (!self.active) return;
+            self.stopTicker();
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
+            // Clear in-place frame only; no ✓/✗ line (session banner or error follows).
+            if (tui.theme.active(self.io, self.writer).capability.hasColor() and
+                !tui.theme.reducedMotion(self.io, self.writer))
+            {
+                self.writer.writeAll("\r\x1b[2K\r") catch {};
+            }
+            flushWriter(self.writer) catch {};
+            self.active = false;
+            self.spinner = null;
+        }
+
+        fn tickLocked(self: *Self) void {
+            if (self.spinner) |*sp| sp.tick() catch {};
+        }
+
+        fn tickerLoop(self: *Self) void {
+            while (!self.stop_ticker.load(.acquire)) {
+                std.Io.sleep(self.io, prepare_spinner_tick, .awake) catch {};
+                if (self.stop_ticker.load(.acquire)) break;
+                self.mutex.lockUncancelable(self.io);
+                defer self.mutex.unlock(self.io);
+                if (!self.active) continue;
+                self.tickLocked();
+            }
+        }
+    };
+}
+
+fn flushWriter(writer: anytype) !void {
+    const Writer = @TypeOf(writer);
+    switch (@typeInfo(Writer)) {
+        .pointer => |pointer| if (@hasDecl(pointer.child, "flush")) try writer.flush(),
+        else => if (@hasDecl(Writer, "flush")) try writer.flush(),
+    }
+}
+
 /// Apply OS sandbox for the production run path.
+///
+/// `progress` is the TTY stream for prepare activity (typically stdout, same as
+/// the session banner). Errors still print on `stderr`.
 ///
 /// `launch_argv0` is the agent command (first argv of `ryk run -- <cmd>`). When set,
 /// resolved absolute file paths are granted as narrow `.exec` profile entries so
 /// agents installed outside workspace/system prefixes (typical `~/.local/...`) can
 /// pass child preflight after Seatbelt/Landlock attach.
 pub fn applyForRun(
+    io: std.Io,
     allocator: std.mem.Allocator,
     mode: sandbox.posture.OsSandboxMode,
     workspace_root: []const u8,
@@ -35,9 +129,25 @@ pub fn applyForRun(
     require_network_route_forcing: bool,
     seatbelt_profile: sandbox.posture.SeatbeltProfileGrade,
     protect_workspace_secrets: bool,
+    progress: anytype,
     stderr: anytype,
     launch_argv0: ?[]const u8,
 ) !ApplyForRunOutcome {
+    const label: []const u8 = if (protect_workspace_secrets)
+        "Preparing OS sandbox (scanning workspace secrets)"
+    else
+        "Preparing OS sandbox";
+
+    var activity = PrepareActivity(@TypeOf(progress)){
+        .io = io,
+        .writer = progress,
+        .label = label,
+    };
+    // Only animate when apply will do real work (on/auto). Join ticker in clear
+    // before return so later agent fork is not multi-threaded solely for UX.
+    if (mode != .off) activity.start();
+    defer activity.clear();
+
     var fail_reason: []const u8 = "unknown";
     var io_rt: std.Io.Threaded = .init_single_threaded;
     const launch_io = io_rt.io();
@@ -62,6 +172,8 @@ pub fn applyForRun(
         .fail_reason_out = &fail_reason,
     }) catch |err| switch (err) {
         error.RequireFailed => {
+            // Clear activity before the durable error line.
+            activity.clear();
             // Incomplete env scrub fails closed on both on and auto; wording must not
             // always claim the user passed `--os-sandbox on`.
             switch (mode) {
@@ -248,6 +360,23 @@ pub fn formatOsSandboxBannerLine(
         .failed => "OS sandbox: failed",
         .disabled => "OS sandbox: disabled",
     };
+}
+
+test "PrepareActivity start/clear is idempotent without residual success glyph" {
+    var buf: [256]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    var activity = PrepareActivity(*std.Io.Writer){
+        .io = std.testing.io,
+        .writer = &writer,
+        .label = "Preparing OS sandbox",
+    };
+    // No color under test io → start is a no-op; clear must stay safe.
+    activity.start();
+    activity.clear();
+    activity.clear();
+    try std.testing.expect(!activity.active);
+    try std.testing.expect(activity.spinner == null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "✓") == null);
 }
 
 test "isSandboxSpawnFailure classifies ApplyFailed ForkFailed Unsupported ExecFailed; not FileNotFound" {

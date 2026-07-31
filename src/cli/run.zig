@@ -334,6 +334,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         .containsFn = intercept.session_secrets.Store.mintedEnvContains,
     } else null;
     var apply_result = switch (try run_os_sandbox.applyForRun(
+        io,
         allocator,
         effective_os_sandbox,
         workspace_root_for_policy,
@@ -344,6 +345,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         requiresBackend(options, .network_enforce),
         options.seatbelt_profile,
         secret_boundary == .empty_backpack,
+        stdout,
         stderr,
         launch_argv0,
     )) {
