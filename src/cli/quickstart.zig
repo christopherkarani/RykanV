@@ -129,7 +129,7 @@ fn commandWithDaemonChecker(
     if (!core.ready) {
         try stdout.writeAll("\n");
         try writeReceipt(stdout, core, false);
-        try stdout.writeAll("Policy missing or invalid. Fix with `ryk init` / policy edits, then re-run `ryk status --check`.\n");
+        try stdout.writeAll("Policy missing or invalid. Fix with `ryk init` / policy edits, then re-run `ryk doctor --check`.\n");
         return exit_codes.general;
     }
     try stdout.writeAll("\n");
@@ -146,7 +146,7 @@ fn commandWithDaemonChecker(
         // Core ready (cached); hosts failed — do not claim global success.
         try writeReceipt(stdout, core, true);
         try stdout.writeAll("Host integrations need attention; do not treat hosts as fully protected.\n");
-        try stdout.writeAll("Re-check with: ryk status --check\n");
+        try stdout.writeAll("Re-check with: ryk doctor --check\n");
         return setup_code;
     }
     try tui.render.stepLine(io, stdout, .done, "Step 3 — Host integrations", "complete", 0);
@@ -158,7 +158,7 @@ fn commandWithDaemonChecker(
     try stdout.writeAll("\nStart protecting your sessions:\n");
     try stdout.writeAll("  ryk claude   # or codex / pi / opencode / …\n");
     try stdout.writeAll("\nUseful next steps:\n");
-    try stdout.writeAll("  ryk status\n");
+    try stdout.writeAll("  ryk doctor\n");
     try stdout.writeAll("  ryk replay\n");
     try stdout.writeAll("  ryk start    Re-run Safe Launch if hosts need repair\n");
 

@@ -122,7 +122,7 @@ pub const commands =
                 "On non-TTY terminals, auto-selects safe defaults (no --auto required).",
                 "Use --auto to force non-interactive mode on a TTY; optional --hosts and --preset.",
                 "Compatibility flags --yes and --no-interact also select non-interactive mode.",
-                "Next steps after start: ryk <agent> · ryk status · ryk replay.",
+                "Next steps after start: ryk <agent> · ryk doctor · ryk replay.",
                 "Re-run safely to repair or update an existing setup.",
             },
         },
@@ -149,6 +149,17 @@ pub const commands =
             },
         },
         .{
+            .name = "status",
+            .summary = "Removed — use ryk doctor",
+            .usage = "ryk doctor",
+            .category = .getting_started,
+            .hidden = true,
+            .examples = &.{},
+            .details = &.{
+                "`ryk status` was removed. Use `ryk doctor` for diagnostics and readiness checks.",
+            },
+        },
+        .{
             .name = "env",
             .summary = "Print shell environment for ryk",
             .usage = "ryk env",
@@ -159,32 +170,11 @@ pub const commands =
             },
         },
         .{
-            .name = "status",
-            .summary = "One-glance protection snapshot",
-            .usage = "ryk status [--json] [--check]",
-            .category = .getting_started,
-            .public = true,
-            .examples = &.{
-                "ryk status",
-                "ryk status --json",
-                "ryk status --check",
-                "ryk status --check --json",
-            },
-            .additional_completion_flags = &.{ "--json", "--check" },
-            .details = &.{
-                "Shows daemon health, policy path/mode/valid, hosts summary, enabled packs, and one next step.",
-                "Status is the glance; `ryk doctor` is the deep diagnostic.",
-                "Packs summary uses the daemon registry (fail-closed note when the daemon is unavailable).",
-                "Pack enablement is written to project `.orca.toml` when in a git repo, else user config (`$XDG_CONFIG_HOME/orca/config.toml` or `~/.config/orca/config.toml`).",
-                "Use --json for scripting (includes schema_version, ready, state, policy.valid).",
-                "Use --check for automation: exit non-zero when core readiness fails (daemon not compatible, or policy missing/invalid). Default without --check still prints the full report and exits 0.",
-            },
-        },
-        .{
             .name = "doctor",
-            .summary = "Show platform capabilities",
+            .summary = "Diagnose protection readiness and platform capabilities",
             .usage = "ryk doctor [-v|--verbose] [--check] [--json]",
             .category = .getting_started,
+            .public = true,
             .examples = &.{
                 "ryk doctor",
                 "ryk doctor --verbose",
@@ -198,7 +188,6 @@ pub const commands =
                 "Use --verbose for the full platform, integration, and capability report.",
                 "Use --check for automation: exit non-zero when core readiness fails (daemon not compatible, or policy missing/invalid).",
                 "Use --json for a minimal readiness report (ready, state, policy.valid).",
-                "For a one-glance snapshot, prefer `ryk status`.",
             },
         },
         .{
@@ -741,7 +730,7 @@ pub const commands =
 /// Prefix of Safe Launch teaching order (host aliases inserted after stop).
 const public_help_prefix = [_][]const u8{ "start", "stop" };
 /// Suffix of Safe Launch teaching order (after host aliases).
-const public_help_suffix = [_][]const u8{ "status", "replay", "scan", "explain" };
+const public_help_suffix = [_][]const u8{ "doctor", "replay", "scan", "explain" };
 
 pub const WriteMode = enum {
     /// Safe Launch surface only (default `ryk` / `ryk help`).
@@ -775,15 +764,14 @@ pub fn writeWithMode(io: std.Io, writer: anytype, mode: WriteMode) !void {
     const public_tasks = [_]Task{
         .{ .label = "Get protected", .cmd = "ryk start" },
         .{ .label = "Run an agent", .cmd = "ryk claude  (or: codex | pi | opencode | openclaw | hermes)" },
-        .{ .label = "See status", .cmd = "ryk status" },
+        .{ .label = "Diagnose", .cmd = "ryk doctor" },
         .{ .label = "Review session", .cmd = "ryk replay" },
         .{ .label = "Why blocked?", .cmd = "ryk explain \"…\"" },
         .{ .label = "Stop protection", .cmd = "ryk stop" },
     };
     const all_tasks = [_]Task{
         .{ .label = "Get protected", .cmd = "ryk start" },
-        .{ .label = "See status", .cmd = "ryk status" },
-        .{ .label = "Deep diagnose", .cmd = "ryk doctor" },
+        .{ .label = "Diagnose", .cmd = "ryk doctor" },
         .{ .label = "Why blocked?", .cmd = "ryk explain \"…\"" },
         .{ .label = "Run an agent", .cmd = "ryk claude  (or: codex | pi | opencode | openclaw | hermes)" },
         .{ .label = "Wire a host", .cmd = "ryk plugin install" },
@@ -828,7 +816,7 @@ pub fn writeWithMode(io: std.Io, writer: anytype, mode: WriteMode) !void {
             try writer.writeAll("  ");
             try tui.theme.paintBold(io, writer, .brand, "Commands");
             try writer.writeAll("\n");
-            // Teaching order: start → stop → host aliases → status → replay → explain
+            // Teaching order: start → stop → host aliases → doctor → replay → explain
             for (public_help_prefix) |name| {
                 try writeCommandRow(io, writer, name, name_width);
             }
@@ -928,6 +916,12 @@ pub fn writeRemovedOnboardingPeer(writer: anytype, name: []const u8) !void {
     );
 }
 
+pub fn writeRemovedStatus(writer: anytype) !void {
+    try writer.writeAll(
+        "ryk: `status` was removed. Use `ryk doctor` for diagnostics.\nRun 'ryk help doctor' for usage.\n",
+    );
+}
+
 pub fn writeCommand(io: std.Io, writer: anytype, name: []const u8) !bool {
     // Progressive disclosure: `ryk help --all` reuses the existing single-arg
     // help dispatch path without changing top-level argv parsing.
@@ -938,6 +932,10 @@ pub fn writeCommand(io: std.Io, writer: anytype, name: []const u8) !bool {
     // Hard-removed onboarding peers: do not re-teach live usage; point at `ryk start`.
     if (std.mem.eql(u8, name, "setup") or std.mem.eql(u8, name, "quickstart")) {
         try writeRemovedOnboardingPeer(writer, name);
+        return true;
+    }
+    if (std.mem.eql(u8, name, "status")) {
+        try writeRemovedStatus(writer);
         return true;
     }
     const command = findCommand(name) orelse return false;
@@ -1085,18 +1083,19 @@ test "default root help shows only public Safe Launch verbs" {
     // Public Safe Launch verbs as command peers
     try std.testing.expect(helpListsPeerCommand(top, "start"));
     try std.testing.expect(helpListsPeerCommand(top, "stop"));
-    try std.testing.expect(helpListsPeerCommand(top, "status"));
+    try std.testing.expect(helpListsPeerCommand(top, "doctor"));
     try std.testing.expect(helpListsPeerCommand(top, "replay"));
     try std.testing.expect(helpListsPeerCommand(top, "explain"));
     for (host_launch.host_launch_aliases) |host| {
         try std.testing.expect(helpListsPeerCommand(top, host));
     }
 
-    // Common tasks teach start → agent → status → replay
+    // Common tasks teach start → agent → doctor → replay
     try std.testing.expect(std.mem.indexOf(u8, top, "ryk start") != null);
-    try std.testing.expect(std.mem.indexOf(u8, top, "ryk status") != null);
+    try std.testing.expect(std.mem.indexOf(u8, top, "ryk doctor") != null);
     try std.testing.expect(std.mem.indexOf(u8, top, "ryk replay") != null);
     try std.testing.expect(std.mem.indexOf(u8, top, "ryk claude") != null);
+    try std.testing.expect(std.mem.indexOf(u8, top, "ryk status") == null);
 
     // Progressive disclosure escape hatch
     try std.testing.expect(std.mem.indexOf(u8, top, "help --all") != null);
@@ -1104,9 +1103,9 @@ test "default root help shows only public Safe Launch verbs" {
     // Not Getting Started / public peers
     try std.testing.expect(!helpListsPeerCommand(top, "quickstart"));
     try std.testing.expect(!helpListsPeerCommand(top, "setup"));
+    try std.testing.expect(!helpListsPeerCommand(top, "status"));
     try std.testing.expect(!helpListsPeerCommand(top, "init"));
     try std.testing.expect(!helpListsPeerCommand(top, "run"));
-    try std.testing.expect(!helpListsPeerCommand(top, "doctor"));
     try std.testing.expect(!helpListsPeerCommand(top, "history"));
     try std.testing.expect(!helpListsPeerCommand(top, "policy"));
     try std.testing.expect(!helpListsPeerCommand(top, "mcp"));
@@ -1157,6 +1156,16 @@ test "help setup and quickstart print removal notice pointing at start" {
     try std.testing.expect(std.mem.indexOf(u8, qs_out, "removed") != null);
     try std.testing.expect(std.mem.indexOf(u8, qs_out, "ryk start") != null);
     try std.testing.expect(std.mem.indexOf(u8, qs_out, "ryk quickstart --") == null);
+}
+
+test "help status print removal notice pointing at doctor" {
+    var buf: [1024]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try std.testing.expect(try writeCommand(std.testing.io, &writer, "status"));
+    const out = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "removed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "ryk doctor") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "ryk status --") == null);
 }
 
 // ---------------------------------------------------------------------------

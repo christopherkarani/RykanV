@@ -15,7 +15,7 @@ ryk ships **one** product CLI (two PATH names):
 ```text
 ryk start
 ryk claude | codex | pi | opencode | openclaw | hermes
-ryk status
+ryk doctor
 ryk replay
 ryk stop
 # or: ryk start …  (compat alias)
@@ -36,7 +36,7 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 | `start` | Get protected: policy, hosts, Ask on risk, verify | `src/cli/start.zig` |
 | `stop` | Stop ryk protection for host agents | `src/cli/disable.zig` |
 | `claude` / `codex` / `pi` / `opencode` / `openclaw` / `hermes` | Launch host under ryk (alias → run engine) | `src/cli/host_launch.zig` |
-| `status` | Traffic light: Protected \| Limited \| Off + caveat | `src/cli/status.zig` |
+| `doctor` | Diagnose readiness and platform capabilities | `src/cli/doctor.zig` |
 | `replay` | Replay last session (denials dominant) | `src/cli/replay.zig` |
 | `explain` | Why a shell command is blocked or allowed (Zig shell_engine) | `src/cli/shell_explain.zig` |
 | `help` | Show help (`help --all` = full surface) | `src/cli/help.zig` |
@@ -47,7 +47,6 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 |---------|---------|-------------|
 | `run` | Run engine / custom agents / CI | `src/cli/run.zig` |
 | `init` | Create an Orca policy (power/CI scaffold) | `src/cli/init.zig` |
-| `doctor` | Show platform capabilities | `src/cli/doctor.zig` |
 | `policy` | Validate, explain, and apply policies | `src/cli/policy.zig` |
 | `credentials` | Check Secretless credential brokers | `src/cli/credentials.zig` |
 | `report` | Export a local safety report | `src/cli/report.zig` |
@@ -78,6 +77,7 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 |---------|--------|
 | `quickstart` | Hard-removed from dispatcher — use `ryk start` |
 | `setup` | Hard-removed from dispatcher — use `ryk start` (library retained internally) |
+| `status` | Hard-removed from dispatcher — use `ryk doctor` |
 
 ### Not available (hidden; typing yields short notice)
 
@@ -115,11 +115,11 @@ Single public onboarding door. Creates policy when missing, wires hosts, default
 
 ---
 
-### `ryk status`
+### `ryk doctor`
 
-Human traffic light: **Protected | Limited | Off**, plus one mediation caveat when not Off. Machine `--json` / `--check` keep existing contracts.
+Diagnose protection readiness: policy, hosts, capabilities, packs, and recommended next steps.
 
-**Usage:** `ryk status [--json] [--check]`
+**Usage:** `ryk doctor [-v|--verbose] [--check] [--json]`
 
 ---
 

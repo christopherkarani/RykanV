@@ -206,7 +206,7 @@ fn runAutoSetup(io: std.Io, cwd: std.Io.Dir, preset: []const u8, stdout: anytype
     }
 
     try style.maybeColor(io, stdout, style.Style.green, style.Glyph.party ++ " Setup complete!");
-    try stdout.writeAll("\nNext: ryk claude  (or codex / pi / …) · ryk status · ryk replay\n");
+    try stdout.writeAll("\nNext: ryk claude  (or codex / pi / …) · ryk doctor · ryk replay\n");
     try stdout.writeAll("Re-run: ryk start --auto\n");
     return exit_codes.success;
 }

@@ -519,7 +519,7 @@ fn writeSuccessEndCard(
     try tui.theme.paintBold(io, stdout, .brand, "Try next");
     try stdout.writeAll("\n");
     try stdout.writeAll("  ryk claude          # or codex / pi / opencode / …\n");
-    try stdout.writeAll("  ryk status\n");
+    try stdout.writeAll("  ryk doctor\n");
     try stdout.writeAll("  ryk replay\n");
     try stdout.writeAll("\n");
     try tui.theme.paint(io, stdout, .muted, "Re-run safely: ryk start · off-ramp: ryk stop");
@@ -648,7 +648,7 @@ test "start auto mode with mock daemon completes in temp workspace" {
     try std.testing.expect(std.mem.indexOf(u8, output, "Policy") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Hosts") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "ryk claude") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "ryk status") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk doctor") != null);
     // No interactive grade menu on the Safe Launch path.
     try std.testing.expect(std.mem.indexOf(u8, output, "Choose your protection mode") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "command-guard") == null);

@@ -63,7 +63,6 @@ pub const agent_hook = @import("agent_hook.zig");
 pub const daemon_contracts = @import("daemon_contracts.zig");
 pub const packs = @import("packs.zig");
 pub const pack_state = @import("pack_state.zig");
-pub const status = @import("status.zig");
 pub const readiness = @import("readiness.zig");
 pub const history = @import("history.zig");
 pub const suggestions = @import("suggestions.zig");
@@ -113,7 +112,6 @@ test {
     _ = daemon_contracts;
     _ = packs;
     _ = pack_state;
-    _ = status;
     _ = readiness;
     _ = doctor;
     _ = history;
@@ -491,7 +489,11 @@ fn runWithCwdUsing(
         return exit_codes.usage;
     }
     if (std.mem.eql(u8, command, "init")) return init.command(io, cwd, argv[1..], stdout, stderr);
-    if (std.mem.eql(u8, command, "status")) return status.command(io, argv[1..], stdout, stderr);
+    // Hard-removed: thin glance duplicated doctor and misled with legacy daemon framing.
+    if (std.mem.eql(u8, command, "status")) {
+        try help.writeRemovedStatus(stderr);
+        return exit_codes.usage;
+    }
     if (std.mem.eql(u8, command, "doctor")) return doctor.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "policy")) return policy.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "credentials")) return credentials_command.command(io, argv[1..], stdout, stderr);
@@ -1199,8 +1201,7 @@ test "human parser families suggest valid flags and exact help remediation" {
         .{ .argv = &.{ "plugin", "instal" }, .suggestion = "install", .help_command = "plugin" },
         .{ .argv = &.{ "start", "--preest" }, .suggestion = "--preset", .help_command = "start" },
         .{ .argv = &.{ "run", "--workspce" }, .suggestion = "--workspace", .help_command = "run" },
-        // packs is P0-hidden until Slice 4; do not exercise flag suggestions for unavailable verbs.
-        .{ .argv = &.{ "status", "--chek" }, .suggestion = "--check", .help_command = "status" },
+        .{ .argv = &.{ "doctor", "--chek" }, .suggestion = "--check", .help_command = "doctor" },
     };
 
     for (cases) |case| {

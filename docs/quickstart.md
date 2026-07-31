@@ -38,21 +38,13 @@ Non-interactive / CI-friendly:
 
 Public peers `ryk setup` / `orca setup` and quickstart are removed — use `ryk start`. Power/CI scaffolding may still use advanced commands via `ryk help --all`.
 
-## 3. Check Status
+## 3. Diagnose readiness
 
 ```sh
-./zig-out/bin/ryk status
+./zig-out/bin/ryk doctor
 ```
 
-Human output is a traffic light:
-
-| State | Meaning (glance) |
-| --- | --- |
-| **Protected** | Daemon ready + valid policy |
-| **Limited** | Daemon ready but policy missing/invalid |
-| **Off** | Daemon unavailable / incompatible |
-
-When not Off, status adds one honest note: mediation covers agents started via ryk; some paths can still bypass. For a deep capability matrix, use `ryk doctor` (advanced).
+`ryk doctor` reports policy, host integrations, capabilities, packs, and a recommended next step. Use `ryk doctor --check` in automation (non-zero when core readiness fails).
 
 ## 4. Run A Protected Agent
 

@@ -7,7 +7,7 @@ These are starting points. Agent-specific presets are generic unless their polic
 ```sh
 ./zig-out/bin/ryk start
 ./zig-out/bin/ryk claude   # or: codex | pi | opencode | openclaw | hermes
-./zig-out/bin/ryk status
+./zig-out/bin/ryk doctor
 ```
 
 `ryk start` creates policy when missing (Ask on risk / `generic-agent`), wires host integrations, and verifies readiness. Host aliases are the taught launch path; bare `ryk run -- …` is advanced.
@@ -19,7 +19,7 @@ Host aliases default to empty backpack. Prefer the host’s login store; configu
 ```sh
 ./zig-out/bin/ryk start
 ./zig-out/bin/ryk claude   # or: pi | codex | …
-./zig-out/bin/ryk status
+./zig-out/bin/ryk doctor
 ```
 
 Notes:
