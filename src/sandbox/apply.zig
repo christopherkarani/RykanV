@@ -123,9 +123,11 @@ pub const ApplyBoundary = struct {
     /// Agents installed outside workspace/system prefixes (e.g. `~/.local/...`) need these
     /// so child preflight after Seatbelt/Landlock can still read+exec argv0.
     launch_exec_paths: []const []const u8 = &.{},
-    /// Absolute RO install trees for Node/npm launch packages (see `collectLaunchInstallRoPaths`).
-    /// Narrow package roots only (directory with package.json) — never bare `$HOME`.
-    /// Covers nested optional deps + vendor native binaries next to shebang entry scripts.
+    /// Absolute RO trees for launch: Node/npm install package roots (see
+    /// `collectLaunchInstallRoPaths`) plus host-scoped system RO (e.g. codex
+    /// `/etc/codex` via `host_config_grants.collectHostSystemRoPaths`). Never bare
+    /// `$HOME` or bare `/etc`. Covers nested optional deps + vendor binaries and
+    /// narrow system config residual paths.
     launch_ro_paths: []const []const u8 = &.{},
     /// Absolute host-agent config trees as `.rw` grants (see `host_config_grants`).
     /// Empty backpack keeps HOME in env but denies home FS; these narrow subpaths
@@ -536,13 +538,51 @@ fn appendInstallRoForLaunchFile(
         return;
     }
 
+    try appendUniqueInstallRo(allocator, list, root);
+
+    // npm optional deps often live as *siblings* under the same scope dir
+    // (`node_modules/@openai/codex` + `node_modules/@openai/codex-darwin-arm64`).
+    // Nested `package/node_modules/...` is already covered by package-root RO;
+    // grant the scoped parent (`…/node_modules/@scope`) when the layout matches.
+    if (try scopedNpmParentRo(allocator, root, env_map)) |scope_parent| {
+        try appendUniqueInstallRo(allocator, list, scope_parent);
+    }
+}
+
+fn appendUniqueInstallRo(
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList([]const u8),
+    path: []u8,
+) error{OutOfMemory}!void {
+    errdefer allocator.free(path);
     for (list.items) |existing| {
-        if (std.mem.eql(u8, existing, root)) {
-            allocator.free(root);
+        if (std.mem.eql(u8, existing, path)) {
+            allocator.free(path);
             return;
         }
     }
-    try list.append(allocator, root);
+    try list.append(allocator, path);
+}
+
+/// If `package_root` is `…/node_modules/@scope/pkg`, return owned `…/node_modules/@scope`.
+/// Otherwise null. Never bare HOME or filesystem root.
+fn scopedNpmParentRo(
+    allocator: std.mem.Allocator,
+    package_root: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!?[]u8 {
+    const pkg_name = std.fs.path.basename(package_root);
+    if (pkg_name.len == 0 or pkg_name[0] == '@') return null; // already a scope dir
+    const scope_dir = std.fs.path.dirname(package_root) orelse return null;
+    const scope_name = std.fs.path.basename(scope_dir);
+    if (scope_name.len < 2 or scope_name[0] != '@') return null;
+    const nm = std.fs.path.dirname(scope_dir) orelse return null;
+    if (!std.mem.eql(u8, std.fs.path.basename(nm), "node_modules")) return null;
+    if (envHome(env_map)) |home| {
+        if (std.mem.eql(u8, scope_dir, home)) return null;
+    }
+    if (scope_dir.len <= 1) return null;
+    return try allocator.dupe(u8, scope_dir);
 }
 
 /// Walk parents of `file_path` for a directory containing `package.json`.
@@ -1897,8 +1937,12 @@ test "collectLaunchInstallRoPaths grants package root for node shebang agent" {
     const ro = try collectLaunchInstallRoPaths(io, allocator, script, &env_map);
     defer freeLaunchInstallRoPaths(allocator, ro);
 
-    try std.testing.expectEqual(@as(usize, 1), ro.len);
-    try std.testing.expectEqualStrings(pkg_root, ro[0]);
+    // Package root + scoped parent (`…/node_modules/@scope`) for sibling optional deps.
+    try std.testing.expect(ro.len >= 1);
+    try std.testing.expect(pathsContain(ro, pkg_root));
+    const scope_parent = try std.fs.path.join(allocator, &.{ home, ".local/lib/node_modules/@scope" });
+    defer allocator.free(scope_parent);
+    try std.testing.expect(pathsContain(ro, scope_parent));
     try std.testing.expect(!pathsContainHomeOrDir(ro, home));
 
     // Plain system binary: no package root → empty RO list.
@@ -2294,21 +2338,4 @@ test "protect_workspace_secrets compiles into profile hash material" {
     defer compiled.deinit();
     try std.testing.expect(compiled.protect_workspace_secrets);
     try std.testing.expect(std.mem.indexOf(u8, compiled.canonical_bytes, "protect_workspace_secrets\ttrue") != null);
-}
-
-test "debug collectLaunchExecPaths for live codex" {
-    if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
-    const allocator = std.testing.allocator;
-    const io = std.testing.io;
-    var env_map = try std.process.Environ.createMap(std.process.Environ.empty, allocator);
-    defer env_map.deinit();
-    // inherit PATH/HOME via put from c env
-    if (std.c.getenv("PATH")) |p| try env_map.put("PATH", std.mem.span(p));
-    if (std.c.getenv("HOME")) |h| try env_map.put("HOME", std.mem.span(h));
-
-    const paths = try collectLaunchExecPaths(io, allocator, "codex", &env_map);
-    defer freeLaunchExecPaths(allocator, paths);
-    std.debug.print("codex launch paths ({d}):\n", .{paths.len});
-    for (paths) |p| std.debug.print("  {s}\n", .{p});
-    try std.testing.expect(paths.len >= 1);
 }

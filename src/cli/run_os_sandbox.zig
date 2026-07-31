@@ -108,6 +108,51 @@ fn flushWriter(writer: anytype) !void {
     }
 }
 
+/// Concatenate two owned path lists into one. Dupes path strings into the result,
+/// then frees `a` and `b` completely on success. On error leaves `a`/`b` intact
+/// for the caller's errdefer. Dedups exact string matches (prefer `a`).
+fn mergeOwnedPathLists(
+    allocator: std.mem.Allocator,
+    a: []const []const u8,
+    b: []const []const u8,
+) error{OutOfMemory}![]const []const u8 {
+    var list: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (list.items) |p| allocator.free(p);
+        list.deinit(allocator);
+    }
+
+    for (a) |p| {
+        const owned = try allocator.dupe(u8, p);
+        errdefer allocator.free(owned);
+        try list.append(allocator, owned);
+    }
+    for (b) |p| {
+        var is_dup = false;
+        for (list.items) |existing| {
+            if (std.mem.eql(u8, existing, p)) {
+                is_dup = true;
+                break;
+            }
+        }
+        if (is_dup) continue;
+        const owned = try allocator.dupe(u8, p);
+        errdefer allocator.free(owned);
+        try list.append(allocator, owned);
+    }
+
+    const out = try list.toOwnedSlice(allocator);
+    // Success: consume inputs so callers must not free them again.
+    freeMergedPathList(allocator, a);
+    freeMergedPathList(allocator, b);
+    return out;
+}
+
+fn freeMergedPathList(allocator: std.mem.Allocator, paths: []const []const u8) void {
+    for (paths) |p| allocator.free(p);
+    allocator.free(paths);
+}
+
 /// Apply OS sandbox for the production run path.
 ///
 /// `progress` is the TTY stream for prepare activity (typically stdout, same as
@@ -118,7 +163,8 @@ fn flushWriter(writer: anytype) !void {
 /// agents installed outside workspace/system prefixes (typical `~/.local/...`) can
 /// pass child preflight after Seatbelt/Landlock attach. Known host basenames also
 /// collect host-config RW subpaths (e.g. `$HOME/.claude`) so empty backpack can
-/// still use host login without granting bare `$HOME`.
+/// still use host login without granting bare `$HOME`. Host-scoped system RO trees
+/// (e.g. codex `/etc/codex`) merge into the same launch RO list as install package roots.
 pub fn applyForRun(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -161,11 +207,15 @@ pub fn applyForRun(
 
     // Node/npm agents: RO package root so nested optional deps + vendor binaries
     // are readable after empty-backpack Seatbelt (file-only .exec is not enough).
-    const launch_ro_paths: []const []const u8 = if (launch_argv0) |argv0|
-        try sandbox.apply.collectLaunchInstallRoPaths(launch_io, allocator, argv0, env_map)
-    else
-        &.{};
-    defer if (launch_argv0 != null) sandbox.apply.freeLaunchInstallRoPaths(allocator, launch_ro_paths);
+    // Host system RO (e.g. codex `/etc/codex`) merges into the same `.ro` list.
+    const launch_ro_paths: []const []const u8 = if (launch_argv0) |argv0| blk: {
+        const install_ro = try sandbox.apply.collectLaunchInstallRoPaths(launch_io, allocator, argv0, env_map);
+        errdefer sandbox.apply.freeLaunchInstallRoPaths(allocator, install_ro);
+        const system_ro = try sandbox.host_config_grants.collectHostSystemRoPaths(allocator, argv0);
+        errdefer sandbox.host_config_grants.freeHostSystemRoPaths(allocator, system_ro);
+        break :blk try mergeOwnedPathLists(allocator, install_ro, system_ro);
+    } else &.{};
+    defer if (launch_argv0 != null) freeMergedPathList(allocator, launch_ro_paths);
 
     const home_for_config: []const u8 = if (env_map.get("HOME")) |h| h else "";
     const launch_host_rw_paths: []const []const u8 = if (launch_argv0) |argv0|

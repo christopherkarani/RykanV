@@ -6,9 +6,11 @@
 //! not blank-hang after `sandbox=active`.
 //!
 //! Contract:
-//! - Grant only explicit per-host subpaths that already exist on disk.
+//! - Grant only explicit per-host subpaths that already exist on disk (home RW).
 //! - Paths compile as **RW** so agents can write session/history under their own
 //!   roots — still never bare `$HOME`, bare `~/Library`, or `~/.ssh`.
+//! - Optional **system RO** trees (e.g. `/etc/codex`) are host-scoped, never bare
+//!   `/etc`, and may be granted even when missing so open fails as ENOENT not EPERM.
 //! - Non-host `ryk run -- /bin/echo` collects an empty list (no fail-closed).
 
 const std = @import("std");
@@ -22,6 +24,10 @@ pub const HostConfigSpec = struct {
     /// Home-relative files that count as usable login material (any one non-empty).
     /// Empty list → directory presence alone is enough (weaker, host-specific).
     login_markers: []const []const u8 = &.{},
+    /// Absolute system RO trees (not under `$HOME`). Host-scoped only — never bare
+    /// `/etc` or `/private/etc`. Granted even when missing so Seatbelt open is
+    /// ENOENT rather than EPERM (Codex requirements residual).
+    system_ro_dirs: []const []const u8 = &.{},
 };
 
 /// Authoritative grant table for host-launch aliases that need host login stores.
@@ -48,6 +54,12 @@ pub const host_config_table = [_]HostConfigSpec{
         .host = "codex",
         .home_rel_dirs = &.{".codex"},
         .login_markers = &.{ ".codex/auth.json", ".codex/config.toml" },
+        // Enterprise/system requirements under /etc/codex. macOS also has the
+        // firmlink form /private/etc/codex. Never bare /etc (see collectHostSystemRoPaths).
+        .system_ro_dirs = if (builtin.os.tag == .macos)
+            &.{ "/etc/codex", "/private/etc/codex" }
+        else
+            &.{"/etc/codex"},
     },
     .{
         .host = "pi",
@@ -189,6 +201,73 @@ pub fn collectHostConfigPaths(
 pub fn freeHostConfigPaths(allocator: std.mem.Allocator, paths: []const []const u8) void {
     for (paths) |p| allocator.free(p);
     allocator.free(paths);
+}
+
+/// True when `path` must never be granted as host system RO (root, bare `/etc`,
+/// bare `/private/etc`, or non-absolute). Defends against table drift.
+pub fn isForbiddenSystemRoPath(path: []const u8) bool {
+    if (path.len == 0) return true;
+    if (!std.fs.path.isAbsolute(path)) return true;
+    if (path.len == 1 and path[0] == '/') return true;
+    // Bare system config / firmlink roots — only host-scoped leaves are allowed.
+    if (std.mem.eql(u8, path, "/etc") or std.mem.eql(u8, path, "/private/etc")) return true;
+    if (std.mem.eql(u8, path, "/private") or std.mem.eql(u8, path, "/var") or
+        std.mem.eql(u8, path, "/private/var"))
+        return true;
+    // No traversal / self-ref in the absolute path.
+    if (relHasUnsafeComponents(path[1..])) return true;
+    return false;
+}
+
+/// Collect owned absolute **system RO** grant paths for a host launch binary.
+///
+/// Unlike home-config RW, paths are granted **even when missing** so open under
+/// Seatbelt returns ENOENT (agent soft-skip) instead of EPERM (fatal for Codex
+/// `/etc/codex/requirements.toml`). Never returns bare `/etc` or `/private/etc`.
+///
+/// Caller frees with `freeHostSystemRoPaths` (same shape as host-config paths).
+pub fn collectHostSystemRoPaths(
+    allocator: std.mem.Allocator,
+    argv0: []const u8,
+) error{OutOfMemory}![]const []const u8 {
+    const host = hostBasename(argv0);
+    const spec = specForHost(host) orelse {
+        return try allocator.alloc([]const u8, 0);
+    };
+    if (spec.system_ro_dirs.len == 0) {
+        return try allocator.alloc([]const u8, 0);
+    }
+
+    var list: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (list.items) |p| allocator.free(p);
+        list.deinit(allocator);
+    }
+
+    for (spec.system_ro_dirs) |raw| {
+        if (isForbiddenSystemRoPath(raw)) continue;
+
+        var exists = false;
+        for (list.items) |existing| {
+            if (std.mem.eql(u8, existing, raw)) {
+                exists = true;
+                break;
+            }
+        }
+        if (exists) continue;
+
+        const owned = try allocator.dupe(u8, raw);
+        list.append(allocator, owned) catch |err| {
+            allocator.free(owned);
+            return err;
+        };
+    }
+
+    return try list.toOwnedSlice(allocator);
+}
+
+pub fn freeHostSystemRoPaths(allocator: std.mem.Allocator, paths: []const []const u8) void {
+    freeHostConfigPaths(allocator, paths);
 }
 
 /// True when a known host has at least one listed config root present under home.
@@ -381,9 +460,15 @@ pub const empty_backpack_pathwalk_exit_tip =
     \\
 ;
 
+/// Tip when agent output shows system-config RO residual (`/etc/codex` EPERM).
+pub const empty_backpack_system_ro_exit_tip =
+    \\ryk run: empty-backpack: agent died after sandbox attach — system config RO residual (EPERM reading /etc/codex or requirements.toml). This is an OS-sandbox filesystem residual, not missing host login. If it persists on a current ryk build, report it; do not re-login first. Bare /etc is not granted (by design).
+    \\
+;
+
 /// Generic tip when empty-backpack agent exits non-zero without a more specific residual.
 pub const empty_backpack_agent_exit_tip =
-    \\ryk run: empty-backpack tip: agent exited non-zero after sandbox attach. Common causes: Seatbelt path-walk EPERM (lstat/realpath on path parents), redirected stdio into /tmp or /var/folders (fstat denials — capture under the workspace), stale host auth (re-login outside ryk), missing host-matched API key for gateway, or --with-host-secrets (loud). Keychain FS is not granted (by design).
+    \\ryk run: empty-backpack tip: agent exited non-zero after sandbox attach. Common causes: Seatbelt path-walk EPERM (lstat/realpath on path parents), redirected stdio into /tmp or /var/folders (fstat denials — capture under the workspace), system config RO residual (/etc/codex), stale host auth (re-login outside ryk), missing host-matched API key for gateway, or --with-host-secrets (loud). Keychain FS is not granted (by design).
     \\
 ;
 
@@ -465,14 +550,28 @@ pub fn stderrLooksLikeSeatbeltPathWalkResidual(text: []const u8) bool {
         std.ascii.indexOfIgnoreCase(text, "resolveMainPath") != null;
 }
 
+/// True when text looks like Codex system-requirements RO residual under Seatbelt.
+pub fn stderrLooksLikeEtcCodexRequirementsEperm(text: []const u8) bool {
+    if (text.len == 0) return false;
+    const has_eperm = std.ascii.indexOfIgnoreCase(text, "EPERM") != null or
+        std.ascii.indexOfIgnoreCase(text, "operation not permitted") != null or
+        std.ascii.indexOfIgnoreCase(text, "Permission denied") != null or
+        std.ascii.indexOfIgnoreCase(text, "os error 1") != null;
+    if (!has_eperm) return false;
+    return std.ascii.indexOfIgnoreCase(text, "/etc/codex") != null or
+        std.ascii.indexOfIgnoreCase(text, "requirements.toml") != null;
+}
+
 /// Pick empty-backpack post-exit tip:
 /// 1) stdio/fstat residual when parent FD path is ungranted host tmp
 /// 2) path-walk residual when agent_output matches EPERM + lstat/realpath
-/// 3) generic tip (auth / gateway / remaining residuals)
+/// 3) system config RO residual (`/etc/codex` / requirements.toml EPERM)
+/// 4) generic tip (auth / gateway / remaining residuals)
 pub fn selectEmptyBackpackAgentExitTip(input: EmptyBackpackExitTipInput) []const u8 {
     if (input.stdio_host_tmp_risk) return empty_backpack_stdio_fstat_exit_tip;
     if (input.agent_output) |text| {
         if (stderrLooksLikeSeatbeltPathWalkResidual(text)) return empty_backpack_pathwalk_exit_tip;
+        if (stderrLooksLikeEtcCodexRequirementsEperm(text)) return empty_backpack_system_ro_exit_tip;
     }
     return empty_backpack_agent_exit_tip;
 }
@@ -839,4 +938,74 @@ test "resolveFdPathname round-trips a /tmp file on supported platforms" {
     try std.testing.expect(
         std.mem.indexOf(u8, resolved, "ryk-stdio-risk-probe.txt") != null,
     );
+}
+
+test "isForbiddenSystemRoPath rejects bare etc and root" {
+    try std.testing.expect(isForbiddenSystemRoPath(""));
+    try std.testing.expect(isForbiddenSystemRoPath("/"));
+    try std.testing.expect(isForbiddenSystemRoPath("etc/codex"));
+    try std.testing.expect(isForbiddenSystemRoPath("/etc"));
+    try std.testing.expect(isForbiddenSystemRoPath("/private/etc"));
+    try std.testing.expect(isForbiddenSystemRoPath("/private"));
+    try std.testing.expect(isForbiddenSystemRoPath("/etc/../etc"));
+    try std.testing.expect(!isForbiddenSystemRoPath("/etc/codex"));
+    try std.testing.expect(!isForbiddenSystemRoPath("/private/etc/codex"));
+}
+
+test "collectHostSystemRoPaths grants codex etc trees even when missing" {
+    const allocator = std.testing.allocator;
+
+    const codex_paths = try collectHostSystemRoPaths(allocator, "codex");
+    defer freeHostSystemRoPaths(allocator, codex_paths);
+    try std.testing.expect(codex_paths.len >= 1);
+    var found_etc = false;
+    var found_private = false;
+    for (codex_paths) |p| {
+        try std.testing.expect(!isForbiddenSystemRoPath(p));
+        try std.testing.expect(!std.mem.eql(u8, p, "/etc"));
+        try std.testing.expect(!std.mem.eql(u8, p, "/private/etc"));
+        if (std.mem.eql(u8, p, "/etc/codex")) found_etc = true;
+        if (std.mem.eql(u8, p, "/private/etc/codex")) found_private = true;
+    }
+    try std.testing.expect(found_etc);
+    if (builtin.os.tag == .macos) {
+        try std.testing.expect(found_private);
+    }
+
+    // Path form of argv0 still matches host basename.
+    const via_path = try collectHostSystemRoPaths(allocator, "/usr/local/bin/codex");
+    defer freeHostSystemRoPaths(allocator, via_path);
+    try std.testing.expectEqual(codex_paths.len, via_path.len);
+
+    // Non-codex hosts get empty system RO.
+    const claude = try collectHostSystemRoPaths(allocator, "claude");
+    defer freeHostSystemRoPaths(allocator, claude);
+    try std.testing.expectEqual(@as(usize, 0), claude.len);
+
+    const echo = try collectHostSystemRoPaths(allocator, "/bin/echo");
+    defer freeHostSystemRoPaths(allocator, echo);
+    try std.testing.expectEqual(@as(usize, 0), echo.len);
+}
+
+test "selectEmptyBackpackAgentExitTip prefers system-ro residual for etc/codex EPERM" {
+    const stack =
+        \\Error loading config.toml: Failed to read requirements file /etc/codex/requirements.toml: Operation not permitted (os error 1)
+    ;
+    try std.testing.expect(stderrLooksLikeEtcCodexRequirementsEperm(stack));
+    const tip = selectEmptyBackpackAgentExitTip(.{ .agent_output = stack });
+    try std.testing.expect(tip.ptr == empty_backpack_system_ro_exit_tip.ptr);
+    try std.testing.expect(std.mem.indexOf(u8, tip, "/etc/codex") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tip, "not missing host login") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tip, "API key") == null);
+
+    // Path-walk still wins when both could match.
+    const pathwalk =
+        \\Error: EPERM: operation not permitted, lstat '/Users'
+        \\Failed requirements /etc/codex/requirements.toml
+    ;
+    const pathwalk_tip = selectEmptyBackpackAgentExitTip(.{ .agent_output = pathwalk });
+    try std.testing.expect(pathwalk_tip.ptr == empty_backpack_pathwalk_exit_tip.ptr);
+
+    try std.testing.expect(!stderrLooksLikeEtcCodexRequirementsEperm("invalid API key"));
+    try std.testing.expect(!stderrLooksLikeEtcCodexRequirementsEperm(""));
 }

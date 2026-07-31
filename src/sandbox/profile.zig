@@ -936,6 +936,31 @@ test "launch exec_paths reject filesystem root" {
     }));
 }
 
+test "codex system ro_paths compile narrow /etc/codex without bare /etc or HOME" {
+    const allocator = std.testing.allocator;
+    const home = "/Users/dev";
+    const ws = "/Users/dev/projects/app";
+    var compiled = try compileProfile(allocator, .{
+        .workspace_root = ws,
+        .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
+        .ro_paths = &.{ "/etc/codex", "/private/etc/codex" },
+        .host_rw_paths = &.{"/Users/dev/.codex"},
+    });
+    defer compiled.deinit();
+
+    try std.testing.expect(compiled.hasGrant("/etc/codex", .ro));
+    try std.testing.expect(compiled.hasGrant("/private/etc/codex", .ro));
+    try std.testing.expect(compiled.isGrantedReadable("/etc/codex/requirements.toml"));
+    try std.testing.expect(compiled.isGrantedReadable("/private/etc/codex/requirements.toml"));
+    // Not bare /etc content.
+    try std.testing.expect(!compiled.hasGrant("/etc", .ro));
+    try std.testing.expect(!compiled.isGrantedReadable("/etc/passwd"));
+    try std.testing.expect(!compiled.isGrantedReadable("/etc/hosts"));
+    try std.testing.expect(!compiled.grantsHome(home));
+    try std.testing.expect(!compiled.isAgentWritable("/etc/codex"));
+    try std.testing.expect(compiled.hasGrant("/Users/dev/.codex", .rw));
+}
+
 test "host config host_rw_paths compile as RW without HOME or ssh" {
     const allocator = std.testing.allocator;
     const home = "/Users/dev";

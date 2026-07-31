@@ -204,6 +204,16 @@ pub fn renderSbplWithOptions(
         }
     }
 
+    // Path-walk firmlink residual: vnode for `/Users` is often under
+    // `/System/Volumes/Data/Users`. Earlier Users-form metadata literals do not
+    // match that Data path string, and the Data deny above is last-match for it.
+    // Re-emit *metadata-only* ancestors in Data-form for Users-mapped grants so
+    // Node realpathSync/lstat(`/Users`) succeeds without content grants on home.
+    try out.appendSlice(allocator, ";; path-walk Data-form ancestor metadata (after Data deny; metadata only)\n");
+    for (compiled.grants) |g| {
+        try appendPathAncestorMetadataLiteralsDataForm(&out, allocator, g.path);
+    }
+
     if (compiled.protect_workspace_secrets) {
         try out.appendSlice(allocator, "\n;; workspace env secret carve-out\n");
         try appendWorkspaceSecretDeny(&out, allocator, "file-read*", compiled.workspace_root);
@@ -668,6 +678,36 @@ fn appendPathAncestorMetadataLiterals(
     path: []const u8,
 ) !void {
     const emit = sbplEmitPath(path);
+    try appendPathAncestorMetadataLiteralsForEmit(out, allocator, emit);
+}
+
+/// Same as ancestor metadata, but emit `/System/Volumes/Data` + Users-form path
+/// components when the grant maps to Users-form. Used *after* the Data deny so
+/// firmlink-backed lstat of `/Users` (Data vnode) is not last-match denied.
+fn appendPathAncestorMetadataLiteralsDataForm(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    path: []const u8,
+) !void {
+    const emit = sbplEmitPath(path);
+    // Only Users-mapped grants need Data-form twins.
+    if (!std.mem.eql(u8, emit, "/Users") and !std.mem.startsWith(u8, emit, "/Users/")) return;
+
+    // Data-form path: /System/Volumes/Data + Users path.
+    var data_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const prefix = data_volume_prefix; // /System/Volumes/Data
+    if (prefix.len + emit.len >= data_buf.len) return;
+    @memcpy(data_buf[0..prefix.len], prefix);
+    @memcpy(data_buf[prefix.len..][0..emit.len], emit);
+    const data_path = data_buf[0 .. prefix.len + emit.len];
+    try appendPathAncestorMetadataLiteralsForEmit(out, allocator, data_path);
+}
+
+fn appendPathAncestorMetadataLiteralsForEmit(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    emit: []const u8,
+) !void {
     if (emit.len < 2 or emit[0] != '/') return;
 
     var idx: usize = 1;
@@ -893,6 +933,12 @@ test "SBPL path-walk ancestor metadata literals for Users-form grants" {
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/Users\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/Users/dev\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/Users/dev/projects\"))") != null);
+    // Data-form twins after Data deny (firmlink lstat residual).
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/System/Volumes/Data/Users\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/System/Volumes/Data/Users/dev\"))") != null);
+    // Still no content grant on bare Users / Data Users.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/System/Volumes/Data/Users\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/System/Volumes/Data/Users\"))") == null);
     // Leaf content stays grant-scoped subpath — not ancestor content grants.
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/projects/app\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users\"))") == null);
@@ -956,6 +1002,33 @@ test "SBPL host config host_rw_paths emit subpath RW without bare HOME" {
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev\"))") == null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/.ssh\"))") == null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/Library\"))") == null);
+}
+
+test "SBPL codex system ro_paths emit narrow /etc/codex without bare /etc" {
+    const allocator = std.testing.allocator;
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = "/Users/dev/projects/app",
+        .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
+        .ro_paths = &.{ "/etc/codex", "/private/etc/codex" },
+        .host_rw_paths = &.{"/Users/dev/.codex"},
+    });
+    defer compiled.deinit();
+
+    const sbpl = try renderSbpl(allocator, &compiled);
+    defer allocator.free(sbpl);
+
+    // Narrow host system RO for Codex requirements residual.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/etc/codex\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/private/etc/codex\"))") != null);
+    // Path-walk metadata ancestors for /etc and /private/etc are OK (metadata only).
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/etc\"))") != null or
+        std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/private\"))") != null);
+    // Never bare /etc content grant (passwd, hosts, other agents).
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/etc\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/private/etc\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-write* (subpath \"/etc/codex\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev\"))") == null);
+    try std.testing.expect(!sbplGrantsHome(sbpl, "/Users/dev"));
 }
 
 test "SBPL narrows /dev writes to null and urandom only" {
