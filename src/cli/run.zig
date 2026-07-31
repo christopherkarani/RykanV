@@ -400,6 +400,12 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 }
             }
         }
+        // Shell redirects open stdio FDs in the parent before fork. When those
+        // targets sit under classic /tmp or /var/folders, empty-backpack Seatbelt
+        // will deny Bun fstat — warn early so operators fix capture location first.
+        if (sandbox.host_config_grants.parentStdioHasUngrantedHostTmpRisk()) {
+            try stderr.writeAll(sandbox.host_config_grants.empty_backpack_stdio_host_tmp_warn);
+        }
     }
 
     const AuditContext = struct {
@@ -1023,9 +1029,11 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     else
         result.status;
 
-    // M-20 partial-ok: pre-exec handshake proves apply, not agent entry. When attach
+    // M-20 partial-ok: attach/handshake proves apply, not agent success. When attach
     // succeeded but the agent process ends non-zero, say so explicitly so operators
     // do not read "OS sandbox: active" as "agent ran successfully under the box".
+    // Wording uses "after sandbox attach" (not "pre-exec handshake residual") so
+    // operators do not think attach itself failed.
     if (apply_result.receipt.isActive() and !boundary_backend_failed) {
         const agent_failed = switch (result.status) {
             .exited => |code| code != 0,
@@ -1034,24 +1042,25 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         if (agent_failed) {
             switch (result.status) {
                 .exited => |code| try stderr.print(
-                    "ryk run: note: OS sandbox attach succeeded; agent exited with code {d} (pre-exec handshake residual).\n",
+                    "ryk run: note: OS sandbox attach succeeded; agent exited with code {d} after sandbox attach.\n",
                     .{code},
                 ),
                 .signal => |sig| try stderr.print(
-                    "ryk run: note: OS sandbox attach succeeded; agent terminated by signal {d} (pre-exec handshake residual).\n",
+                    "ryk run: note: OS sandbox attach succeeded; agent terminated by signal {d} after sandbox attach.\n",
                     .{sig},
                 ),
                 .stopped => |sig| try stderr.print(
-                    "ryk run: note: OS sandbox attach succeeded; agent stopped by signal {d} (pre-exec handshake residual).\n",
+                    "ryk run: note: OS sandbox attach succeeded; agent stopped by signal {d} after sandbox attach.\n",
                     .{sig},
                 ),
                 .unknown => |st| try stderr.print(
-                    "ryk run: note: OS sandbox attach succeeded; agent ended with unknown status {d} (pre-exec handshake residual).\n",
+                    "ryk run: note: OS sandbox attach succeeded; agent ended with unknown status {d} after sandbox attach.\n",
                     .{st},
                 ),
             }
             if (secret_boundary == .empty_backpack) {
-                try stderr.writeAll(sandbox.host_config_grants.empty_backpack_agent_exit_tip);
+                const stdio_risk = sandbox.host_config_grants.parentStdioHasUngrantedHostTmpRisk();
+                try stderr.writeAll(sandbox.host_config_grants.selectEmptyBackpackAgentExitTip(stdio_risk));
             }
         }
     }
@@ -3508,7 +3517,8 @@ test "ryk run notes attach-ok residual when agent exits non-zero after active at
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "OS sandbox: active") != null);
     const err = stderr_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, err, "OS sandbox attach succeeded") != null);
-    try std.testing.expect(std.mem.indexOf(u8, err, "pre-exec handshake residual") != null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "after sandbox attach") != null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "pre-exec handshake residual") == null);
 }
 
 // M-31: fail-closed spawn/handshake under on and auto (preflight fails → ApplyFailed).

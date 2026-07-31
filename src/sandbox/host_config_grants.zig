@@ -12,6 +12,7 @@
 //! - Non-host `ryk run -- /bin/echo` collects an empty list (no fail-closed).
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 /// Home-relative config roots for a launch host basename (exact match).
 pub const HostConfigSpec = struct {
@@ -46,7 +47,7 @@ pub const host_config_table = [_]HostConfigSpec{
     .{
         .host = "codex",
         .home_rel_dirs = &.{".codex"},
-        .login_markers = &.{".codex/auth.json", ".codex/config.toml"},
+        .login_markers = &.{ ".codex/auth.json", ".codex/config.toml" },
     },
     .{
         .host = "pi",
@@ -366,11 +367,80 @@ pub const stale_login_fail_closed_message =
     \\
 ;
 
-/// Extra tip when the agent exits non-zero after a successful sandbox attach under empty backpack.
-pub const empty_backpack_agent_exit_tip =
-    \\ryk run: empty-backpack tip: re-login outside ryk if auth is stale; export a host-matched API key for gateway; or use --with-host-secrets (loud). Redirected stdio into /tmp or /var/folders can hit Seatbelt fstat denials — capture under the workspace instead. Keychain FS is not granted (by design).
+/// Primary tip when parent stdout/stderr path is under classic ungranted host tmp
+/// (inherited shell redirects). Leads with stdio/fstat residual — not re-login.
+pub const empty_backpack_stdio_fstat_exit_tip =
+    \\ryk run: empty-backpack: agent died after sandbox attach — redirected stdout/stderr lands under classic /tmp or /var/folders, which Seatbelt does not grant. Bun/Node fstat on those FDs fails (EPERM / process.stderr.fd). Capture under the workspace (e.g. .orca-tmp), use a pipe, or a TTY. Do not treat this as missing login first. Keychain FS is not granted (by design).
     \\
 ;
+
+/// Generic tip when empty-backpack agent exits non-zero without detected stdio residual.
+pub const empty_backpack_agent_exit_tip =
+    \\ryk run: empty-backpack tip: agent exited non-zero after sandbox attach. Common causes: stale host auth (re-login outside ryk), missing host-matched API key for gateway, or --with-host-secrets (loud). Redirected stdio into /tmp or /var/folders can also hit Seatbelt fstat denials — capture under the workspace instead. Keychain FS is not granted (by design).
+    \\
+;
+
+/// Pre-spawn warning when parent stdio already points at ungranted host tmp.
+pub const empty_backpack_stdio_host_tmp_warn =
+    \\ryk run: warning: stdout/stderr appear redirected under /tmp or /var/folders; empty-backpack Seatbelt may deny agent fstat on those FDs. Prefer workspace capture, pipe, or TTY.
+    \\
+;
+
+/// True when `path` is classic host temp content empty backpack does not grant.
+/// Bootstrap may allow the literal `/private/tmp` directory node only — not tree contents.
+pub fn pathIsUngrantedHostTmpContent(path: []const u8) bool {
+    if (path.len == 0) return false;
+    if (std.mem.eql(u8, path, "/tmp") or std.mem.eql(u8, path, "/private/tmp")) return true;
+    if (std.mem.startsWith(u8, path, "/tmp/")) return true;
+    if (std.mem.startsWith(u8, path, "/private/tmp/")) return true;
+    if (std.mem.startsWith(u8, path, "/var/folders/")) return true;
+    if (std.mem.startsWith(u8, path, "/private/var/folders/")) return true;
+    return false;
+}
+
+/// Resolve a pathname for an open FD when the platform supports it.
+/// macOS: F_GETPATH. Linux: /proc/self/fd/N. Other: null.
+/// Caller must pass a buffer of at least `std.fs.max_path_bytes` (Darwin F_GETPATH
+/// writes up to PATH_MAX; a short buffer would be a length-blind kernel write).
+pub fn resolveFdPathname(fd: std.posix.fd_t, buf: []u8) ?[]const u8 {
+    if (buf.len < std.fs.max_path_bytes) return null;
+    switch (builtin.os.tag) {
+        .macos, .ios, .tvos, .watchos, .visionos => {
+            // Darwin F_GETPATH (sys/fcntl.h) writes a NUL-terminated path into buf.
+            const F_GETPATH: c_int = 50;
+            @memset(buf[0..std.fs.max_path_bytes], 0);
+            const rc = std.c.fcntl(@as(c_int, @intCast(fd)), F_GETPATH, buf.ptr);
+            if (rc != 0) return null;
+            return std.mem.sliceTo(buf, 0);
+        },
+        .linux => {
+            var link_path_buf: [64]u8 = undefined;
+            const link_path = std.fmt.bufPrint(&link_path_buf, "/proc/self/fd/{d}", .{fd}) catch return null;
+            const n = std.posix.readlink(link_path, buf) catch return null;
+            return buf[0..n];
+        },
+        else => return null,
+    }
+}
+
+/// True when parent process stdout (1) or stderr (2) path is under ungranted host tmp.
+/// Used for tip selection and pre-spawn warning (shell redirects open FDs before fork).
+pub fn parentStdioHasUngrantedHostTmpRisk() bool {
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (resolveFdPathname(1, &path_buf)) |path| {
+        if (pathIsUngrantedHostTmpContent(path)) return true;
+    }
+    if (resolveFdPathname(2, &path_buf)) |path| {
+        if (pathIsUngrantedHostTmpContent(path)) return true;
+    }
+    return false;
+}
+
+/// Pick empty-backpack post-exit tip: stdio/fstat residual first when detected.
+pub fn selectEmptyBackpackAgentExitTip(stdio_host_tmp_risk: bool) []const u8 {
+    if (stdio_host_tmp_risk) return empty_backpack_stdio_fstat_exit_tip;
+    return empty_backpack_agent_exit_tip;
+}
 
 /// Choose the fail-closed stderr blob for a known host with unusable auth.
 pub fn failClosedMessageFor(
@@ -643,4 +713,60 @@ test "missing_config_fail_closed_message names login material" {
     try std.testing.expect(std.mem.indexOf(u8, missing_config_fail_closed_message, ".credentials.json") != null);
     try std.testing.expect(std.mem.indexOf(u8, empty_backpack_agent_exit_tip, "var/folders") != null);
     try std.testing.expect(std.mem.indexOf(u8, empty_backpack_agent_exit_tip, "Keychain") != null);
+}
+
+test "pathIsUngrantedHostTmpContent classifies classic tmp vs workspace" {
+    try std.testing.expect(pathIsUngrantedHostTmpContent("/tmp/ryk-probe-out.txt"));
+    try std.testing.expect(pathIsUngrantedHostTmpContent("/tmp"));
+    try std.testing.expect(pathIsUngrantedHostTmpContent("/private/tmp/err.txt"));
+    try std.testing.expect(pathIsUngrantedHostTmpContent("/private/tmp"));
+    try std.testing.expect(pathIsUngrantedHostTmpContent("/var/folders/xx/yy/T/out.txt"));
+    try std.testing.expect(pathIsUngrantedHostTmpContent("/private/var/folders/ab/cd/T/err.txt"));
+    try std.testing.expect(!pathIsUngrantedHostTmpContent(""));
+    try std.testing.expect(!pathIsUngrantedHostTmpContent("/Users/me/proj/.orca-tmp/out.txt"));
+    try std.testing.expect(!pathIsUngrantedHostTmpContent("/dev/null"));
+    try std.testing.expect(!pathIsUngrantedHostTmpContent("/private/var/log/system.log"));
+    // Prefix must not false-positive adjacent names.
+    try std.testing.expect(!pathIsUngrantedHostTmpContent("/tmpish/foo"));
+    try std.testing.expect(!pathIsUngrantedHostTmpContent("/var/foldersish/x"));
+}
+
+test "selectEmptyBackpackAgentExitTip prefers stdio residual over re-login lead" {
+    const stdio_tip = selectEmptyBackpackAgentExitTip(true);
+    try std.testing.expect(stdio_tip.ptr == empty_backpack_stdio_fstat_exit_tip.ptr);
+    try std.testing.expect(std.mem.indexOf(u8, stdio_tip, "fstat") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdio_tip, "after sandbox attach") != null);
+    // Must lead with stdio residual framing, not re-login / generic tip prefix.
+    try std.testing.expect(std.mem.startsWith(u8, stdio_tip, "ryk run: empty-backpack: agent died after sandbox attach"));
+    try std.testing.expect(std.mem.indexOf(u8, stdio_tip, "Do not treat this as missing login first") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdio_tip, "--with-host-secrets") == null);
+
+    const generic_tip = selectEmptyBackpackAgentExitTip(false);
+    try std.testing.expect(generic_tip.ptr == empty_backpack_agent_exit_tip.ptr);
+    try std.testing.expect(std.mem.indexOf(u8, generic_tip, "re-login") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generic_tip, "var/folders") != null);
+}
+
+test "resolveFdPathname round-trips a /tmp file on supported platforms" {
+    if (builtin.os.tag != .macos and builtin.os.tag != .linux) return error.SkipZigTest;
+
+    const io = std.testing.io;
+    const path = "/tmp/ryk-stdio-risk-probe.txt";
+    {
+        const file = try std.Io.Dir.createFileAbsolute(io, path, .{});
+        defer file.close(io);
+        try file.writeStreamingAll(io, "probe");
+    }
+    defer std.Io.Dir.deleteFileAbsolute(io, path) catch {};
+
+    const file = try std.Io.Dir.openFileAbsolute(io, path, .{});
+    defer file.close(io);
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const resolved = resolveFdPathname(file.handle, &buf) orelse return error.SkipZigTest;
+    try std.testing.expect(pathIsUngrantedHostTmpContent(resolved));
+    // macOS often returns /private/tmp/...; Linux returns /tmp/...
+    try std.testing.expect(
+        std.mem.indexOf(u8, resolved, "ryk-stdio-risk-probe.txt") != null,
+    );
 }
