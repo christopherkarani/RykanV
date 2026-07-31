@@ -10,7 +10,11 @@ const secrets = @import("secrets.zig");
 const rank = @import("rank.zig");
 
 /// Optional host-level progress for TTY spinners (scan is otherwise silent).
-pub const ProgressPhase = enum { host_start, host_done };
+/// `sessions` meaning by phase:
+/// - `host_start`: total session files for this host
+/// - `file`: 1-based index of the file about to be processed
+/// - `host_done`: total session files processed for this host
+pub const ProgressPhase = enum { host_start, file, host_done };
 pub const ProgressFn = *const fn (ctx: ?*anyopaque, host: types.Host, phase: ProgressPhase, sessions: usize) void;
 
 pub const ScanOptions = struct {
@@ -50,9 +54,11 @@ pub fn runScan(io: std.Io, allocator: std.mem.Allocator, options: ScanOptions) !
     }
 
     for (hosts) |h| {
-        if (options.progress) |pf| pf(options.progress_ctx, h.host, .host_start, 0);
-        scorecard.setHost(h.host, h.status, h.files.items.len, h.note);
-        for (h.files.items) |file| {
+        const file_total = h.files.items.len;
+        if (options.progress) |pf| pf(options.progress_ctx, h.host, .host_start, file_total);
+        scorecard.setHost(h.host, h.status, file_total, h.note);
+        for (h.files.items, 0..) |file, fi| {
+            if (options.progress) |pf| pf(options.progress_ctx, h.host, .file, fi + 1);
             scorecard.sessions_scanned += 1;
 
             var parsed = if (h.host == .opencode)
@@ -86,7 +92,7 @@ pub fn runScan(io: std.Io, allocator: std.mem.Allocator, options: ScanOptions) !
                 try processMaterialDedup(allocator, &findings, &scorecard, &seen_material, h.host, file.session_id, evidence_path, ts, blob);
             }
         }
-        if (options.progress) |pf| pf(options.progress_ctx, h.host, .host_done, h.files.items.len);
+        if (options.progress) |pf| pf(options.progress_ctx, h.host, .host_done, file_total);
     }
 
     rank.sortFindings(findings.items);

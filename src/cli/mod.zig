@@ -141,7 +141,9 @@ fn suggestCommand(unknown: []const u8) ?[]const u8 {
 
 /// Commands that render their own branded header internally and so must NOT
 /// receive the shared entry banner (would double-print).
-const self_banner_commands = [_][]const u8{ "version", "--version", "help", "run", "start" };
+/// `scan` keeps the progress phase banner-free (spinner only); durable brand
+/// lives on the result scorecard / alt-screen TUI header.
+const self_banner_commands = [_][]const u8{ "version", "--version", "help", "run", "start", "scan" };
 
 /// Commands whose output is always machine/raw (JSON, generated scripts, export
 /// lines, long-running servers) — never receive the human brand banner.
@@ -1333,6 +1335,12 @@ test "banner renders on a human command (doctor)" {
 test "start owns its onboarding banner" {
     try std.testing.expect(!shouldShowBanner("start", &.{"start"}));
     try std.testing.expect(!shouldShowBanner("start", &.{ "start", "--auto" }));
+}
+
+test "scan suppresses entry banner (progress is spinner-only)" {
+    try std.testing.expect(!shouldShowBanner("scan", &.{"scan"}));
+    try std.testing.expect(!shouldShowBanner("scan", &.{ "scan", "--host", "grok" }));
+    try std.testing.expect(!shouldShowBanner("scan", &.{ "scan", "--plain" }));
 }
 
 test "banner suppressed for raw env output" {

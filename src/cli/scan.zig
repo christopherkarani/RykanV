@@ -15,13 +15,21 @@ const Options = struct {
     only_host: ?scan_lib.types.Host = null,
 };
 
+/// ~12 fps — smooth enough for braille frames without thrashing the TTY.
+const spinner_tick_duration = std.Io.Duration.fromNanoseconds(80 * std.time.ns_per_ms);
+
 const ProgressCtx = struct {
     io: std.Io,
     stdout: *std.Io.Writer,
     label_buf: [96]u8 = undefined,
     label_len: usize = 0,
+    host_file_total: usize = 0,
     spinner: ?tui.spinner.Spinner(*std.Io.Writer) = null,
     active: bool = false,
+    /// Guards spinner frame/label writes between progress callbacks and ticker.
+    mutex: std.Io.Mutex = .init,
+    stop_ticker: std.atomic.Value(bool) = .init(true),
+    ticker_thread: ?std.Thread = null,
 
     fn setLabel(self: *ProgressCtx, text: []const u8) void {
         const n = @min(text.len, self.label_buf.len);
@@ -40,14 +48,35 @@ const ProgressCtx = struct {
         };
         self.spinner.?.start() catch {};
         self.active = true;
+        self.startTicker();
     }
 
-    fn tick(self: *ProgressCtx) void {
+    fn startTicker(self: *ProgressCtx) void {
+        // No animation under reduced-motion / colourless — single static frame is enough.
+        if (tui.theme.reducedMotion(self.io, self.stdout)) return;
+        if (!tui.theme.active(self.io, self.stdout).capability.hasColor()) return;
+        if (self.ticker_thread != null) return;
+        self.stop_ticker.store(false, .release);
+        self.ticker_thread = std.Thread.spawn(.{}, tickerMain, .{self}) catch null;
+    }
+
+    fn stopTicker(self: *ProgressCtx) void {
+        self.stop_ticker.store(true, .release);
+        if (self.ticker_thread) |t| {
+            t.join();
+            self.ticker_thread = null;
+        }
+    }
+
+    fn tickLocked(self: *ProgressCtx) void {
         if (self.spinner) |*sp| sp.tick() catch {};
     }
 
     fn clear(self: *ProgressCtx) void {
         if (!self.active) return;
+        self.stopTicker();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         // Clear in-place spinner without a residual success line (TUI follows).
         if (tui.theme.active(self.io, self.stdout).capability.hasColor() and
             !tui.theme.reducedMotion(self.io, self.stdout))
@@ -56,25 +85,57 @@ const ProgressCtx = struct {
         }
         flushWriter(self.stdout) catch {};
         self.active = false;
+        self.spinner = null;
     }
 
     fn finishPlain(self: *ProgressCtx, success: bool) void {
         if (!self.active) return;
+        self.stopTicker();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         if (self.spinner) |*sp| sp.stop(success) catch {};
         self.active = false;
+        self.spinner = null;
     }
 };
 
+fn tickerMain(self: *ProgressCtx) void {
+    while (!self.stop_ticker.load(.acquire)) {
+        std.Io.sleep(self.io, spinner_tick_duration, .awake) catch {};
+        if (self.stop_ticker.load(.acquire)) break;
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        if (!self.active) continue;
+        self.tickLocked();
+    }
+}
+
 fn progressCb(ctx: ?*anyopaque, host: scan_lib.types.Host, phase: scan_lib.engine.ProgressPhase, sessions: usize) void {
     const self: *ProgressCtx = @ptrCast(@alignCast(ctx orelse return));
+    self.mutex.lockUncancelable(self.io);
+    defer self.mutex.unlock(self.io);
     self.ensureSpinner();
     var tmp: [96]u8 = undefined;
     const text = switch (phase) {
-        .host_start => std.fmt.bufPrint(&tmp, "Scanning {s}", .{host.toString()}) catch "Scanning",
+        .host_start => blk: {
+            self.host_file_total = sessions;
+            break :blk if (sessions > 0)
+                std.fmt.bufPrint(&tmp, "Scanning {s} (0/{d})", .{ host.toString(), sessions }) catch "Scanning"
+            else
+                std.fmt.bufPrint(&tmp, "Scanning {s}", .{host.toString()}) catch "Scanning";
+        },
+        .file => blk: {
+            const total = self.host_file_total;
+            break :blk if (total > 0)
+                std.fmt.bufPrint(&tmp, "Scanning {s} ({d}/{d})", .{ host.toString(), sessions, total }) catch "Scanning"
+            else
+                std.fmt.bufPrint(&tmp, "Scanning {s}", .{host.toString()}) catch "Scanning";
+        },
         .host_done => std.fmt.bufPrint(&tmp, "Scanned {s} ({d} files)", .{ host.toString(), sessions }) catch "Scanned",
     };
     self.setLabel(text);
-    self.tick();
+    // Redraw with new label; ticker advances frames between progress events.
+    self.tickLocked();
 }
 
 fn flushWriter(writer: anytype) !void {

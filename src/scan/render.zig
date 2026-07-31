@@ -14,10 +14,13 @@ pub fn writeHuman(io: std.Io, writer: anytype, result: types.ScanResult) !void {
     var win_buf: [32]u8 = undefined;
     const window = risk.windowLabel(sc, &win_buf);
 
-    // Entry banner is painted by cli/mod; this is the feature scorecard block.
+    // Compact durable brand (no entry banner / rule — progress is spinner-only).
     try writer.writeAll("  ");
+    try theme.paintBold(io, writer, .brand, "🛡  ryk");
+    try writer.writeAll(" · ");
     try theme.paintBold(io, writer, .text_bright, "session scan");
-    try writer.writeAll("  ·  ");
+    try writer.writeAll("\n");
+    try writer.writeAll("  ");
     try theme.paint(io, writer, .muted, window);
     try writer.writeAll("\n\n");
 
@@ -346,6 +349,8 @@ test "human render guided empty for no sessions" {
     const out = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, out, "Nothing to scan yet") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "session scan") != null);
+    // Durable brand on results (no version, no rule under brand).
+    try std.testing.expect(std.mem.indexOf(u8, out, "ryk") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "OpenCode") != null);
 }
 
