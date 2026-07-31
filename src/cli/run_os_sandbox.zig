@@ -159,6 +159,14 @@ pub fn applyForRun(
         &.{};
     defer if (launch_argv0 != null) sandbox.apply.freeLaunchExecPaths(allocator, launch_exec_paths);
 
+    // Node/npm agents: RO package root so nested optional deps + vendor binaries
+    // are readable after empty-backpack Seatbelt (file-only .exec is not enough).
+    const launch_ro_paths: []const []const u8 = if (launch_argv0) |argv0|
+        try sandbox.apply.collectLaunchInstallRoPaths(launch_io, allocator, argv0, env_map)
+    else
+        &.{};
+    defer if (launch_argv0 != null) sandbox.apply.freeLaunchInstallRoPaths(allocator, launch_ro_paths);
+
     const home_for_config: []const u8 = if (env_map.get("HOME")) |h| h else "";
     const launch_host_rw_paths: []const []const u8 = if (launch_argv0) |argv0|
         try sandbox.host_config_grants.collectHostConfigPaths(launch_io, allocator, argv0, home_for_config)
@@ -174,6 +182,7 @@ pub fn applyForRun(
         .minted_env_lookup = minted_env_lookup,
         .with_host_secrets = with_host_secrets,
         .launch_exec_paths = launch_exec_paths,
+        .launch_ro_paths = launch_ro_paths,
         .launch_host_rw_paths = launch_host_rw_paths,
         .network_proxy_port = network_proxy_port,
         .require_network_route_forcing = require_network_route_forcing,

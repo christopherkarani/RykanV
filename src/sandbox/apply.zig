@@ -123,6 +123,10 @@ pub const ApplyBoundary = struct {
     /// Agents installed outside workspace/system prefixes (e.g. `~/.local/...`) need these
     /// so child preflight after Seatbelt/Landlock can still read+exec argv0.
     launch_exec_paths: []const []const u8 = &.{},
+    /// Absolute RO install trees for Node/npm launch packages (see `collectLaunchInstallRoPaths`).
+    /// Narrow package roots only (directory with package.json) — never bare `$HOME`.
+    /// Covers nested optional deps + vendor native binaries next to shebang entry scripts.
+    launch_ro_paths: []const []const u8 = &.{},
     /// Absolute host-agent config trees as `.rw` grants (see `host_config_grants`).
     /// Empty backpack keeps HOME in env but denies home FS; these narrow subpaths
     /// restore host login/config (+ session write) for known agents without bare `$HOME`.
@@ -455,6 +459,120 @@ pub fn freeLaunchExecPaths(allocator: std.mem.Allocator, paths: []const []const 
     allocator.free(paths);
 }
 
+/// Collect narrow **read-only install trees** for Node/npm-style launch agents.
+///
+/// Empty-backpack grants `.exec` only on the shebang script file + interpreter.
+/// Node then loads sibling package files and nested optional deps (e.g.
+/// `@openai/codex` → `node_modules/@openai/codex-darwin-arm64/vendor/...`).
+/// Without a package-root RO subpath, realpath of the entry works but the agent
+/// dies on missing nested package content (often misread as path-walk EPERM).
+///
+/// For each resolved launch file, walk parents for a `package.json` directory
+/// and grant that directory as RO (includes nested deps + vendor binaries).
+/// Never returns bare `$HOME` or `/`. Empty when argv0 is a plain binary with
+/// no package root (file-only `.exec` is enough).
+///
+/// Caller frees with `freeLaunchInstallRoPaths` (same shape as exec paths).
+pub fn collectLaunchInstallRoPaths(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    argv0: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}![]const []const u8 {
+    if (argv0.len == 0) return try allocator.alloc([]const u8, 0);
+
+    const resolved = apply_posix.resolveArgv0(io, allocator, argv0, env_map) catch {
+        return try allocator.alloc([]const u8, 0);
+    };
+    defer if (resolved.owned) allocator.free(resolved.path);
+
+    const abs = try absolutePathForGrant(io, allocator, resolved.path);
+    defer allocator.free(abs);
+
+    var list: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (list.items) |p| allocator.free(p);
+        list.deinit(allocator);
+    }
+
+    try appendInstallRoForLaunchFile(io, allocator, &list, abs, env_map);
+
+    var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (realpathInto(abs, &real_buf)) |real| {
+        if (!std.mem.eql(u8, real, abs)) {
+            try appendInstallRoForLaunchFile(io, allocator, &list, real, env_map);
+        }
+    }
+
+    return try list.toOwnedSlice(allocator);
+}
+
+/// Free the slice returned by `collectLaunchInstallRoPaths`.
+pub fn freeLaunchInstallRoPaths(allocator: std.mem.Allocator, paths: []const []const u8) void {
+    freeLaunchExecPaths(allocator, paths);
+}
+
+fn appendInstallRoForLaunchFile(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList([]const u8),
+    path: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!void {
+    if (path.len == 0) return;
+    if (!isRegularFile(io, path)) return;
+
+    const root = (try findPackageRootForFile(io, allocator, path, env_map)) orelse return;
+    errdefer allocator.free(root);
+
+    if (envHome(env_map)) |home| {
+        if (std.mem.eql(u8, root, home)) {
+            allocator.free(root);
+            return;
+        }
+    }
+    if (root.len == 1 and root[0] == '/') {
+        allocator.free(root);
+        return;
+    }
+
+    for (list.items) |existing| {
+        if (std.mem.eql(u8, existing, root)) {
+            allocator.free(root);
+            return;
+        }
+    }
+    try list.append(allocator, root);
+}
+
+/// Walk parents of `file_path` for a directory containing `package.json`.
+/// Caps walk depth; refuses bare HOME and filesystem root.
+fn findPackageRootForFile(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    file_path: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!?[]u8 {
+    if (!std.fs.path.isAbsolute(file_path)) return null;
+    var dir = std.fs.path.dirname(file_path) orelse return null;
+    const home = envHome(env_map);
+    var depth: usize = 0;
+    const max_depth: usize = 24;
+    while (depth < max_depth) : (depth += 1) {
+        if (dir.len <= 1) return null;
+        if (home) |h| {
+            if (std.mem.eql(u8, dir, h)) return null;
+        }
+        const pkg_json = try std.fs.path.join(allocator, &.{ dir, "package.json" });
+        defer allocator.free(pkg_json);
+        if (isRegularFile(io, pkg_json)) {
+            return try allocator.dupe(u8, dir);
+        }
+        dir = std.fs.path.dirname(dir) orelse return null;
+    }
+    return null;
+}
+
 /// Make `path` absolute (lexical). Relative paths join cwd.
 fn absolutePathForGrant(io: std.Io, allocator: std.mem.Allocator, path: []const u8) error{OutOfMemory}![]u8 {
     if (std.fs.path.isAbsolute(path)) {
@@ -718,6 +836,7 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
         .control_roots = boundary.control_roots,
         .include_tmp = boundary.include_tmp,
         .exec_paths = boundary.launch_exec_paths,
+        .ro_paths = boundary.launch_ro_paths,
         .host_rw_paths = boundary.launch_host_rw_paths,
         .protect_workspace_secrets = boundary.protect_workspace_secrets,
     }) catch |err| switch (err) {
@@ -1738,6 +1857,83 @@ test "collectLaunchExecPaths resolves regular file and rejects HOME" {
     try std.testing.expectEqual(@as(usize, 0), home_paths.len);
 }
 
+test "collectLaunchInstallRoPaths grants package root for node shebang agent" {
+    // Simulated npm global layout:
+    //   $tmp/home/.local/lib/node_modules/@scope/agent/bin/cli.js  (shebang)
+    //   $tmp/home/.local/lib/node_modules/@scope/agent/package.json
+    //   $tmp/home/.local/lib/node_modules/@scope/agent/node_modules/@scope/agent-native/package.json
+    // Install RO must be the agent package root (includes nested native), never HOME.
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+
+    const pkg_rel = ".local/lib/node_modules/@scope/agent";
+    try tmp.dir.createDirPath(io, pkg_rel ++ "/bin");
+    try tmp.dir.createDirPath(io, pkg_rel ++ "/node_modules/@scope/agent-native/vendor/bin");
+    try tmp.dir.writeFile(io, .{ .sub_path = pkg_rel ++ "/package.json", .data = "{\"name\":\"@scope/agent\"}\n" });
+    try tmp.dir.writeFile(io, .{
+        .sub_path = pkg_rel ++ "/node_modules/@scope/agent-native/package.json",
+        .data = "{\"name\":\"@scope/agent-native\"}\n",
+    });
+    try tmp.dir.writeFile(io, .{
+        .sub_path = pkg_rel ++ "/bin/cli.js",
+        .data = "#!/usr/bin/env node\nconsole.log('ok');\n",
+    });
+    try tmp.dir.setFilePermissions(io, pkg_rel ++ "/bin/cli.js", std.Io.File.Permissions.fromMode(0o755), .{});
+
+    const script = try std.fs.path.join(allocator, &.{ home, pkg_rel, "bin", "cli.js" });
+    defer allocator.free(script);
+    const pkg_root = try std.fs.path.join(allocator, &.{ home, pkg_rel });
+    defer allocator.free(pkg_root);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+
+    const ro = try collectLaunchInstallRoPaths(io, allocator, script, &env_map);
+    defer freeLaunchInstallRoPaths(allocator, ro);
+
+    try std.testing.expectEqual(@as(usize, 1), ro.len);
+    try std.testing.expectEqualStrings(pkg_root, ro[0]);
+    try std.testing.expect(!pathsContainHomeOrDir(ro, home));
+
+    // Plain system binary: no package root → empty RO list.
+    const true_src: []const u8 = blk: {
+        std.Io.Dir.cwd().access(io, "/usr/bin/true", .{}) catch break :blk "/bin/true";
+        break :blk "/usr/bin/true";
+    };
+    const plain = try collectLaunchInstallRoPaths(io, allocator, true_src, &env_map);
+    defer freeLaunchInstallRoPaths(allocator, plain);
+    try std.testing.expectEqual(@as(usize, 0), plain.len);
+}
+
+test "collectLaunchInstallRoPaths rejects package.json planted at HOME" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+    try tmp.dir.writeFile(io, .{ .sub_path = "package.json", .data = "{}\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "agent.js", .data = "#!/usr/bin/env node\n" });
+    try tmp.dir.setFilePermissions(io, "agent.js", std.Io.File.Permissions.fromMode(0o755), .{});
+    const script = try std.fs.path.join(allocator, &.{ home, "agent.js" });
+    defer allocator.free(script);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+
+    const ro = try collectLaunchInstallRoPaths(io, allocator, script, &env_map);
+    defer freeLaunchInstallRoPaths(allocator, ro);
+    try std.testing.expectEqual(@as(usize, 0), ro.len);
+}
+
 fn pathsContain(paths: []const []const u8, want: []const u8) bool {
     for (paths) |p| {
         if (std.mem.eql(u8, p, want)) return true;
@@ -2098,4 +2294,21 @@ test "protect_workspace_secrets compiles into profile hash material" {
     defer compiled.deinit();
     try std.testing.expect(compiled.protect_workspace_secrets);
     try std.testing.expect(std.mem.indexOf(u8, compiled.canonical_bytes, "protect_workspace_secrets\ttrue") != null);
+}
+
+test "debug collectLaunchExecPaths for live codex" {
+    if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var env_map = try std.process.Environ.createMap(std.process.Environ.empty, allocator);
+    defer env_map.deinit();
+    // inherit PATH/HOME via put from c env
+    if (std.c.getenv("PATH")) |p| try env_map.put("PATH", std.mem.span(p));
+    if (std.c.getenv("HOME")) |h| try env_map.put("HOME", std.mem.span(h));
+
+    const paths = try collectLaunchExecPaths(io, allocator, "codex", &env_map);
+    defer freeLaunchExecPaths(allocator, paths);
+    std.debug.print("codex launch paths ({d}):\n", .{paths.len});
+    for (paths) |p| std.debug.print("  {s}\n", .{p});
+    try std.testing.expect(paths.len >= 1);
 }
