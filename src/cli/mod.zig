@@ -43,6 +43,7 @@ pub const report = @import("report.zig");
 pub const ci = @import("ci.zig");
 pub const disable = @import("disable.zig");
 pub const uninstall = @import("uninstall.zig");
+pub const update = @import("update.zig");
 pub const interactive = @import("interactive.zig");
 pub const child_process = @import("child_process.zig");
 pub const style = @import("style.zig");
@@ -88,6 +89,7 @@ test {
     _ = quickstart;
     _ = help;
     _ = disable;
+    _ = update;
     _ = @import("spinner.zig");
     // Pull daemon UDS/IPC/trust/error tests into the test binary.
     _ = daemon;
@@ -516,6 +518,7 @@ fn runWithCwdUsing(
     if (std.mem.eql(u8, command, "stop")) return disable.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "disable")) return disable.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "uninstall")) return uninstall.command(io, argv[1..], stdout, stderr);
+    if (std.mem.eql(u8, command, "update")) return update.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "shutdown")) return shutdown.command(io, argv[1..], stdout, stderr);
 
     // Host launch aliases after real ryk commands (ryk wins on name collision).

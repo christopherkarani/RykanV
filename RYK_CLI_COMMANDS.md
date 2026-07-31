@@ -40,6 +40,7 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 | `replay` | Replay last session (denials dominant) | `src/cli/replay.zig` |
 | `explain` | Why a shell command is blocked or allowed (Zig shell_engine) | `src/cli/shell_explain.zig` |
 | `help` | Show help (`help --all` = full surface) | `src/cli/help.zig` |
+| `update` | Update ryk to the latest release (official installer) | `src/cli/update.zig` |
 
 ### Advanced / integration (via `ryk help --all`)
 

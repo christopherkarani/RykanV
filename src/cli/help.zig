@@ -631,6 +631,33 @@ pub const commands =
             "Prints the current ryk version.",
             "--json emits version, commit, target, and build_date fields for release automation.",
         } },
+        .{
+            .name = "update",
+            .summary = "Update ryk to the latest release",
+            .usage = "ryk update [--check] [--yes] [--version <semver>] [--json] [--force]",
+            .category = .getting_started,
+            .public = true,
+            .examples = &.{
+                "ryk update",
+                "ryk update --check",
+                "ryk update --yes",
+                "ryk update --version 1.2.9 --yes",
+            },
+            .details = &.{
+                "Checks GitHub for the latest release and upgrades this install via the official installer",
+                "(scripts/install.sh on macOS/Linux, install.ps1 on Windows). Checksums and atomic install",
+                "stay on the same path as a first-time curl install.",
+                "Options:",
+                "  --check            Report current vs latest only (no install).",
+                "  --yes              Skip the confirmation prompt.",
+                "  --version <semver> Install a specific release instead of latest.",
+                "  --json             Machine-readable status.",
+                "  --force            Allow curl installer on package-managed installs, or downgrade with --version.",
+                "Homebrew/npm/scoop/winget installs print the package-manager upgrade command instead of",
+                "overwriting the binary (use --force to override).",
+                "See also: docs/install.md",
+            },
+        },
         .{ .name = "plugin", .summary = "Plugin management and diagnostics", .usage = "ryk plugin <list|host|doctor|manifest|install> [options]", .category = .integrations, .additional_completion_flags = &.{ "--dry-run", "--yes", "--json", "--path" }, .details = &.{
             "Subcommands:",
             "  ryk plugin list",
@@ -724,7 +751,7 @@ pub const commands =
 /// Prefix of Safe Launch teaching order (host aliases inserted after stop).
 const public_help_prefix = [_][]const u8{ "start", "stop" };
 /// Suffix of Safe Launch teaching order (after host aliases).
-const public_help_suffix = [_][]const u8{ "doctor", "replay", "scan", "explain" };
+const public_help_suffix = [_][]const u8{ "doctor", "replay", "scan", "explain", "update" };
 
 pub const WriteMode = enum {
     /// Safe Launch surface only (default `ryk` / `ryk help`).
@@ -761,6 +788,7 @@ pub fn writeWithMode(io: std.Io, writer: anytype, mode: WriteMode) !void {
         .{ .label = "Diagnose", .cmd = "ryk doctor" },
         .{ .label = "Review session", .cmd = "ryk replay" },
         .{ .label = "Why blocked?", .cmd = "ryk explain \"…\"" },
+        .{ .label = "Update ryk", .cmd = "ryk update" },
         .{ .label = "Stop protection", .cmd = "ryk stop" },
     };
     const all_tasks = [_]Task{
@@ -1080,14 +1108,16 @@ test "default root help shows only public Safe Launch verbs" {
     try std.testing.expect(helpListsPeerCommand(top, "doctor"));
     try std.testing.expect(helpListsPeerCommand(top, "replay"));
     try std.testing.expect(helpListsPeerCommand(top, "explain"));
+    try std.testing.expect(helpListsPeerCommand(top, "update"));
     for (host_launch.host_launch_aliases) |host| {
         try std.testing.expect(helpListsPeerCommand(top, host));
     }
 
-    // Common tasks teach start → agent → doctor → replay
+    // Common tasks teach start → agent → doctor → replay → update
     try std.testing.expect(std.mem.indexOf(u8, top, "ryk start") != null);
     try std.testing.expect(std.mem.indexOf(u8, top, "ryk doctor") != null);
     try std.testing.expect(std.mem.indexOf(u8, top, "ryk replay") != null);
+    try std.testing.expect(std.mem.indexOf(u8, top, "ryk update") != null);
     try std.testing.expect(std.mem.indexOf(u8, top, "ryk claude") != null);
     try std.testing.expect(std.mem.indexOf(u8, top, "ryk status") == null);
 
