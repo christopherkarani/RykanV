@@ -1130,3 +1130,117 @@ test "real FS deny: hardlink alias of workspace .env denied under protect" {
         else => return error.UnexpectedSandboxChildExit,
     }
 }
+
+// Host-agent config RW grant: ~/.claude canary readable+writable; sibling ~/.ssh
+// denied; bare HOME still not granted. Exit: 0=ok, 2=apply fail, 3=claude unreadable,
+// 4=ssh leak, 5=ws neighbor fail, 6=claude write fail.
+test "real FS: host config RW grant allows .claude and still denies .ssh" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    if (!sandboxInitAvailable()) return error.SkipZigTest;
+    const ver = try detectProductVersion();
+    try std.testing.expect(isMatrixMajor(ver.major));
+    try std.testing.expectEqual(SupportStatus.supported, evaluateSupport());
+
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    const home_root = try home_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home_root);
+
+    try home_tmp.dir.createDirPath(io, ".claude");
+    try home_tmp.dir.createDirPath(io, ".ssh");
+    try home_tmp.dir.writeFile(io, .{ .sub_path = ".claude/settings.json", .data = "CLAUDE_CFG_OK" });
+    try home_tmp.dir.writeFile(io, .{ .sub_path = ".ssh/id_canary", .data = "SSH_SECRET_LEAK" });
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.writeFile(io, .{ .sub_path = "neighbor.txt", .data = "WS_OK" });
+    const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(ws_root);
+
+    const claude_cfg = try std.fs.path.join(allocator, &.{ home_root, ".claude" });
+    defer allocator.free(claude_cfg);
+    const claude_file = try std.fs.path.join(allocator, &.{ home_root, ".claude", "settings.json" });
+    defer allocator.free(claude_file);
+    const claude_write = try std.fs.path.join(allocator, &.{ home_root, ".claude", "write_probe.txt" });
+    defer allocator.free(claude_write);
+    const ssh_file = try std.fs.path.join(allocator, &.{ home_root, ".ssh", "id_canary" });
+    defer allocator.free(ssh_file);
+    const neighbor = try std.fs.path.join(allocator, &.{ ws_root, "neighbor.txt" });
+    defer allocator.free(neighbor);
+
+    const claude_z = try allocator.dupeZ(u8, claude_file);
+    defer allocator.free(claude_z);
+    const claude_write_z = try allocator.dupeZ(u8, claude_write);
+    defer allocator.free(claude_write_z);
+    const ssh_z = try allocator.dupeZ(u8, ssh_file);
+    defer allocator.free(ssh_z);
+    const neighbor_z = try allocator.dupeZ(u8, neighbor);
+    defer allocator.free(neighbor_z);
+
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = ws_root,
+        .include_tmp = false,
+        .host_rw_paths = &.{claude_cfg},
+    });
+    defer compiled.deinit();
+    try std.testing.expect(compiled.hasGrant(claude_cfg, .rw));
+    try std.testing.expect(compiled.isGrantedReadable(claude_file));
+    try std.testing.expect(compiled.isAgentWritable(claude_write));
+    try std.testing.expect(!compiled.isGrantedReadable(ssh_file));
+    try std.testing.expect(!compiled.grantsHome(home_root));
+
+    const prepared = prepareForChildApply(allocator, &compiled);
+    defer if (prepared.sbpl_z) |p| allocator.free(p);
+    try std.testing.expectEqual(.prepared, prepared.status);
+    const sbpl_z = prepared.sbpl_z.?;
+
+    const pid = std.c.fork();
+    if (pid < 0) return error.SkipZigTest;
+    if (pid == 0) {
+        applyInChild(sbpl_z.ptr) catch std.c._exit(2);
+
+        const cfd = std.c.open(claude_z.ptr, .{ .ACCMODE = .RDONLY });
+        if (cfd < 0) std.c._exit(3);
+        var buf: [64]u8 = undefined;
+        const n = std.c.read(cfd, &buf, buf.len);
+        _ = std.c.close(cfd);
+        if (n != "CLAUDE_CFG_OK".len or !std.mem.eql(u8, buf[0..@intCast(n)], "CLAUDE_CFG_OK")) std.c._exit(3);
+
+        const sfd = std.c.open(ssh_z.ptr, .{ .ACCMODE = .RDONLY });
+        if (sfd >= 0) {
+            _ = std.c.close(sfd);
+            std.c._exit(4);
+        }
+
+        const nfd = std.c.open(neighbor_z.ptr, .{ .ACCMODE = .RDONLY });
+        if (nfd < 0) std.c._exit(5);
+        _ = std.c.close(nfd);
+
+        const wfd = std.c.open(
+            claude_write_z.ptr,
+            .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true },
+            @as(std.c.mode_t, 0o600),
+        );
+        if (wfd < 0) std.c._exit(6);
+        const wrote = std.c.write(wfd, "ok", 2);
+        _ = std.c.close(wfd);
+        if (wrote != 2) std.c._exit(6);
+
+        std.c._exit(0);
+    }
+
+    const exit_code = try waitExitCode(pid);
+    switch (exit_code) {
+        0 => {},
+        2 => return error.SeatbeltApplyFailedOnHost,
+        3 => return error.HostConfigClaudeUnreadable,
+        4 => return error.SshReadableUnderHostConfigGrant,
+        5 => return error.WorkspaceNeighborUnreadable,
+        6 => return error.HostConfigClaudeWriteFailed,
+        else => return error.UnexpectedSandboxChildExit,
+    }
+}

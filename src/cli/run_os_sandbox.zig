@@ -116,7 +116,9 @@ fn flushWriter(writer: anytype) !void {
 /// `launch_argv0` is the agent command (first argv of `ryk run -- <cmd>`). When set,
 /// resolved absolute file paths are granted as narrow `.exec` profile entries so
 /// agents installed outside workspace/system prefixes (typical `~/.local/...`) can
-/// pass child preflight after Seatbelt/Landlock attach.
+/// pass child preflight after Seatbelt/Landlock attach. Known host basenames also
+/// collect host-config RW subpaths (e.g. `$HOME/.claude`) so empty backpack can
+/// still use host login without granting bare `$HOME`.
 pub fn applyForRun(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -157,6 +159,13 @@ pub fn applyForRun(
         &.{};
     defer if (launch_argv0 != null) sandbox.apply.freeLaunchExecPaths(allocator, launch_exec_paths);
 
+    const home_for_config: []const u8 = if (env_map.get("HOME")) |h| h else "";
+    const launch_host_rw_paths: []const []const u8 = if (launch_argv0) |argv0|
+        try sandbox.host_config_grants.collectHostConfigRoPaths(launch_io, allocator, argv0, home_for_config)
+    else
+        &.{};
+    defer if (launch_argv0 != null) sandbox.host_config_grants.freeHostConfigRoPaths(allocator, launch_host_rw_paths);
+
     const result = sandbox.apply.applyBeforeExec(.{
         .allocator = allocator,
         .mode = mode,
@@ -165,6 +174,7 @@ pub fn applyForRun(
         .minted_env_lookup = minted_env_lookup,
         .with_host_secrets = with_host_secrets,
         .launch_exec_paths = launch_exec_paths,
+        .launch_host_rw_paths = launch_host_rw_paths,
         .network_proxy_port = network_proxy_port,
         .require_network_route_forcing = require_network_route_forcing,
         .seatbelt_profile = seatbelt_profile,

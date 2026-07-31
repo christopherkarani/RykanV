@@ -127,7 +127,7 @@ In this mode:
 | Fact | Detail |
 |------|--------|
 | Env contract | Public-only constructed child env plus exact session phantoms for granted model keys |
-| Claude / Pi / Codex / OpenCode | Host login remains preferred; Anthropic/OpenAI env-key clients that honor their base-URL variables use the loopback gateway |
+| Claude / Pi / Codex / OpenCode | Host login remains preferred; empty-backpack Seatbelt grants **narrow RW** to known agent config roots (e.g. `~/.claude`, Claude Application Support trees, `~/.codex`) — never bare `$HOME`, bare `~/Library`, or `~/.ssh`. Anthropic/OpenAI env-key clients that honor their base-URL variables use the loopback gateway. If neither host config nor gateway is available, `ryk` fails closed with an actionable message instead of blank-hanging |
 | Broker resolve APIs | `source: broker` grants resolve in the parent session store; only the minted phantom reaches the child |
 | Provider gateway | Fixed upstream hosts only; absolute-form/caller-selected destinations and unminted phantoms are denied |
 | Network proxy | CONNECT policy proxy is separate; current route-forced proxy + provider gateway combination fails closed |

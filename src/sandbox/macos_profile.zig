@@ -834,6 +834,27 @@ test "SBPL never emits bare unrestricted file-read-metadata" {
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (subpath \"/usr\"))") != null);
 }
 
+test "SBPL host config host_rw_paths emit subpath RW without bare HOME" {
+    const allocator = std.testing.allocator;
+    const claude_cfg = "/Users/dev/.claude";
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = "/Users/dev/projects/app",
+        .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
+        .host_rw_paths = &.{claude_cfg},
+    });
+    defer compiled.deinit();
+
+    const sbpl = try renderSbpl(allocator, &compiled);
+    defer allocator.free(sbpl);
+
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/.claude\"))") != null);
+    // RW grant emits write allow with control-root require-not, not bare HOME.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(subpath \"/Users/dev/.claude\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/.ssh\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/Library\"))") == null);
+}
+
 test "SBPL narrows /dev writes to null and urandom only" {
     const allocator = std.testing.allocator;
     var compiled = try profile.compileProfile(allocator, .{

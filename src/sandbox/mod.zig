@@ -11,6 +11,7 @@ pub const fd_scrub = @import("fd_scrub.zig");
 pub const profile = @import("profile.zig");
 pub const session_tmp = @import("session_tmp.zig");
 pub const apply = @import("apply.zig");
+pub const host_config_grants = @import("host_config_grants.zig");
 pub const landlock = @import("landlock.zig");
 pub const apply_posix = @import("apply_posix.zig");
 pub const macos_profile = @import("macos_profile.zig");
@@ -39,6 +40,7 @@ test {
     _ = profile;
     _ = session_tmp;
     _ = apply;
+    _ = host_config_grants;
     _ = landlock;
     _ = apply_posix;
     _ = macos_profile;

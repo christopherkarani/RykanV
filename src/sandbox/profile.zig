@@ -59,6 +59,15 @@ pub const CompileOptions = struct {
     /// directory trees. `compileProfile` rejects filesystem-root exec (`InvalidExecPath`);
     /// apply layers re-check file-ness (Seatbelt `literal`, Landlock regular-file gate).
     exec_paths: []const []const u8 = &.{},
+    /// Absolute paths granted as `.ro` trees (Seatbelt/Landlock subpath read).
+    /// Optional extra RO trees beyond system prefixes — never bare `$HOME` or `/`.
+    /// `compileProfile` rejects filesystem root (`InvalidRoPath`).
+    ro_paths: []const []const u8 = &.{},
+    /// Absolute paths granted as `.rw` trees for narrow host-agent config roots
+    /// (e.g. `$HOME/.claude`, Application Support Claude). Never bare `$HOME` or `/`.
+    /// `compileProfile` rejects filesystem root (`InvalidRwPath`). Callers must
+    /// filter forbidden paths (`.ssh`, bare home) before compile.
+    host_rw_paths: []const []const u8 = &.{},
     /// Deny workspace `.env` / `.env.*` content at the OS sandbox layer.
     /// Exact safe templates remain readable: `.env.example`, `.env.sample`,
     /// and `.env.template`.
@@ -396,6 +405,17 @@ pub fn compileProfile(allocator: std.mem.Allocator, options: CompileOptions) !Co
         try appendUniqueExecGrant(&grants_list, allocator, raw_exec);
     }
 
+    // Optional extra RO trees — never bare HOME or `/`.
+    for (options.ro_paths) |raw_ro| {
+        try appendUniqueRoGrant(&grants_list, allocator, raw_ro);
+    }
+
+    // Host-agent config RW trees (e.g. $HOME/.claude) — never bare HOME or `/`.
+    // Dedup against existing workspace RW is handled by appendUniqueRwGrant.
+    for (options.host_rw_paths) |raw_rw| {
+        try appendUniqueHostRwGrant(&grants_list, allocator, raw_rw);
+    }
+
     // Control roots: always workspace/.orca plus any listed roots.
     var control_list: std.ArrayList([]const u8) = .empty;
     errdefer {
@@ -621,6 +641,43 @@ fn appendUniqueExecGrant(
     try grants_list.append(allocator, .{ .path = canon, .mode = .exec });
 }
 
+/// Append a unique `.ro` grant for a directory (or file) tree. Fail closed on `/`.
+/// Does not open the path (pure compile). Callers filter bare HOME / `.ssh` first.
+fn appendUniqueRoGrant(
+    grants_list: *std.ArrayList(PathGrant),
+    allocator: std.mem.Allocator,
+    raw_path: []const u8,
+) !void {
+    const canon = try canonicalizeAbsolute(allocator, raw_path);
+    errdefer allocator.free(canon);
+    if (canon.len == 1 and canon[0] == '/') return error.InvalidRoPath;
+    for (grants_list.items) |g| {
+        if (pathEqual(g.path, canon) and g.mode == .ro) {
+            allocator.free(canon);
+            return;
+        }
+    }
+    try grants_list.append(allocator, .{ .path = canon, .mode = .ro });
+}
+
+/// Append a unique `.rw` grant for a host-agent config tree. Fail closed on `/`.
+fn appendUniqueHostRwGrant(
+    grants_list: *std.ArrayList(PathGrant),
+    allocator: std.mem.Allocator,
+    raw_path: []const u8,
+) !void {
+    const canon = try canonicalizeAbsolute(allocator, raw_path);
+    errdefer allocator.free(canon);
+    if (canon.len == 1 and canon[0] == '/') return error.InvalidRwPath;
+    for (grants_list.items) |g| {
+        if (pathEqual(g.path, canon) and g.mode == .rw) {
+            allocator.free(canon);
+            return;
+        }
+    }
+    try grants_list.append(allocator, .{ .path = canon, .mode = .rw });
+}
+
 fn pathLessThan(_: void, a: []const u8, b: []const u8) bool {
     return std.mem.order(u8, a, b) == .lt;
 }
@@ -843,6 +900,43 @@ test "launch exec_paths reject filesystem root" {
         .workspace_root = "/Users/dev/projects/app",
         .system_ro_prefixes = &[_][]const u8{"/usr"},
         .exec_paths = &.{"/"},
+    }));
+}
+
+test "host config host_rw_paths compile as RW without HOME or ssh" {
+    const allocator = std.testing.allocator;
+    const home = "/Users/dev";
+    const ws = "/Users/dev/projects/app";
+    const claude_cfg = "/Users/dev/.claude";
+    const claude_share = "/Users/dev/.local/share/claude";
+    const claude_app_support = "/Users/dev/Library/Application Support/Claude";
+    var compiled = try compileProfile(allocator, .{
+        .workspace_root = ws,
+        .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
+        .host_rw_paths = &.{ claude_cfg, claude_share, claude_app_support },
+    });
+    defer compiled.deinit();
+
+    try std.testing.expect(compiled.hasGrant(claude_cfg, .rw));
+    try std.testing.expect(compiled.hasGrant(claude_share, .rw));
+    try std.testing.expect(compiled.hasGrant(claude_app_support, .rw));
+    try std.testing.expect(compiled.isAgentWritable(claude_cfg));
+    try std.testing.expect(compiled.isAgentWritable("/Users/dev/.claude/history.jsonl"));
+    try std.testing.expect(!compiled.grantsHome(home));
+    try std.testing.expect(!compiled.isAgentWritable(home));
+    try std.testing.expect(!compiled.isAgentWritable("/Users/dev/.ssh/id_rsa"));
+    try std.testing.expect(!compiled.isGrantedReadable("/Users/dev/.ssh/id_rsa"));
+    try std.testing.expect(!compiled.isAgentWritable("/Users/dev/Library"));
+    try std.testing.expect(compiled.isGrantedReadable(claude_cfg));
+    try std.testing.expect(compiled.isGrantedReadable("/Users/dev/.claude/settings.json"));
+}
+
+test "host config host_rw_paths reject filesystem root" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(error.InvalidRwPath, compileProfile(allocator, .{
+        .workspace_root = "/Users/dev/projects/app",
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+        .host_rw_paths = &.{"/"},
     }));
 }
 

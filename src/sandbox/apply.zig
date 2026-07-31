@@ -31,6 +31,7 @@ const macos_seatbelt = @import("macos_seatbelt.zig");
 const macos_profile = @import("macos_profile.zig");
 const apply_posix = @import("apply_posix.zig");
 const session_tmp = @import("session_tmp.zig");
+pub const host_config_grants = @import("host_config_grants.zig");
 
 /// Re-export session-tmp surface for callers that only import apply.
 pub const workspace_session_tmp_name = session_tmp.workspace_session_tmp_name;
@@ -122,6 +123,10 @@ pub const ApplyBoundary = struct {
     /// Agents installed outside workspace/system prefixes (e.g. `~/.local/...`) need these
     /// so child preflight after Seatbelt/Landlock can still read+exec argv0.
     launch_exec_paths: []const []const u8 = &.{},
+    /// Absolute host-agent config trees as `.rw` grants (see `host_config_grants`).
+    /// Empty backpack keeps HOME in env but denies home FS; these narrow subpaths
+    /// restore host login/config (+ session write) for known agents without bare `$HOME`.
+    launch_host_rw_paths: []const []const u8 = &.{},
     /// Empty-backpack sessions require OS enforcement for workspace `.env`
     /// and `.env.*` names (safe templates remain readable).
     protect_workspace_secrets: bool = false,
@@ -713,6 +718,7 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
         .control_roots = boundary.control_roots,
         .include_tmp = boundary.include_tmp,
         .exec_paths = boundary.launch_exec_paths,
+        .host_rw_paths = boundary.launch_host_rw_paths,
         .protect_workspace_secrets = boundary.protect_workspace_secrets,
     }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,

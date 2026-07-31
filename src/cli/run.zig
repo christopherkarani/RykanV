@@ -362,6 +362,27 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     }
     try run_os_sandbox.warnAutoDegrade(effective_os_sandbox, &apply_result, stderr);
 
+    // Empty backpack + known agent host: require host config root or a *relevant*
+    // provider gateway (claude→Anthropic, codex→OpenAI). Without either, agents
+    // blank-hang after sandbox=active (HOME env set, home FS denied). Fail closed.
+    if (secret_boundary == .empty_backpack and options.command_argv.len > 0) {
+        const argv0 = options.command_argv[0];
+        const host = sandbox.host_config_grants.hostBasename(argv0);
+        if (sandbox.host_config_grants.specForHost(host) != null) {
+            const home = filtered_env.env_map.get("HOME") orelse "";
+            const has_config = sandbox.host_config_grants.hostConfigPresent(io, argv0, home);
+            if (sandbox.host_config_grants.shouldFailClosedMissingAuth(
+                host,
+                anthropic_gateway != null,
+                openai_gateway != null,
+                has_config,
+            )) {
+                try stderr.writeAll(sandbox.host_config_grants.missing_config_fail_closed_message);
+                return exit_codes.unsupported;
+            }
+        }
+    }
+
     const AuditContext = struct {
         io: std.Io,
         allocator: std.mem.Allocator,
