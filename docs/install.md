@@ -56,6 +56,18 @@ brew install christopherkarani/orca/ryk
 3. Extract the archive, or run `scripts/install.sh` / `scripts/install.ps1` to install the binary and runtime assets together.
 4. Paste the activation command printed by the installer (the highlighted `eval "$(… env …)"` block on Unix). It invokes the absolute installed binary, so it also works in the shell that launched a first-time install before `ryk` is on `PATH`. Then run `ryk start` to get protected (policy + host integrations).
 
+### Updating
+
+If you installed via the curl installer (`~/.local/bin/ryk`):
+
+```sh
+ryk update          # confirm + upgrade to latest
+ryk update --check  # report only
+ryk update --yes    # non-interactive
+```
+
+`ryk update` reuses the official installer (checksums + atomic replace). Homebrew/npm installs should use `brew upgrade ryk` / `npm update -g @orca-sec/ryk` instead (or `ryk update --force` to override).
+
 The curl installer (`scripts/install.sh`) prints a step-based receipt (brand header, phases, activation hero). It honors `NO_COLOR` and `RYK_INSTALL_QUIET=1` / `ORCA_INSTALL_QUIET=1` (non-error silence; activation line still printed). Host configuration is never performed by the installer — that remains `ryk start` (orca alias works).
 
 Windows (`scripts/install.ps1`) shares the same core contracts (checksum verify, binary + runtime install, structured failures, quiet mode, activation handoff) with a smaller surface: it does not manage `PATH` (use your profile / user PATH) and does not soft-warn on a missing dashboard UI bundle.

@@ -120,7 +120,7 @@ Engine self-test fixtures (not your workspace policy):
 ./zig-out/bin/ryk redteam --ci
 ```
 
-Report export is free (`ryk report`). See `ryk help --all` for the full command surface.
+Safety reports are free (`ryk report`; export with `--format markdown|json`). See `ryk help --all` for the full command surface.
 
 ## Next Steps
 

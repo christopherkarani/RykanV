@@ -9,8 +9,8 @@ const help = @import("help.zig");
 const tui = @import("../tui/mod.zig");
 const suggestions = @import("suggestions.zig");
 
-const Format = enum { markdown, json };
-const Options = struct { session: []const u8 = "last", format: Format = .markdown };
+const Format = enum { human, markdown, json };
+const Options = struct { session: []const u8 = "last", format: Format = .human };
 
 pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     const options = parseOptions(io, argv, stdout, stderr) catch |err| switch (err) {
@@ -40,7 +40,13 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
             return exit_codes.general;
         },
         error.HashVerificationFailed => {
-            try stderr.writeAll("ryk report: hash verification failed; refusing to export report from tampered evidence.\n");
+            try tui.render.callout(
+                io,
+                stderr,
+                .danger,
+                "Hash verification failed",
+                "Refusing to export a report from tampered evidence. The session hash chain does not match.",
+            );
             return exit_codes.general;
         },
         else => {
@@ -51,16 +57,29 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     defer replay.deinit();
 
     switch (options.format) {
-        .markdown => report.writeMarkdown(io, allocator, stdout, workspace_root, replay) catch |err| return mapReportExportError(stderr, err),
-        .json => report.writeJson(io, allocator, stdout, workspace_root, replay) catch |err| return mapReportExportError(stderr, err),
+        .human => report.writeHuman(io, allocator, stdout, workspace_root, replay) catch |err| {
+            return mapReportExportError(io, stderr, err);
+        },
+        .markdown => report.writeMarkdown(io, allocator, stdout, workspace_root, replay) catch |err| {
+            return mapReportExportError(io, stderr, err);
+        },
+        .json => report.writeJson(io, allocator, stdout, workspace_root, replay) catch |err| {
+            return mapReportExportError(io, stderr, err);
+        },
     }
     return exit_codes.success;
 }
 
-fn mapReportExportError(stderr: anytype, err: anyerror) !u8 {
+fn mapReportExportError(io: std.Io, stderr: anytype, err: anyerror) !u8 {
     switch (err) {
         error.ParseIntegrityFailed => {
-            try stderr.writeAll("ryk report: event parse integrity failed; refusing to export report from incomplete evidence.\n");
+            try tui.render.callout(
+                io,
+                stderr,
+                .danger,
+                "Event parse integrity failed",
+                "Refusing to export a report from incomplete evidence.",
+            );
             return exit_codes.general;
         },
         else => return err,
@@ -85,11 +104,17 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
         } else if (std.mem.eql(u8, arg, "--format")) {
             index += 1;
             if (index >= argv.len) {
-                try stderr.writeAll("ryk report: --format requires markdown or json.\n");
+                try stderr.writeAll("ryk report: --format requires human, markdown, or json.\n");
                 return error.Usage;
             }
-            if (std.mem.eql(u8, argv[index], "markdown")) options.format = .markdown else if (std.mem.eql(u8, argv[index], "json")) options.format = .json else {
-                try stderr.writeAll("ryk report: --format supports markdown or json.\n");
+            if (std.mem.eql(u8, argv[index], "human")) {
+                options.format = .human;
+            } else if (std.mem.eql(u8, argv[index], "markdown")) {
+                options.format = .markdown;
+            } else if (std.mem.eql(u8, argv[index], "json")) {
+                options.format = .json;
+            } else {
+                try stderr.writeAll("ryk report: --format supports human, markdown, or json.\n");
                 return error.Usage;
             }
         } else {

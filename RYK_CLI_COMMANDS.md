@@ -40,6 +40,7 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 | `replay` | Replay last session (denials dominant) | `src/cli/replay.zig` |
 | `explain` | Why a shell command is blocked or allowed (Zig shell_engine) | `src/cli/shell_explain.zig` |
 | `help` | Show help (`help --all` = full surface) | `src/cli/help.zig` |
+| `update` | Update ryk to the latest release (official installer) | `src/cli/update.zig` |
 
 ### Advanced / integration (via `ryk help --all`)
 
@@ -233,15 +234,15 @@ Check Secretless credential broker configuration.
 
 ### `ryk report`
 
-Export a local safety report. Free for all users — no license required.
+Show a local safety report (rich terminal by default). Free for all users — no license required.
 
-**Usage:** `ryk report --session <id|last> --format <format>`
+**Usage:** `ryk report --session <id|last> [--format human|markdown|json]`
 
 **Flags:**
 | Flag | Description |
 |------|-------------|
-| `--session <id\|last>` | Session ID or `last` |
-| `--format markdown\|json` | Output format |
+| `--session <id\|last>` | Session ID or `last` (default: `last`) |
+| `--format human\|markdown\|json` | Output format (default: `human` rich terminal; `markdown`/`json` for export) |
 
 ---
 
