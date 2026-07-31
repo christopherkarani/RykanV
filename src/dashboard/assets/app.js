@@ -158,7 +158,6 @@ function renderStatus(data) {
   const machineMode = data.mode === "machine";
   const policy = data.policy;
   const secretless = data.secretless_runtime;
-  const license = data.license;
   const ci = data.ci_readiness;
   const blockedCount = data.blocked_actions.length;
   const sessionCount = data.sessions.length;
@@ -170,13 +169,13 @@ function renderStatus(data) {
     metric("Prevented", `${blockedCount}`, "recent denied shell decisions"),
     metric("Decisions", `${rustShellCount}`, "from Pi, Codex, Claude, run, and hooks"),
     metric("Sessions", `${sessionCount}`, "merged from registered workspaces"),
-    metric("License", license.tier, license.report_export ? "report export enabled" : "core safety enabled"),
+    metric("Report export", "Free", "safety reports available without a license"),
   ].join("") : [
     metric("CLI", "Installed", `Orca ${data.orca.version}`),
     metric("Policy", policy.exists ? (policy.valid ? "Valid" : "Invalid") : "Missing", policy.exists ? policy.path : "Create one from a preset"),
     metric("Daemon", daemonHealthLabel(daemonHealth.status), daemonHealth.detail || "Rust shell evaluator"),
     metric("Secretless", secretless.available ? "Available" : "Unavailable", `${secretless.active_broker.label}: references only`),
-    metric("License", license.tier, license.report_export ? "report export enabled" : "core safety enabled"),
+    metric("Report export", "Free", "safety reports available without a license"),
     metric("CI", ci.ok ? "Ready" : "Needs work", ci.error || ci.checks.map((check) => `${check.name}: ${check.status}`).join(", ")),
     metric("Prevented", `${blockedCount}`, blockedCount === 1 ? "blocked action found" : "blocked actions found"),
     metric("Rust shell", `${rustShellCount}`, rustShellCount === 1 ? "daemon decision recorded" : "daemon decisions recorded"),

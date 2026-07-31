@@ -15,7 +15,7 @@ ryk ships **one** product CLI (two PATH names):
 ```text
 ryk start
 ryk claude | codex | pi | opencode | openclaw | hermes
-ryk status
+ryk doctor
 ryk replay
 ryk stop
 # or: ryk start …  (compat alias)
@@ -36,10 +36,12 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 | `start` | Get protected: policy, hosts, Ask on risk, verify | `src/cli/start.zig` |
 | `stop` | Stop ryk protection for host agents | `src/cli/disable.zig` |
 | `claude` / `codex` / `pi` / `opencode` / `openclaw` / `hermes` | Launch host under ryk (alias → run engine) | `src/cli/host_launch.zig` |
-| `status` | Traffic light: Protected \| Limited \| Off + caveat | `src/cli/status.zig` |
+| `doctor` | Diagnose readiness and platform capabilities | `src/cli/doctor.zig` |
+| `scan` | Offline session forensics (secrets + risky commands; free) | `src/cli/scan.zig` |
 | `replay` | Replay last session (denials dominant) | `src/cli/replay.zig` |
 | `explain` | Why a shell command is blocked or allowed (Zig shell_engine) | `src/cli/shell_explain.zig` |
 | `help` | Show help (`help --all` = full surface) | `src/cli/help.zig` |
+| `update` | Update ryk to the latest release (official installer) | `src/cli/update.zig` |
 
 ### Advanced / integration (via `ryk help --all`)
 
@@ -47,11 +49,9 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 |---------|---------|-------------|
 | `run` | Run engine / custom agents / CI | `src/cli/run.zig` |
 | `init` | Create an Orca policy (power/CI scaffold) | `src/cli/init.zig` |
-| `doctor` | Show platform capabilities | `src/cli/doctor.zig` |
 | `policy` | Validate, explain, and apply policies | `src/cli/policy.zig` |
 | `credentials` | Check Secretless credential brokers | `src/cli/credentials.zig` |
-| `report` | Export a local safety report | `src/cli/report.zig` |
-| `license` | Manage local offline licenses | `src/cli/license.zig` |
+| `report` | Export a local safety report (free) | `src/cli/report.zig` |
 | `test` | Test a shell command with Zig shell_engine packs | `src/cli/shell_test.zig` |
 | `packs` | Browse / enable / disable safety packs (oracle + pack_config) | `src/cli/packs.zig` |
 | `allowlist` | Permanent pack-exception allowlist (rule id / exact command) | `src/cli/allowlist_cmd.zig` |
@@ -68,7 +68,7 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 | `dashboard` | Local Orca dashboard | `src/cli/dashboard.zig` |
 | `ci` | Local CI readiness checks | `src/cli/ci.zig` |
 | `shutdown` | Stop the background ryk daemon (live Zig) | `src/cli/shutdown.zig` |
-| `uninstall` | Uninstall Orca from this machine | `src/cli/uninstall.zig` |
+| `uninstall` | Uninstall ryk from this machine | `src/cli/uninstall.zig` |
 | `env` | Print install environment for shell activation | `src/cli/mod.zig` |
 | `--print-install-env` | Hidden flag (same as `env`) | `src/cli/mod.zig` |
 
@@ -78,6 +78,8 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 |---------|--------|
 | `quickstart` | Hard-removed from dispatcher — use `ryk start` |
 | `setup` | Hard-removed from dispatcher — use `ryk start` (library retained internally) |
+| `status` | Hard-removed from dispatcher — use `ryk doctor` |
+| `license` | Hard-removed — report export is free; no license CLI |
 
 ### Not available (hidden; typing yields short notice)
 
@@ -85,7 +87,9 @@ Unavailable former daemon ports are **not** listed by `ryk help` / `ryk help --a
 
 | Command | Status |
 |---------|--------|
-| `scan`, `precommit`, `simulate`, `classify`, `suggest-allowlist`, `history`, `rebase-recover`, `config` | Hide-list (unavailable daemon ports) |
+| `precommit`, `simulate`, `classify`, `suggest-allowlist`, `history`, `rebase-recover`, `config` | Hide-list (unavailable daemon ports) |
+
+> **`scan` is live** (public Safe Launch table above) — free offline session forensics, not a daemon port.
 
 ### Exit Codes (`src/cli/exit_codes.zig`)
 
@@ -115,11 +119,23 @@ Single public onboarding door. Creates policy when missing, wires hosts, default
 
 ---
 
-### `ryk status`
+### `ryk doctor`
 
-Human traffic light: **Protected | Limited | Off**, plus one mediation caveat when not Off. Machine `--json` / `--check` keep existing contracts.
+Diagnose protection readiness: policy, hosts, capabilities, packs, sandbox backend features, network policy engine status, and recommended next steps.
 
-**Usage:** `ryk status [--json] [--check]`
+**Usage:** `ryk doctor [-v|--verbose] [--check] [--json] [--help]`
+
+---
+
+### `ryk scan`
+
+Free offline session forensics across known agent hosts (Claude Code, Codex, Pi, OpenCode, Grok, thin ryk bridge). Surfaces medium+ dangerous shell commands and secret material/access with redaction. Exit **0** on a successful scan even when findings exist.
+
+**Usage:** `ryk scan [--json] [--plain] [--all] [--days <n>] [--all-time] [--host <name>]`
+
+**Examples:** `ryk scan` · `ryk scan --days 7 --host codex` · `ryk scan --json --plain` (prefer one of json/plain)
+
+Interactive colour TTY: scorecard + list/detail (`c` copy path, `o` reveal/open, `q` quit).
 
 ---
 
@@ -191,16 +207,6 @@ Public dispatcher peers are **hard-removed**. Invoking them exits with a usage e
 
 ---
 
-### `ryk doctor`
-
-Show platform capabilities — reports sandbox backend features, network policy engine status, and platform limitations honestly.
-
-**Usage:** `ryk doctor [--help]`
-
-No persistent flags.
-
----
-
 ### `ryk policy`
 
 Validate, explain, and apply policy files.
@@ -233,31 +239,15 @@ Check Secretless credential broker configuration.
 
 ### `ryk report`
 
-Export a local safety report (Pro/Team license feature).
+Show a local safety report (rich terminal by default). Free for all users — no license required.
 
-**Usage:** `ryk report --session <id|last> --format <format>`
+**Usage:** `ryk report --session <id|last> [--format human|markdown|json]`
 
 **Flags:**
 | Flag | Description |
 |------|-------------|
-| `--session <id\|last>` | Session ID or `last` |
-| `--format markdown\|json` | Output format |
-
----
-
-### `ryk license`
-
-Manage local offline licenses.
-
-**Usage:** `ryk license <status|activate> [...]`
-
-**Subcommands:**
-| Subcommand | Usage | Description |
-|------------|-------|-------------|
-| `status` | `ryk license status [--json]` | Show license status |
-| `activate` | `ryk license activate <key-or-file>` | Activate a license key |
-
-**Development keys:** `dev-free`, `dev-pro`, `dev-team`
+| `--session <id\|last>` | Session ID or `last` (default: `last`) |
+| `--format human\|markdown\|json` | Output format (default: `human` rich terminal; `markdown`/`json` for export) |
 
 ---
 
@@ -489,16 +479,19 @@ Disable Orca plugins from host agents without removing the ryk binary or policy 
 
 ### `ryk uninstall`
 
-Completely remove Orca and its integrations from the machine.
+Completely remove ryk and its integrations from the machine (plugins, binaries, runtime, shell activation, config, and local data).
 
-**Usage:** `ryk uninstall [--plugins-only] [--keep-config] [--yes]`
+**Usage:** `ryk uninstall [--plugins-only] [--keep-config] [--dry-run] [--yes]`
 
 **Flags:**
 | Flag | Description |
 |------|-------------|
 | `--plugins-only` | Only remove plugins; keep binary and config |
-| `--keep-config` | Remove plugins and binary but keep `~/.config/orca/` |
+| `--keep-config` | Keep `~/.config/orca/` and allow-once data; still remove runtime + binary |
+| `--dry-run` | Print what would be removed without changing anything |
 | `--yes` | Skip confirmation prompt |
+
+Does **not** remove project workspace `.orca/` dirs. Package-manager installs (brew/scoop/winget) must be uninstalled with those tools.
 
 ---
 

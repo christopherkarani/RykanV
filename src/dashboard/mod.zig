@@ -91,8 +91,6 @@ pub fn writeStatusJson(io: std.Io, allocator: std.mem.Allocator, writer: anytype
     try writeQuickAction(writer, "suggest-allowlist", "orca suggest-allowlist --confidence high");
     try writer.writeByte(',');
     try writeQuickAction(writer, "allowlist-list", "ryk allowlist list");
-    try writer.writeByte(',');
-    try writeQuickAction(writer, "license-status", "orca license status");
     try writer.writeAll("]}");
 }
 
@@ -138,8 +136,6 @@ pub fn writeMachineStatusJson(
     try aggregate.writeGlobalFeedHealthJson(io, allocator, writer, dashboard_root);
     try writer.writeAll(",\"quick_actions\":[");
     try writeQuickAction(writer, "doctor", "ryk doctor");
-    try writer.writeByte(',');
-    try writeQuickAction(writer, "license-status", "orca license status");
     try writer.writeAll("]}");
 }
 
@@ -390,7 +386,7 @@ fn writePolicySummaryJson(io: std.Io, allocator: std.mem.Allocator, writer: anyt
 fn writeLicenseJson(io: std.Io, allocator: std.mem.Allocator, writer: anytype) !void {
     var current = license_mod.status(io, allocator) catch |err| switch (err) {
         error.InvalidLicense, error.InvalidLicenseSignature, error.UnsupportedLicenseIssuer, error.UnsupportedLicenseTier => {
-            try writer.writeAll("{\"tier\":\"Free\",\"verified\":false,\"error\":");
+            try writer.writeAll("{\"tier\":\"Free\",\"verified\":false,\"report_export\":true,\"error\":");
             try core.util.writeJsonString(writer, @errorName(err));
             try writer.writeByte('}');
             return;
@@ -403,8 +399,8 @@ fn writeLicenseJson(io: std.Io, allocator: std.mem.Allocator, writer: anytype) !
     try core.util.writeJsonString(writer, current.tier.label());
     try writer.writeAll(",\"verified\":");
     try writer.writeAll(if (current.verified) "true" else "false");
-    try writer.writeAll(",\"report_export\":");
-    try writer.writeAll(if (current.tier.allows(.report_export)) "true" else "false");
+    // Report export is free for all users; keep the field for dashboard UI compatibility.
+    try writer.writeAll(",\"report_export\":true");
     try writer.writeAll(",\"error\":null}");
 }
 
@@ -1177,7 +1173,7 @@ test "machine status aggregates registered workspaces and exposes only global ac
     try std.testing.expect(std.mem.indexOf(u8, out, workspace_a) != null);
     try std.testing.expect(std.mem.indexOf(u8, out, workspace_b) != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "\"id\":\"doctor\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "\"id\":\"license-status\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"id\":\"license-status\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "replay-last") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "suggest-allowlist") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "allowlist-list") == null);

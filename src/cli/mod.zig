@@ -15,6 +15,7 @@ pub const doctor = @import("doctor.zig");
 pub const policy = @import("policy.zig");
 pub const credentials_command = @import("credentials.zig");
 pub const replay = @import("replay.zig");
+pub const scan_command = @import("scan.zig");
 pub const diff = @import("diff.zig");
 pub const apply = @import("apply.zig");
 pub const discard = @import("discard.zig");
@@ -39,10 +40,10 @@ pub const evaluate = @import("evaluate.zig");
 pub const hook = @import("hook.zig");
 pub const dashboard_command = @import("dashboard.zig");
 pub const report = @import("report.zig");
-pub const license_command = @import("license.zig");
 pub const ci = @import("ci.zig");
 pub const disable = @import("disable.zig");
 pub const uninstall = @import("uninstall.zig");
+pub const update = @import("update.zig");
 pub const interactive = @import("interactive.zig");
 pub const child_process = @import("child_process.zig");
 pub const style = @import("style.zig");
@@ -62,7 +63,6 @@ pub const agent_hook = @import("agent_hook.zig");
 pub const daemon_contracts = @import("daemon_contracts.zig");
 pub const packs = @import("packs.zig");
 pub const pack_state = @import("pack_state.zig");
-pub const status = @import("status.zig");
 pub const readiness = @import("readiness.zig");
 pub const history = @import("history.zig");
 pub const suggestions = @import("suggestions.zig");
@@ -89,6 +89,8 @@ test {
     _ = quickstart;
     _ = help;
     _ = disable;
+    _ = uninstall;
+    _ = update;
     _ = @import("spinner.zig");
     // Pull daemon UDS/IPC/trust/error tests into the test binary.
     _ = daemon;
@@ -97,6 +99,7 @@ test {
     _ = daemon.errors;
     _ = shutdown;
     _ = shell_eval;
+    _ = scan_command;
     // Pull hook.zig tests (daemon evaluate → HookResponse, strict refuse, redaction).
     _ = hook;
     _ = shell_test;
@@ -111,7 +114,6 @@ test {
     _ = daemon_contracts;
     _ = packs;
     _ = pack_state;
-    _ = status;
     _ = readiness;
     _ = doctor;
     _ = history;
@@ -139,7 +141,9 @@ fn suggestCommand(unknown: []const u8) ?[]const u8 {
 
 /// Commands that render their own branded header internally and so must NOT
 /// receive the shared entry banner (would double-print).
-const self_banner_commands = [_][]const u8{ "version", "--version", "help", "run", "start" };
+/// `scan` keeps the progress phase banner-free (spinner only); durable brand
+/// lives on the result scorecard / alt-screen TUI header.
+const self_banner_commands = [_][]const u8{ "version", "--version", "help", "run", "start", "scan" };
 
 /// Commands whose output is always machine/raw (JSON, generated scripts, export
 /// lines, long-running servers) — never receive the human brand banner.
@@ -454,7 +458,8 @@ fn runWithCwdUsing(
     if (isDaemonLocalMutatingInvocation(command, argv[1..])) {
         return rust_legacy_stub.unavailable(command, stderr);
     }
-    // Former ExecuteCli proxies (scan/simulate/classify/…) — unavailable product verbs.
+    // Former ExecuteCli proxies (simulate/classify/…) — unavailable product verbs.
+    // `scan` is Zig-native (session forensics); not routed here.
     if (isDaemonProxyCommand(command)) {
         return rust_legacy_stub.unavailable(command, stderr);
     }
@@ -486,11 +491,16 @@ fn runWithCwdUsing(
         return exit_codes.usage;
     }
     if (std.mem.eql(u8, command, "init")) return init.command(io, cwd, argv[1..], stdout, stderr);
-    if (std.mem.eql(u8, command, "status")) return status.command(io, argv[1..], stdout, stderr);
+    // Hard-removed: thin glance duplicated doctor and misled with legacy daemon framing.
+    if (std.mem.eql(u8, command, "status")) {
+        try help.writeRemovedStatus(stderr);
+        return exit_codes.usage;
+    }
     if (std.mem.eql(u8, command, "doctor")) return doctor.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "policy")) return policy.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "credentials")) return credentials_command.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "replay")) return replay.command(io, argv[1..], stdout, stderr);
+    if (std.mem.eql(u8, command, "scan")) return scan_command.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "diff")) return diff.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "apply")) return apply.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "discard")) return discard.command(io, argv[1..], stdout, stderr);
@@ -505,11 +515,11 @@ fn runWithCwdUsing(
     if (std.mem.eql(u8, command, "hook")) return hook.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "dashboard")) return dashboard_command.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "report")) return report.command(io, argv[1..], stdout, stderr);
-    if (std.mem.eql(u8, command, "license")) return license_command.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "ci")) return ci.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "stop")) return disable.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "disable")) return disable.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "uninstall")) return uninstall.command(io, argv[1..], stdout, stderr);
+    if (std.mem.eql(u8, command, "update")) return update.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "shutdown")) return shutdown.command(io, argv[1..], stdout, stderr);
 
     // Host launch aliases after real ryk commands (ryk wins on name collision).
@@ -576,8 +586,8 @@ fn proxyVersionCommand(comptime execute_cli: anytype, io: std.Io, stdout: anytyp
 /// `test` / `explain` are Zig-native; remaining entries stub until ported or dropped.
 fn isDaemonProxyCommand(command: []const u8) bool {
     // allowlist is live Zig (s-allowlist-cli); no longer a daemon proxy surface.
-    return std.mem.eql(u8, command, "scan") or
-        std.mem.eql(u8, command, "precommit") or
+    // `scan` is Zig-native session forensics (not the old Rust file/pre-commit scan).
+    return std.mem.eql(u8, command, "precommit") or
         std.mem.eql(u8, command, "classify") or
         std.mem.eql(u8, command, "suggest-allowlist") or
         std.mem.eql(u8, command, "simulate");
@@ -842,14 +852,6 @@ fn fakeTestProxySuccess(_: std.Io, argv: []const []const u8, stdout: anytype, _:
     return exit_codes.success;
 }
 
-fn fakeScanProxySuccess(_: std.Io, argv: []const []const u8, stdout: anytype, _: anytype) !u8 {
-    try std.testing.expectEqual(@as(usize, 2), argv.len);
-    try std.testing.expectEqualStrings("scan", argv[0]);
-    try std.testing.expectEqualStrings("--help", argv[1]);
-    try stdout.writeAll("scan ok\n");
-    return exit_codes.success;
-}
-
 fn fakeHistoryProxySuccess(_: std.Io, argv: []const []const u8, stdout: anytype, _: anytype) !u8 {
     try std.testing.expectEqual(@as(usize, 2), argv.len);
     try std.testing.expectEqualStrings("history", argv[0]);
@@ -985,12 +987,8 @@ test "phase 1 proxy commands construct daemon argv and render success" {
     try std.testing.expectEqualStrings("test ok\n", stdout_writer.buffered());
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 
-    stdout_writer = .fixed(&stdout_buf);
-    stderr_writer = .fixed(&stderr_buf);
-    const scan_code = try proxyPhase1Command(fakeScanProxySuccess, "scan", &.{"--help"}, std.testing.io, &stdout_writer, &stderr_writer);
-    try std.testing.expectEqual(exit_codes.success, scan_code);
-    try std.testing.expectEqualStrings("scan ok\n", stdout_writer.buffered());
-    try std.testing.expectEqualStrings("", stderr_writer.buffered());
+    // `scan` is Zig-native forensics — must not be a daemon proxy command.
+    try std.testing.expect(!isDaemonProxyCommand("scan"));
 
     stdout_writer = .fixed(&stdout_buf);
     stderr_writer = .fixed(&stderr_buf);
@@ -1052,6 +1050,8 @@ test "phase A proxy commands construct daemon argv and render success" {
     try std.testing.expect(!isDaemonLocalMutatingInvocation("suggest-allowlist", &.{"--non-interactive"}));
     try std.testing.expect(!isDaemonProxyCommand("doctor"));
     try std.testing.expect(!isDaemonProxyCommand("init"));
+    try std.testing.expect(!isDaemonProxyCommand("scan"));
+    try std.testing.expect(!isDaemonProxyCommand("update"));
 
     // Direct proxyDaemonCommand helper still works for remaining stubbed ExecuteCli surfaces.
     const classify_code = try proxyDaemonCommand(fakeClassifyProxySuccess, "classify", &.{"rm -rf /tmp/x"}, std.testing.io, &stdout_writer, &stderr_writer);
@@ -1193,8 +1193,7 @@ test "human parser families suggest valid flags and exact help remediation" {
         .{ .argv = &.{ "plugin", "instal" }, .suggestion = "install", .help_command = "plugin" },
         .{ .argv = &.{ "start", "--preest" }, .suggestion = "--preset", .help_command = "start" },
         .{ .argv = &.{ "run", "--workspce" }, .suggestion = "--workspace", .help_command = "run" },
-        // packs is P0-hidden until Slice 4; do not exercise flag suggestions for unavailable verbs.
-        .{ .argv = &.{ "status", "--chek" }, .suggestion = "--check", .help_command = "status" },
+        .{ .argv = &.{ "doctor", "--chek" }, .suggestion = "--check", .help_command = "doctor" },
     };
 
     for (cases) |case| {
@@ -1331,6 +1330,12 @@ test "start owns its onboarding banner" {
     try std.testing.expect(!shouldShowBanner("start", &.{ "start", "--auto" }));
 }
 
+test "scan suppresses entry banner (progress is spinner-only)" {
+    try std.testing.expect(!shouldShowBanner("scan", &.{"scan"}));
+    try std.testing.expect(!shouldShowBanner("scan", &.{ "scan", "--host", "grok" }));
+    try std.testing.expect(!shouldShowBanner("scan", &.{ "scan", "--plain" }));
+}
+
 test "banner suppressed for raw env output" {
     var stdout_buf: [4096]u8 = undefined;
     var stderr_buf: [256]u8 = undefined;
@@ -1360,6 +1365,7 @@ test "banner suppressed for completions raw output" {
 
 test "report generated exports are classified as raw at top level" {
     try std.testing.expect(!shouldShowBanner("report", &.{"report"}));
+    try std.testing.expect(!shouldShowBanner("report", &.{ "report", "--format", "human" }));
     try std.testing.expect(!shouldShowBanner("report", &.{ "report", "--format", "markdown" }));
     try std.testing.expect(!shouldShowBanner("report", &.{ "report", "--format", "json" }));
 }
@@ -1420,7 +1426,6 @@ test "history live human rejection gets a banner while machine conflict stays ra
 test "daemon passthrough and robot surfaces have no top-level presentation bytes" {
     const raw_invocations = [_]struct { command: []const u8, argv: []const []const u8 }{
         .{ .command = "test", .argv = &.{ "test", "git status" } },
-        .{ .command = "scan", .argv = &.{ "scan", "." } },
         .{ .command = "precommit", .argv = &.{"precommit"} },
         .{ .command = "packs", .argv = &.{ "packs", "--robot" } },
         .{ .command = "history", .argv = &.{ "history", "export", "--format", "jsonl" } },
@@ -1520,15 +1525,34 @@ fn expectShortUnavailable(
 }
 
 test "P0 honesty: hide-list command yields short not-available and usage exit" {
-    // Representative hide-list port via isDaemonProxyCommand (`scan`).
+    // Representative hide-list port via isDaemonProxyCommand (`precommit`).
     var stdout_buf: [512]u8 = undefined;
     var stderr_buf: [1024]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
-    const code = try testRun(&.{"scan"}, &stdout_writer, &stderr_writer);
+    const code = try testRun(&.{"precommit"}, &stdout_writer, &stderr_writer);
     // Proxy path is raw-passthrough → no brand banner → empty stdout.
-    try expectShortUnavailable("scan", code, stdout_writer.buffered(), stderr_writer.buffered(), true);
+    try expectShortUnavailable("precommit", code, stdout_writer.buffered(), stderr_writer.buffered(), true);
+}
+
+test "scan dispatches Zig session forensics not daemon unavailable stub" {
+    var stdout_buf: [64 * 1024]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try testRun(&.{ "scan", "--help" }, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, code);
+    const combined = try std.fmt.allocPrint(std.testing.allocator, "{s}{s}", .{
+        stdout_writer.buffered(),
+        stderr_writer.buffered(),
+    });
+    defer std.testing.allocator.free(combined);
+    try std.testing.expect(std.mem.indexOf(u8, combined, "not available") == null);
+    try std.testing.expect(std.mem.indexOf(u8, combined, "session") != null or
+        std.mem.indexOf(u8, combined, "forensics") != null or
+        std.mem.indexOf(u8, combined, "secret") != null);
 }
 
 test "P0 honesty: live packs dispatches (not short not-available)" {
@@ -1747,10 +1771,6 @@ test "top-level report exports preserve exact generated bytes" {
     }
     try std.testing.expectEqual(@as(c_int, 0), setenv("XDG_CONFIG_HOME", root, 1));
     try std.testing.expectEqual(@as(c_int, 0), setenv("PATH", "", 1));
-    const license_path = try std.fs.path.join(std.testing.allocator, &.{ root, "orca", "license.json" });
-    defer std.testing.allocator.free(license_path);
-    var activated = try @import("orca").license.activateToPath(std.testing.io, std.testing.allocator, "dev-pro", license_path);
-    activated.deinit();
     try tmp.dir.createDirPath(std.testing.io, ".orca");
     {
         const policy_file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
@@ -1796,8 +1816,25 @@ test "top-level report exports preserve exact generated bytes" {
     var stderr_buf: [256]u8 = undefined;
     var stdout: std.Io.Writer = .fixed(&stdout_buf);
     var stderr: std.Io.Writer = .fixed(&stderr_buf);
+    // Default is the rich human report (plain text under tests — no colour escapes).
     try std.testing.expectEqual(exit_codes.success, try testRun(&.{ "report", "--session", session_id }, &stdout, &stderr));
-    try std.testing.expectEqualStrings(expected_markdown, stdout.buffered());
+    try std.testing.expect(std.mem.indexOf(u8, stdout.buffered(), "safety report") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.buffered(), "What ryk stopped") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.buffered(), "rm -rf ./fixture") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.buffered(), "[DENY]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.buffered(), "fixture-label") != null);
+    try std.testing.expect(std.mem.indexOfScalar(u8, stdout.buffered(), 0x1b) == null);
+    try std.testing.expectEqualStrings("", stderr.buffered());
+
+    // Explicit --format human matches the default surface.
+    stdout = .fixed(&stdout_buf);
+    stderr = .fixed(&stderr_buf);
+    try std.testing.expectEqual(exit_codes.success, try testRun(
+        &.{ "report", "--session", session_id, "--format", "human" },
+        &stdout,
+        &stderr,
+    ));
+    try std.testing.expect(std.mem.indexOf(u8, stdout.buffered(), "safety report") != null);
     try std.testing.expectEqualStrings("", stderr.buffered());
 
     inline for (.{

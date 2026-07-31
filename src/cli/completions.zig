@@ -481,9 +481,10 @@ fn completionRegistersCommand(output: []const u8, shell: []const u8, name: []con
 
 test "P0 honesty: completions omit hide-list ports but include live P0 + shutdown" {
     const hidden = [_][]const u8{
-        "scan",    "precommit",      "simulate", "classify", "suggest-allowlist",
-        "history", "rebase-recover", "config",
+        "precommit", "simulate", "classify", "suggest-allowlist",
+        "history",   "rebase-recover", "config",
     };
+    const live_scan = [_][]const u8{"scan"};
     const live_p0 = [_][]const u8{
         "packs", "allowlist", "allow", "unallow", "allow-once", "shutdown",
     };
@@ -499,6 +500,9 @@ test "P0 honesty: completions omit hide-list ports but include live P0 + shutdow
         const output = stdout_writer.buffered();
 
         for (live_p0) |name| {
+            try std.testing.expect(completionRegistersCommand(output, shell, name));
+        }
+        for (live_scan) |name| {
             try std.testing.expect(completionRegistersCommand(output, shell, name));
         }
         for (hidden) |name| {

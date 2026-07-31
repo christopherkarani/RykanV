@@ -45,16 +45,15 @@ Machine-wide mode reads Orca's local workspace registry and global decision feed
 - Recent shell / policy decisions across Pi, Codex, Claude, OpenCode, `orca run`, and other hook paths
 - Sessions merged from registered workspace `.orca/sessions` directories and feed-backed agent sessions such as Pi
 - Denied shell decisions with `workspace_root`, `host`, and recording source
-- Machine-wide daemon health and local license status
+- Machine-wide daemon health
 
 Decision writers continue to store the existing per-workspace feed and also append a redacted record to `$HOME/.orca/dashboard/events.jsonl`. `$HOME/.orca/dashboard/workspaces.json` indexes recently active workspaces for session aggregation. Feed writes are best-effort and do not change hook, run, or evaluate exit behavior.
 
-Machine-wide mode exposes only global actions: `orca doctor` and `orca license status`. Policy, replay, report, CI, credential, proxy, and integration actions stay hidden and are rejected server-side until the dashboard is started with an explicit workspace. This prevents ambiguous uses of `last` from `~`.
+Machine-wide mode exposes only the global action `ryk doctor`. Policy, replay, report, CI, credential, proxy, and integration actions stay hidden and are rejected server-side until the dashboard is started with an explicit workspace. This prevents ambiguous uses of `last` from `~`.
 
 ## Workspace View
 
 - Orca version and workspace root
-- Local license tier, report-export availability, and offline verification status
 - CI readiness from the same checks as `orca ci check`
 - `.orca/policy.yaml` presence, mode, and validation status
 - Secretless runtime availability, broker-reference mode, service-policy templates, verification commands, guarantees, and limitations
@@ -77,7 +76,6 @@ orca replay --session last --only denied --verify
 orca report --session last --format markdown
 orca ci check --format markdown
 ryk explain "rm -rf /"
-orca license status
 ```
 
 Policy edits are saved only after Orca parses and validates the submitted YAML. Preset initialization writes `.orca/policy.yaml` from the same preset text used by the CLI. Policy routes return `workspace_required` in machine-wide mode.

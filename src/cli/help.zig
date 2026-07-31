@@ -86,7 +86,7 @@ pub const commands =
         .{
             .name = "init",
             .summary = "Create an ryk policy",
-            .usage = "ryk init [--preset <name>] [--mode strict|ask|yolo|observe|ci|trusted] [--ci] [--force] [--quiet]",
+            .usage = "ryk init [--preset <name>] [--mode strict|ask|observe|ci|trusted] [--ci] [--force] [--quiet]",
             .category = .getting_started,
             .examples = &.{
                 "ryk init --preset generic-agent",
@@ -122,7 +122,7 @@ pub const commands =
                 "On non-TTY terminals, auto-selects safe defaults (no --auto required).",
                 "Use --auto to force non-interactive mode on a TTY; optional --hosts and --preset.",
                 "Compatibility flags --yes and --no-interact also select non-interactive mode.",
-                "Next steps after start: ryk <agent> · ryk status · ryk replay.",
+                "Next steps after start: ryk <agent> · ryk doctor · ryk replay.",
                 "Re-run safely to repair or update an existing setup.",
             },
         },
@@ -149,6 +149,17 @@ pub const commands =
             },
         },
         .{
+            .name = "status",
+            .summary = "Removed — use ryk doctor",
+            .usage = "ryk doctor",
+            .category = .getting_started,
+            .hidden = true,
+            .examples = &.{},
+            .details = &.{
+                "`ryk status` was removed. Use `ryk doctor` for diagnostics and readiness checks.",
+            },
+        },
+        .{
             .name = "env",
             .summary = "Print shell environment for ryk",
             .usage = "ryk env",
@@ -159,32 +170,11 @@ pub const commands =
             },
         },
         .{
-            .name = "status",
-            .summary = "One-glance protection snapshot",
-            .usage = "ryk status [--json] [--check]",
-            .category = .getting_started,
-            .public = true,
-            .examples = &.{
-                "ryk status",
-                "ryk status --json",
-                "ryk status --check",
-                "ryk status --check --json",
-            },
-            .additional_completion_flags = &.{ "--json", "--check" },
-            .details = &.{
-                "Shows daemon health, policy path/mode/valid, hosts summary, enabled packs, and one next step.",
-                "Status is the glance; `ryk doctor` is the deep diagnostic.",
-                "Packs summary uses the daemon registry (fail-closed note when the daemon is unavailable).",
-                "Pack enablement is written to project `.orca.toml` when in a git repo, else user config (`$XDG_CONFIG_HOME/orca/config.toml` or `~/.config/orca/config.toml`).",
-                "Use --json for scripting (includes schema_version, ready, state, policy.valid).",
-                "Use --check for automation: exit non-zero when core readiness fails (daemon not compatible, or policy missing/invalid). Default without --check still prints the full report and exits 0.",
-            },
-        },
-        .{
             .name = "doctor",
-            .summary = "Show platform capabilities",
+            .summary = "Diagnose protection readiness and platform capabilities",
             .usage = "ryk doctor [-v|--verbose] [--check] [--json]",
             .category = .getting_started,
+            .public = true,
             .examples = &.{
                 "ryk doctor",
                 "ryk doctor --verbose",
@@ -198,7 +188,6 @@ pub const commands =
                 "Use --verbose for the full platform, integration, and capability report.",
                 "Use --check for automation: exit non-zero when core readiness fails (daemon not compatible, or policy missing/invalid).",
                 "Use --json for a minimal readiness report (ready, state, policy.valid).",
-                "For a one-glance snapshot, prefer `ryk status`.",
             },
         },
         .{
@@ -217,18 +206,29 @@ pub const commands =
         },
         .{
             .name = "scan",
-            .summary = "Scan files for destructive commands",
-            .usage = "ryk scan [--staged|--paths <path>...] [options]",
-            .category = .core_workflow,
-            // Unavailable daemon-backed ports stay hidden (not product surface).
-            .hidden = true,
+            .summary = "Scan past agent sessions for risky commands and secret exposure",
+            .usage = "ryk scan [--days N|--all-time] [--all] [--json] [--plain] [--host <name>]",
+            .category = .getting_started,
+            .public = true,
+            .hidden = false,
+            .additional_completion_flags = &.{ "--days", "--all-time", "--all", "--json", "--plain", "--host" },
             .examples = &.{
-                "ryk scan --staged",
-                "ryk scan --paths scripts/deploy.sh --format json",
+                "ryk scan",
+                "ryk scan --days 7",
+                "ryk scan --json",
+                "ryk scan --plain",
+                "ryk scan --host claude --all",
             },
             .details = &.{
-                "Proxies to the Rust daemon for CI and pre-commit scanning.",
-                "Use 'ryk scan --help' for the full Rust-backed option set.",
+                "Free offline session forensics for new ryk users. Scans known host session stores only",
+                "(Claude Code, Codex, Pi, OpenCode, Grok Build) plus a thin ryk bridge — no $HOME crawl.",
+                "Reports dangerous shell/tool commands (high+medium via shell_engine) and secret material/access.",
+                "Never prints raw secrets. Default window is 30 days; default list cap is ~20 (use --all).",
+                "On an interactive colour TTY, opens a scorecard + list/detail viewer (libvaxis alt-screen).",
+                "TUI keys: c copies the full evidence path · o reveals/opens it · q quits.",
+                "Use --plain for linear rich text; --json for machine output (no TUI).",
+                "Exit 0 on successful scan even when findings exist. Existing users: prefer `ryk replay`.",
+                "Hosts: claude | codex | pi | opencode | grok | ryk. OpenCode uses opencode.db (read-only; requires sqlite3 CLI).",
             },
         },
         .{
@@ -509,16 +509,10 @@ pub const commands =
             "Supported broker kinds: local-dummy, env-file-dev, 1password-cli, macos-keychain, infisical-agent-vault.",
             "Infisical/Agent Vault is currently a status/config boundary until exact local API or CLI behavior is verified.",
         } },
-        .{ .name = "report", .summary = "Export a safety report for a session", .usage = "ryk report --session <id|last> --format markdown|json", .category = .diagnostics, .details = &.{
-            "Loads a local session, verifies session integrity, and exports denied actions, redactions, plugin readiness, and a plain-language prevention summary.",
-            "Report export is a Pro/Team local-license feature. Core safety commands remain available without a license.",
-        } },
-        .{ .name = "license", .summary = "Manage local offline licenses", .usage = "ryk license <status|activate> [...]", .category = .advanced, .additional_completion_flags = &.{"--json"}, .details = &.{
-            "Subcommands:",
-            "  ryk license status [--json]",
-            "  ryk license activate <key-or-file>",
-            "Development keys: dev-free, dev-pro, dev-team.",
-            "Licenses are verified offline and stored under the user config directory.",
+        .{ .name = "report", .summary = "Show a safety report for a session", .usage = "ryk report --session <id|last> [--format human|markdown|json]", .category = .diagnostics, .details = &.{
+            "Loads a local session, verifies session integrity, and shows denied actions, redactions, plugin readiness, and a plain-language prevention summary.",
+            "Default output is a colour terminal report. Use --format markdown or --format json for export.",
+            "Report export is free — no license required.",
         } },
         .{ .name = "ci", .summary = "Run local CI readiness checks", .usage = "ryk ci check [--format markdown|json] [--github-summary <path>]", .category = .advanced, .details = &.{
             "Validates .orca/policy.yaml, rejects dangerous obvious defaults, runs a focused CI-safe redteam fixture, and emits GitHub Actions-friendly output.",
@@ -545,18 +539,21 @@ pub const commands =
             "Codex / Claude: removes known plugin paths (host-managed install locations).",
             "Restart protection later with: ryk start",
         } },
-        .{ .name = "uninstall", .summary = "Uninstall ryk from this machine", .usage = "ryk uninstall [--plugins-only] [--keep-config] [--yes]", .category = .integrations, .details = &.{
+        .{ .name = "uninstall", .summary = "Uninstall ryk from this machine", .usage = "ryk uninstall [--plugins-only] [--keep-config] [--dry-run] [--yes]", .category = .integrations, .details = &.{
             "Completely removes ryk and its integrations from the machine.",
             "Steps:",
             "  1. Removes all plugins from host agents (same as 'ryk stop').",
-            "  2. Removes the ryk binary from known locations (~/.local/bin/orca, PATH).",
-            "  3. Removes user config and data (~/.config/orca/, ~/.orca).",
+            "  2. Removes ryk + orca binaries from user install dirs, runtime assets,",
+            "     shell activation (ryk + legacy Orca markers), and share data.",
+            "  3. Removes user config (~/.config/orca/, ~/.orca) unless --keep-config.",
             "Options:",
             "  --plugins-only   Only remove plugins; keep binary and config.",
-            "  --keep-config    Remove plugins and binary but keep ~/.config/orca/.",
+            "  --keep-config    Keep ~/.config/orca/ and allow-once data; still remove runtime + binary.",
+            "  --dry-run        Print what would be removed without changing anything.",
             "  --yes            Skip confirmation prompt.",
-            "Local workspace .orca/ directories are not removed automatically;",
+            "Local workspace .orca/ directories are never removed automatically;",
             "run 'find . -type d -name .orca' to locate them manually.",
+            "Package-manager binaries (Homebrew/Scoop/WinGet) are left in place; uninstall there separately.",
         } },
         .{ .name = "replay", .summary = "Replay an audit session", .usage = "ryk replay [--list] [--session <id|last>] [--json] [--only denied] [--verify] [--tui]", .category = .core_workflow, .public = true, .examples = &.{
             "ryk replay",
@@ -637,6 +634,33 @@ pub const commands =
             "Prints the current ryk version.",
             "--json emits version, commit, target, and build_date fields for release automation.",
         } },
+        .{
+            .name = "update",
+            .summary = "Update ryk to the latest release",
+            .usage = "ryk update [--check] [--yes] [--version <semver>] [--json] [--force]",
+            .category = .getting_started,
+            .public = true,
+            .examples = &.{
+                "ryk update",
+                "ryk update --check",
+                "ryk update --yes",
+                "ryk update --version 1.2.9 --yes",
+            },
+            .details = &.{
+                "Checks GitHub for the latest release and upgrades this install via the official installer",
+                "(scripts/install.sh on macOS/Linux, install.ps1 on Windows). Checksums and atomic install",
+                "stay on the same path as a first-time curl install.",
+                "Options:",
+                "  --check            Report current vs latest only (no install).",
+                "  --yes              Skip the confirmation prompt.",
+                "  --version <semver> Install a specific release instead of latest.",
+                "  --json             Machine-readable status.",
+                "  --force            Allow curl installer on package-managed installs, or downgrade with --version.",
+                "Homebrew/npm/scoop/winget installs print the package-manager upgrade command instead of",
+                "overwriting the binary (use --force to override).",
+                "See also: docs/install.md",
+            },
+        },
         .{ .name = "plugin", .summary = "Plugin management and diagnostics", .usage = "ryk plugin <list|host|doctor|manifest|install> [options]", .category = .integrations, .additional_completion_flags = &.{ "--dry-run", "--yes", "--json", "--path" }, .details = &.{
             "Subcommands:",
             "  ryk plugin list",
@@ -730,7 +754,7 @@ pub const commands =
 /// Prefix of Safe Launch teaching order (host aliases inserted after stop).
 const public_help_prefix = [_][]const u8{ "start", "stop" };
 /// Suffix of Safe Launch teaching order (after host aliases).
-const public_help_suffix = [_][]const u8{ "status", "replay", "explain" };
+const public_help_suffix = [_][]const u8{ "doctor", "replay", "scan", "explain", "update" };
 
 pub const WriteMode = enum {
     /// Safe Launch surface only (default `ryk` / `ryk help`).
@@ -764,15 +788,15 @@ pub fn writeWithMode(io: std.Io, writer: anytype, mode: WriteMode) !void {
     const public_tasks = [_]Task{
         .{ .label = "Get protected", .cmd = "ryk start" },
         .{ .label = "Run an agent", .cmd = "ryk claude  (or: codex | pi | opencode | openclaw | hermes)" },
-        .{ .label = "See status", .cmd = "ryk status" },
+        .{ .label = "Diagnose", .cmd = "ryk doctor" },
         .{ .label = "Review session", .cmd = "ryk replay" },
         .{ .label = "Why blocked?", .cmd = "ryk explain \"…\"" },
+        .{ .label = "Update ryk", .cmd = "ryk update" },
         .{ .label = "Stop protection", .cmd = "ryk stop" },
     };
     const all_tasks = [_]Task{
         .{ .label = "Get protected", .cmd = "ryk start" },
-        .{ .label = "See status", .cmd = "ryk status" },
-        .{ .label = "Deep diagnose", .cmd = "ryk doctor" },
+        .{ .label = "Diagnose", .cmd = "ryk doctor" },
         .{ .label = "Why blocked?", .cmd = "ryk explain \"…\"" },
         .{ .label = "Run an agent", .cmd = "ryk claude  (or: codex | pi | opencode | openclaw | hermes)" },
         .{ .label = "Wire a host", .cmd = "ryk plugin install" },
@@ -817,7 +841,7 @@ pub fn writeWithMode(io: std.Io, writer: anytype, mode: WriteMode) !void {
             try writer.writeAll("  ");
             try tui.theme.paintBold(io, writer, .brand, "Commands");
             try writer.writeAll("\n");
-            // Teaching order: start → stop → host aliases → status → replay → explain
+            // Teaching order: start → stop → host aliases → doctor → replay → explain
             for (public_help_prefix) |name| {
                 try writeCommandRow(io, writer, name, name_width);
             }
@@ -917,6 +941,12 @@ pub fn writeRemovedOnboardingPeer(writer: anytype, name: []const u8) !void {
     );
 }
 
+pub fn writeRemovedStatus(writer: anytype) !void {
+    try writer.writeAll(
+        "ryk: `status` was removed. Use `ryk doctor` for diagnostics.\nRun 'ryk help doctor' for usage.\n",
+    );
+}
+
 pub fn writeCommand(io: std.Io, writer: anytype, name: []const u8) !bool {
     // Progressive disclosure: `ryk help --all` reuses the existing single-arg
     // help dispatch path without changing top-level argv parsing.
@@ -927,6 +957,10 @@ pub fn writeCommand(io: std.Io, writer: anytype, name: []const u8) !bool {
     // Hard-removed onboarding peers: do not re-teach live usage; point at `ryk start`.
     if (std.mem.eql(u8, name, "setup") or std.mem.eql(u8, name, "quickstart")) {
         try writeRemovedOnboardingPeer(writer, name);
+        return true;
+    }
+    if (std.mem.eql(u8, name, "status")) {
+        try writeRemovedStatus(writer);
         return true;
     }
     const command = findCommand(name) orelse return false;
@@ -993,8 +1027,10 @@ test "mode option lists include yolo" {
     }
     try std.testing.expect(std.mem.indexOf(u8, run_w.buffered(), "observe|ask|yolo|strict|ci") != null);
 
+    // init parser rejects yolo — usage must match the live option set (not advertise it).
     const init_info = findCommand("init") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(std.mem.indexOf(u8, init_info.usage, "yolo") != null);
+    try std.testing.expect(std.mem.indexOf(u8, init_info.usage, "yolo") == null);
+    try std.testing.expect(std.mem.indexOf(u8, init_info.usage, "strict|ask|observe|ci|trusted") != null);
 
     const policy_info = findCommand("policy") orelse return error.TestUnexpectedResult;
     var policy_joined: [4096]u8 = undefined;
@@ -1074,18 +1110,21 @@ test "default root help shows only public Safe Launch verbs" {
     // Public Safe Launch verbs as command peers
     try std.testing.expect(helpListsPeerCommand(top, "start"));
     try std.testing.expect(helpListsPeerCommand(top, "stop"));
-    try std.testing.expect(helpListsPeerCommand(top, "status"));
+    try std.testing.expect(helpListsPeerCommand(top, "doctor"));
     try std.testing.expect(helpListsPeerCommand(top, "replay"));
     try std.testing.expect(helpListsPeerCommand(top, "explain"));
+    try std.testing.expect(helpListsPeerCommand(top, "update"));
     for (host_launch.host_launch_aliases) |host| {
         try std.testing.expect(helpListsPeerCommand(top, host));
     }
 
-    // Common tasks teach start → agent → status → replay
+    // Common tasks teach start → agent → doctor → replay → update
     try std.testing.expect(std.mem.indexOf(u8, top, "ryk start") != null);
-    try std.testing.expect(std.mem.indexOf(u8, top, "ryk status") != null);
+    try std.testing.expect(std.mem.indexOf(u8, top, "ryk doctor") != null);
     try std.testing.expect(std.mem.indexOf(u8, top, "ryk replay") != null);
+    try std.testing.expect(std.mem.indexOf(u8, top, "ryk update") != null);
     try std.testing.expect(std.mem.indexOf(u8, top, "ryk claude") != null);
+    try std.testing.expect(std.mem.indexOf(u8, top, "ryk status") == null);
 
     // Progressive disclosure escape hatch
     try std.testing.expect(std.mem.indexOf(u8, top, "help --all") != null);
@@ -1093,9 +1132,9 @@ test "default root help shows only public Safe Launch verbs" {
     // Not Getting Started / public peers
     try std.testing.expect(!helpListsPeerCommand(top, "quickstart"));
     try std.testing.expect(!helpListsPeerCommand(top, "setup"));
+    try std.testing.expect(!helpListsPeerCommand(top, "status"));
     try std.testing.expect(!helpListsPeerCommand(top, "init"));
     try std.testing.expect(!helpListsPeerCommand(top, "run"));
-    try std.testing.expect(!helpListsPeerCommand(top, "doctor"));
     try std.testing.expect(!helpListsPeerCommand(top, "history"));
     try std.testing.expect(!helpListsPeerCommand(top, "policy"));
     try std.testing.expect(!helpListsPeerCommand(top, "mcp"));
@@ -1121,7 +1160,8 @@ test "help --all lists full advanced command surface" {
     try std.testing.expect(!helpListsPeerCommand(all, "setup"));
     // Unavailable ports are not product surface.
     try std.testing.expect(!helpListsPeerCommand(all, "history"));
-    try std.testing.expect(!helpListsPeerCommand(all, "scan"));
+    // scan is public Zig session forensics (not the old daemon file scan).
+    try std.testing.expect(helpListsPeerCommand(all, "scan"));
     // Live P0: packs, allow-once, permanent allowlist writers.
     try std.testing.expect(helpListsPeerCommand(all, "packs"));
     try std.testing.expect(helpListsPeerCommand(all, "allow-once"));
@@ -1147,6 +1187,16 @@ test "help setup and quickstart print removal notice pointing at start" {
     try std.testing.expect(std.mem.indexOf(u8, qs_out, "ryk quickstart --") == null);
 }
 
+test "help status print removal notice pointing at doctor" {
+    var buf: [1024]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try std.testing.expect(try writeCommand(std.testing.io, &writer, "status"));
+    const out = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "removed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "ryk doctor") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "ryk status --") == null);
+}
+
 // ---------------------------------------------------------------------------
 // Slice 1 (P0 honesty) — public help set tells the truth about live verbs.
 // Hide-list = unavailable daemon ports. Live P0: packs, allow-once, allowlist/
@@ -1154,8 +1204,8 @@ test "help setup and quickstart print removal notice pointing at start" {
 // ---------------------------------------------------------------------------
 
 /// Unavailable daemon-stub ports (plan hide-list). Not product surface.
+/// `scan` was removed — it is now live Zig session forensics.
 const p0_honesty_hide_list = [_][]const u8{
-    "scan",
     "precommit",
     "simulate",
     "classify",

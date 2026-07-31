@@ -14,7 +14,7 @@ That is powerful.
 
 It is also dangerous.
 
-ryk is **graded mediation** (not a universal sandbox): it evaluates actions on paths it actually mediates. Day-1 path is Safe Launch — get protected, run your agent, check status, review the session. See [Protection grades](#protection-grades) for what that guarantee means.
+ryk is **graded mediation** (not a universal sandbox): it evaluates actions on paths it actually mediates. Day-1 path is Safe Launch — get protected, run your agent, diagnose, review the session. See [Protection grades](#protection-grades) for what that guarantee means.
 
 ```bash
 # Install and configure protection
@@ -24,8 +24,8 @@ brew install christopherkarani/orca/ryk
 ryk claude
 # or: ryk codex | ryk pi | ryk opencode | ryk openclaw | ryk hermes
 
-# Glance status · review last session · off-ramp
-ryk status
+# Diagnose · review last session · off-ramp
+ryk doctor
 ryk replay
 ryk stop
 ```

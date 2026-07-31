@@ -27,7 +27,7 @@ For a package install (Homebrew, install script), see [install.md](install.md), 
 - creates `.orca/policy.yaml` when missing (Ask on risk / `generic-agent` preset)
 - wires host integrations
 - verifies core readiness (daemon + policy)
-- prints next steps: run an agent, then `status` / `replay`
+- prints next steps: run an agent, then `doctor` / `scan` / `replay`
 
 Non-interactive / CI-friendly:
 
@@ -38,21 +38,13 @@ Non-interactive / CI-friendly:
 
 Public peers `ryk setup` / `orca setup` and quickstart are removed — use `ryk start`. Power/CI scaffolding may still use advanced commands via `ryk help --all`.
 
-## 3. Check Status
+## 3. Diagnose readiness
 
 ```sh
-./zig-out/bin/ryk status
+./zig-out/bin/ryk doctor
 ```
 
-Human output is a traffic light:
-
-| State | Meaning (glance) |
-| --- | --- |
-| **Protected** | Daemon ready + valid policy |
-| **Limited** | Daemon ready but policy missing/invalid |
-| **Off** | Daemon unavailable / incompatible |
-
-When not Off, status adds one honest note: mediation covers agents started via ryk; some paths can still bypass. For a deep capability matrix, use `ryk doctor` (advanced).
+`ryk doctor` reports policy, host integrations, capabilities, packs, and a recommended next step. Use `ryk doctor --check` in automation (non-zero when core readiness fails).
 
 ## 4. Run A Protected Agent
 
@@ -128,7 +120,7 @@ Engine self-test fixtures (not your workspace policy):
 ./zig-out/bin/ryk redteam --ci
 ```
 
-Report export is gated to a local Pro/Team license; free mode still allows Safe Launch, policy checks, and replay. See `orca help --all` and [license](../ORCA_CLI_COMMANDS.md) notes.
+Safety reports are free (`ryk report`; export with `--format markdown|json`). See `ryk help --all` for the full command surface.
 
 ## Next Steps
 

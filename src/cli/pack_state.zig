@@ -2,7 +2,7 @@
 //!
 //! Pack *definitions* stay in the Rust registry (daemon). This module:
 //! - maps policy presets → opt-in pack IDs
-//! - summarizes enabled packs for `ryk doctor` / `ryk status`
+//! - summarizes enabled packs for `ryk doctor`
 //! - re-exports config path + enable/disable mutation from `pack_config.zig`
 //!
 //! Config path rule (documented in help + status):

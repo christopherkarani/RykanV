@@ -7,6 +7,7 @@ pub const policy = orca_core.policy;
 pub const audit = orca_core.audit;
 pub const intercept = @import("intercept/mod.zig");
 pub const shell_engine = @import("shell_engine/mod.zig");
+pub const scan = @import("scan/mod.zig");
 pub const mcp = @import("mcp/mod.zig");
 pub const sandbox = @import("sandbox/mod.zig");
 pub const redteam = @import("redteam/mod.zig");
@@ -28,6 +29,7 @@ test {
     _ = policy;
     _ = audit;
     _ = intercept;
+    _ = scan;
     _ = mcp;
     _ = sandbox;
     _ = redteam;

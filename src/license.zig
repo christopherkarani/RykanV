@@ -32,7 +32,9 @@ pub const Tier = enum {
 
     pub fn allows(self: Tier, feature: Feature) bool {
         return switch (feature) {
-            .report_export, .advanced_dashboard, .policy_packs => self == .pro or self == .team,
+            // Report export is free for all tiers (local safety report, no license gate).
+            .report_export => true,
+            .advanced_dashboard, .policy_packs => self == .pro or self == .team,
             .team_ci_baseline => self == .team,
         };
     }
@@ -270,6 +272,8 @@ test "dev licenses verify and expose paid gates" {
     defer parsed.deinit();
     try std.testing.expectEqual(Tier.pro, parsed.tier);
     try std.testing.expect(parsed.verified);
+    // report_export is free on every tier.
+    try std.testing.expect(Tier.free.allows(.report_export));
     try std.testing.expect(parsed.tier.allows(.report_export));
     try std.testing.expect(!parsed.tier.allows(.team_ci_baseline));
 }
