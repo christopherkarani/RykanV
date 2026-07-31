@@ -89,10 +89,10 @@ function OverviewContent() {
           status: (data.secretless_runtime.available ? "success" : "warning") as "success" | "warning",
         }] : []),
         {
-          label: "License",
-          value: data.license.tier,
-          detail: data.license.report_export ? "Report export enabled" : "Core safety enabled",
-          status: "neutral" as const,
+          label: "Report export",
+          value: "Free",
+          detail: "Safety reports available without a license",
+          status: "success" as const,
         },
         ...(data.ci_readiness ? [{
           label: "CI",

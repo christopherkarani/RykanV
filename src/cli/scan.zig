@@ -157,7 +157,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     defer _ = gpa_state.deinit();
     const allocator = gpa_state.allocator();
 
-    // No license gate (free forensics — unlike `report`).
+    // Free forensics surface (no paid gates on local diagnostics).
 
     if (options.json and options.plain) {
         try stderr.writeAll("ryk scan: --plain cannot be combined with --json.\n");

@@ -48,7 +48,6 @@ const actionIconMap: Record<string, string> = {
   "report-last": "FileBarChart",
   "ci-check": "GitBranch",
   "demo-blocked-action": "Ban",
-  "license-status": "BadgeCheck",
   "openclaw-doctor": "Plug",
   "hermes-doctor": "MessageSquare",
   "replay-denied": "XCircle",

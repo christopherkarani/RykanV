@@ -4,7 +4,6 @@ const core = @import("orca_core").core;
 const core_api = @import("orca_core").api;
 const supervisor = core.supervisor;
 const report = @import("../report.zig");
-const license = @import("../license.zig");
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
 const tui = @import("../tui/mod.zig");
@@ -22,24 +21,6 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_state.deinit();
     const allocator = gpa_state.allocator();
-    var current = license.status(io, allocator) catch |err| switch (err) {
-        error.InvalidLicense, error.InvalidLicenseSignature, error.UnsupportedLicenseIssuer, error.UnsupportedLicenseTier => {
-            try stderr.print("ryk report: stored license is invalid: {s}\n", .{@errorName(err)});
-            return exit_codes.general;
-        },
-        else => return err,
-    };
-    defer current.deinit();
-    if (!current.tier.allows(.report_export)) {
-        try tui.render.callout(
-            io,
-            stderr,
-            .info,
-            "Report export requires a license",
-            "Activate a local development license with: ryk license activate dev-pro",
-        );
-        return exit_codes.unsupported;
-    }
 
     const workspace_root = supervisor.resolveWorkspaceRoot(io, allocator, null, ".") catch |err| {
         try stderr.print("ryk report: failed to resolve workspace: {s}\n", .{@errorName(err)});
@@ -129,29 +110,9 @@ test "report rejects unsupported format" {
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "--format") != null);
 }
 
-extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
-extern "c" fn unsetenv(name: [*:0]const u8) c_int;
-
-fn restoreXdgConfigHome(previous: ?[:0]u8) void {
-    if (previous) |value| {
-        _ = setenv("XDG_CONFIG_HOME", value, 1);
-        std.testing.allocator.free(value);
-    } else {
-        _ = unsetenv("XDG_CONFIG_HOME");
-    }
-}
-
-test "report public errors render license remediation and missing-session guidance" {
+test "report public errors render missing-session guidance without a license" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
-    defer std.testing.allocator.free(root);
-    const previous_xdg: ?[:0]u8 = if (std.c.getenv("XDG_CONFIG_HOME")) |value|
-        try std.testing.allocator.dupeZ(u8, std.mem.sliceTo(value, 0))
-    else
-        null;
-    defer restoreXdgConfigHome(previous_xdg);
-    try std.testing.expectEqual(@as(c_int, 0), setenv("XDG_CONFIG_HOME", root, 1));
 
     const previous_cwd = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(previous_cwd);
@@ -168,21 +129,6 @@ test "report public errors render license remediation and missing-session guidan
     var stderr_buf: [1024]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-    const unlicensed_code = try command(std.testing.io, &.{}, &stdout_writer, &stderr_writer);
-
-    try std.testing.expectEqual(exit_codes.unsupported, unlicensed_code);
-    try std.testing.expectEqualStrings("", stdout_writer.buffered());
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ℹ  Report export requires a license") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk license activate dev-pro") != null);
-    try std.testing.expect(std.mem.indexOfScalar(u8, stderr_writer.buffered(), 0x1b) == null);
-
-    const license_path = try std.fs.path.join(std.testing.allocator, &.{ root, "orca", "license.json" });
-    defer std.testing.allocator.free(license_path);
-    var activated = try license.activateToPath(std.testing.io, std.testing.allocator, "dev-pro", license_path);
-    activated.deinit();
-
-    stdout_writer = .fixed(&stdout_buf);
-    stderr_writer = .fixed(&stderr_buf);
     const missing_code = try command(std.testing.io, &.{ "--session", "missing" }, &stdout_writer, &stderr_writer);
 
     try std.testing.expectEqual(exit_codes.general, missing_code);
@@ -190,4 +136,6 @@ test "report public errors render license remediation and missing-session guidan
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "No reportable session found") != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk run -- echo") != null);
     try std.testing.expect(std.mem.indexOfScalar(u8, stderr_writer.buffered(), 0x1b) == null);
+    // Free feature: no license gate messaging.
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "license") == null);
 }

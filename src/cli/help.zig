@@ -511,14 +511,7 @@ pub const commands =
         } },
         .{ .name = "report", .summary = "Export a safety report for a session", .usage = "ryk report --session <id|last> --format markdown|json", .category = .diagnostics, .details = &.{
             "Loads a local session, verifies session integrity, and exports denied actions, redactions, plugin readiness, and a plain-language prevention summary.",
-            "Report export is a Pro/Team local-license feature. Core safety commands remain available without a license.",
-        } },
-        .{ .name = "license", .summary = "Manage local offline licenses", .usage = "ryk license <status|activate> [...]", .category = .advanced, .additional_completion_flags = &.{"--json"}, .details = &.{
-            "Subcommands:",
-            "  ryk license status [--json]",
-            "  ryk license activate <key-or-file>",
-            "Development keys: dev-free, dev-pro, dev-team.",
-            "Licenses are verified offline and stored under the user config directory.",
+            "Report export is free — no license required.",
         } },
         .{ .name = "ci", .summary = "Run local CI readiness checks", .usage = "ryk ci check [--format markdown|json] [--github-summary <path>]", .category = .advanced, .details = &.{
             "Validates .orca/policy.yaml, rejects dangerous obvious defaults, runs a focused CI-safe redteam fixture, and emits GitHub Actions-friendly output.",

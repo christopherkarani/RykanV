@@ -49,8 +49,7 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 | `init` | Create an Orca policy (power/CI scaffold) | `src/cli/init.zig` |
 | `policy` | Validate, explain, and apply policies | `src/cli/policy.zig` |
 | `credentials` | Check Secretless credential brokers | `src/cli/credentials.zig` |
-| `report` | Export a local safety report | `src/cli/report.zig` |
-| `license` | Manage local offline licenses | `src/cli/license.zig` |
+| `report` | Export a local safety report (free) | `src/cli/report.zig` |
 | `test` | Test a shell command with Zig shell_engine packs | `src/cli/shell_test.zig` |
 | `packs` | Browse / enable / disable safety packs (oracle + pack_config) | `src/cli/packs.zig` |
 | `allowlist` | Permanent pack-exception allowlist (rule id / exact command) | `src/cli/allowlist_cmd.zig` |
@@ -78,6 +77,7 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 | `quickstart` | Hard-removed from dispatcher — use `ryk start` |
 | `setup` | Hard-removed from dispatcher — use `ryk start` (library retained internally) |
 | `status` | Hard-removed from dispatcher — use `ryk doctor` |
+| `license` | Hard-removed — report export is free; no license CLI |
 
 ### Not available (hidden; typing yields short notice)
 
@@ -233,7 +233,7 @@ Check Secretless credential broker configuration.
 
 ### `ryk report`
 
-Export a local safety report (Pro/Team license feature).
+Export a local safety report. Free for all users — no license required.
 
 **Usage:** `ryk report --session <id|last> --format <format>`
 
@@ -242,22 +242,6 @@ Export a local safety report (Pro/Team license feature).
 |------|-------------|
 | `--session <id\|last>` | Session ID or `last` |
 | `--format markdown\|json` | Output format |
-
----
-
-### `ryk license`
-
-Manage local offline licenses.
-
-**Usage:** `ryk license <status|activate> [...]`
-
-**Subcommands:**
-| Subcommand | Usage | Description |
-|------------|-------|-------------|
-| `status` | `ryk license status [--json]` | Show license status |
-| `activate` | `ryk license activate <key-or-file>` | Activate a license key |
-
-**Development keys:** `dev-free`, `dev-pro`, `dev-team`
 
 ---
 

@@ -7,7 +7,6 @@ const credentials_cmd = @import("credentials.zig");
 const doctor = @import("doctor.zig");
 const report_cmd = @import("report.zig");
 const init = @import("init.zig");
-const license_cmd = @import("license.zig");
 const ci_cmd = @import("ci.zig");
 
 const plugin = @import("plugin.zig");
@@ -65,7 +64,6 @@ const DashboardAction = enum {
     ci_check,
     suggest_allowlist,
     allowlist_list,
-    license_status,
     init_generic_agent,
 
     fn id(self: DashboardAction) []const u8 {
@@ -84,7 +82,6 @@ const DashboardAction = enum {
             .ci_check => "ci-check",
             .suggest_allowlist => "suggest-allowlist",
             .allowlist_list => "allowlist-list",
-            .license_status => "license-status",
             .init_generic_agent => "init-generic-agent",
         };
     }
@@ -100,7 +97,7 @@ const DashboardAction = enum {
     fn allowedWithoutWorkspace(self: DashboardAction) bool {
         return switch (self) {
             // Plugin doctor is host-global (not workspace policy).
-            .doctor, .license_status, .openclaw_doctor, .hermes_doctor => true,
+            .doctor, .openclaw_doctor, .hermes_doctor => true,
             else => false,
         };
     }
@@ -850,7 +847,6 @@ fn runAllowedAction(io: std.Io, allocator: std.mem.Allocator, action: []const u8
         .replay_denied => replay.command(io, &.{ "--session", "last", "--only", "denied", "--verify" }, stdout, stderr),
         .report_last => report_cmd.command(io, &.{ "--session", "last", "--format", "markdown" }, stdout, stderr),
         .ci_check => ci_cmd.command(io, &.{ "check", "--format", "markdown" }, stdout, stderr),
-        .license_status => license_cmd.command(io, &.{"status"}, stdout, stderr),
         // Handled above (daemon / openDir / absolute path).
         .suggest_allowlist, .allowlist_list, .init_generic_agent, .policy_check => unreachable,
     }) catch |err| {
@@ -1114,12 +1110,12 @@ test "dashboard parses machine and workspace flags" {
 
 test "machine dashboard actions exclude workspace-scoped commands" {
     try std.testing.expect(actionAllowedWithoutWorkspace("doctor"));
-    try std.testing.expect(actionAllowedWithoutWorkspace("license-status"));
     try std.testing.expect(actionAllowedWithoutWorkspace("openclaw-doctor"));
     try std.testing.expect(actionAllowedWithoutWorkspace("hermes-doctor"));
     try std.testing.expect(!actionAllowedWithoutWorkspace("replay-last"));
     try std.testing.expect(!actionAllowedWithoutWorkspace("report-last"));
     try std.testing.expect(!actionAllowedWithoutWorkspace("ci-check"));
+    try std.testing.expect(!actionAllowedWithoutWorkspace("license-status"));
     try std.testing.expectError(error.WorkspaceRequired, runAllowedAction(std.testing.io, std.testing.allocator, "replay-last", null));
 }
 
@@ -1231,12 +1227,10 @@ test "workspace dashboard actions run in the selected canonical workspace" {
 
 test "dashboard action workspace cwd classification matches remediation surface" {
     try std.testing.expect(actionNeedsWorkspaceCwd("doctor"));
-    try std.testing.expect(!actionNeedsWorkspaceCwd("license-status"));
     try std.testing.expect(!actionNeedsWorkspaceCwd("init-generic-agent"));
     try std.testing.expect(!actionNeedsWorkspaceCwd("policy-check"));
     try std.testing.expect(!actionNeedsWorkspaceCwd("suggest-allowlist"));
     try std.testing.expect(actionNeedsWorkspaceCwd("replay-last"));
-    try std.testing.expect(actionNeedsWorkspaceCwd("ci-check"));
     try std.testing.expect(actionNeedsWorkspaceCwd("ci-check"));
 }
 

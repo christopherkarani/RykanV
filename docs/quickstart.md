@@ -120,7 +120,7 @@ Engine self-test fixtures (not your workspace policy):
 ./zig-out/bin/ryk redteam --ci
 ```
 
-Report export is gated to a local Pro/Team license; free mode still allows Safe Launch, policy checks, and replay. See `orca help --all` and [license](../ORCA_CLI_COMMANDS.md) notes.
+Report export is free (`ryk report`). See `ryk help --all` for the full command surface.
 
 ## Next Steps
 
