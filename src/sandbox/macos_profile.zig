@@ -47,10 +47,10 @@ pub const RenderOptions = struct {
     network_route_forcing: ?NetworkRouteForcing = null,
     /// Residual grade. Default is hardened.
     profile_grade: SeatbeltProfileGrade = SeatbeltProfileGrade.default_grade,
-    /// Absolute paths of multi-nlink non-secret basenames under the workspace
-    /// (prepare-time hardlink residual closes outside secret-form inodes linked
-    /// under ordinary names). Each path receives last-match deny for
-    /// read/write/metadata. Caller owns the slices.
+    /// Absolute paths of multi-nlink non-secret basenames that need explicit
+    /// last-match denies (secret-sharing inodes and outside-link residual).
+    /// Internal-only hardlink groups (e.g. cargo `target/` object graphs) are
+    /// not included. Caller owns the slices.
     hardlink_alias_denies: []const []const u8 = &.{},
 };
 
@@ -325,21 +325,43 @@ fn appendBootstrapFs(
     );
 }
 
-/// Regular file recorded during protect-on hardlink alias discovery.
+/// Multi-nlink regular file recorded during protect-on hardlink alias discovery.
 const ScannedFile = struct {
     path: []u8,
     secret_name: bool,
     nlink: u64,
+    dev: u64,
+    ino: u64,
+};
+
+const InodeKey = struct {
+    dev: u64,
+    ino: u64,
+};
+
+const InodeAgg = struct {
+    /// Number of multi-nlink paths for this inode found under the workspace walk.
+    seen: u32,
+    nlink: u64,
+    has_secret: bool,
 };
 
 /// Walk `workspace_root` and return owned absolute paths of regular files that
 /// need explicit last-match Seatbelt path denies as hardlink aliases.
 ///
-/// Policy (aligns with Linux FUSE multi-nlink taint):
+/// Policy:
 /// - Secret-form basenames are covered by the shared path-regex deny.
-/// - Non-secret basenames with `nlink > 1` are denied by path: they can alias
-///   an outside secret-form inode (e.g. host `.env` hardlinked as `config.txt`)
-///   or a workspace secret-form name. Single-nlink ordinary files stay allowed.
+/// - Non-secret basenames are denied by path only when their inode is hostile:
+///   1. any scanned path on that inode is secret-form (workspace `.env` hardlinked
+///      as `notes.txt`), or
+///   2. `nlink` exceeds the number of workspace paths found for that inode
+///      (outside residual: host `.env` hardlinked into the workspace as
+///      `config.txt` while the secret basename lives outside the walk).
+/// - Multi-nlink groups that are entirely non-secret and fully contained in the
+///   workspace (cargo/incremental hardlink graphs, APFS shared build artifacts)
+///   are **not** denied — denying them bloated SBPL until `sandbox_init` failed
+///   with `child_apply_failed` on monorepos.
+/// - Single-nlink ordinary files stay allowed.
 ///
 /// Fail-closed policy (protect-on prepare path):
 /// - Missing workspace (`error.FileNotFound`) → empty list (regex deny still
@@ -392,6 +414,25 @@ pub fn collectSecretHardlinkAliasPaths(
         &entries,
     );
 
+    var aggs = std.AutoHashMap(InodeKey, InodeAgg).init(allocator);
+    defer aggs.deinit();
+
+    for (entries.items) |e| {
+        const key = InodeKey{ .dev = e.dev, .ino = e.ino };
+        const gop = try aggs.getOrPut(key);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .{
+                .seen = 0,
+                .nlink = e.nlink,
+                .has_secret = false,
+            };
+        }
+        gop.value_ptr.seen = std.math.add(u32, gop.value_ptr.seen, 1) catch return error.ScanCapacity;
+        if (e.secret_name) gop.value_ptr.has_secret = true;
+        // Prefer the higher link count if fstat disagrees (should not happen).
+        if (e.nlink > gop.value_ptr.nlink) gop.value_ptr.nlink = e.nlink;
+    }
+
     var aliases: std.ArrayList([]const u8) = .empty;
     errdefer {
         for (aliases.items) |p| allocator.free(p);
@@ -399,8 +440,11 @@ pub fn collectSecretHardlinkAliasPaths(
     }
 
     for (entries.items) |e| {
-        // Secret basenames: path-regex deny. Multi-nlink non-secret: explicit path deny.
-        if (e.secret_name or e.nlink <= 1) continue;
+        // Secret basenames: path-regex deny (no per-path entry needed).
+        if (e.secret_name) continue;
+        const agg = aggs.get(.{ .dev = e.dev, .ino = e.ino }) orelse continue;
+        const outside_residual = agg.nlink > @as(u64, agg.seen);
+        if (!agg.has_secret and !outside_residual) continue;
         // dupe before append: free on append failure (partial-success path).
         const owned = try allocator.dupe(u8, e.path);
         errdefer allocator.free(owned);
@@ -485,6 +529,10 @@ fn recordScannedRegular(
     entries: *std.ArrayList(ScannedFile),
 ) !void {
     const meta = (try regularFileMetaForPath(io, child_path)) orelse return;
+    // Single-nlink files cannot be hardlink aliases — skip storage (regex still
+    // covers secret basenames). Monorepo build trees hardlink thousands of
+    // ordinary objects; retaining them only for the multi-nlink filter.
+    if (meta.nlink <= 1) return;
     const secret_name = profile.isWorkspaceSecretBasename(entry_name);
     const owned = try allocator.dupe(u8, child_path);
     errdefer allocator.free(owned);
@@ -492,11 +540,15 @@ fn recordScannedRegular(
         .path = owned,
         .secret_name = secret_name,
         .nlink = meta.nlink,
+        .dev = meta.dev,
+        .ino = meta.ino,
     });
 }
 
 const RegularFileMeta = struct {
     nlink: u64,
+    dev: u64,
+    ino: u64,
 };
 
 /// Open/fstat a path as a regular file. Open/fstat failures → `ScanOpenFailed`
@@ -508,12 +560,14 @@ fn regularFileMetaForPath(io: std.Io, path: []const u8) error{ScanOpenFailed}!?R
         .follow_symlinks = false,
     }) catch return error.ScanOpenFailed;
     defer file.close(io);
-    // Zig 0.16 File.Stat omits nlink; use libc fstat for multi-link detection.
+    // Zig 0.16 File.Stat omits nlink/ino; use libc fstat for multi-link detection.
     var st: std.posix.Stat = undefined;
     if (std.c.fstat(file.handle, &st) != 0) return error.ScanOpenFailed;
     if (!std.posix.S.ISREG(st.mode)) return null;
     return .{
         .nlink = @intCast(st.nlink),
+        .dev = @intCast(st.dev),
+        .ino = @intCast(st.ino),
     };
 }
 
@@ -1224,6 +1278,28 @@ test "collectSecretHardlinkAliasPaths finds non-secret basenames sharing secret 
     try std.testing.expect(std.mem.endsWith(u8, aliases[0], "alias.txt"));
     try std.testing.expect(!std.mem.endsWith(u8, aliases[0], ".env"));
     try std.testing.expect(!std.mem.endsWith(u8, aliases[0], "ordinary.txt"));
+}
+
+test "collectSecretHardlinkAliasPaths ignores internal non-secret hardlink groups" {
+    // Cargo/incremental trees hardlink many non-secret objects. Those must not
+    // become SBPL path denies (profile size → sandbox_init / child_apply_failed).
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "obj-a.o", .data = "object-body" });
+    tmp.dir.hardLink("obj-a.o", tmp.dir, "obj-b.o", io, .{}) catch return error.SkipZigTest;
+    try tmp.dir.writeFile(io, .{ .sub_path = "readme.txt", .data = "plain" });
+
+    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+
+    const aliases = try collectSecretHardlinkAliasPaths(allocator, io, root);
+    defer freeHardlinkAliasPaths(allocator, aliases);
+
+    try std.testing.expectEqual(@as(usize, 0), aliases.len);
 }
 
 test "collectSecretHardlinkAliasPaths denies outside secret hardlinked under non-secret name" {
