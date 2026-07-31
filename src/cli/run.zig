@@ -2342,6 +2342,12 @@ test "agent-primary host launch enters empty backpack without secretless flag" {
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
+    // Fake HOME with agent config so empty-backpack fail-closed does not fire.
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    try home_tmp.dir.createDirPath(std.testing.io, ".claude");
+    const fake_home = try home_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(fake_home);
     {
         const script = try tmp.dir.createFile(std.testing.io, "claude", .{});
         defer script.close(std.testing.io);
@@ -2356,6 +2362,7 @@ test "agent-primary host launch enters empty backpack without secretless flag" {
     defer current.deinit();
     const path_env = if (std.c.getenv("PATH")) |path| std.mem.span(path) else "/usr/bin:/bin:/usr/sbin:/sbin";
     try current.put("PATH", path_env);
+    try current.put("HOME", fake_home);
     try current.put("MYSQL_PWD", "SuperSecretPass99");
 
     var stdout_buf: [8192]u8 = undefined;
