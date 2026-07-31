@@ -122,7 +122,15 @@ pub fn loadPackIdsForWorkspace(
     };
     defer allocator.free(resolved.path);
 
-    var lists = try loadPackIdLists(io, allocator, resolved.path);
+    var lists = loadPackIdLists(io, allocator, resolved.path) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        // User-scope config under Seatbelt "no bare home" (or missing HOME path) is
+        // unreadable by design → baseline packs only, not a shell hard-deny.
+        else => {
+            if (resolved.scope == .user and isSandboxUserConfigAccessError(err)) return .{};
+            return err;
+        },
+    };
     errdefer lists.deinit(allocator);
 
     if (resolved.scope == .project) {
@@ -149,6 +157,12 @@ pub fn loadPackIdsForWorkspace(
     };
 }
 
+/// Errors that mean "cannot read user config under sandbox residual", not "corrupt
+/// project config". Soft-degrade to baseline-only / skip user merge.
+fn isSandboxUserConfigAccessError(err: anyerror) bool {
+    return err == error.AccessDenied or err == error.PermissionDenied;
+}
+
 /// Resolve where pack enablement should be written.
 /// Prefers project `.orca.toml` when workspace has `.git` or `.orca/policy.yaml`.
 pub fn resolvePackConfigPath(
@@ -164,6 +178,10 @@ pub fn resolvePackConfigPath(
 }
 
 /// Merge baseline-only entries from user pack config into `disabled` (owned ids).
+///
+/// Under hardened Seatbelt (no bare home), user config is often unreadable. That is
+/// not a project-config failure: skip the merge (baseline packs stay enabled — safer
+/// than failing closed on every shell command in-sandbox).
 fn mergeUserBaselineDisabled(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -172,7 +190,13 @@ fn mergeUserBaselineDisabled(
     const user = resolveUserPackConfigPath(allocator) catch return;
     defer allocator.free(user.path);
 
-    var user_lists = try loadPackIdLists(io, allocator, user.path);
+    var user_lists = loadPackIdLists(io, allocator, user.path) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => {
+            // Missing / unreadable user config: no baseline opt-outs to merge.
+            return;
+        },
+    };
     defer user_lists.deinit(allocator);
 
     for (user_lists.disabled.items) |id| {
@@ -1121,6 +1145,99 @@ test "loadPackIdsForWorkspace strips project baseline disabled and merges user b
     }
     try std.testing.expect(saw_disk); // user baseline opt-out honored
     try std.testing.expect(!saw_core_git); // project baseline strip
+}
+
+test "loadPackIdsForWorkspace survives unreadable user config when merging baseline" {
+    // Seatbelt residual: project config is readable; ~/.config/orca is not.
+    // Must not fail closed the whole shell eval (pack-config-load deny).
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    {
+        const f = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        defer f.close(std.testing.io);
+        try f.writeStreamingAll(std.testing.io, "version: 1\n");
+    }
+    {
+        const f = try tmp.dir.createFile(std.testing.io, ".orca.toml", .{});
+        defer f.close(std.testing.io);
+        try f.writeStreamingAll(std.testing.io,
+            \\[packs]
+            \\enabled = ["package_managers"]
+            \\
+        );
+    }
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var xdg = try testIsolateXdg();
+    defer xdg.deinit();
+
+    // Create user config then strip all permissions so loadPackIdLists hits AccessDenied.
+    {
+        const user = try resolveUserPackConfigPath(std.testing.allocator);
+        defer std.testing.allocator.free(user.path);
+        try writeConfigFile(std.testing.io, std.testing.allocator, user.path,
+            \\[packs]
+            \\disabled = ["system.disk"]
+            \\
+        );
+        try std.Io.Dir.cwd().setFilePermissions(
+            std.testing.io,
+            user.path,
+            std.Io.File.Permissions.fromMode(0o000),
+            .{},
+        );
+    }
+
+    var loaded = try loadPackIdsForWorkspace(std.testing.io, std.testing.allocator, root);
+    defer loaded.deinit(std.testing.allocator);
+
+    // Project enabled packs still load; user baseline opt-out is skipped (not deny-all).
+    var saw_pkg = false;
+    for (loaded.enabled) |id| {
+        if (std.mem.eql(u8, id, "package_managers")) saw_pkg = true;
+    }
+    try std.testing.expect(saw_pkg);
+    for (loaded.disabled) |id| {
+        try std.testing.expect(!std.mem.eql(u8, id, "system.disk"));
+    }
+}
+
+test "loadPackIdsForWorkspace user-scope AccessDenied degrades to baseline only" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    // No project markers → user scope. Point XDG at a directory we make unreadable.
+    var xdg = try testIsolateXdg();
+    defer xdg.deinit();
+
+    const user = try resolveUserPackConfigPath(std.testing.allocator);
+    defer std.testing.allocator.free(user.path);
+    try writeConfigFile(std.testing.io, std.testing.allocator, user.path,
+        \\[packs]
+        \\enabled = ["containers.docker"]
+        \\
+    );
+    try std.Io.Dir.cwd().setFilePermissions(
+        std.testing.io,
+        user.path,
+        std.Io.File.Permissions.fromMode(0o000),
+        .{},
+    );
+
+    // Workspace without project markers forces user scope.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var loaded = try loadPackIdsForWorkspace(std.testing.io, std.testing.allocator, root);
+    defer loaded.deinit(std.testing.allocator);
+    // Soft residual: empty lists (baseline only), not error.
+    try std.testing.expectEqual(@as(usize, 0), loaded.enabled.len);
+    try std.testing.expectEqual(@as(usize, 0), loaded.disabled.len);
 }
 
 test "resolvePackConfigPath treats .orca/policy.yaml as project marker" {
