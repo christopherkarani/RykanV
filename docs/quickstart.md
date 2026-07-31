@@ -27,7 +27,7 @@ For a package install (Homebrew, install script), see [install.md](install.md), 
 - creates `.orca/policy.yaml` when missing (Ask on risk / `generic-agent` preset)
 - wires host integrations
 - verifies core readiness (daemon + policy)
-- prints next steps: run an agent, then `status` / `replay`
+- prints next steps: run an agent, then `doctor` / `scan` / `replay`
 
 Non-interactive / CI-friendly:
 

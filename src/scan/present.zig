@@ -110,8 +110,11 @@ pub fn whyFired(f: types.Finding, buf: []u8) []const u8 {
 
 pub fn hostNextStep(host: types.Host, session_id: []const u8, buf: []u8) []const u8 {
     return switch (host) {
-        // Full session id for replay — never a truncated tail (breaks resume).
-        .ryk => std.fmt.bufPrint(buf, "Next: ryk replay --session {s}", .{displaySessionId(.ryk, session_id)}) catch "Next: ryk replay",
+        // Full session id for replay — quote so shell metacharacters are paste-safe.
+        .ryk => blk: {
+            const sid = displaySessionId(.ryk, session_id);
+            break :blk std.fmt.bufPrint(buf, "Next: ryk replay --session '{s}'", .{sid}) catch "Next: ryk replay";
+        },
         .codex => blk: {
             if (codexResumeUuid(session_id)) |uuid| {
                 break :blk std.fmt.bufPrint(buf, "Next: codex resume {s}  (or c copy / o reveal File)", .{uuid}) catch

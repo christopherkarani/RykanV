@@ -14,9 +14,33 @@ const suggestions = @import("suggestions.zig");
 const env_util = @import("../env_util.zig");
 
 pub const github_latest_url = "https://api.github.com/repos/christopherkarani/rykan/releases/latest";
-pub const install_script_url = "https://raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh";
-pub const install_ps1_url = "https://raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.ps1";
+/// Fallback when no target version is known (should be rare — prefer tag-pinned URLs).
+pub const install_script_url_main = "https://raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh";
+pub const install_ps1_url_main = "https://raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.ps1";
+/// Back-compat alias used in user-facing manual recovery messages.
+pub const install_script_url = install_script_url_main;
+pub const install_ps1_url = install_ps1_url_main;
 pub const docs_install_url = "https://github.com/christopherkarani/rykan/blob/main/docs/install.md";
+
+/// Pin installer script to the release tag that matches `target_version` (no leading `v`).
+pub fn installScriptUrlForVersion(allocator: std.mem.Allocator, target_version: []const u8, windows: bool) ![]u8 {
+    const tag = stripLeadingV(target_version);
+    if (tag.len == 0) {
+        return try allocator.dupe(u8, if (windows) install_ps1_url_main else install_script_url_main);
+    }
+    if (windows) {
+        return try std.fmt.allocPrint(
+            allocator,
+            "https://raw.githubusercontent.com/christopherkarani/rykan/v{s}/scripts/install.ps1",
+            .{tag},
+        );
+    }
+    return try std.fmt.allocPrint(
+        allocator,
+        "https://raw.githubusercontent.com/christopherkarani/rykan/v{s}/scripts/install.sh",
+        .{tag},
+    );
+}
 
 pub const InstallChannel = enum {
     curl_installer,
@@ -116,6 +140,12 @@ pub fn parseSemver(text: []const u8) !Semver {
     };
 }
 
+/// True when version string carries a prerelease suffix (`-rc.1`, `-beta`, …).
+pub fn hasPrereleaseSuffix(text: []const u8) bool {
+    const core = stripLeadingV(text);
+    return std.mem.indexOfScalar(u8, core, '-') != null;
+}
+
 /// Compare `a` to `b`: returns `.older` if a < b, `.equal` if equal, `.newer` if a > b.
 pub fn compareSemver(a: Semver, b: Semver) Order {
     if (a.major != b.major) return if (a.major < b.major) .older else .newer;
@@ -127,7 +157,15 @@ pub fn compareSemver(a: Semver, b: Semver) Order {
 pub fn compareVersionStrings(current: []const u8, target: []const u8) !Order {
     const a = try parseSemver(current);
     const b = try parseSemver(target);
-    return compareSemver(a, b);
+    const base = compareSemver(a, b);
+    if (base != .equal) return base;
+    // Same major.minor.patch: prerelease is older than a final release so
+    // `1.2.9-rc.1` → `1.2.9` is an upgrade, not a skip.
+    const cur_pre = hasPrereleaseSuffix(current);
+    const tgt_pre = hasPrereleaseSuffix(target);
+    if (cur_pre and !tgt_pre) return .older;
+    if (!cur_pre and tgt_pre) return .newer;
+    return .equal;
 }
 
 /// Heuristic install channel from the running binary path.
@@ -473,17 +511,34 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         return exit_codes.general;
     }
 
+    // Best-effort: re-read on-PATH version. Installer exit 0 alone is not enough
+    // when PATH still points at a different binary.
+    const post = resolveOnPathVersion(allocator, io);
+    defer if (post) |p| allocator.free(p);
+    const verified = if (post) |p| blk: {
+        const post_order = compareVersionStrings(p, target) catch break :blk false;
+        // Accept equal (exact) or newer (channel already past target).
+        break :blk post_order == .equal or post_order == .newer;
+    } else false;
+
     if (args.json) {
         try writeJsonResult(stdout, .{
-            .status = "updated",
-            .current = current,
+            .status = if (verified) "updated" else "installed_unverified",
+            .current = if (post) |p| p else current,
             .target = target,
             .channel = @tagName(channel),
-            .action = "installed",
-            .message = "installer completed; restart open shells if PATH changed",
+            .action = if (verified) "installed" else "installed_unverified",
+            .message = if (verified)
+                "installer completed; on-PATH version matches target"
+            else
+                "installer exited 0 but on-PATH version could not be confirmed; restart shells and re-check",
         });
-    } else {
+    } else if (verified) {
         try stdout.print("\n✅ Update complete: ryk {s} → {s}\n", .{ current, target });
+        try stdout.writeAll("If hosts need rewiring after a major change, run: ryk start\n");
+    } else {
+        try stdout.print("\n⚠ Installer finished, but could not confirm ryk {s} on PATH.\n", .{target});
+        try stdout.writeAll("Open a new shell and run: ryk version\n");
         try stdout.writeAll("If hosts need rewiring after a major change, run: ryk start\n");
     }
     return exit_codes.success;
@@ -622,6 +677,25 @@ pub fn tagFromReleaseUrl(url: []const u8) ?[]const u8 {
     return stripLeadingV(tag);
 }
 
+/// Probe on-PATH `ryk version --json` after install (owned; null on failure).
+fn resolveOnPathVersion(allocator: std.mem.Allocator, io: std.Io) ?[]u8 {
+    const out = runCapture(allocator, io, &.{ "ryk", "version", "--json" }) catch return null;
+    defer allocator.free(out);
+    // Minimal extract: "version": "X.Y.Z"
+    const key = "\"version\"";
+    const idx = std.mem.indexOf(u8, out, key) orelse return null;
+    var i = idx + key.len;
+    while (i < out.len and (out[i] == ' ' or out[i] == ':' or out[i] == '\t')) : (i += 1) {}
+    if (i >= out.len or out[i] != '"') return null;
+    i += 1;
+    const start = i;
+    while (i < out.len and out[i] != '"') : (i += 1) {}
+    if (i <= start) return null;
+    const raw = out[start..i];
+    _ = parseSemver(raw) catch return null;
+    return allocator.dupe(u8, stripLeadingV(raw)) catch null;
+}
+
 fn runCapture(allocator: std.mem.Allocator, io: std.Io, argv: []const []const u8) ![]u8 {
     const run_result = std.process.run(allocator, io, .{
         .argv = argv,
@@ -632,9 +706,9 @@ fn runCapture(allocator: std.mem.Allocator, io: std.Io, argv: []const []const u8
             .clock = .awake,
         } },
     }) catch return error.FetchFailed;
+    // Free stderr always; free stdout only on failure. Do not combine errdefer +
+    // manual free on the same buffer (double-free on non-zero/non-exited terms).
     defer allocator.free(run_result.stderr);
-    errdefer allocator.free(run_result.stdout);
-
     switch (run_result.term) {
         .exited => |code| if (code != 0) {
             allocator.free(run_result.stdout);
@@ -744,7 +818,10 @@ fn runUnixInstaller(
     quiet_json: bool,
     stderr: anytype,
 ) !u8 {
-    const script_path = stageInstallerFile(allocator, io, install_script_url, "sh") catch |err| {
+    // Prefer tag-pinned installer so floating `main` cannot diverge from the release.
+    const url = try installScriptUrlForVersion(allocator, target_version, false);
+    defer allocator.free(url);
+    const script_path = stageInstallerFile(allocator, io, url, "sh") catch |err| {
         if (!quiet_json) {
             try stderr.writeAll("ryk update: failed to download install.sh (need curl or wget).\n");
         }
@@ -758,6 +835,23 @@ fn runUnixInstaller(
     return try execInstaller(allocator, io, &.{ "sh", script_path }, target_version, quiet_json, true);
 }
 
+/// Installer child must not inherit operator overrides that redirect download roots.
+const scrub_env_keys = [_][]const u8{
+    "RYK_BASE_URL",
+    "ORCA_BASE_URL",
+    "ARTIFACT_DIR",
+    "RYK_ARTIFACT_DIR",
+    "ORCA_ARTIFACT_DIR",
+    "RYK_INSTALL_ROOT",
+    "ORCA_INSTALL_ROOT",
+};
+
+fn scrubInstallerEnv(env_map: *std.process.Environ.Map) void {
+    for (scrub_env_keys) |key| {
+        _ = env_map.swapRemove(key);
+    }
+}
+
 fn execInstaller(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -768,6 +862,7 @@ fn execInstaller(
 ) !u8 {
     var env_map = try env_util.createProcessMap(allocator);
     defer env_map.deinit();
+    scrubInstallerEnv(&env_map);
     try env_map.put("RYK_VERSION", target_version);
     try env_map.put("ORCA_VERSION", target_version);
     if (skip_onboard) {
@@ -801,7 +896,9 @@ fn runWindowsInstaller(
     quiet_json: bool,
     stderr: anytype,
 ) !u8 {
-    const script_path = stageInstallerFile(allocator, io, install_ps1_url, "ps1") catch |err| {
+    const url = try installScriptUrlForVersion(allocator, target_version, true);
+    defer allocator.free(url);
+    const script_path = stageInstallerFile(allocator, io, url, "ps1") catch |err| {
         if (!quiet_json) {
             try stderr.writeAll("ryk update: failed to download Windows installer.\n");
         }
@@ -848,8 +945,26 @@ test "compareSemver orders versions" {
     try std.testing.expectEqual(Order.older, compareSemver(a, b));
     try std.testing.expectEqual(Order.newer, compareSemver(b, a));
     try std.testing.expectEqual(Order.equal, compareSemver(a, try parseSemver("1.2.9")));
-    try std.testing.expectEqual(Order.equal, try compareVersionStrings("1.2.9-rc.1", "1.2.9"));
+    // Prerelease is older than the final release with the same core version.
+    try std.testing.expectEqual(Order.older, try compareVersionStrings("1.2.9-rc.1", "1.2.9"));
+    try std.testing.expectEqual(Order.newer, try compareVersionStrings("1.2.9", "1.2.9-rc.1"));
+    try std.testing.expectEqual(Order.equal, try compareVersionStrings("1.2.9-rc.1", "1.2.9-rc.1"));
     try std.testing.expectError(error.InvalidSemver, parseSemver("nope"));
+}
+
+test "installScriptUrlForVersion pins release tag" {
+    const sh = try installScriptUrlForVersion(std.testing.allocator, "1.3.0", false);
+    defer std.testing.allocator.free(sh);
+    try std.testing.expectEqualStrings(
+        "https://raw.githubusercontent.com/christopherkarani/rykan/v1.3.0/scripts/install.sh",
+        sh,
+    );
+    const ps1 = try installScriptUrlForVersion(std.testing.allocator, "v2.0.0", true);
+    defer std.testing.allocator.free(ps1);
+    try std.testing.expectEqualStrings(
+        "https://raw.githubusercontent.com/christopherkarani/rykan/v2.0.0/scripts/install.ps1",
+        ps1,
+    );
 }
 
 test "detectInstallChannel classifies known layouts" {

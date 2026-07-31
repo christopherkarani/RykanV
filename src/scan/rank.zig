@@ -20,9 +20,26 @@ pub fn sortFindings(findings: []types.Finding) void {
     std.mem.sort(types.Finding, findings, {}, lessThan);
 }
 
+/// Weak/placeholder fingerprints must not collapse distinct secrets together.
+fn isStrongFingerprint(fp: []const u8) bool {
+    if (fp.len < 8) return false;
+    // classifyMaterial fallback when no digest is available.
+    if (std.mem.eql(u8, fp, "00000000")) return false;
+    var all_zero = true;
+    for (fp) |c| {
+        if (c != '0') {
+            all_zero = false;
+            break;
+        }
+    }
+    if (all_zero) return false;
+    return true;
+}
+
 /// Collapse secret_material rows that share the same fingerprint (across hosts/sessions).
 /// Keeps the highest-ranked (already sorted) hit and bumps `occurrence_count`.
 /// Frees dropped findings. In-place on an ArrayList-style slice via comptime allocator.
+/// Weak fingerprints (empty / all-zero placeholders) are never merged.
 pub fn collapseSecretFingerprints(allocator: std.mem.Allocator, findings: *std.ArrayList(types.Finding)) void {
     if (findings.items.len < 2) return;
     var write: usize = 0;
@@ -31,22 +48,25 @@ pub fn collapseSecretFingerprints(allocator: std.mem.Allocator, findings: *std.A
         const cur = findings.items[i];
         if (cur.kind == .secret_material) {
             if (cur.secret_fingerprint) |fp| {
-                var merged = false;
-                var j: usize = 0;
-                while (j < write) : (j += 1) {
-                    const prev = findings.items[j];
-                    if (prev.kind != .secret_material) continue;
-                    const pfp = prev.secret_fingerprint orelse continue;
-                    if (std.mem.eql(u8, pfp, fp)) {
-                        findings.items[j].occurrence_count += cur.occurrence_count;
-                        // Prefer keeping the newer timestamp already in `prev` (sorted).
-                        var drop = findings.items[i];
-                        drop.deinit(allocator);
-                        merged = true;
-                        break;
+                if (isStrongFingerprint(fp)) {
+                    var merged = false;
+                    var j: usize = 0;
+                    while (j < write) : (j += 1) {
+                        const prev = findings.items[j];
+                        if (prev.kind != .secret_material) continue;
+                        const pfp = prev.secret_fingerprint orelse continue;
+                        if (!isStrongFingerprint(pfp)) continue;
+                        if (std.mem.eql(u8, pfp, fp)) {
+                            findings.items[j].occurrence_count += cur.occurrence_count;
+                            // Prefer keeping the newer timestamp already in `prev` (sorted).
+                            var drop = findings.items[i];
+                            drop.deinit(allocator);
+                            merged = true;
+                            break;
+                        }
                     }
+                    if (merged) continue;
                 }
-                if (merged) continue;
             }
         }
         if (write != i) findings.items[write] = findings.items[i];
@@ -171,4 +191,43 @@ test "collapseSecretFingerprints merges same fp" {
         }
     }
     try std.testing.expect(saw_merged);
+}
+
+test "collapseSecretFingerprints does not merge weak fingerprints" {
+    var list: std.ArrayList(types.Finding) = .empty;
+    defer {
+        for (list.items) |*f| f.deinit(std.testing.allocator);
+        list.deinit(std.testing.allocator);
+    }
+    const weak = "00000000";
+    try list.append(std.testing.allocator, .{
+        .kind = .secret_material,
+        .severity = .high,
+        .host = .codex,
+        .session_id = try std.testing.allocator.dupe(u8, "s1"),
+        .path = try std.testing.allocator.dupe(u8, "p1"),
+        .timestamp_secs = 200,
+        .title = try std.testing.allocator.dupe(u8, "t1"),
+        .detail = try std.testing.allocator.dupe(u8, "Value hidden"),
+        .secret_label = try std.testing.allocator.dupe(u8, "secret:embedded"),
+        .secret_fingerprint = try std.testing.allocator.dupe(u8, weak),
+        .evidence_ref = try std.testing.allocator.dupe(u8, "e1"),
+        .occurrence_count = 1,
+    });
+    try list.append(std.testing.allocator, .{
+        .kind = .secret_material,
+        .severity = .high,
+        .host = .grok,
+        .session_id = try std.testing.allocator.dupe(u8, "s2"),
+        .path = try std.testing.allocator.dupe(u8, "p2"),
+        .timestamp_secs = 100,
+        .title = try std.testing.allocator.dupe(u8, "t2"),
+        .detail = try std.testing.allocator.dupe(u8, "Value hidden"),
+        .secret_label = try std.testing.allocator.dupe(u8, "secret:embedded"),
+        .secret_fingerprint = try std.testing.allocator.dupe(u8, weak),
+        .evidence_ref = try std.testing.allocator.dupe(u8, "e2"),
+        .occurrence_count = 1,
+    });
+    collapseSecretFingerprints(std.testing.allocator, &list);
+    try std.testing.expectEqual(@as(usize, 2), list.items.len);
 }

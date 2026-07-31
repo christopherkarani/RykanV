@@ -90,13 +90,13 @@ pub const Scorecard = struct {
     danger_count: usize = 0,
     secret_access_count: usize = 0,
     secret_material_count: usize = 0,
-    hosts: [6]HostAccount = .{
-        .{ .host = .claude, .status = .not_found },
-        .{ .host = .codex, .status = .not_found },
-        .{ .host = .pi, .status = .not_found },
-        .{ .host = .opencode, .status = .not_found },
-        .{ .host = .grok, .status = .not_found },
-        .{ .host = .ryk, .status = .not_found },
+    // Length bound to Host enum so new hosts cannot silently desync the scorecard.
+    hosts: [@typeInfo(Host).@"enum".fields.len]HostAccount = blk: {
+        var arr: [@typeInfo(Host).@"enum".fields.len]HostAccount = undefined;
+        for (@typeInfo(Host).@"enum".fields, 0..) |field, i| {
+            arr[i] = .{ .host = @enumFromInt(field.value), .status = .not_found };
+        }
+        break :blk arr;
     },
 
     pub fn setHost(self: *Scorecard, host: Host, status: HostStatus, sessions: usize, note: []const u8) void {

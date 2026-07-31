@@ -138,6 +138,7 @@ fn openLinux(io: std.Io, path: []const u8) Result {
 
 fn runArgv(io: std.Io, argv: []const []const u8) Result {
     // Use process.run so we don't manage pipes; path is argv element (spaces OK).
+    // Bound wait so a hung open/xdg-open cannot freeze the TUI forever.
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_state.deinit();
     const allocator = gpa_state.allocator();
@@ -146,6 +147,10 @@ fn runArgv(io: std.Io, argv: []const []const u8) Result {
         .argv = argv,
         .stdout_limit = .limited(4096),
         .stderr_limit = .limited(4096),
+        .timeout = .{ .duration = .{
+            .raw = .fromNanoseconds(8 * std.time.ns_per_s),
+            .clock = .awake,
+        } },
     }) catch return .unavailable;
     defer {
         allocator.free(run_result.stdout);

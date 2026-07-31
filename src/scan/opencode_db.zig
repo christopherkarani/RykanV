@@ -315,7 +315,15 @@ fn runSqlite3(
         .argv = argv,
         .stdout_limit = .limited(stdout_limit),
         .stderr_limit = .limited(64 * 1024),
-    }) catch return error.SqliteRunFailed;
+        // Bound hang residual if sqlite3 blocks on a locked/hostile DB.
+        .timeout = .{ .duration = .{
+            .raw = .fromNanoseconds(12 * std.time.ns_per_s),
+            .clock = .awake,
+        } },
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.SqliteRunFailed,
+    };
     // Free stderr always; transfer stdout only on success (no errdefer double-free).
     defer allocator.free(run_result.stderr);
     switch (run_result.term) {

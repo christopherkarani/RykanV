@@ -31,6 +31,7 @@ const secret_path_needles = [_][]const u8{
     "private-key",
 };
 
+// Compared against lowercased command text — keep these lowercase.
 const secret_cmd_prefixes = [_][]const u8{
     "cat ",
     "head ",
@@ -39,7 +40,7 @@ const secret_cmd_prefixes = [_][]const u8{
     "more ",
     "bat ",
     "type ",
-    "Get-Content ",
+    "get-content ",
     "cp ",
     "mv ",
     "scp ",
@@ -170,17 +171,31 @@ pub fn isSecretAccessCommand(command: []const u8) bool {
     return false;
 }
 
+/// Case-insensitive substring search for residual secret-shaped prefixes.
+fn containsAsciiIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len == 0 or haystack.len < needle.len) return false;
+    var i: usize = 0;
+    while (i + needle.len <= haystack.len) : (i += 1) {
+        if (std.ascii.eqlIgnoreCase(haystack[i .. i + needle.len], needle)) return true;
+    }
+    return false;
+}
+
 /// Redact any secret material from a display string (owned).
 /// Redacts the full input first, then truncates for display (never cut mid-token before classify).
 pub fn safeDetail(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
+    // Single free owner: free on residual/truncate paths without errdefer (avoids
+    // double-free if residual free succeeds then dupe returns OutOfMemory).
     const redacted = try redact_bridge.redactAlloc(allocator, text);
-    errdefer allocator.free(redacted);
     // Fail closed if residual provider-shaped prefixes remain after redaction.
-    const residual_prefixes = [_][]const u8{ "ghp_", "gho_", "ghs_", "ghu_", "ghr_", "github_pat_", "sk-", "sk-ant-", "AKIA", "ASIA", "BEGIN PRIVATE", "BEGIN OPENSSH" };
+    const residual_prefixes = [_][]const u8{
+        "ghp_", "gho_", "ghs_", "ghu_", "ghr_", "github_pat_",
+        "sk-", "sk-ant-", "AKIA", "ASIA", "BEGIN PRIVATE", "BEGIN OPENSSH",
+    };
     for (residual_prefixes) |p| {
-        if (std.mem.indexOf(u8, redacted, p) != null) {
+        if (containsAsciiIgnoreCase(redacted, p)) {
             allocator.free(redacted);
-            return allocator.dupe(u8, redact_bridge.redacted_value);
+            return try allocator.dupe(u8, redact_bridge.redacted_value);
         }
     }
     if (redacted.len <= types.max_detail_len) return redacted;
@@ -223,4 +238,17 @@ test "secret_material never returns raw ghp_ or sk- tokens" {
 test "benign text is not secret material" {
     const hit = try classifyMaterial(std.testing.allocator, "hello world ls -la");
     try std.testing.expect(hit == null);
+}
+
+test "Get-Content case-insensitive secret access" {
+    try std.testing.expect(isSecretAccessCommand("Get-Content .env"));
+    try std.testing.expect(isSecretAccessCommand("get-content ~/.ssh/id_rsa"));
+}
+
+test "safeDetail residual prefixes are case-insensitive" {
+    // Synthetic residual shape after a failed redaction path — must never pass through.
+    const detail = try safeDetail(std.testing.allocator, "leak SK-FAKEVALUE1234567890XXXX more");
+    defer std.testing.allocator.free(detail);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "SK-FAKE") == null);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "sk-fake") == null);
 }

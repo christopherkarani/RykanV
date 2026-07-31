@@ -178,19 +178,22 @@ fn discoverRyk(io: std.Io, allocator: std.mem.Allocator, options: DiscoveryOptio
             if (host.files.items.len >= types.max_sessions_per_host) break;
             const session_path = try std.fs.path.join(allocator, &.{ root, entry.name });
             defer allocator.free(session_path);
+            if (!isSafeEntryName(entry.name)) continue;
             const events = try std.fs.path.join(allocator, &.{ session_path, "events.jsonl" });
             // appendFile always consumes `events` (frees on reject/error, owns on success).
-            if (!pathExists(io, events)) {
+            // Refuse symlink leaves (pathExists follows links — use no-follow open).
+            if (!isRegularFileNoFollow(io, events)) {
                 allocator.free(events);
                 continue;
             }
-            const mtime = fileMtimeSecs(io, events) orelse 0;
+            const mtime = fileMtimeSecsNoFollow(io, events) orelse 0;
             if (!time_window.inWindow(mtime, options.window)) {
                 allocator.free(events);
                 continue;
             }
             const sid_name = try allocator.dupe(u8, entry.name);
             defer allocator.free(sid_name);
+            // appendFile owns a dupe of session_id; this temporary is freed on all paths.
             try appendFile(allocator, &host.files, .ryk, events, sid_name, mtime);
         }
     }
@@ -339,6 +342,8 @@ fn walkCollect(
             if (std.mem.eql(u8, entry.name, "prompt_history.jsonl") or
                 std.mem.eql(u8, entry.name, "session_search.sqlite"))
                 continue;
+            // Hostile / non-session entry names.
+            if (!isSafeEntryName(entry.name)) continue;
             const name_owned = try allocator.dupe(u8, entry.name);
             defer allocator.free(name_owned);
             const file_rel = if (rel.len == 0)
@@ -346,11 +351,14 @@ fn walkCollect(
             else
                 try std.fs.path.join(allocator, &.{ rel, name_owned });
             defer allocator.free(file_rel);
-            // Do not follow symlinks out of known roots (containment).
-            if (entry.kind == .sym_link) continue;
             const file_path = try std.fs.path.join(allocator, &.{ root, file_rel });
+            // Containment: refuse symlink leaves (open without following).
+            if (!isRegularFileNoFollow(io, file_path)) {
+                allocator.free(file_path);
+                continue;
+            }
             // appendFile always consumes file_path.
-            const mtime = fileMtimeSecs(io, file_path) orelse 0;
+            const mtime = fileMtimeSecsNoFollow(io, file_path) orelse 0;
             if (!time_window.inWindow(mtime, options.window)) {
                 allocator.free(file_path);
                 continue;
@@ -460,8 +468,34 @@ fn pathExists(io: std.Io, path: []const u8) bool {
     return true;
 }
 
+/// Entry-name gate shared by directory walk and ryk session roots.
+pub fn isSafeEntryName(name: []const u8) bool {
+    if (name.len == 0 or name.len > 255) return false;
+    if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return false;
+    if (std.mem.indexOfScalar(u8, name, 0) != null) return false;
+    if (std.mem.indexOfScalar(u8, name, '/') != null) return false;
+    if (std.mem.indexOfScalar(u8, name, '\\') != null) return false;
+    return true;
+}
+
+/// True when path opens as a regular file without following symlinks.
+fn isRegularFileNoFollow(io: std.Io, path: []const u8) bool {
+    if (path.len == 0) return false;
+    const file = std.Io.Dir.cwd().openFile(io, path, .{ .follow_symlinks = false }) catch return false;
+    defer file.close(io);
+    const st = file.stat(io) catch return false;
+    return st.kind == .file;
+}
+
 fn fileMtimeSecs(io: std.Io, path: []const u8) ?i64 {
     const st = std.Io.Dir.cwd().statFile(io, path, .{}) catch return null;
+    return st.mtime.toSeconds();
+}
+
+fn fileMtimeSecsNoFollow(io: std.Io, path: []const u8) ?i64 {
+    const file = std.Io.Dir.cwd().openFile(io, path, .{ .follow_symlinks = false }) catch return null;
+    defer file.close(io);
+    const st = file.stat(io) catch return null;
     return st.mtime.toSeconds();
 }
 

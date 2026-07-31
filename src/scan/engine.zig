@@ -62,14 +62,22 @@ pub fn runScan(io: std.Io, allocator: std.mem.Allocator, options: ScanOptions) !
             scorecard.sessions_scanned += 1;
 
             var parsed = if (h.host == .opencode)
-                opencode_db.parseSession(io, allocator, file.path, file.session_id, file.mtime_secs) catch continue
+                opencode_db.parseSession(io, allocator, file.path, file.session_id, file.mtime_secs) catch |err| {
+                    // parseSession is fail-soft for IO; only OOM must bubble.
+                    if (err == error.OutOfMemory) return error.OutOfMemory;
+                    continue;
+                }
             else
-                jsonl.parseJsonlFile(io, allocator, file.path, file.mtime_secs) catch continue;
+                jsonl.parseJsonlFile(io, allocator, file.path, file.mtime_secs) catch |err| {
+                    if (err == error.OutOfMemory) return error.OutOfMemory;
+                    continue;
+                };
             defer parsed.deinit(allocator);
 
-            // Prefer content timestamp when present; drop out-of-window sessions.
+            // Discovery already windowed by mtime. Do not drop the whole session when
+            // the first content timestamp is older than the window — recent danger can
+            // live in long-running session files. Use content ts only for display.
             const ts = if (parsed.timestamp_secs != 0) parsed.timestamp_secs else file.mtime_secs;
-            if (!time_window.inWindow(ts, window)) continue;
 
             // OpenCode evidence is session-scoped (DB path alone is not a unique session id).
             const evidence_owned: ?[]u8 = if (h.host == .opencode)
@@ -131,7 +139,8 @@ fn processCommand(
     ts: i64,
     cmd: []const u8,
 ) !void {
-    // secret_access first — may dual-tag with danger; prefer secret_access only for secret paths.
+    // secret_access first. Still evaluate danger so compound commands (secret path +
+    // destructive shell) surface both — do not hide danger behind access-only.
     if (secrets.isSecretAccessCommand(cmd)) {
         const detail = try secrets.safeDetail(allocator, cmd);
         errdefer allocator.free(detail);
@@ -149,7 +158,6 @@ fn processCommand(
             .evidence_ref = path,
         });
         scorecard.secret_access_count += 1;
-        return; // prefer secret_access over generic danger for same command
     }
 
     if (try danger.evaluateDanger(allocator, cmd)) |hit_const| {

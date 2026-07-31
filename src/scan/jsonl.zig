@@ -40,11 +40,22 @@ pub fn parseJsonlFile(
     if (path.len == 0 or path.len > 4096 or std.mem.indexOfScalar(u8, path, 0) != null) {
         return result;
     }
+    // Refuse symlink targets (containment): open without following links.
+    {
+        const probe = std.Io.Dir.cwd().openFile(io, path, .{ .follow_symlinks = false }) catch |err| switch (err) {
+            error.FileNotFound => return result,
+            error.AccessDenied, error.IsDir => return result,
+            // Symlink / not a regular openable file → empty (do not follow out).
+            else => return result,
+        };
+        probe.close(io);
+    }
     const text = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(types.max_file_bytes)) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
         error.FileNotFound => return result,
         error.AccessDenied, error.IsDir => return result,
         error.FileTooBig => {
-            // Oversized blob: skip body, keep empty (bounded).
+            // Oversized blob: skip body, keep empty (bounded). Caller still counts session.
             return result;
         },
         // Fail-soft on hostile paths / IO surprises during historical scan.

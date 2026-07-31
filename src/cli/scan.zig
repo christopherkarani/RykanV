@@ -226,8 +226,11 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         try flushWriter(stdout);
         scan_lib.tui_view.run(io, stdout, &result) catch |err| switch (err) {
             // Already printed linear findings; interactive layer is optional.
+            // Never fail the successful scan exit-0 contract for TUI issues.
             error.TtyUnavailable => {},
-            else => return err,
+            else => {
+                try stderr.print("ryk scan: interactive view skipped ({s})\n", .{@errorName(err)});
+            },
         };
     } else {
         progress_ctx.finishPlain(true);

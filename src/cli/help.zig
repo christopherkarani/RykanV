@@ -86,7 +86,7 @@ pub const commands =
         .{
             .name = "init",
             .summary = "Create an ryk policy",
-            .usage = "ryk init [--preset <name>] [--mode strict|ask|yolo|observe|ci|trusted] [--ci] [--force] [--quiet]",
+            .usage = "ryk init [--preset <name>] [--mode strict|ask|observe|ci|trusted] [--ci] [--force] [--quiet]",
             .category = .getting_started,
             .examples = &.{
                 "ryk init --preset generic-agent",
@@ -1027,8 +1027,10 @@ test "mode option lists include yolo" {
     }
     try std.testing.expect(std.mem.indexOf(u8, run_w.buffered(), "observe|ask|yolo|strict|ci") != null);
 
+    // init parser rejects yolo — usage must match the live option set (not advertise it).
     const init_info = findCommand("init") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(std.mem.indexOf(u8, init_info.usage, "yolo") != null);
+    try std.testing.expect(std.mem.indexOf(u8, init_info.usage, "yolo") == null);
+    try std.testing.expect(std.mem.indexOf(u8, init_info.usage, "strict|ask|observe|ci|trusted") != null);
 
     const policy_info = findCommand("policy") orelse return error.TestUnexpectedResult;
     var policy_joined: [4096]u8 = undefined;

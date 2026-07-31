@@ -167,7 +167,7 @@ fn writeMetric(io: std.Io, writer: anytype, label: []const u8, n: usize, tok: th
 fn riskToken(level: risk.RiskLevel) theme.Token {
     return switch (level) {
         .dangerous => .danger,
-        .secrets_accessed, .secrets_seen => .warn,
+        .secrets_accessed, .secrets_seen, .incomplete => .warn,
         .clear => .success,
         .no_data => .info,
     };
@@ -260,6 +260,7 @@ pub fn writeJson(writer: anytype, result: types.ScanResult) !void {
         try writer.writeAll("      \"evidence_ref\": ");
         try writeJsonString(writer, f.evidence_ref);
         try writer.writeAll(",\n");
+        try writer.print("      \"occurrence_count\": {d},\n", .{f.occurrence_count});
         try writer.print("      \"timestamp_secs\": {d}\n", .{f.timestamp_secs});
         try writer.writeAll("    }");
         if (i + 1 < result.findings.len) try writer.writeAll(",");

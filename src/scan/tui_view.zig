@@ -398,7 +398,7 @@ fn writeTrunc(stdout: anytype, s: []const u8, max_cols: usize) !void {
 fn riskToken(level: risk.RiskLevel) theme.Token {
     return switch (level) {
         .dangerous => .danger,
-        .secrets_accessed, .secrets_seen => .warn,
+        .secrets_accessed, .secrets_seen, .incomplete => .warn,
         .clear => .success,
         .no_data => .info,
     };
@@ -447,13 +447,13 @@ pub fn run(io: std.Io, stdout: anytype, result: *const types.ScanResult) !void {
     configureReadTimeout(&tty);
 
     // Enter alt-screen only after TTY is ready so init failure never blank-screens.
+    // Register restore *before* hide_cursor so a mid-setup write failure still restores.
     try stdout.writeAll(vaxis.ctlseqs.smcup);
-    try stdout.writeAll(vaxis.ctlseqs.hide_cursor);
-    // Always restore on every exit path (including write errors during loop).
     defer {
         stdout.writeAll(vaxis.ctlseqs.show_cursor) catch {};
         stdout.writeAll(vaxis.ctlseqs.rmcup) catch {};
     }
+    try stdout.writeAll(vaxis.ctlseqs.hide_cursor);
 
     var selected: usize = 0;
     var list_scroll: usize = 0;
@@ -727,12 +727,27 @@ test "scan tui frame: clear empty with sessions" {
     theme.resetCache();
     var sc_result = testResult(&.{}, 5, 0, 0);
     sc_result.scorecard.sessions_scanned = 5;
+    // testResult marks OpenCode unsupported — that is incomplete, not clear.
+    // For a true clear path, every host must be readable (ok/empty/not_found).
+    sc_result.scorecard.setHost(.opencode, .empty, 0, "no OpenCode sessions in window");
     var buf: [4096]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
     _ = try renderFrame(std.testing.io, &w, &sc_result, 0, 0, 6, "\n", "");
     const out = w.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "Looking good") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "No risky findings") != null);
+}
+
+test "scan tui frame: incomplete when host unsupported" {
+    theme.resetCache();
+    var sc_result = testResult(&.{}, 5, 0, 0);
+    sc_result.scorecard.sessions_scanned = 5;
+    // opencode stays unsupported from testResult.
+    var buf: [4096]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    _ = try renderFrame(std.testing.io, &w, &sc_result, 0, 0, 6, "\n", "");
+    const out = w.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "Scan incomplete") != null);
 }
 
 test "scan tui frame: redacted secret never shows raw token" {

@@ -27,21 +27,15 @@ pub fn evaluateDanger(
     const trimmed = std.mem.trim(u8, command, " \t\r\n");
     if (trimmed.len == 0) return null;
 
-    var eval = shell_engine.evaluateCommand(allocator, trimmed, .{
+    // evaluateCommand error set is allocator-only; never invent a high finding from OOM.
+    var eval = try shell_engine.evaluateCommand(allocator, trimmed, .{
         .default_packs_only = true,
         .consume_allow_once = false,
         // Historical scan: do not apply permanent allowlist exceptions — surface risk as-written.
         .permanent_allowlist = null,
         .allow_once_path = null,
         .now_iso = null,
-    }) catch {
-        // Evaluator hard failure: treat as high-severity forensics signal, not fail-closed deny product path.
-        const reason = try allocator.dupe(u8, "shell_engine evaluation failed");
-        return .{
-            .severity = .high,
-            .reason = reason,
-        };
-    };
+    });
     defer eval.deinit(allocator);
 
     if (eval.decision != .deny) return null;

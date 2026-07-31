@@ -37,6 +37,7 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 | `stop` | Stop ryk protection for host agents | `src/cli/disable.zig` |
 | `claude` / `codex` / `pi` / `opencode` / `openclaw` / `hermes` | Launch host under ryk (alias → run engine) | `src/cli/host_launch.zig` |
 | `doctor` | Diagnose readiness and platform capabilities | `src/cli/doctor.zig` |
+| `scan` | Offline session forensics (secrets + risky commands; free) | `src/cli/scan.zig` |
 | `replay` | Replay last session (denials dominant) | `src/cli/replay.zig` |
 | `explain` | Why a shell command is blocked or allowed (Zig shell_engine) | `src/cli/shell_explain.zig` |
 | `help` | Show help (`help --all` = full surface) | `src/cli/help.zig` |
@@ -86,7 +87,9 @@ Unavailable former daemon ports are **not** listed by `ryk help` / `ryk help --a
 
 | Command | Status |
 |---------|--------|
-| `scan`, `precommit`, `simulate`, `classify`, `suggest-allowlist`, `history`, `rebase-recover`, `config` | Hide-list (unavailable daemon ports) |
+| `precommit`, `simulate`, `classify`, `suggest-allowlist`, `history`, `rebase-recover`, `config` | Hide-list (unavailable daemon ports) |
+
+> **`scan` is live** (public Safe Launch table above) — free offline session forensics, not a daemon port.
 
 ### Exit Codes (`src/cli/exit_codes.zig`)
 
@@ -118,9 +121,21 @@ Single public onboarding door. Creates policy when missing, wires hosts, default
 
 ### `ryk doctor`
 
-Diagnose protection readiness: policy, hosts, capabilities, packs, and recommended next steps.
+Diagnose protection readiness: policy, hosts, capabilities, packs, sandbox backend features, network policy engine status, and recommended next steps.
 
-**Usage:** `ryk doctor [-v|--verbose] [--check] [--json]`
+**Usage:** `ryk doctor [-v|--verbose] [--check] [--json] [--help]`
+
+---
+
+### `ryk scan`
+
+Free offline session forensics across known agent hosts (Claude Code, Codex, Pi, OpenCode, Grok, thin ryk bridge). Surfaces medium+ dangerous shell commands and secret material/access with redaction. Exit **0** on a successful scan even when findings exist.
+
+**Usage:** `ryk scan [--json] [--plain] [--all] [--days <n>] [--all-time] [--host <name>]`
+
+**Examples:** `ryk scan` · `ryk scan --days 7 --host codex` · `ryk scan --json --plain` (prefer one of json/plain)
+
+Interactive colour TTY: scorecard + list/detail (`c` copy path, `o` reveal/open, `q` quit).
 
 ---
 
@@ -189,16 +204,6 @@ Disable Orca plugins from host agents (binary and policy remain). Restart with `
 ### `ryk setup` / `ryk quickstart` (removed)
 
 Public dispatcher peers are **hard-removed**. Invoking them exits with a usage error pointing at `ryk start`. Internal library entry points may remain for tests/composition.
-
----
-
-### `ryk doctor`
-
-Show platform capabilities — reports sandbox backend features, network policy engine status, and platform limitations honestly.
-
-**Usage:** `ryk doctor [--help]`
-
-No persistent flags.
 
 ---
 

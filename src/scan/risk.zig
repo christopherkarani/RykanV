@@ -5,6 +5,7 @@ const types = @import("types.zig");
 /// One-glance risk level for new users ("Am I at risk?").
 pub const RiskLevel = enum {
     no_data,
+    incomplete,
     clear,
     secrets_seen,
     secrets_accessed,
@@ -13,6 +14,7 @@ pub const RiskLevel = enum {
     pub fn toString(self: RiskLevel) []const u8 {
         return switch (self) {
             .no_data => "no_data",
+            .incomplete => "incomplete",
             .clear => "clear",
             .secrets_seen => "secrets_seen",
             .secrets_accessed => "secrets_accessed",
@@ -23,6 +25,7 @@ pub const RiskLevel = enum {
     pub fn headline(self: RiskLevel) []const u8 {
         return switch (self) {
             .no_data => "Nothing to scan yet",
+            .incomplete => "Scan incomplete",
             .clear => "Looking good",
             .secrets_seen => "Secrets appeared in sessions",
             .secrets_accessed => "Secret access detected",
@@ -33,7 +36,8 @@ pub const RiskLevel = enum {
     pub fn blurb(self: RiskLevel) []const u8 {
         return switch (self) {
             .no_data => "No agent session files were found in known locations for this window.",
-            .clear => "No high/medium risky commands or secret exposure in this window.",
+            .incomplete => "Some hosts could not be read or are unsupported. Findings may be incomplete.",
+            .clear => "No high/medium risky commands or secret exposure in readable hosts for this window.",
             .secrets_seen => "Session text matched secret patterns (values are redacted). Review top findings.",
             .secrets_accessed => "An agent ran commands that touch secret-bearing paths. Review those first.",
             .dangerous => "High or medium risk shell/tool commands showed up in past agent sessions.",
@@ -41,11 +45,20 @@ pub const RiskLevel = enum {
     }
 };
 
+fn hasCoverageGaps(sc: types.Scorecard) bool {
+    for (sc.hosts) |h| {
+        if (h.status == .unreadable or h.status == .unsupported) return true;
+    }
+    return false;
+}
+
 pub fn riskLevel(sc: types.Scorecard) RiskLevel {
     if (sc.danger_count > 0) return .dangerous;
     if (sc.secret_access_count > 0) return .secrets_accessed;
     if (sc.secret_material_count > 0) return .secrets_seen;
     if (sc.sessions_scanned == 0) return .no_data;
+    // Do not claim "clear" when some hosts failed to read.
+    if (hasCoverageGaps(sc)) return .incomplete;
     return .clear;
 }
 
@@ -101,6 +114,13 @@ test "riskLevel: sessions but no findings is clear" {
     var sc: types.Scorecard = .{ .window_days = 30, .all_time = false };
     sc.sessions_scanned = 12;
     try std.testing.expectEqual(RiskLevel.clear, riskLevel(sc));
+}
+
+test "riskLevel: unreadable host is incomplete not clear" {
+    var sc: types.Scorecard = .{ .window_days = 30, .all_time = false };
+    sc.sessions_scanned = 4;
+    sc.hosts[0].status = .unreadable;
+    try std.testing.expectEqual(RiskLevel.incomplete, riskLevel(sc));
 }
 
 test "riskLevel: material only" {

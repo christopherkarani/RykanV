@@ -852,14 +852,6 @@ fn fakeTestProxySuccess(_: std.Io, argv: []const []const u8, stdout: anytype, _:
     return exit_codes.success;
 }
 
-fn fakeScanProxySuccess(_: std.Io, argv: []const []const u8, stdout: anytype, _: anytype) !u8 {
-    try std.testing.expectEqual(@as(usize, 2), argv.len);
-    try std.testing.expectEqualStrings("scan", argv[0]);
-    try std.testing.expectEqualStrings("--help", argv[1]);
-    try stdout.writeAll("scan ok\n");
-    return exit_codes.success;
-}
-
 fn fakeHistoryProxySuccess(_: std.Io, argv: []const []const u8, stdout: anytype, _: anytype) !u8 {
     try std.testing.expectEqual(@as(usize, 2), argv.len);
     try std.testing.expectEqualStrings("history", argv[0]);
@@ -995,12 +987,8 @@ test "phase 1 proxy commands construct daemon argv and render success" {
     try std.testing.expectEqualStrings("test ok\n", stdout_writer.buffered());
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 
-    stdout_writer = .fixed(&stdout_buf);
-    stderr_writer = .fixed(&stderr_buf);
-    const scan_code = try proxyPhase1Command(fakeScanProxySuccess, "scan", &.{"--help"}, std.testing.io, &stdout_writer, &stderr_writer);
-    try std.testing.expectEqual(exit_codes.success, scan_code);
-    try std.testing.expectEqualStrings("scan ok\n", stdout_writer.buffered());
-    try std.testing.expectEqualStrings("", stderr_writer.buffered());
+    // `scan` is Zig-native forensics — must not be a daemon proxy command.
+    try std.testing.expect(!isDaemonProxyCommand("scan"));
 
     stdout_writer = .fixed(&stdout_buf);
     stderr_writer = .fixed(&stderr_buf);
@@ -1062,6 +1050,8 @@ test "phase A proxy commands construct daemon argv and render success" {
     try std.testing.expect(!isDaemonLocalMutatingInvocation("suggest-allowlist", &.{"--non-interactive"}));
     try std.testing.expect(!isDaemonProxyCommand("doctor"));
     try std.testing.expect(!isDaemonProxyCommand("init"));
+    try std.testing.expect(!isDaemonProxyCommand("scan"));
+    try std.testing.expect(!isDaemonProxyCommand("update"));
 
     // Direct proxyDaemonCommand helper still works for remaining stubbed ExecuteCli surfaces.
     const classify_code = try proxyDaemonCommand(fakeClassifyProxySuccess, "classify", &.{"rm -rf /tmp/x"}, std.testing.io, &stdout_writer, &stderr_writer);
