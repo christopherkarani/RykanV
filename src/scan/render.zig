@@ -139,7 +139,7 @@ pub fn writeHuman(io: std.Io, writer: anytype, result: types.ScanResult) !void {
 
         try writer.writeAll("     ");
         try theme.paint(io, writer, .muted, "Session: ");
-        try terminal_text.write(writer, present.shortId(f.session_id), .single_line);
+        try terminal_text.write(writer, present.displaySessionId(f.host, f.session_id), .single_line);
         try writer.writeAll("\n");
 
         try writer.writeAll("     ");
@@ -347,6 +347,80 @@ test "human render guided empty for no sessions" {
     try std.testing.expect(std.mem.indexOf(u8, out, "Nothing to scan yet") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "session scan") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "OpenCode") != null);
+}
+
+test "human render Session uses displaySessionId not last-20 tail (AC-S4)" {
+    theme.resetCache();
+    const stem = "rollout-2026-07-30T21-25-08-019fb445-e7a9-7612-bf1a-8fe20ff9e69b";
+    const uuid = "019fb445-e7a9-7612-bf1a-8fe20ff9e69b";
+    var findings = try std.testing.allocator.alloc(types.Finding, 1);
+    findings[0] = .{
+        .kind = .danger,
+        .severity = .medium,
+        .host = .codex,
+        .session_id = try std.testing.allocator.dupe(u8, stem),
+        .path = try std.testing.allocator.dupe(u8, "/tmp/c.jsonl"),
+        .timestamp_secs = 1,
+        .title = try std.testing.allocator.dupe(u8, "Risky"),
+        .detail = try std.testing.allocator.dupe(u8, "echo"),
+        .evidence_ref = try std.testing.allocator.dupe(u8, "/tmp/c.jsonl"),
+    };
+    var result: types.ScanResult = .{
+        .scorecard = .{
+            .window_days = 7,
+            .all_time = false,
+            .sessions_scanned = 1,
+            .danger_count = 1,
+        },
+        .findings = findings,
+        .total_findings = 1,
+        .shown_cap = 20,
+        .allocator = std.testing.allocator,
+    };
+    defer result.deinit();
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try writeHuman(std.testing.io, &aw.writer, result);
+    const out = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, out, uuid) != null);
+    try std.testing.expect(!std.mem.eql(u8, present.displaySessionId(.codex, stem), present.shortId(stem)));
+}
+
+test "json render keeps full session_id and evidence_ref (AC-S6)" {
+    const stem = "rollout-2026-07-30T21-25-08-019fb445-e7a9-7612-bf1a-8fe20ff9e69b";
+    const full_path = "/Users/me/.codex/sessions/2026/07/30/rollout-long-name.jsonl";
+    var findings = try std.testing.allocator.alloc(types.Finding, 1);
+    findings[0] = .{
+        .kind = .danger,
+        .severity = .medium,
+        .host = .codex,
+        .session_id = try std.testing.allocator.dupe(u8, stem),
+        .path = try std.testing.allocator.dupe(u8, full_path),
+        .timestamp_secs = 1,
+        .title = try std.testing.allocator.dupe(u8, "Risky"),
+        .detail = try std.testing.allocator.dupe(u8, "echo"),
+        .evidence_ref = try std.testing.allocator.dupe(u8, full_path),
+    };
+    var result: types.ScanResult = .{
+        .scorecard = .{
+            .window_days = 7,
+            .all_time = false,
+            .sessions_scanned = 1,
+            .danger_count = 1,
+        },
+        .findings = findings,
+        .total_findings = 1,
+        .shown_cap = 20,
+        .allocator = std.testing.allocator,
+    };
+    defer result.deinit();
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try writeJson(&aw.writer, result);
+    const out = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, out, stem) != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, full_path) != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "…") == null);
 }
 
 test "human render risk headline for danger findings" {

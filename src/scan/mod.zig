@@ -16,6 +16,7 @@ pub const render = @import("render.zig");
 pub const risk = @import("risk.zig");
 pub const present = @import("present.zig");
 pub const tui_view = @import("tui_view.zig");
+pub const os_actions = @import("os_actions.zig");
 
 pub const Finding = types.Finding;
 pub const ScanResult = types.ScanResult;
@@ -40,4 +41,5 @@ test {
     _ = risk;
     _ = present;
     _ = tui_view;
+    _ = os_actions;
 }

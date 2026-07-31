@@ -7,15 +7,17 @@ const builtin = @import("builtin");
 const types = @import("types.zig");
 const risk = @import("risk.zig");
 const present = @import("present.zig");
+const os_actions = @import("os_actions.zig");
 const theme = @import("../tui/theme.zig");
 const vaxis = @import("vaxis");
 
-pub const KeyAction = enum { quit, up, down, top, bottom, other };
+pub const KeyAction = enum { quit, up, down, top, bottom, copy_path, open_path, other };
 
 /// Pure frame renderer: scorecard-first risk snapshot + selectable findings list
 /// + detail pane for the selected finding. Emits content + theme colour only
 /// (no alt-screen / cursor controls — those live in `run`).
 ///
+/// `status_msg` is an optional one-line toast (copy/reveal result); empty = none.
 /// Returns lines written so the live loop can re-home the cursor.
 pub fn renderFrame(
     io: std.Io,
@@ -25,6 +27,7 @@ pub fn renderFrame(
     list_scroll: usize,
     list_rows: usize,
     line_ending: []const u8,
+    status_msg: []const u8,
 ) !usize {
     var written: usize = 0;
     const sc = result.scorecard;
@@ -249,11 +252,11 @@ pub fn renderFrame(
             written += 1;
         }
 
-        // Session short id + path secondary.
+        // Host-aware display id (Codex UUID, not last-20 tail) + path secondary.
         try stdout.writeAll("  ");
         try theme.paint(io, stdout, .muted, "Session");
         try stdout.writeAll(" ");
-        try writeTrunc(stdout, present.shortId(f.session_id), 28);
+        try writeTrunc(stdout, present.displaySessionId(f.host, f.session_id), 36);
         try stdout.writeAll("  ");
         try theme.paint(io, stdout, .muted, present.listTitle(f, &title_buf));
         try stdout.writeAll(line_ending);
@@ -272,9 +275,13 @@ pub fn renderFrame(
         written += 1;
     }
 
-    // Footer
+    // Footer: keys always; status toast when present.
     try stdout.writeAll("  ");
-    try theme.paint(io, stdout, .muted, "↑↓/jk move · g/G top/end · q quit");
+    if (status_msg.len > 0) {
+        try theme.paint(io, stdout, .success, status_msg);
+        try stdout.writeAll("  ·  ");
+    }
+    try theme.paint(io, stdout, .muted, "↑↓/jk move · c copy path · o reveal · q quit");
     try stdout.writeAll(line_ending);
     written += 1;
 
@@ -450,6 +457,8 @@ pub fn run(io: std.Io, stdout: anytype, result: *const types.ScanResult) !void {
 
     var selected: usize = 0;
     var list_scroll: usize = 0;
+    var status_buf: [48]u8 = undefined;
+    var status_len: usize = 0;
 
     // Reserve rows: header(~8) + list + detail(~7) + footer. List gets remainder.
     const list_rows: usize = blk: {
@@ -474,26 +483,61 @@ pub fn run(io: std.Io, stdout: anytype, result: *const types.ScanResult) !void {
             if (selected < list_scroll) list_scroll = selected;
             if (selected >= list_scroll + list_rows) list_scroll = selected + 1 - list_rows;
         }
-        frame_lines = try renderFrame(io, stdout, result, selected, list_scroll, list_rows, "\r\n");
+        const status = status_buf[0..status_len];
+        frame_lines = try renderFrame(io, stdout, result, selected, list_scroll, list_rows, "\r\n", status);
         try flush(stdout);
 
         // Hard read failures: leave the viewer (primary-screen summary remains).
         const action = readKey(&tty, &decoder) catch break;
         switch (action) {
             .quit => break,
-            .up => if (selected > 0) {
-                selected -= 1;
+            .up => {
+                status_len = 0;
+                if (selected > 0) selected -= 1;
             },
-            .down => if (result.findings.len > 0 and selected + 1 < result.findings.len) {
-                selected += 1;
+            .down => {
+                status_len = 0;
+                if (result.findings.len > 0 and selected + 1 < result.findings.len) {
+                    selected += 1;
+                }
             },
-            .top => selected = 0,
-            .bottom => if (result.findings.len > 0) {
-                selected = result.findings.len - 1;
+            .top => {
+                status_len = 0;
+                selected = 0;
+            },
+            .bottom => {
+                status_len = 0;
+                if (result.findings.len > 0) selected = result.findings.len - 1;
+            },
+            .copy_path => {
+                const msg = handleCopyPath(io, result, selected);
+                status_len = @min(msg.len, status_buf.len);
+                @memcpy(status_buf[0..status_len], msg[0..status_len]);
+            },
+            .open_path => {
+                const msg = handleOpenPath(io, result, selected);
+                status_len = @min(msg.len, status_buf.len);
+                @memcpy(status_buf[0..status_len], msg[0..status_len]);
             },
             .other => {},
         }
     }
+}
+
+/// Copy full `evidence_ref` for the selected finding. Empty list / fail → soft status.
+fn handleCopyPath(io: std.Io, result: *const types.ScanResult, selected: usize) []const u8 {
+    if (result.findings.len == 0) return os_actions.Result.empty.statusLine(.copy);
+    const idx = @min(selected, result.findings.len - 1);
+    const path = result.findings[idx].evidence_ref;
+    return os_actions.copyPath(io, path).statusLine(.copy);
+}
+
+/// Reveal/open full `evidence_ref`. Empty list / fail → soft status; never panics.
+fn handleOpenPath(io: std.Io, result: *const types.ScanResult, selected: usize) []const u8 {
+    if (result.findings.len == 0) return os_actions.Result.empty.statusLine(.open);
+    const idx = @min(selected, result.findings.len - 1);
+    const path = result.findings[idx].evidence_ref;
+    return os_actions.revealOrOpenPath(io, path).statusLine(.open);
 }
 
 const Decoder = struct {
@@ -546,6 +590,8 @@ fn keyToAction(key: vaxis.Key) KeyAction {
     if (key.matches('j', .{})) return .down;
     if (key.matches('g', .{})) return .top;
     if (key.matches('G', .{ .shift = true }) or key.matches('G', .{})) return .bottom;
+    if (key.matches('c', .{})) return .copy_path;
+    if (key.matches('o', .{})) return .open_path;
     return .other;
 }
 
@@ -645,7 +691,7 @@ test "scan tui frame: risk headline and counts for danger" {
 
     var buf: [4096]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
-    const n = try renderFrame(std.testing.io, &w, &result, 0, 0, 6, "\n");
+    const n = try renderFrame(std.testing.io, &w, &result, 0, 0, 6, "\n", "");
     const out = w.buffered();
     try std.testing.expect(n > 8);
     try std.testing.expect(std.mem.indexOf(u8, out, "🛡  ryk") != null);
@@ -656,6 +702,8 @@ test "scan tui frame: risk headline and counts for danger" {
     try std.testing.expect(std.mem.indexOf(u8, out, "Detail") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "rm -rf /tmp/demo") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "q quit") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "c copy path") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "o reveal") != null);
     // No alt-screen controls in pure frame.
     try std.testing.expect(std.mem.indexOf(u8, out, vaxis.ctlseqs.smcup) == null);
     try std.testing.expect(std.mem.indexOfScalar(u8, out, '\x1b') == null);
@@ -666,7 +714,7 @@ test "scan tui frame: guided empty state for no_data" {
     const result = testResult(&.{}, 0, 0, 0);
     var buf: [4096]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
-    _ = try renderFrame(std.testing.io, &w, &result, 0, 0, 6, "\n");
+    _ = try renderFrame(std.testing.io, &w, &result, 0, 0, 6, "\n", "");
     const out = w.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "Nothing to scan yet") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "What we checked") != null);
@@ -681,7 +729,7 @@ test "scan tui frame: clear empty with sessions" {
     sc_result.scorecard.sessions_scanned = 5;
     var buf: [4096]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
-    _ = try renderFrame(std.testing.io, &w, &sc_result, 0, 0, 6, "\n");
+    _ = try renderFrame(std.testing.io, &w, &sc_result, 0, 0, 6, "\n", "");
     const out = w.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "Looking good") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "No risky findings") != null);
@@ -710,7 +758,7 @@ test "scan tui frame: redacted secret never shows raw token" {
     const result = testResult(findings, 2, 0, 1);
     var buf: [4096]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
-    _ = try renderFrame(std.testing.io, &w, &result, 0, 0, 6, "\n");
+    _ = try renderFrame(std.testing.io, &w, &result, 0, 0, 6, "\n", "");
     const out = w.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "Secrets appeared") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "GitHub token") != null);
@@ -747,8 +795,141 @@ test "scan tui frame: selection marker and multi-finding" {
     const result = testResult(findings, 3, 3, 0);
     var buf: [4096]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
-    _ = try renderFrame(std.testing.io, &w, &result, 1, 0, 6, "\n");
+    _ = try renderFrame(std.testing.io, &w, &result, 1, 0, 6, "\n", "");
     const out = w.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "›") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Finding 1") != null);
+}
+
+test "keyToAction: c copy_path and o open_path (AC-C1, AC-O1)" {
+    const c_key: vaxis.Key = .{ .codepoint = 'c' };
+    const o_key: vaxis.Key = .{ .codepoint = 'o' };
+    const q_key: vaxis.Key = .{ .codepoint = 'q' };
+    try std.testing.expectEqual(KeyAction.copy_path, keyToAction(c_key));
+    try std.testing.expectEqual(KeyAction.open_path, keyToAction(o_key));
+    try std.testing.expectEqual(KeyAction.quit, keyToAction(q_key));
+}
+
+test "scan tui frame: Codex Session shows full UUID not last-20 tail (AC-S5)" {
+    theme.resetCache();
+    const stem = "rollout-2026-07-30T21-25-08-019fb445-e7a9-7612-bf1a-8fe20ff9e69b";
+    const uuid = "019fb445-e7a9-7612-bf1a-8fe20ff9e69b";
+    const bad_tail = "12-bf1a-8fe20ff9e69b";
+    var findings = try std.testing.allocator.alloc(types.Finding, 1);
+    defer {
+        for (findings) |*f| f.deinit(std.testing.allocator);
+        std.testing.allocator.free(findings);
+    }
+    findings[0] = .{
+        .kind = .danger,
+        .severity = .medium,
+        .host = .codex,
+        .session_id = try std.testing.allocator.dupe(u8, stem),
+        .path = try std.testing.allocator.dupe(u8, "/tmp/long/path/to/rollout.jsonl"),
+        .timestamp_secs = 1,
+        .title = try std.testing.allocator.dupe(u8, "Risky command"),
+        .detail = try std.testing.allocator.dupe(u8, "echo hi"),
+        .evidence_ref = try std.testing.allocator.dupe(u8, "/Users/me/.codex/sessions/2026/07/30/rollout-2026-07-30T21-25-08-019fb445-e7a9-7612-bf1a-8fe20ff9e69b.jsonl"),
+    };
+    const result = testResult(findings, 1, 1, 0);
+    var buf: [4096]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    _ = try renderFrame(std.testing.io, &w, &result, 0, 0, 6, "\n", "");
+    const out = w.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, uuid) != null);
+    // Session row (not only Next) must show full UUID: require "Session" before UUID with no intervening "Next".
+    const sess_at = std.mem.indexOf(u8, out, "Session") orelse return error.TestUnexpectedResult;
+    const uuid_at = std.mem.indexOf(u8, out[sess_at..], uuid) orelse return error.TestUnexpectedResult;
+    const next_at = std.mem.indexOf(u8, out[sess_at..], "Next:");
+    try std.testing.expect(next_at == null or uuid_at < next_at.?);
+    // Session line must not *equal* the last-20 fragment alone (substring of UUID is OK).
+    try std.testing.expect(!std.mem.eql(u8, present.displaySessionId(.codex, stem), bad_tail));
+    try std.testing.expect(std.mem.indexOf(u8, out, "c copy path") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "o reveal") != null);
+}
+
+test "scan tui frame: status toast appears when provided" {
+    theme.resetCache();
+    const result = testResult(&.{}, 0, 0, 0);
+    var buf: [4096]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    // Empty findings use early footer without status; findings path shows toast.
+    var findings = try std.testing.allocator.alloc(types.Finding, 1);
+    defer {
+        for (findings) |*f| f.deinit(std.testing.allocator);
+        std.testing.allocator.free(findings);
+    }
+    findings[0] = .{
+        .kind = .danger,
+        .severity = .low,
+        .host = .claude,
+        .session_id = try std.testing.allocator.dupe(u8, "s1"),
+        .path = try std.testing.allocator.dupe(u8, "/p"),
+        .timestamp_secs = 1,
+        .title = try std.testing.allocator.dupe(u8, "t"),
+        .detail = try std.testing.allocator.dupe(u8, "d"),
+        .evidence_ref = try std.testing.allocator.dupe(u8, "/full/evidence/path.jsonl"),
+    };
+    const with_f = testResult(findings, 1, 1, 0);
+    _ = try renderFrame(std.testing.io, &w, &with_f, 0, 0, 6, "\n", "copied path");
+    const out = w.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "copied path") != null);
+    _ = result;
+}
+
+test "handleCopyPath empty findings is soft no-crash (AC-C6)" {
+    const result = testResult(&.{}, 0, 0, 0);
+    const msg = handleCopyPath(std.testing.io, &result, 0);
+    try std.testing.expect(msg.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, msg, "no path") != null or std.mem.indexOf(u8, msg, "copy") != null);
+}
+
+test "handleOpenPath empty findings is soft no-crash (AC-O4)" {
+    const result = testResult(&.{}, 0, 0, 0);
+    const msg = handleOpenPath(std.testing.io, &result, 0);
+    try std.testing.expect(msg.len > 0);
+}
+
+test "handleCopyPath uses full evidence_ref not display truncate (AC-C2, AC-C3)" {
+    if (builtin.os.tag != .macos) return;
+    const full_path = "/tmp/ryk-scan-copy-test-full-path-that-would-truncate-in-tui-display.jsonl";
+    const secretish = "ghp_should_never_land_on_clipboard_ABC123";
+    var findings = try std.testing.allocator.alloc(types.Finding, 1);
+    defer {
+        for (findings) |*f| f.deinit(std.testing.allocator);
+        std.testing.allocator.free(findings);
+    }
+    findings[0] = .{
+        .kind = .secret_material,
+        .severity = .low,
+        .host = .codex,
+        .session_id = try std.testing.allocator.dupe(u8, "rollout-2026-07-30T21-25-08-019fb445-e7a9-7612-bf1a-8fe20ff9e69b"),
+        .path = try std.testing.allocator.dupe(u8, full_path),
+        .timestamp_secs = 1,
+        .title = try std.testing.allocator.dupe(u8, "t"),
+        .detail = try std.testing.allocator.dupe(u8, secretish),
+        .secret_label = try std.testing.allocator.dupe(u8, "secret:github_token"),
+        .evidence_ref = try std.testing.allocator.dupe(u8, full_path),
+    };
+    const result = testResult(findings, 1, 0, 1);
+    const msg = handleCopyPath(std.testing.io, &result, 0);
+    try std.testing.expect(std.mem.indexOf(u8, msg, "copied") != null or std.mem.indexOf(u8, msg, "fail") != null or std.mem.indexOf(u8, msg, "unavailable") != null);
+    if (std.mem.indexOf(u8, msg, "copied") != null) {
+        const paste = std.process.run(std.testing.allocator, std.testing.io, .{
+            .argv = &.{"pbpaste"},
+            .stdout_limit = .limited(8192),
+            .stderr_limit = .limited(1024),
+        }) catch return;
+        defer {
+            std.testing.allocator.free(paste.stdout);
+            std.testing.allocator.free(paste.stderr);
+        }
+        if (paste.term == .exited and paste.term.exited == 0) {
+            try std.testing.expectEqualStrings(full_path, paste.stdout);
+            try std.testing.expect(std.mem.indexOf(u8, paste.stdout, "…") == null);
+            // Path only — secretish detail must never reach clipboard.
+            try std.testing.expect(std.mem.indexOf(u8, paste.stdout, secretish) == null);
+            try std.testing.expect(std.mem.indexOf(u8, paste.stdout, "ghp_") == null);
+        }
+    }
 }

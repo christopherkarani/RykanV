@@ -110,8 +110,15 @@ pub fn whyFired(f: types.Finding, buf: []u8) []const u8 {
 
 pub fn hostNextStep(host: types.Host, session_id: []const u8, buf: []u8) []const u8 {
     return switch (host) {
-        .ryk => std.fmt.bufPrint(buf, "Next: ryk replay --session {s}", .{shortId(session_id)}) catch "Next: ryk replay",
-        .codex => "Next: open the Codex session file (path below) if you need context",
+        // Full session id for replay — never a truncated tail (breaks resume).
+        .ryk => std.fmt.bufPrint(buf, "Next: ryk replay --session {s}", .{displaySessionId(.ryk, session_id)}) catch "Next: ryk replay",
+        .codex => blk: {
+            if (codexResumeUuid(session_id)) |uuid| {
+                break :blk std.fmt.bufPrint(buf, "Next: codex resume {s}  (or c copy / o reveal File)", .{uuid}) catch
+                    "Next: open the Codex session file (path below; TUI: c/o)";
+            }
+            break :blk "Next: open the Codex session file (path below; TUI: c copy · o reveal)";
+        },
         .claude => "Next: open the Claude Code transcript (path below) if you need context",
         .grok => "Next: open the Grok session chat_history (path below) if you need context",
         .pi => "Next: open the Pi session.jsonl (path below) if you need context",
@@ -119,10 +126,50 @@ pub fn hostNextStep(host: types.Host, session_id: []const u8, buf: []u8) []const
     };
 }
 
-/// Prefer a short trailing id for long session names.
+/// True when `s` is a canonical 8-4-4-4-12 hex UUID (36 chars with hyphens).
+pub fn isCanonicalUuid(s: []const u8) bool {
+    if (s.len != 36) return false;
+    for (s, 0..) |c, i| {
+        if (i == 8 or i == 13 or i == 18 or i == 23) {
+            if (c != '-') return false;
+        } else if (!std.ascii.isHex(c)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Codex rollout stems end with `-<uuid>`. Returns the full UUID slice when parseable.
+/// Never returns a truncated fragment — only a verified 36-char UUID.
+pub fn codexResumeUuid(session_id: []const u8) ?[]const u8 {
+    if (session_id.len < 36) return null;
+    const cand = session_id[session_id.len - 36 ..];
+    if (!isCanonicalUuid(cand)) return null;
+    // Prefer stems that look like rollout-* or at least have a separator before UUID.
+    if (session_id.len > 36) {
+        const before = session_id[session_id.len - 37];
+        if (before != '-' and before != '_') return null;
+    }
+    return cand;
+}
+
+/// Host-aware session id for human display (TUI + plain). Never invents a resume id.
+/// Codex: full UUID from rollout stem when parseable; otherwise full stored id.
+/// Other hosts: full stored id (callers may width-truncate with ellipsis, not last-20-only).
+pub fn displaySessionId(host: types.Host, session_id: []const u8) []const u8 {
+    switch (host) {
+        .codex => {
+            if (codexResumeUuid(session_id)) |uuid| return uuid;
+            return session_id;
+        },
+        else => return session_id,
+    }
+}
+
+/// Legacy trailing slice for non-resume contexts. Prefer `displaySessionId` for UI.
+/// Kept so accidental call sites stay short; **do not** use for resume/replay hints.
 pub fn shortId(id: []const u8) []const u8 {
     if (id.len <= 28) return id;
-    // Prefer last 20 chars (often the UUID tail).
     return id[id.len - 20 ..];
 }
 
@@ -170,4 +217,77 @@ test "plainSentence for secret_material" {
     try std.testing.expect(std.mem.indexOf(u8, s, "hidden") != null);
     try std.testing.expect(std.mem.indexOf(u8, s, "High-entropy") != null);
     try std.testing.expect(std.mem.indexOf(u8, s, "contained:") != null);
+}
+
+// ── Session id display (AC-S1–S7, edges E1–E3, E10) ─────────────────────────
+
+const codex_rollout_stem =
+    "rollout-2026-07-30T21-25-08-019fb445-e7a9-7612-bf1a-8fe20ff9e69b";
+const codex_full_uuid = "019fb445-e7a9-7612-bf1a-8fe20ff9e69b";
+const codex_bad_tail = "12-bf1a-8fe20ff9e69b"; // last-20 of stem — not a resume id
+
+test "displaySessionId: Codex rollout stem shows full UUID (AC-S1)" {
+    const shown = displaySessionId(.codex, codex_rollout_stem);
+    try std.testing.expectEqualStrings(codex_full_uuid, shown);
+    try std.testing.expect(isCanonicalUuid(shown));
+}
+
+test "displaySessionId: rejects last-20-only tail as display id (AC-S2)" {
+    const shown = displaySessionId(.codex, codex_rollout_stem);
+    // Must not *be* the last-20 fragment (substring may overlap a real UUID).
+    try std.testing.expect(!std.mem.eql(u8, shown, codex_bad_tail));
+    try std.testing.expectEqual(@as(usize, 36), shown.len);
+    // shortId still produces the bad tail — prove we do not use it for Codex display.
+    try std.testing.expectEqualStrings(codex_bad_tail, shortId(codex_rollout_stem));
+    try std.testing.expect(!std.mem.eql(u8, shown, shortId(codex_rollout_stem)));
+}
+
+test "displaySessionId: short ids unchanged (AC-S3)" {
+    try std.testing.expectEqualStrings("sess-abc", displaySessionId(.claude, "sess-abc"));
+    try std.testing.expectEqualStrings("short", displaySessionId(.codex, "short"));
+    const uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    try std.testing.expectEqualStrings(uuid, displaySessionId(.ryk, uuid));
+    try std.testing.expectEqualStrings(uuid, displaySessionId(.codex, uuid));
+}
+
+test "codexResumeUuid: extracts only full UUID; no mid-stem fragment (AC-S7)" {
+    const u = codexResumeUuid(codex_rollout_stem).?;
+    try std.testing.expectEqualStrings(codex_full_uuid, u);
+    try std.testing.expect(codexResumeUuid("rollout-no-uuid-here") == null);
+    try std.testing.expect(codexResumeUuid(codex_bad_tail) == null);
+    try std.testing.expect(codexResumeUuid("") == null);
+}
+
+test "hostNextStep: Codex resume uses full UUID never truncated tail (AC-S7)" {
+    var buf: [160]u8 = undefined;
+    const next = hostNextStep(.codex, codex_rollout_stem, &buf);
+    try std.testing.expect(std.mem.indexOf(u8, next, codex_full_uuid) != null);
+    try std.testing.expect(std.mem.indexOf(u8, next, "codex resume") != null);
+    // Must not recommend resume of the last-20-only fragment alone.
+    var bad_resume_buf: [64]u8 = undefined;
+    const bad_resume = std.fmt.bufPrint(&bad_resume_buf, "codex resume {s}", .{codex_bad_tail}) catch unreachable;
+    try std.testing.expect(std.mem.indexOf(u8, next, bad_resume) == null);
+    // Without UUID, no fake resume suggestion.
+    const no_uuid = hostNextStep(.codex, "rollout-2026-07-30-notauuid", &buf);
+    try std.testing.expect(std.mem.indexOf(u8, no_uuid, "codex resume") == null);
+}
+
+test "hostNextStep: ryk replay uses full session id not last-20 (E10)" {
+    var buf: [160]u8 = undefined;
+    const full = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const next = hostNextStep(.ryk, full, &buf);
+    try std.testing.expect(std.mem.indexOf(u8, next, full) != null);
+    // Replay line must include the complete id, not only shortId tail as the argument.
+    var short_only: [80]u8 = undefined;
+    const short_arg = std.fmt.bufPrint(&short_only, "ryk replay --session {s}", .{shortId(full)}) catch unreachable;
+    // shortId is a suffix of full, so the short_arg string is a prefix of the good line —
+    // require the full id appears (already checked) and shortId alone is not equal to display.
+    try std.testing.expect(!std.mem.eql(u8, shortId(full), full));
+    try std.testing.expect(std.mem.indexOf(u8, next, "ryk replay --session ") != null);
+    _ = short_arg;
+}
+
+test "displaySessionId: Codex stem without UUID returns full stem (E2)" {
+    const stem = "rollout-2026-07-30T21-25-08-not-a-uuid-suffix";
+    try std.testing.expectEqualStrings(stem, displaySessionId(.codex, stem));
 }
