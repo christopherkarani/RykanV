@@ -18,8 +18,8 @@ What it does:
 3. `./scripts/verify-pre-merge.sh`
 4. Local multi-arch build (Darwin Zig + Linux Docker) via `build-release.sh`
 5. GitHub Release with assets (including `checksums.txt`)
-6. npm: `@orca-sec/ryk` (rendered checksums) + integration plugins + `orca-pi`
-7. Push formulas to `christopherkarani/homebrew-orca`
+6. npm: `@rykan/ryk` (rendered checksums) + integration plugins + `ryk-pi`
+7. Push formulas to `christopherkarani/homebrew-ryk`
 
 CI `release.yml` on `v*` tags **skips** when the release already has `checksums.txt`. Use **workflow_dispatch** only as a backup cut.
 

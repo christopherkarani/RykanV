@@ -1,6 +1,6 @@
 # Red-team
 
-`orca redteam` is a **fixture engine self-test**. It exercises Orca’s built-in redteam fixture suite against the internal **`builtin:redteam`** policy preset using **synthetic, in-process** attempts (Zig evaluators).
+`ryk redteam` is a **fixture engine self-test**. It exercises ryk’s built-in redteam fixture suite against the internal **`builtin:redteam`** policy preset using **synthetic, in-process** attempts (Zig evaluators).
 
 ## What it is
 
@@ -10,12 +10,12 @@
 
 ## What it is not
 
-- **Not** a test of your workspace `.orca/policy.yaml`
+- **Not** a test of your workspace `.ryk/policy.yaml`
 - **Not** a test of production hook install / host wiring (shell Evaluate itself is Zig `shell_engine`)
 - **Not** proof that PATH wrappers, host hooks, network proxy, or OS-enforced filesystem backends are active
 - A **100% score does not mean** your workspace is protected
 
-For protection grade honesty, see [protection-grades.md](protection-grades.md) and `orca doctor` / `orca status` (readiness checks are a separate concern).
+For protection grade honesty, see [protection-grades.md](protection-grades.md) and `ryk doctor` / `ryk status` (readiness checks are a separate concern).
 
 Future directions (not implemented here): `redteam policy` against workspace YAML, and live e2e that exercise daemon/host boundaries.
 
@@ -26,14 +26,14 @@ Current fixture categories include prompt injection, secret exfiltration, shell 
 ## Run
 
 ```sh
-./zig-out/bin/orca redteam --ci
-./zig-out/bin/orca redteam fixtures --fixture prompt-injection/readme-env-read --ci
+./zig-out/bin/ryk redteam --ci
+./zig-out/bin/ryk redteam fixtures --fixture prompt-injection/readme-env-read --ci
 ```
 
 ## JSON Output
 
 ```sh
-./zig-out/bin/orca redteam --json --ci > redteam.json
+./zig-out/bin/ryk redteam --json --ci > redteam.json
 ```
 
 JSON includes a top-level `provenance` object, for example:

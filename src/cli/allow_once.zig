@@ -4,17 +4,17 @@
 //! pending + active JSONL stores. **No daemon.**
 //!
 //! Paths (must match product-wire loaders / s3-once-store brand):
-//!   pending  → `$XDG_DATA_HOME/orca/pending_exceptions.jsonl`
-//!              else `~/.local/share/orca/pending_exceptions.jsonl`
-//!   active   → `$XDG_DATA_HOME/orca/allow_once.jsonl`
-//!              else `~/.local/share/orca/allow_once.jsonl`
+//!   pending  → `$XDG_DATA_HOME/ryk/pending_exceptions.jsonl`
+//!              else `~/.local/share/ryk/pending_exceptions.jsonl`
+//!   active   → `$XDG_DATA_HOME/ryk/allow_once.jsonl`
+//!              else `~/.local/share/ryk/allow_once.jsonl`
 //!
 //! Subcommands: `<code> [-y] [--json] [--scope cwd|project]`, `list`, `clear`, `revoke`.
 //! Default redeem scope_path is the pending record cwd (grant matches deny site).
-//! Redeem is operator-bound (M-1): TTY confirmation or ORCA_OPERATOR=1 / RYK_OPERATOR=1.
+//! Redeem is operator-bound (M-1): TTY confirmation or RYK_OPERATOR=1 / RYK_OPERATOR=1.
 
 const std = @import("std");
-const core = @import("orca_core").core;
+const core = @import("ryk_core").core;
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
 const interactive = @import("interactive.zig");
@@ -36,10 +36,10 @@ const usage_text =
     \\command and scope. Management: list, clear, revoke.
     \\
     \\Redeem is operator-bound: interactive TTY confirmation, or set
-    \\ORCA_OPERATOR=1 / RYK_OPERATOR=1 for non-interactive operator redeem.
+    \\RYK_OPERATOR=1 / RYK_OPERATOR=1 for non-interactive operator redeem.
     \\-y/--yes skips TTY confirmation only (does not authorize non-TTY redeem).
     \\
-    \\Paths: $XDG_DATA_HOME/orca/ (or ~/.local/share/orca/)
+    \\Paths: $XDG_DATA_HOME/ryk/ (or ~/.local/share/ryk/)
     \\  pending_exceptions.jsonl · allow_once.jsonl
     \\
 ;
@@ -96,13 +96,13 @@ fn resolveOrcaDataDir(gpa: std.mem.Allocator) !?[]u8 {
     if (std.c.getenv("XDG_DATA_HOME")) |xdg_z| {
         const xdg = std.mem.span(xdg_z);
         if (xdg.len > 0) {
-            return try std.fs.path.join(gpa, &.{ xdg, "orca" });
+            return try std.fs.path.join(gpa, &.{ xdg, "ryk"});
         }
     }
     if (std.c.getenv("HOME")) |home_z| {
         const home = std.mem.span(home_z);
         if (home.len > 0) {
-            return try std.fs.path.join(gpa, &.{ home, ".local", "share", "orca" });
+            return try std.fs.path.join(gpa, &.{ home, ".local", "share", "ryk"});
         }
     }
     return null;
@@ -112,7 +112,7 @@ fn resolveOrcaDataDir(gpa: std.mem.Allocator) !?[]u8 {
 /// Agents must not be able to set this ambiently from ordinary host shells without
 /// the human operator configuring the environment (M-1).
 fn operatorRedeemAuthorized() bool {
-    return envTruthy("ORCA_OPERATOR") or envTruthy("RYK_OPERATOR");
+    return envTruthy("RYK_OPERATOR") or envTruthy("RYK_OPERATOR");
 }
 
 fn envTruthy(name: [*:0]const u8) bool {
@@ -179,14 +179,14 @@ fn cmdRedeem(
         }
     }
     // M-1 redeem gate: fail closed unless operator-bound.
-    // - ORCA_OPERATOR=1 / RYK_OPERATOR=1 → non-interactive operator redeem
+    // - RYK_OPERATOR=1 / RYK_OPERATOR=1 → non-interactive operator redeem
     // - stdin TTY → interactive confirmation (unless -y)
     // - else → refuse (-y alone is not enough for agents/scripts)
     if (!operatorRedeemAuthorized()) {
         const is_tty = std.Io.File.stdin().isTty(io) catch false;
         if (!is_tty) {
             try stderr.writeAll(
-                \\ryk allow-once: redeem requires interactive TTY confirmation, or ORCA_OPERATOR=1 (or RYK_OPERATOR=1) for non-interactive operator redeem
+                \\ryk allow-once: redeem requires interactive TTY confirmation, or RYK_OPERATOR=1 (or RYK_OPERATOR=1) for non-interactive operator redeem
                 \\
             );
             return exit_codes.usage;
@@ -564,7 +564,7 @@ const SOnceCliEnv = struct {
     fn deinit(self: *@This()) void {
         sOnceCliRestoreEnv("XDG_DATA_HOME", self.prev_data);
         sOnceCliRestoreEnv("HOME", self.prev_home);
-        sOnceCliRestoreEnv("ORCA_OPERATOR", self.prev_operator);
+        sOnceCliRestoreEnv("RYK_OPERATOR", self.prev_operator);
         sOnceCliRestoreEnv("RYK_OPERATOR", self.prev_ryk_operator);
         std.testing.allocator.free(self.data_root);
         self.data_tmp.cleanup();
@@ -572,7 +572,7 @@ const SOnceCliEnv = struct {
 };
 
 /// Isolate allow-once JSONL under a temp `$XDG_DATA_HOME` (and pin HOME away from host).
-/// Also sets ORCA_OPERATOR=1 so redeem tests exercise the operator non-interactive path.
+/// Also sets RYK_OPERATOR=1 so redeem tests exercise the operator non-interactive path.
 fn sOnceCliIsolateXdg() !SOnceCliEnv {
     var data_tmp = std.testing.tmpDir(.{});
     errdefer data_tmp.cleanup();
@@ -586,7 +586,7 @@ fn sOnceCliIsolateXdg() !SOnceCliEnv {
     errdefer if (prev_data) |p| std.testing.allocator.free(p);
     const prev_home = try sOnceCliDupEnvZ("HOME");
     errdefer if (prev_home) |p| std.testing.allocator.free(p);
-    const prev_operator = try sOnceCliDupEnvZ("ORCA_OPERATOR");
+    const prev_operator = try sOnceCliDupEnvZ("RYK_OPERATOR");
     errdefer if (prev_operator) |p| std.testing.allocator.free(p);
     const prev_ryk_operator = try sOnceCliDupEnvZ("RYK_OPERATOR");
     errdefer if (prev_ryk_operator) |p| std.testing.allocator.free(p);
@@ -594,10 +594,10 @@ fn sOnceCliIsolateXdg() !SOnceCliEnv {
     const data_z0 = try std.testing.allocator.dupeZ(u8, data_root);
     defer std.testing.allocator.free(data_z0);
     try std.testing.expectEqual(@as(c_int, 0), setenv("XDG_DATA_HOME", data_z0.ptr, 1));
-    // Pin HOME so fallback `~/.local/share/orca` never touches the host home.
+    // Pin HOME so fallback `~/.local/share/ryk` never touches the host home.
     try std.testing.expectEqual(@as(c_int, 0), setenv("HOME", data_z0.ptr, 1));
     // Operator gate for non-TTY redeem tests (M-1).
-    try std.testing.expectEqual(@as(c_int, 0), setenv("ORCA_OPERATOR", "1", 1));
+    try std.testing.expectEqual(@as(c_int, 0), setenv("RYK_OPERATOR", "1", 1));
 
     return .{
         .data_tmp = data_tmp,
@@ -642,17 +642,17 @@ fn sOnceCliIsStubNotImplemented(stdout: []const u8, stderr: []const u8) bool {
 }
 
 fn sOnceCliPendingPath(xdg_data: []const u8) ![]u8 {
-    return try sOnceCliJoin(&.{ xdg_data, "orca", allow_once_store.pending_file_name });
+    return try sOnceCliJoin(&.{ xdg_data, "ryk", allow_once_store.pending_file_name });
 }
 
 fn sOnceCliAllowOncePath(xdg_data: []const u8) ![]u8 {
-    return try sOnceCliJoin(&.{ xdg_data, "orca", allow_once_store.allow_once_file_name });
+    return try sOnceCliJoin(&.{ xdg_data, "ryk", allow_once_store.allow_once_file_name });
 }
 
 fn sOnceCliEnsureOrcaDataDir(xdg_data: []const u8) !void {
-    const orca_dir = try sOnceCliJoin(&.{ xdg_data, "orca" });
-    defer std.testing.allocator.free(orca_dir);
-    try std.Io.Dir.cwd().createDirPath(std.testing.io, orca_dir);
+    const ryk_dir = try sOnceCliJoin(&.{ xdg_data, "ryk"});
+    defer std.testing.allocator.free(ryk_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, ryk_dir);
 }
 
 fn sOnceCliExpectNoDaemonText(text: []const u8) !void {
@@ -757,7 +757,7 @@ test "s-once-cli: help and missing args are usage-safe without daemon" {
             std.mem.indexOf(u8, run.stdout, "Usage") != null or
             std.mem.indexOf(u8, run.stdout, "usage") != null);
         // Operator-bound redeem documented on help.
-        try std.testing.expect(std.mem.indexOf(u8, run.stdout, "ORCA_OPERATOR") != null or
+        try std.testing.expect(std.mem.indexOf(u8, run.stdout, "RYK_OPERATOR") != null or
             std.mem.indexOf(u8, run.stdout, "operator") != null);
     }
     {
@@ -770,15 +770,15 @@ test "s-once-cli: help and missing args are usage-safe without daemon" {
     }
 }
 
-test "s-once-cli: non-TTY redeem without ORCA_OPERATOR fails closed" {
+test "s-once-cli: non-TTY redeem without RYK_OPERATOR fails closed" {
     // M-1: -y alone must not authorize silent agent redeem on non-TTY.
     var xdg = try sOnceCliIsolateXdg();
     defer xdg.deinit();
     var ws = try sOnceCliWorkspace();
     defer ws.deinit();
 
-    // Isolate sets ORCA_OPERATOR=1; clear it to exercise the fail-closed path.
-    _ = unsetenv("ORCA_OPERATOR");
+    // Isolate sets RYK_OPERATOR=1; clear it to exercise the fail-closed path.
+    _ = unsetenv("RYK_OPERATOR");
     _ = unsetenv("RYK_OPERATOR");
 
     const cmd_text = "git reset --hard";
@@ -789,7 +789,7 @@ test "s-once-cli: non-TTY redeem without ORCA_OPERATOR fails closed" {
     const run = try sOnceCliRun(&.{ code, "-y" });
     defer sOnceCliFreeRun(run);
     try std.testing.expect(run.code != exit_codes.success);
-    try std.testing.expect(std.mem.indexOf(u8, run.stderr, "ORCA_OPERATOR") != null or
+    try std.testing.expect(std.mem.indexOf(u8, run.stderr, "RYK_OPERATOR") != null or
         std.mem.indexOf(u8, run.stderr, "TTY") != null or
         std.mem.indexOf(u8, run.stderr, "operator") != null);
 

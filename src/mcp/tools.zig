@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const core = @import("orca_core").core;
+const core = @import("ryk_core").core;
 const jsonrpc = @import("jsonrpc.zig");
 const schema_limits = @import("schema_limits.zig");
 
@@ -189,7 +189,7 @@ fn schemaFieldsUnrelated(tool_name: []const u8, schema_text: []const u8) bool {
 
 fn looksLikeImpersonation(server_name: []const u8, tool_name: []const u8) bool {
     if (server_name.len == 0) return false;
-    if (containsIgnoreCase(tool_name, "orca") or containsIgnoreCase(tool_name, "aegis") or containsIgnoreCase(tool_name, "system") or containsIgnoreCase(tool_name, "admin")) return true;
+    if (containsIgnoreCase(tool_name, "ryk") or containsIgnoreCase(tool_name, "rykan") or containsIgnoreCase(tool_name, "orca") or containsIgnoreCase(tool_name, "aegis") or containsIgnoreCase(tool_name, "system") or containsIgnoreCase(tool_name, "admin")) return true;
     if (containsIgnoreCase(tool_name, "github") and !containsIgnoreCase(server_name, "github")) return true;
     return false;
 }

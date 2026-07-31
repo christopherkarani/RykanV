@@ -23,7 +23,7 @@ Status: `todo` | `ci-green` (set `ci-green` only when the named job runs the fil
 | OS sandbox adversarial (linux) | `scripts/os-sandbox-adversarial-e2e.sh --case ci-linux` | `ci.yml` os-sandbox (ubuntu-latest matrix) | todo | | Job exists in CI with `--require-attach`; not yet proven on tip (`last_run_url` unset) |
 | OS sandbox adversarial (macos) | `scripts/os-sandbox-adversarial-e2e.sh --case ci-macos` | `ci.yml` os-sandbox (macos-14 matrix) | todo | | Job exists in CI with `--require-attach`; not yet proven on tip (`last_run_url` unset) |
 | MCP proxy fail-closed (unit set) | `proxy fails closed` / malformed transport filters in `src/mcp/proxy.zig` | zig-test | ci-green | | Expand residual via checklist |
-| Policy presets validate | `orca policy check` loop over `policies/presets` | `test.yml` | ci-green | | Already in test.yml |
+| Policy presets validate | `ryk policy check` loop over `policies/presets` | `test.yml` | ci-green | | Already in test.yml |
 | Per-host daemon-down wire residual (opencode/openclaw/hermes/claude shell) | checklist todos under `hook-residual-fail-closed` | zig-test | todo | | Z1 residual slice |
 
 ## Out of sweep (`sweep: out_of_sweep`)
@@ -34,7 +34,7 @@ Do **not** schedule these for Zig coverage-agent progress this sweep.
 |---------|----------------------|---------------|--------|-------|
 | Plugin install matrix | `tests/phase3*` / plugin packages | various | — | Plugins % parked |
 | Install/uninstall first-user | `scripts/install-first-user-regression-test.sh` | journey (if present) | — | Not Zig security checklist DoD |
-| Redteam CI | `orca redteam --ci` | `test.yml` / release | — | Keep green product-wide; not a coverage-agent work unit unless labeled |
+| Redteam CI | `ryk redteam --ci` | `test.yml` / release | — | Keep green product-wide; not a coverage-agent work unit unless labeled |
 | Rust protocol Decision Matrix | `docs/testing/protocol-decision-matrix.toml` | rust-test / future | — | Appendix R |
 | Rust pack family matrix | `docs/testing/pack-family-matrix.toml` | future | — | Appendix R |
 | Rust llvm-cov / rust-coverage job | `orca-rs/scripts/coverage.sh` | — | — | **deferred** this sweep |

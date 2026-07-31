@@ -17,8 +17,8 @@
 //! scope = "project"        # informational; file location is source of truth
 //! ```
 //!
-//! Paths (product): project `.orca/allowlist.toml`, user `~/.config/orca/allowlist.toml`
-//! (or `$XDG_CONFIG_HOME/orca/allowlist.toml`). Tests inject absolute paths.
+//! Paths (product): project `.ryk/allowlist.toml`, user `~/.config/ryk/allowlist.toml`
+//! (or `$XDG_CONFIG_HOME/ryk/allowlist.toml`). Tests inject absolute paths.
 //! Re-exported via `shell_engine` and covered by `test-shell-engine`.
 
 const std = @import("std");

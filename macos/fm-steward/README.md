@@ -1,6 +1,6 @@
 # fm-steward (Phase 3)
 
-Mac-only **on-device Apple Foundation Models steward** for Orca (`SystemLanguageModel`).
+Mac-only **on-device Apple Foundation Models steward** for ryk (`SystemLanguageModel`).
 
 **v1 focus: dangerous shell / agent commands** (soft-interrupt nuance after policy + hard fence).  
 Email bulk/VIP / pay adapters are **out of v1 product corpus** — architecture stubs only under `residual-knowledge/`.
@@ -205,10 +205,10 @@ before host attach.** Do not enable few-shot on `eval-danger` (pure-FM only).
 
 | Artifact | Path |
 |----------|------|
-| Wax store | `~/Library/Application Support/Orca/fm-steward/ambig.wax` |
-| Seed-hash sidecar | `~/Library/Application Support/Orca/fm-steward/ambig.wax.seedsha` (`v{N}:<seed-sha256>:<store-sha256>`) |
-| Reseed lock | `~/Library/Application Support/Orca/fm-steward/ambig.wax.reseed.lock` |
-| Optional seed copy | `~/Library/Application Support/Orca/fm-steward/seed.json` |
+| Wax store | `~/Library/Application Support/ryk/fm-steward/ambig.wax` |
+| Seed-hash sidecar | `~/Library/Application Support/ryk/fm-steward/ambig.wax.seedsha` (`v{N}:<seed-sha256>:<store-sha256>`) |
+| Reseed lock | `~/Library/Application Support/ryk/fm-steward/ambig.wax.reseed.lock` |
+| Optional seed copy | `~/Library/Application Support/ryk/fm-steward/seed.json` |
 
 Resolved via `FewShotStorePaths.productStoreURL()` / `storeURL(override:)`. Hosts may
 override the store URL for tests or ops; product default is **not** a temp directory.

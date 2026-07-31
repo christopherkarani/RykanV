@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const core = @import("orca_core").core;
-const core_api = @import("orca_core").api;
+const core = @import("ryk_core").core;
+const core_api = @import("ryk_core").api;
 const credentials = @import("../intercept/credentials.zig");
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");

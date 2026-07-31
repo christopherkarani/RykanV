@@ -1,7 +1,7 @@
 const std = @import("std");
-const exit_codes = @import("orca").cli.exit_codes;
+const exit_codes = @import("ryk").cli.exit_codes;
 
-const orca_bin = "./zig-out/bin/orca";
+const ryk_bin = "./zig-out/bin/ryk";
 
 const HostCase = struct {
     host: []const u8,
@@ -49,13 +49,13 @@ fn fileExists(path: []const u8) bool {
 }
 
 fn daemonBinaryAvailable() bool {
-    if (std.c.getenv("ORCA_DAEMON")) |path| {
+    if (std.c.getenv("RYK_DAEMON")) |path| {
         return fileExists(std.mem.span(path));
     }
     const candidates = [_][]const u8{
-        "./zig-out/bin/orca-daemon",
-        "orca-rs/target/release/orca-daemon",
-        "orca-rs/target/debug/orca-daemon",
+        "./zig-out/bin/ryk-daemon",
+        "orca-rs/target/release/ryk-daemon",
+        "orca-rs/target/debug/ryk-daemon",
     };
     for (candidates) |candidate| {
         if (fileExists(candidate)) return true;
@@ -122,7 +122,7 @@ fn parseDecision(allocator: std.mem.Allocator, stdout: []const u8) ![]const u8 {
 }
 
 test "phase2d real daemon host matrix exercises shell payloads when daemon is available" {
-    if (!fileExists(orca_bin)) return;
+    if (!fileExists(ryk_bin)) return;
     if (!daemonBinaryAvailable()) return;
 
     const allocator = std.testing.allocator;
@@ -131,7 +131,7 @@ test "phase2d real daemon host matrix exercises shell payloads when daemon is av
         const safe_fixture = try readFile(allocator, host_case.safe_fixture);
         defer allocator.free(safe_fixture);
 
-        const safe_result = try runOrca(allocator, &.{ orca_bin, "hook", host_case.host, host_case.event }, safe_fixture);
+        const safe_result = try runOrca(allocator, &.{ ryk_bin, "hook", host_case.host, host_case.event }, safe_fixture);
         defer allocator.free(safe_result.stdout);
         defer allocator.free(safe_result.stderr);
 
@@ -142,7 +142,7 @@ test "phase2d real daemon host matrix exercises shell payloads when daemon is av
         const dangerous_fixture = try readFile(allocator, host_case.dangerous_fixture);
         defer allocator.free(dangerous_fixture);
 
-        const deny_result = try runOrca(allocator, &.{ orca_bin, "hook", host_case.host, host_case.event }, dangerous_fixture);
+        const deny_result = try runOrca(allocator, &.{ ryk_bin, "hook", host_case.host, host_case.event }, dangerous_fixture);
         defer allocator.free(deny_result.stdout);
         defer allocator.free(deny_result.stderr);
 

@@ -1,5 +1,5 @@
 const std = @import("std");
-const orca = @import("orca");
+const ryk = @import("ryk");
 
 fn readFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     return try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .limited(256 * 1024));
@@ -34,14 +34,14 @@ test "phase25 Windows package templates match nested zip layout" {
     const version_file = try readFile(std.testing.allocator, "VERSION");
     defer std.testing.allocator.free(version_file);
     const version = std.mem.trim(u8, version_file, " \t\r\n");
-    const scoop = try readFile(std.testing.allocator, "packaging/scoop/orca.json");
+    const scoop = try readFile(std.testing.allocator, "packaging/scoop/ryk.json");
     defer std.testing.allocator.free(scoop);
-    const winget = try readFile(std.testing.allocator, "packaging/winget/orca.yaml");
+    const winget = try readFile(std.testing.allocator, "packaging/winget/ryk.yaml");
     defer std.testing.allocator.free(winget);
 
-    const scoop_path = try std.fmt.allocPrint(std.testing.allocator, "orca-v{s}-windows-amd64\\\\bin\\\\orca.exe", .{version});
+    const scoop_path = try std.fmt.allocPrint(std.testing.allocator, "ryk-v{s}-windows-amd64\\\\bin\\\\ryk.exe", .{version});
     defer std.testing.allocator.free(scoop_path);
-    const winget_path = try std.fmt.allocPrint(std.testing.allocator, "orca-v{s}-windows-amd64\\bin\\orca.exe", .{version});
+    const winget_path = try std.fmt.allocPrint(std.testing.allocator, "ryk-v{s}-windows-amd64\\bin\\ryk.exe", .{version});
     defer std.testing.allocator.free(winget_path);
     try std.testing.expect(std.mem.indexOf(u8, scoop, scoop_path) != null);
     try std.testing.expect(std.mem.indexOf(u8, winget, winget_path) != null);
@@ -50,12 +50,12 @@ test "phase25 Windows package templates match nested zip layout" {
 test "phase25 npm package is honest while checksum placeholders remain" {
     const package_json = try readFile(std.testing.allocator, "packaging/npm/package.json");
     defer std.testing.allocator.free(package_json);
-    const wrapper = try readFile(std.testing.allocator, "packaging/npm/bin/orca.js");
+    const wrapper = try readFile(std.testing.allocator, "packaging/npm/bin/ryk.js");
     defer std.testing.allocator.free(wrapper);
     const readme = try readFile(std.testing.allocator, "packaging/npm/README.md");
     defer std.testing.allocator.free(readme);
 
-    try std.testing.expect(std.mem.indexOf(u8, package_json, "npm launcher for the Zig-built Orca binary") != null);
+    try std.testing.expect(std.mem.indexOf(u8, package_json, "npm launcher for the Zig-built ryk binary") != null);
     try std.testing.expect(std.mem.indexOf(u8, wrapper, "missing release checksums") != null);
     try std.testing.expect(std.mem.indexOf(u8, readme, "fails closed") != null);
 }
@@ -72,7 +72,7 @@ test "phase25 MCP docs distinguish proxy stdin and list observation" {
 test "phase25 Core facade is the shared CLI policy audit replay and redaction surface" {
     try std.testing.expect(@hasDecl(orca, "core_api"));
 
-    var selected = try orca.core_api.parsePolicyFromSlice(std.testing.allocator,
+    var selected = try ryk.core_api.parsePolicyFromSlice(std.testing.allocator,
         \\version: 1
         \\mode: ci
         \\commands:
@@ -81,7 +81,7 @@ test "phase25 Core facade is the shared CLI policy audit replay and redaction su
     , "phase25-core-api.yaml");
     defer selected.deinit();
 
-    var evaluation = try orca.core_api.evaluateAction(
+    var evaluation = try ryk.core_api.evaluateAction(
         std.testing.allocator,
         selected,
         .{ .command_exec = .{ .argv = &.{ "npm", "install", "left-pad" } } },
@@ -89,7 +89,7 @@ test "phase25 Core facade is the shared CLI policy audit replay and redaction su
     );
     defer evaluation.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(orca.core_api.DecisionResult.deny, evaluation.decision.result);
-    const redacted = orca.core_api.redactString("OPENAI_API_KEY=sk-fakeSyntheticOpenAIKey1234567890");
+    try std.testing.expectEqual(ryk.core_api.DecisionResult.deny, evaluation.decision.result);
+    const redacted = ryk.core_api.redactString("OPENAI_API_KEY=sk-fakeSyntheticOpenAIKey1234567890");
     try std.testing.expect(std.mem.indexOf(u8, redacted, "sk-fakeSynthetic") == null);
 }

@@ -11,14 +11,14 @@ const listenWithOrigin = gateway.testing.listenWithOrigin;
 const parseInbound = protocol.parseInbound;
 
 test "gateway parser accepts exact Anthropic phantom and rejects phantom smuggling" {
-    const phantom = "orca-secret://session/0123456789abcdef0123456789abcdef/ANTHROPIC_API_KEY/0123456789abcdef";
+    const phantom = "ryk-secret://session/0123456789abcdef0123456789abcdef/ANTHROPIC_API_KEY/0123456789abcdef";
     const request = try std.fmt.allocPrint(std.testing.allocator, "POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1\r\nx-api-key: {s}\r\ncontent-type: application/json\r\ncontent-length: 2\r\n\r\n{{}}", .{phantom});
     defer std.testing.allocator.free(request);
     var parsed = try parseInbound(std.testing.allocator, .anthropic, request, .{});
     defer parsed.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings(phantom, parsed.phantom);
     try std.testing.expectEqual(@as(usize, 2), parsed.content_length);
-    const smuggled = try std.fmt.allocPrint(std.testing.allocator, "POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1\r\nx-api-key: {s}\r\nx-extra: orca-secret://evil\r\n\r\n", .{phantom});
+    const smuggled = try std.fmt.allocPrint(std.testing.allocator, "POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1\r\nx-api-key: {s}\r\nx-extra: ryk-secret://evil\r\n\r\n", .{phantom});
     defer std.testing.allocator.free(smuggled);
     try std.testing.expectError(
         error.PhantomInUnexpectedHeader,
@@ -201,7 +201,7 @@ test "gateway swaps an exact phantom for fixed synthetic upstream and denies unm
     const denied =
         "POST /v1/messages HTTP/1.1\r\n" ++
         "Host: localhost\r\n" ++
-        "x-api-key: orca-secret://session/evil/ANTHROPIC_API_KEY/0000000000000000\r\n" ++
+        "x-api-key: ryk-secret://session/evil/ANTHROPIC_API_KEY/0000000000000000\r\n" ++
         "content-length: 2\r\nconnection: close\r\n\r\n{}";
     const denied_response = try gatewayExchange(io, runtime.bindPort(), denied);
     try std.testing.expect(std.mem.indexOf(u8, &denied_response, "403 Forbidden") != null);
@@ -509,7 +509,7 @@ fn testUpstream(state: *TestUpstreamState) void {
         if (std.mem.indexOf(u8, request[0..total], "\r\n\r\n{}") != null) break;
     }
     state.saw_raw = std.mem.indexOf(u8, request[0..total], state.expected_raw) != null;
-    state.saw_phantom = std.mem.indexOf(u8, request[0..total], "orca-secret://") != null;
+    state.saw_phantom = std.mem.indexOf(u8, request[0..total], "ryk-secret://") != null;
     var writer_buffer: [512]u8 = undefined;
     var writer = stream.writer(state.io, &writer_buffer);
     writer.interface.writeAll(

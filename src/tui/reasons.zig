@@ -82,7 +82,7 @@ pub fn safeAlternatives(allocator: std.mem.Allocator, command: []const u8) ![]Al
         const target = extractRmTarget(command);
         if (target.len > 0 and (std.mem.eql(u8, target, "/") or std.mem.startsWith(u8, target, "/") or std.mem.eql(u8, target, "~"))) {
             try list.append(allocator, .{ .command = try allocator.dupe(u8, "rm -rf ./build"), .note = "scoped to your project" });
-            try list.append(allocator, .{ .command = try allocator.dupe(u8, "rm -rf /tmp/orca-cleanup"), .note = "scoped to a temp directory" });
+            try list.append(allocator, .{ .command = try allocator.dupe(u8, "rm -rf /tmp/ryk-cleanup"), .note = "scoped to a temp directory" });
         } else if (target.len > 0) {
             // Build a scoped form of the same deletion target under ./ for visibility.
             const scoped = try std.fmt.allocPrint(allocator, "rm -rf .{s}", .{target});

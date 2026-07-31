@@ -6,11 +6,11 @@ ryk checks the direct command before launch and installs session PATH shims for 
 
 By default ryk renders human-facing output with colour, Unicode box-drawing, decision badges, risk meters, and (where useful) inline spinner frames on a terminal. When output is piped, when `NO_COLOR` is set, or when `TERM=dumb`, ryk automatically falls back to clean plain text.
 
-For piping, scripting, CI logs, or terminals that mis-render colour, force plain text everywhere with `--no-rich` (or set `ORCA_NO_RICH=1`):
+For piping, scripting, CI logs, or terminals that mis-render colour, force plain text everywhere with `--no-rich` (or set `RYK_NO_RICH=1`):
 
 ```sh
 ryk --no-rich decide command --json '{"command":"rm -rf /"}' --human
-ORCA_NO_RICH=1 ryk replay
+RYK_NO_RICH=1 ryk replay
 ```
 
 `--no-rich` disables colour and animation but keeps the full information content — panels become ASCII, badges become `[ALLOW]`/`[DENY]`, and risk meters become text bars. It never affects `--json`/`--robot` machine output, which stays byte-stable regardless.

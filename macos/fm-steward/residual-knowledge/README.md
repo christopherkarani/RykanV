@@ -1,6 +1,6 @@
 # Residual knowledge packs
 
-Human-authored **ambiguous** examples for Orca’s Mac `fm-steward` residual path.
+Human-authored **ambiguous** examples for ryk’s Mac `fm-steward` residual path.
 
 These packs are compiled into `Fixtures/ambig-fewshot/seed.json`, loaded into a **text-mode Wax** store, and retrieved **only after** rules pre-pass returns nil. Foundation Models use the neighbors as **guidance**, not authority.
 

@@ -25,11 +25,11 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
 
     def test_fail_open_defaults_on(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("ORCA_HERMES_FAIL_OPEN", None)
+            os.environ.pop("RYK_HERMES_FAIL_OPEN", None)
             os.environ.pop("RYK_HERMES_FAIL_OPEN", None)
             with mock.patch.object(_PLUGIN, "_stance_file_fail_open", return_value=None):
                 self.assertTrue(_PLUGIN._fail_open_enabled())
-        with mock.patch.dict(os.environ, {"ORCA_HERMES_FAIL_OPEN": "0"}):
+        with mock.patch.dict(os.environ, {"RYK_HERMES_FAIL_OPEN": "0"}):
             self.assertFalse(_PLUGIN._fail_open_enabled())
         # Dual-read: RYK_ preferred brand key also closes fail-open.
         with mock.patch.dict(os.environ, {"RYK_HERMES_FAIL_OPEN": "0"}, clear=False):
@@ -38,12 +38,12 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
 
     def test_fail_open_stance_file_fail_closed_for_new_installs(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("ORCA_HERMES_FAIL_OPEN", None)
+            os.environ.pop("RYK_HERMES_FAIL_OPEN", None)
             os.environ.pop("RYK_HERMES_FAIL_OPEN", None)
             with mock.patch.object(_PLUGIN, "_stance_file_fail_open", return_value=False):
                 self.assertFalse(_PLUGIN._fail_open_enabled())
             # Env wins over stance file.
-            with mock.patch.dict(os.environ, {"ORCA_HERMES_FAIL_OPEN": "1"}):
+            with mock.patch.dict(os.environ, {"RYK_HERMES_FAIL_OPEN": "1"}):
                 with mock.patch.object(_PLUGIN, "_stance_file_fail_open", return_value=False):
                     self.assertTrue(_PLUGIN._fail_open_enabled())
 
@@ -54,7 +54,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         self.assertIsNone(_PLUGIN._parse_fail_open_token(""))
 
     def test_orca_executable_rejects_missing_file(self) -> None:
-        self.assertIsNone(_PLUGIN._orca_executable("/nonexistent/orca-binary"))
+        self.assertIsNone(_PLUGIN._orca_executable("/nonexistent/ryk-binary"))
 
     def test_hook_smoke_passes_blocks_only(self) -> None:
         self.assertTrue(_PLUGIN._hook_smoke_passes('{"decision":"allow"}'))
@@ -71,7 +71,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
     def test_pre_tool_call_fail_closed_when_disabled(self) -> None:
         ctx = mock.Mock()
         exc = RuntimeError("ryk binary not found or too old for Hermes hooks")
-        with mock.patch.dict(os.environ, {"ORCA_HERMES_FAIL_OPEN": "0"}):
+        with mock.patch.dict(os.environ, {"RYK_HERMES_FAIL_OPEN": "0"}):
             result = _PLUGIN._handle_hook_error(ctx, "pre_tool_call", exc)
         self.assertIsInstance(result, dict)
         assert result is not None
@@ -80,7 +80,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
     def test_pre_tool_call_fail_open_when_enabled(self) -> None:
         ctx = mock.Mock()
         exc = RuntimeError("ryk binary not found or too old for Hermes hooks")
-        with mock.patch.dict(os.environ, {"ORCA_HERMES_FAIL_OPEN": "1"}):
+        with mock.patch.dict(os.environ, {"RYK_HERMES_FAIL_OPEN": "1"}):
             with mock.patch("builtins.print") as printed:
                 result = _PLUGIN._handle_hook_error(ctx, "pre_tool_call", exc)
         self.assertIsNone(result)
@@ -88,7 +88,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         printed.assert_called()
         warn_text = " ".join(str(c) for c in printed.call_args_list)
         self.assertIn("FAIL-OPEN", warn_text)
-        self.assertIn("ORCA_HERMES_FAIL_OPEN=0", warn_text)
+        self.assertIn("RYK_HERMES_FAIL_OPEN=0", warn_text)
 
     def test_pre_tool_call_blocks_hard_deny(self) -> None:
         ctx = mock.Mock()
@@ -108,7 +108,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         _PLUGIN._register(ctx, "pre_tool_call")
         handler = ctx.register_hook.call_args.args[1]
         with mock.patch.dict(os.environ, {}, clear=False):
-            for key in ("CI", "ORCA_CI", "ORCA_NONINTERACTIVE"):
+            for key in ("CI", "RYK_CI", "RYK_NONINTERACTIVE"):
                 os.environ.pop(key, None)
             with mock.patch.object(
                 _PLUGIN,

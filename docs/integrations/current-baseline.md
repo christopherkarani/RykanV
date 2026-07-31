@@ -1,8 +1,8 @@
-> **⚠️ Historical Baseline:** This document captures the state at Phase 35 (2026-05-09). The CLI surface has since evolved significantly (`orca hook`, `orca plugin`, `orca decide` now exist; the C ABI skeleton was never used). See the current command map in `src/cli/mod.zig` and `docs/commands.md`. For merge architecture, see `../plans/MERGE_ORCA_RS_INTO_ORCA_CLI_v2.md`.
+> **⚠️ Historical Baseline:** This document captures the state at Phase 35 (2026-05-09). The CLI surface has since evolved significantly (`ryk hook`, `ryk plugin`, `ryk decide` now exist; the C ABI skeleton was never used). See the current command map in `src/cli/mod.zig` and `docs/commands.md`. For merge architecture, see `../plans/MERGE_RYK_RS_INTO_RYK_CLI_v2.md`.
 
 ---
 
-# Orca Integration Baseline — P00
+# ryk Integration Baseline — P00
 
 > Generated: 2026-05-09  
 > Branch: `phase-35-edge-network-telemetry-data-guard`  
@@ -14,26 +14,26 @@
 
 ## 1. Repo Summary
 
-Orca is a local, policy-driven runtime firewall for AI agents, written in Zig.
+ryk is a local, policy-driven runtime firewall for AI agents, written in Zig.
 It is **not** a SaaS product, hosted dashboard, monetization layer, or telemetry service.
 
 The repo is organized as a monorepo with two products:
 
 | Product | Path | Binary | Role |
 |---------|------|--------|------|
-| Orca Core | `packages/core/` | (library) | Shared policy, audit, replay, redaction, schema, decision engine |
-| Orca | `packages/cli/` + `src/cli/` | `orca` | Desktop / CI AI-agent runtime firewall |
+| ryk Core | `packages/core/` | (library) | Shared policy, audit, replay, redaction, schema, decision engine |
+| ryk | `packages/cli/` + `src/cli/` | `ryk` | Desktop / CI AI-agent runtime firewall |
 
 ---
 
-## 2. Current CLI Map (`orca` binary)
+## 2. Current CLI Map (`ryk` binary)
 
 ### Top-Level Commands
 
 | Command | Namespace | File | Status | Notes |
 |---------|-----------|------|--------|-------|
 | `run` | — | `src/cli/run.zig` | Complete | Direct-child supervision, env filtering, command guard, audit |
-| `init` | — | `src/cli/init.zig` | Complete | Creates `.orca/policy.yaml` from presets |
+| `init` | — | `src/cli/init.zig` | Complete | Creates `.ryk/policy.yaml` from presets |
 | `doctor` | — | `src/cli/doctor.zig` | Complete | Platform capability report |
 | `policy` | `check` | `src/cli/policy.zig` | Complete | Validate policy file |
 | `policy` | `explain` | `src/cli/policy.zig` | Complete | Explain decision for action/target |
@@ -57,15 +57,15 @@ The repo is organized as a monorepo with two products:
 
 | Missing Command | Implication |
 |-----------------|-------------|
-| `orca plugin` | No plugin namespace exists |
-| `orca decide` | No decide command exists |
-| `orca hook` | No hook command exists |
-| `orca mcp` (server mode) | No persistent MCP server mode for plugin tools |
+| `ryk plugin` | No plugin namespace exists |
+| `ryk decide` | No decide command exists |
+| `ryk hook` | No hook command exists |
+| `ryk mcp` (server mode) | No persistent MCP server mode for plugin tools |
 
 ### Incomplete / Stubbed Areas
 
-- `orca mcp --server <preset>` → explicitly unsupported (error: "Phase 11; use --command")
-- `orca mcp trust` → guidance-only; does not write policy
+- `ryk mcp --server <preset>` → explicitly unsupported (error: "Phase 11; use --command")
+- `ryk mcp trust` → guidance-only; does not write policy
 - `src/cli/args.zig` → placeholder/skeleton; not wired into dispatch
 
 ---
@@ -116,11 +116,11 @@ The repo is organized as a monorepo with two products:
 |-------|--------|
 | `zig build` | Pass (no errors) |
 | `zig build test` | Pass |
-| `orca --help` | Pass |
-| `orca version` | Pass (`1.1.0`) |
-| `orca version --json` | Pass |
-| `orca doctor` | Pass |
-| `orca redteam --ci` | **10/10 passed, 100%** |
+| `ryk --help` | Pass |
+| `ryk version` | Pass (`1.1.0`) |
+| `ryk version --json` | Pass |
+| `ryk doctor` | Pass |
+| `ryk redteam --ci` | **10/10 passed, 100%** |
 
 ---
 
@@ -142,16 +142,16 @@ The repo is organized as a monorepo with two products:
 
 | Item | Why Needed | Risk if Missing |
 |------|------------|-----------------|
-| `orca plugin` command namespace | Entry point for plugin management | No user-facing plugin surface |
+| `ryk plugin` command namespace | Entry point for plugin management | No user-facing plugin surface |
 | Plugin manifest schema | Validate plugin metadata before load | Cannot safely load third-party plugins |
 | Hook schema / registry | Define plugin hook points | No structured extension mechanism |
 | `integrations/` directory | Home for plugin code, manifests, docs | Ad-hoc plugin layout |
 | Codex plugin directory | Codex-specific plugin implementation | No Codex integration |
 | Claude Code plugin directory | Claude Code-specific plugin implementation | No Claude Code integration |
-| MCP server mode for Orca tools | Expose Orca capabilities as MCP tools | Plugins cannot use Orca as MCP backend |
+| MCP server mode for ryk tools | Expose ryk capabilities as MCP tools | Plugins cannot use ryk as MCP backend |
 | Plugin tests | Validate plugin loading, isolation, teardown | Silent breakage on plugin changes |
 | Plugin security model doc | Define trust boundaries, sandbox expectations | Unsafe plugin defaults |
-| Orca plugin contract doc | Define what the CLI promises to plugins | Plugin compatibility drift |
+| ryk plugin contract doc | Define what the CLI promises to plugins | Plugin compatibility drift |
 
 ---
 
@@ -159,10 +159,10 @@ The repo is organized as a monorepo with two products:
 
 1. **Plugin infrastructure directory** — Create `integrations/` or `plugins/` with clear subdirectories per target (codex, claude-code, generic-mcp).
 2. **Plugin manifest schema** — JSON/YAML schema for plugin metadata (name, version, hooks, permissions, sandbox requirements).
-3. **`orca plugin` CLI namespace** — Minimum viable: `list`, `install`, `uninstall`, `doctor`.
+3. **`ryk plugin` CLI namespace** — Minimum viable: `list`, `install`, `uninstall`, `doctor`.
 4. **Hook registry** — Define hook points in the CLI lifecycle where plugins can register callbacks.
 5. **Security model documentation** — Before any plugin loads code, document the trust model, permission levels, and isolation expectations.
-6. **MCP server mode** — Allow Orca to expose its own capabilities (policy check, audit query, redteam) as MCP tools.
+6. **MCP server mode** — Allow ryk to expose its own capabilities (policy check, audit query, redteam) as MCP tools.
 7. **Plugin test harness** — A way to load a plugin in a test and verify it does not crash or corrupt state.
 
 ---
@@ -170,13 +170,13 @@ The repo is organized as a monorepo with two products:
 ## 7. Recommended Next Steps
 
 1. **Create `docs/integrations/` directory** (done as part of P00).
-2. **Write `ORCA_CLI_PLUGIN_CONTRACT.md`** — Define the CLI-to-plugin contract.
+2. **Write `RYK_CLI_PLUGIN_CONTRACT.md`** — Define the CLI-to-plugin contract.
 3. **Write `PLUGIN_SECURITY_MODEL.md`** — Define trust boundaries, sandbox levels, permission model.
 4. **Create `integrations/` directory** with subdirs: `codex/`, `claude-code/`, `generic-mcp/`, `schemas/`.
 5. **Design plugin manifest schema** — Start with a minimal JSON schema.
-6. **Stub `orca plugin` command** — Add namespace + help text; defer implementation.
+6. **Stub `ryk plugin` command** — Add namespace + help text; defer implementation.
 7. **Stub hook registry** — Define hook types without wiring them.
-8. **Add plugin baseline smoke tests** — Verify `orca plugin --help` etc.
+8. **Add plugin baseline smoke tests** — Verify `ryk plugin --help` etc.
 
 ---
 
@@ -185,7 +185,7 @@ The repo is organized as a monorepo with two products:
 | Blocker | Severity | Mitigation |
 |---------|----------|------------|
 | No plugin directory or schema | Medium | Create in P01; not blocking P00 |
-| No `orca plugin` command | Medium | Stub in P01; not blocking P00 |
+| No `ryk plugin` command | Medium | Stub in P01; not blocking P00 |
 | Experimental C ABI | Low | Not required for plugin work; use Zig modules |
 | `src/` vs `packages/` split incomplete | Low | Continue using `src/` for CLI; packages are facades |
 

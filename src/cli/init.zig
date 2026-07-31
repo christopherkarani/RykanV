@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const orca_policy = @import("orca_core").policy;
-const core = @import("orca_core").core;
+const orca_policy = @import("ryk_core").policy;
+const core = @import("ryk_core").core;
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
 const style = @import("style.zig");
@@ -22,19 +22,19 @@ pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: an
         else => return err,
     };
 
-    cwd.createDirPath(io, ".orca") catch |err| {
-        try stderr.print("ryk init: failed to create .orca: {s}\n", .{@errorName(err)});
+    cwd.createDirPath(io, ".ryk") catch |err| {
+        try stderr.print("ryk init: failed to create .ryk: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
 
     const flags: std.Io.Dir.CreateFileOptions = if (options.force) .{} else .{ .exclusive = true };
-    const file = cwd.createFile(io, ".orca/policy.yaml", flags) catch |err| switch (err) {
+    const file = cwd.createFile(io, ".ryk/policy.yaml", flags) catch |err| switch (err) {
         error.PathAlreadyExists => {
-            try stderr.writeAll("ryk init: .orca/policy.yaml already exists; use --force to overwrite.\n");
+            try stderr.writeAll("ryk init: .ryk/policy.yaml already exists; use --force to overwrite.\n");
             return exit_codes.general;
         },
         else => {
-            try stderr.print("ryk init: failed to write .orca/policy.yaml: {s}\n", .{@errorName(err)});
+            try stderr.print("ryk init: failed to write .ryk/policy.yaml: {s}\n", .{@errorName(err)});
             return exit_codes.general;
         },
     };
@@ -44,7 +44,7 @@ pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: an
     try writePolicy(io, file, preset_text, options.mode);
     const info = orca_policy.presets.agentPresetInfo(options.preset);
 
-    // Additive pack enablement for the daemon evaluator (project `.orca.toml` when in a git
+    // Additive pack enablement for the daemon evaluator (project `.ryk.toml` when in a git
     // repo, else user config). Zig still owns policy.yaml; packs config is additive.
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_state.deinit();
@@ -67,17 +67,17 @@ pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: an
         // maybeColor, matching the style of setup.zig and run.zig warm paths.
         try stdout.writeAll("\n");
         var msg_buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&msg_buf, "{s} Created .orca/policy.yaml from preset '{s}'.\n", .{ style.Glyph.check, info.name }) catch null;
+        const msg = std.fmt.bufPrint(&msg_buf, "{s} Created .ryk/policy.yaml from preset '{s}'.\n", .{ style.Glyph.check, info.name }) catch null;
         if (msg) |m| {
             try style.maybeColor(io, stdout, style.Style.green, m);
         } else {
             // Buffer too small (should never happen): fall back to manual gating.
             if (style.useColor(io, stdout)) {
                 try stdout.writeAll(style.Style.green);
-                try stdout.print("{s} Created .orca/policy.yaml from preset '{s}'.\n", .{ style.Glyph.check, info.name });
+                try stdout.print("{s} Created .ryk/policy.yaml from preset '{s}'.\n", .{ style.Glyph.check, info.name });
                 try stdout.writeAll(style.Style.reset);
             } else {
-                try stdout.print("{s} Created .orca/policy.yaml from preset '{s}'.\n", .{ style.Glyph.check, info.name });
+                try stdout.print("{s} Created .ryk/policy.yaml from preset '{s}'.\n", .{ style.Glyph.check, info.name });
             }
         }
         try stdout.print("{s}\n", .{packs_result.message});
@@ -89,7 +89,7 @@ pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: an
             "Your policy is ready.\n" ++
             "\n" ++
             "Next steps:\n" ++
-            "  ryk policy check .orca/policy.yaml\n" ++
+            "  ryk policy check .ryk/policy.yaml\n" ++
             "  ryk doctor\n" ++
             "  ryk run -- <command>\n" ++
             "\n");
@@ -221,7 +221,7 @@ test "init creates policy and refuses overwrite without force" {
     const code = try command(std.testing.io, tmp.dir, &.{ "--mode", "strict" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, code);
 
-    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".orca/policy.yaml", std.testing.allocator, .limited(4096));
+    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(4096));
     defer std.testing.allocator.free(policy);
     try std.testing.expect(std.mem.indexOf(u8, policy, "version: 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, policy, "mode: strict") != null);
@@ -237,9 +237,9 @@ test "init force overwrites existing policy" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const existing = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const existing = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer existing.close(std.testing.io);
         try existing.writeStreamingAll(std.testing.io, "old\n");
     }
@@ -253,7 +253,7 @@ test "init force overwrites existing policy" {
     try std.testing.expectEqual(exit_codes.success, code);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 
-    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".orca/policy.yaml", std.testing.allocator, .limited(4096));
+    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(4096));
     defer std.testing.allocator.free(policy);
     try std.testing.expect(std.mem.indexOf(u8, policy, "mode: observe") != null);
 }
@@ -273,12 +273,12 @@ test "init accepts generic-agent preset alias" {
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Packs: baseline only") != null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 
-    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".orca/policy.yaml", std.testing.allocator, .limited(4096));
+    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(4096));
     defer std.testing.allocator.free(policy);
     try std.testing.expect(std.mem.indexOf(u8, policy, "version: 1") != null);
 }
 
-test "init team-ci enables opt-in packs in project .orca.toml" {
+test "init team-ci enables opt-in packs in project .ryk.toml" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.createDirPath(std.testing.io, ".git");
@@ -295,11 +295,11 @@ test "init team-ci enables opt-in packs in project .orca.toml" {
     try std.testing.expect(std.mem.indexOf(u8, out, "containers.docker") != null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 
-    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".orca/policy.yaml", std.testing.allocator, .limited(16 * 1024));
+    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(16 * 1024));
     defer std.testing.allocator.free(policy);
     try std.testing.expect(std.mem.indexOf(u8, policy, "version: 1") != null);
 
-    const packs_cfg = try tmp.dir.readFileAlloc(std.testing.io, ".orca.toml", std.testing.allocator, .limited(8192));
+    const packs_cfg = try tmp.dir.readFileAlloc(std.testing.io, ".ryk.toml", std.testing.allocator, .limited(8192));
     defer std.testing.allocator.free(packs_cfg);
     try std.testing.expect(std.mem.indexOf(u8, packs_cfg, "containers.docker") != null);
     try std.testing.expect(std.mem.indexOf(u8, packs_cfg, "kubernetes.kubectl") != null);
@@ -310,7 +310,7 @@ test "init team-ci enables opt-in packs in project .orca.toml" {
     stderr_writer = .fixed(&stderr_buf);
     const second = try command(std.testing.io, tmp.dir, &.{ "--preset", "team-ci", "--force" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, second);
-    const packs_cfg2 = try tmp.dir.readFileAlloc(std.testing.io, ".orca.toml", std.testing.allocator, .limited(8192));
+    const packs_cfg2 = try tmp.dir.readFileAlloc(std.testing.io, ".ryk.toml", std.testing.allocator, .limited(8192));
     defer std.testing.allocator.free(packs_cfg2);
     try std.testing.expect(std.mem.indexOf(u8, packs_cfg2, "containers.docker") != null);
 }
@@ -334,9 +334,9 @@ test "init writes requested phase 18 presets as valid policies" {
         try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Your policy is ready") != null);
         try std.testing.expectEqualStrings("", stderr_writer.buffered());
 
-        const policy = try tmp.dir.readFileAlloc(std.testing.io, ".orca/policy.yaml", std.testing.allocator, .limited(16 * 1024));
+        const policy = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(16 * 1024));
         defer std.testing.allocator.free(policy);
-        var loaded = try orca_policy.load.parseFromSlice(std.testing.allocator, policy, ".orca/policy.yaml");
+        var loaded = try orca_policy.load.parseFromSlice(std.testing.allocator, policy, ".ryk/policy.yaml");
         defer loaded.deinit();
         try orca_policy.validate.policy(&loaded);
     }

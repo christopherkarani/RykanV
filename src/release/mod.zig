@@ -27,15 +27,15 @@ pub fn artifactName(buffer: []u8, product: []const u8, version: []const u8, targ
 test "phase 19 artifact names match release contract" {
     var names: [targets.len][96]u8 = undefined;
     const expected = [_][]const u8{
-        "orca-v0.19.0-darwin-amd64.tar.gz",
-        "orca-v0.19.0-darwin-arm64.tar.gz",
-        "orca-v0.19.0-linux-amd64.tar.gz",
-        "orca-v0.19.0-linux-arm64.tar.gz",
-        "orca-v0.19.0-windows-amd64.zip",
+        "ryk-v0.19.0-darwin-amd64.tar.gz",
+        "ryk-v0.19.0-darwin-arm64.tar.gz",
+        "ryk-v0.19.0-linux-amd64.tar.gz",
+        "ryk-v0.19.0-linux-arm64.tar.gz",
+        "ryk-v0.19.0-windows-amd64.zip",
     };
 
     for (targets, 0..) |target, index| {
-        const actual = try artifactName(&names[index], "orca", "0.19.0", target);
+        const actual = try artifactName(&names[index], "ryk", "0.19.0", target);
         try std.testing.expectEqualStrings(expected[index], actual);
     }
 }
@@ -49,11 +49,11 @@ test "phase 19 package and workflow files are present" {
         "scripts/generate-checksums.sh",
         "scripts/generate-sbom.sh",
         "scripts/docker-install-layout-smoke-test.sh",
-        "packaging/homebrew/Formula/orca.rb",
-        "packaging/scoop/orca.json",
-        "packaging/winget/orca.yaml",
+        "packaging/homebrew/Formula/ryk.rb",
+        "packaging/scoop/ryk.json",
+        "packaging/winget/ryk.yaml",
         "packaging/npm/package.json",
-        "packaging/npm/bin/orca.js",
+        "packaging/npm/bin/ryk.js",
         "packaging/docker/Dockerfile",
         ".github/workflows/build.yml",
         ".github/workflows/test.yml",
@@ -70,11 +70,11 @@ test "phase 19 release files include integrity checks without obvious credential
     const checked_files = [_][]const u8{
         "scripts/install.sh",
         "scripts/install.ps1",
-        "packaging/homebrew/Formula/orca.rb",
-        "packaging/scoop/orca.json",
-        "packaging/winget/orca.yaml",
+        "packaging/homebrew/Formula/ryk.rb",
+        "packaging/scoop/ryk.json",
+        "packaging/winget/ryk.yaml",
         "packaging/npm/package.json",
-        "packaging/npm/bin/orca.js",
+        "packaging/npm/bin/ryk.js",
         "packaging/docker/Dockerfile",
         ".github/workflows/build.yml",
         ".github/workflows/test.yml",
@@ -97,9 +97,9 @@ test "phase 19 Dockerfile references installed ryk binary" {
     defer std.testing.allocator.free(text);
     try std.testing.expectEqual(@as(usize, 1), countOccurrences(text, "COPY ryk /opt/ryk"));
     try std.testing.expect(std.mem.indexOf(u8, text, "/opt/ryk/bin/ryk") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "ORCA_RESOURCE_ROOT=\"/opt/ryk\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "RYK_RESOURCE_ROOT=\"/opt/ryk\"") != null);
     // Product packaging is CLI-only; daemon binary must not be required.
-    try std.testing.expect(std.mem.indexOf(u8, text, "orca-daemon") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "ryk-daemon") != null);
 }
 
 fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
@@ -112,10 +112,10 @@ fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
     return count;
 }
 
-test "GitHub composite action does not shell-interpolate command input before Orca" {
-    const text = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, ".github/actions/orca-run/action.yml", std.testing.allocator, .limited(64 * 1024));
+test "GitHub composite action does not shell-interpolate command input before ryk" {
+    const text = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, ".github/actions/ryk-run/action.yml", std.testing.allocator, .limited(64 * 1024));
     defer std.testing.allocator.free(text);
     try std.testing.expect(std.mem.indexOf(u8, text, "ryk run --mode ci -- ${{ inputs.command }}") == null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "ORCA_ACTION_COMMAND: ${{ inputs.command }}") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "ryk run --mode ci -- bash -c \"$ORCA_ACTION_COMMAND\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "RYK_ACTION_COMMAND: ${{ inputs.command }}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "ryk run --mode ci -- bash -c \"$RYK_ACTION_COMMAND\"") != null);
 }

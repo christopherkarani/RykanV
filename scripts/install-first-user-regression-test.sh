@@ -55,20 +55,20 @@ escaped="${tmp_root}/escaped"
 install_dir="${home}/bin \$(touch PATH_INJECTION)"
 share_dir="${home}/share \$(touch RESOURCE_INJECTION)"
 artifact_dir="${tmp_root}/artifacts"
-release_root="${tmp_root}/orca-v${VERSION}-${os}-${arch}"
-artifact="orca-v${VERSION}-${os}-${arch}.tar.gz"
+release_root="${tmp_root}/ryk-v${VERSION}-${os}-${arch}"
+artifact="ryk-v${VERSION}-${os}-${arch}.tar.gz"
 mkdir -p "${home}" "${artifact_dir}" "${release_root}/bin"
 
-for dir in integrations fixtures schemas policies orca-pi; do
+for dir in integrations fixtures schemas policies ryk-pi; do
   mkdir -p "${release_root}/${dir}"
   printf 'fixture\n' > "${release_root}/${dir}/fixture.txt"
 done
 
-# Mock product binary installed as ryk (or orca compat). Implements doctor for
+# Mock product binary installed as ryk (or ryk compat). Implements doctor for
 # the W1 ensure door; start is poison so restoring start --auto cannot green
 # when doctor --fix is advertised. doctor --help must list --fix so the
 # installer's capability probe selects the W1 door (not legacy start --auto).
-cat > "${release_root}/bin/orca" <<'EOF'
+cat > "${release_root}/bin/ryk" <<'EOF'
 #!/usr/bin/env sh
 # Log door line + trust-scope env for the first-user harness.
 # Door line for doctor is "doctor <first-flag>" so count gate can use
@@ -129,14 +129,14 @@ case "${1:-}" in
     printf "You're now protected by ryk\n"
     ;;
   env|--print-install-env)
-    printf 'export ORCA_FIRST_USER_ACTIVATED=1\n'
+    printf 'export RYK_FIRST_USER_ACTIVATED=1\n'
     ;;
   version|--version)
     printf 'orca 0.0.0\n'
     ;;
 esac
 EOF
-chmod +x "${release_root}/bin/orca"
+chmod +x "${release_root}/bin/ryk"
 tar -czf "${artifact_dir}/${artifact}" -C "${tmp_root}" "$(basename "${release_root}")"
 if command -v sha256sum >/dev/null 2>&1; then
   checksum="$(sha256sum "${artifact_dir}/${artifact}" | awk '{print $1}')"
@@ -149,22 +149,22 @@ onboard_log="${tmp_root}/onboard.log"
 # Real upgrades may still have the Phase 5a markers. The new installer must
 # migrate them rather than append a second managed block.
 cat > "${home}/.profile" <<EOF
-# Added by Orca installer
+# Added by ryk installer
 export PATH='/legacy/ryk/bin':"\$PATH"
 
-# Orca runtime assets
-export ORCA_RESOURCE_ROOT='/legacy/ryk/share'
+# ryk runtime assets
+export RYK_RESOURCE_ROOT='/legacy/ryk/share'
 EOF
 
 # ── Non-TTY install: doctor --fix once under HOME + resource roots (D86) ──
 output="$(
   HOME="${home}" \
   SHELL=/bin/sh \
-  ORCA_VERSION="${VERSION}" \
-  ORCA_ARTIFACT_DIR="${artifact_dir}" \
-  ORCA_INSTALL_DIR="${install_dir}" \
-  ORCA_SHARE_DIR="${share_dir}" \
-  ORCA_RESOURCE_ROOT="${escaped}" \
+  RYK_VERSION="${VERSION}" \
+  RYK_ARTIFACT_DIR="${artifact_dir}" \
+  RYK_INSTALL_DIR="${install_dir}" \
+  RYK_SHARE_DIR="${share_dir}" \
+  RYK_RESOURCE_ROOT="${escaped}" \
   RYK_TEST_ONBOARD_LOG="${onboard_log}" \
   sh "${INSTALL_SH}"
 )"
@@ -194,17 +194,17 @@ grep -qF "${install_dir}" "${onboard_log}" ||
 # Reinstalling must update the managed blocks instead of appending duplicates.
 HOME="${home}" \
 SHELL=/bin/sh \
-ORCA_VERSION="${VERSION}" \
-ORCA_ARTIFACT_DIR="${artifact_dir}" \
-ORCA_INSTALL_DIR="${install_dir}" \
-ORCA_SHARE_DIR="${share_dir}" \
+RYK_VERSION="${VERSION}" \
+RYK_ARTIFACT_DIR="${artifact_dir}" \
+RYK_INSTALL_DIR="${install_dir}" \
+RYK_SHARE_DIR="${share_dir}" \
 RYK_TEST_ONBOARD_LOG="${onboard_log}" \
 sh "${INSTALL_SH}" >/dev/null
 [[ "$(grep -c '^# Added by ryk installer$' "${home}/.profile")" == 1 ]] || fail "reinstall duplicated the PATH block"
 [[ "$(grep -c '^# ryk runtime assets$' "${home}/.profile")" == 1 ]] || fail "reinstall duplicated the runtime block"
-[[ "$(grep -ci 'Orca installer\\|Orca runtime assets' "${home}/.profile")" == 0 ]] || fail "legacy profile markers were not migrated"
+[[ "$(grep -ci 'ryk installer\\|ryk runtime assets' "${home}/.profile")" == 0 ]] || fail "legacy profile markers were not migrated"
 
-[[ ! -e "${escaped}" ]] || fail "ORCA_RESOURCE_ROOT escaped the install destination"
+[[ ! -e "${escaped}" ]] || fail "RYK_RESOURCE_ROOT escaped the install destination"
 resource_root="${share_dir}/${VERSION}"
 [[ -f "${resource_root}/fixtures/fixture.txt" ]] || fail "runtime assets were not installed under HOME"
 [[ "$(readlink "${share_dir}/current")" == "${resource_root}" ]] || fail "current link targets the wrong runtime root"
@@ -268,11 +268,11 @@ fi
 # Dashboard soft-warn belongs on the receipt stdout when assets are missing.
 printf '%s\n' "${plain_output}" | grep -Eqi 'dashboard' || fail "installer did not surface missing dashboard on the receipt"
 if printf '%s\n' "${plain_output}" | grep -Eiq '(^|[^[:alnum:]_])orca([^[:alnum:]_]|$)'; then
-  fail "installer exposed retired Orca branding"
+  fail "installer exposed retired ryk branding"
 fi
-unset ORCA_FIRST_USER_ACTIVATED
+unset RYK_FIRST_USER_ACTIVATED
 eval "${activation}"
-[[ "${ORCA_FIRST_USER_ACTIVATED:-}" == 1 ]] || fail "printed activation command did not activate the current shell"
+[[ "${RYK_FIRST_USER_ACTIVATED:-}" == 1 ]] || fail "printed activation command did not activate the current shell"
 
 # Quiet mode: only the activation line on stdout (no banner / steps / details).
 # Quiet call site must still invoke doctor --fix under HOME + resource roots.
@@ -280,11 +280,11 @@ eval "${activation}"
 quiet_output="$(
   HOME="${home}" \
   SHELL=/bin/sh \
-  ORCA_VERSION="${VERSION}" \
-  ORCA_ARTIFACT_DIR="${artifact_dir}" \
-  ORCA_INSTALL_DIR="${install_dir}" \
-  ORCA_SHARE_DIR="${share_dir}" \
-  ORCA_INSTALL_QUIET=1 \
+  RYK_VERSION="${VERSION}" \
+  RYK_ARTIFACT_DIR="${artifact_dir}" \
+  RYK_INSTALL_DIR="${install_dir}" \
+  RYK_SHARE_DIR="${share_dir}" \
+  RYK_INSTALL_QUIET=1 \
   RYK_TEST_ONBOARD_LOG="${onboard_log}" \
   sh "${INSTALL_SH}" 2>/dev/null
 )"
@@ -314,10 +314,10 @@ nonempty_quiet="$(printf '%s\n' "${quiet_output}" | sed '/^[[:space:]]*$/d')"
 failed_output="${tmp_root}/failed.out"
 if HOME="${home}" \
   SHELL=/bin/sh \
-  ORCA_VERSION="${VERSION}" \
-  ORCA_ARTIFACT_DIR="${artifact_dir}" \
-  ORCA_INSTALL_DIR="${install_dir}" \
-  ORCA_SHARE_DIR="${share_dir}" \
+  RYK_VERSION="${VERSION}" \
+  RYK_ARTIFACT_DIR="${artifact_dir}" \
+  RYK_INSTALL_DIR="${install_dir}" \
+  RYK_SHARE_DIR="${share_dir}" \
   RYK_TEST_ONBOARD_LOG="${onboard_log}" \
   RYK_TEST_DOCTOR_EXIT=17 \
   sh "${INSTALL_SH}" >"${failed_output}" 2>&1; then
@@ -569,14 +569,14 @@ assert_no_d06_full_protection "${legacy_plain}" "legacy install receipt"
 
 grep -qF 'version "1.2.9"' "${REPO_ROOT}/packaging/homebrew/Formula/ryk.rb" ||
   fail "primary Homebrew formula version does not match VERSION"
-grep -qF 'brew install christopherkarani/orca/ryk' "${REPO_ROOT}/packaging/homebrew/README.md" ||
+grep -qF 'brew install christopherkarani/ryk/ryk' "${REPO_ROOT}/packaging/homebrew/README.md" ||
   fail "Homebrew README does not provide a one-line primary ryk install"
 grep -qF 'raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh' "${INSTALL_SH}" ||
   fail "curl installer guidance does not use the canonical rykan repository"
 grep -qF 'github.com/christopherkarani/rykan/releases/download' "${REPO_ROOT}/packaging/homebrew/Formula/ryk.rb" ||
   fail "Homebrew release artifacts do not use the canonical rykan repository"
 if git -C "${REPO_ROOT}" grep -nE \
-  'github\.com/(christopherkarani|chriskarani)/(Orca|orca|ryk)([^A-Za-z0-9_-]|$)|raw\.githubusercontent\.com/(christopherkarani|chriskarani)/(Orca|orca|ryk)/' \
+  'github\.com/(christopherkarani|chriskarani)/(ryk|orca|ryk)([^A-Za-z0-9_-]|$)|raw\.githubusercontent\.com/(christopherkarani|chriskarani)/(ryk|orca|ryk)/' \
   -- README.md AGENTS.md scripts packaging integrations schemas macos docs; then
   fail "public metadata still contains a stale main-repository URL"
 fi

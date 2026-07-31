@@ -1,6 +1,6 @@
 //! In-process Zig shell command evaluator.
 //!
-//! Owns security decisions for `orca hook` / `orca run` / shims.
+//! Owns security decisions for `ryk hook` / `ryk run` / shims.
 //! Pack patterns are the frozen orca-rs oracle set (embedded JSON + PCRE2).
 //! Evaluator errors fail closed with deny.
 //!

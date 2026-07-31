@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const audit_replay = @import("orca_core").audit.replay;
+const audit_replay = @import("ryk_core").audit.replay;
 const redact = @import("redact.zig");
 
 pub const ParseIntegrityFailed = audit_replay.ParseIntegrityFailed;
@@ -150,7 +150,7 @@ test "summarizeRedactions fails closed on malformed redactions when integrity re
     allocator.free(session.events[0].raw);
     session.events[0].raw = try std.fmt.allocPrint(
         allocator,
-        \\{{"version":1,"session_id":"zh2-test","event_id":"e1","timestamp":"2026-01-01T00:00:00Z","type":"command_denied","actor":{{"kind":"orca","id":null,"display":"orca"}},"target":{{"kind":"command","value":"safe"}},"decision":{{"result":"deny","rule_id":"commands.deny","reason":"blocked","risk_score":90,"requires_user":false,"ci_may_proceed":false}},"redactions":"not-an-object","previous_hash":null,"event_hash":"00"}}
+        \\{{"version":1,"session_id":"zh2-test","event_id":"e1","timestamp":"2026-01-01T00:00:00Z","type":"command_denied","actor":{{"kind":"ryk","id":null,"display":"ryk"}},"target":{{"kind":"command","value":"safe"}},"decision":{{"result":"deny","rule_id":"commands.deny","reason":"blocked","risk_score":90,"requires_user":false,"ci_may_proceed":false}},"redactions":"not-an-object","previous_hash":null,"event_hash":"00"}}
     ,
         .{},
     );

@@ -6,8 +6,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const core = @import("orca_core").core;
-const core_api = @import("orca_core").api;
+const core = @import("ryk_core").core;
+const core_api = @import("ryk_core").api;
 const sandbox = @import("../sandbox/mod.zig");
 const exit_codes = @import("exit_codes.zig");
 const tui = @import("../tui/mod.zig");
@@ -752,7 +752,7 @@ pub fn auditSandboxPosture(
         .event_id = try core.event.generateEventId(ts),
         .timestamp = ts,
         .event_type = .sandbox_posture,
-        .actor = .{ .kind = .orca, .display = "ryk" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .session, .value = "os_filesystem_sandbox" },
         .decision = .{
             .result = .observe,
@@ -1149,7 +1149,7 @@ test "run path spawnAgent attach when Seatbelt available" {
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "neighbor.txt", .data = "ok" });
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
@@ -1201,7 +1201,7 @@ test "run path spawnAgent attach when Landlock available" {
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "neighbor.txt", .data = "ok" });
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);

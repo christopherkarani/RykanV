@@ -65,7 +65,7 @@ test "phase 42 public docs keep customer acquisition claims out of release surfa
 test "phase 42 public README stays product-focused and safety-bounded" {
     const text = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "README.md", std.testing.allocator, .limited(512 * 1024));
     defer std.testing.allocator.free(text);
-    try expectContains(text, "Orca");
+    try expectContains(text, "ryk");
     try expectContains(text, "local");
     try expectContains(text, "policy");
     try expectNotContains(text, "certified safe");

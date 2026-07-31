@@ -12,7 +12,7 @@ import os
 from typing import Any, Callable
 
 # Truthy env tokens for CI / noninteractive hardening of ask → block.
-_CI_ENV_KEYS = ("CI", "ORCA_CI", "ORCA_NONINTERACTIVE")
+_CI_ENV_KEYS = ("CI", "RYK_CI", "RYK_NONINTERACTIVE")
 _FALSY_ENV = frozenset({"0", "false", "no", "off", ""})
 
 # rule_key uses '|' so ryk rule_ids that contain ':' stay unambiguous.

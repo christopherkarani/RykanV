@@ -1,22 +1,22 @@
 #!/usr/bin/env sh
 set -eu
 
-# ryk installer (macOS / Linux) — Phase 5a brand cut; orca is a PATH compat alias.
+# ryk installer (macOS / Linux) — Phase 5a brand cut; ryk is a PATH compat alias.
 #
 # Documented one-liner:
 #   curl -fsSL https://rykanv.com/install | sh
 # Fallback (same script, GitHub raw):
 #   curl -fsSL https://raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh | sh
 #
-# Environment (prefer RYK_*; fall back ORCA_* for one major):
-#   RYK_VERSION / ORCA_VERSION         Pin release version (default: latest / local VERSION / 1.2.9)
-#   RYK_INSTALL_DIR / ORCA_INSTALL_DIR Binary install dir (default: ~/.local/bin)
-#   RYK_SHARE_DIR / ORCA_SHARE_DIR     Runtime share root (default: ~/.local/share/orca — kept in 5a)
-#   RYK_BASE_URL / ORCA_BASE_URL       Override release base URL
-#   RYK_ARTIFACT_DIR / ORCA_ARTIFACT_DIR Offline install from a local dist/ folder
-#   RYK_INSTALL_FORCE / ORCA_INSTALL_FORCE=1 Allow overwriting a non-product file at the destination
-#   RYK_INSTALL_QUIET / ORCA_INSTALL_QUIET=1 Suppress non-error UI (still installs; prints activation line)
-#   RYK_INSTALL_SKIP_ONBOARD / ORCA_INSTALL_SKIP_ONBOARD=1  Skip post-install ensure
+# Environment (prefer RYK_*; fall back RYK_* for one major):
+#   RYK_VERSION / RYK_VERSION         Pin release version (default: latest / local VERSION / 1.2.9)
+#   RYK_INSTALL_DIR / RYK_INSTALL_DIR Binary install dir (default: ~/.local/bin)
+#   RYK_SHARE_DIR / RYK_SHARE_DIR     Runtime share root (default: ~/.local/share/ryk — kept in 5a)
+#   RYK_BASE_URL / RYK_BASE_URL       Override release base URL
+#   RYK_ARTIFACT_DIR / RYK_ARTIFACT_DIR Offline install from a local dist/ folder
+#   RYK_INSTALL_FORCE / RYK_INSTALL_FORCE=1 Allow overwriting a non-product file at the destination
+#   RYK_INSTALL_QUIET / RYK_INSTALL_QUIET=1 Suppress non-error UI (still installs; prints activation line)
+#   RYK_INSTALL_SKIP_ONBOARD / RYK_INSTALL_SKIP_ONBOARD=1  Skip post-install ensure
 #   NO_COLOR             Disable ANSI color even on a TTY
 #
 # Ensure door (release/install contract):
@@ -29,8 +29,8 @@ set -eu
 # Robust VERSION resolution (piped-safe):
 # - File execution (dev, local checkout): read ../VERSION when present.
 # - Piped public install (curl | sh): $0 is not a regular file, so we skip the
-#   local read and fall through to the GitHub API (or ORCA_VERSION / 1.2.9).
-# - ORCA_VERSION always wins. Hardcoded value is only the final safety net.
+#   local read and fall through to the GitHub API (or RYK_VERSION / 1.2.9).
+# - RYK_VERSION always wins. Hardcoded value is only the final safety net.
 
 SCRIPT_DIR=""
 if [ -f "$0" ] 2>/dev/null; then
@@ -42,7 +42,7 @@ fi
 # Glyphs align with src/tui/render.zig (active/done use success green).
 
 QUIET=0
-if [ "${RYK_INSTALL_QUIET:-${ORCA_INSTALL_QUIET:-0}}" = "1" ]; then
+if [ "${RYK_INSTALL_QUIET:-${RYK_INSTALL_QUIET:-0}}" = "1" ]; then
   QUIET=1
 fi
 
@@ -159,7 +159,7 @@ if [ -n "$SCRIPT_DIR" ] && [ -r "${SCRIPT_DIR}/../VERSION" ]; then
 fi
 
 RESOLVED_FROM="fallback 1.2.9"
-if [ -n "${RYK_VERSION:-${ORCA_VERSION:-}}" ]; then
+if [ -n "${RYK_VERSION:-${RYK_VERSION:-}}" ]; then
   RESOLVED_FROM="version environment override"
 elif [ -n "${DEFAULT_VERSION}" ]; then
   RESOLVED_FROM="local VERSION"
@@ -182,17 +182,17 @@ else
   fi
 fi
 
-VERSION="${RYK_VERSION:-${ORCA_VERSION:-${DEFAULT_VERSION:-1.2.9}}}"
-BASE_URL="${RYK_BASE_URL:-${ORCA_BASE_URL:-https://github.com/christopherkarani/rykan/releases/download/v${VERSION}}}"
-INSTALL_DIR="${RYK_INSTALL_DIR:-${ORCA_INSTALL_DIR:-${HOME}/.local/bin}}"
-# Phase 5a: keep existing share layout under share/orca (path migrate is Phase 5b).
-SHARE_DIR="${RYK_SHARE_DIR:-${ORCA_SHARE_DIR:-${HOME}/.local/share/orca}}"
+VERSION="${RYK_VERSION:-${RYK_VERSION:-${DEFAULT_VERSION:-1.2.9}}}"
+BASE_URL="${RYK_BASE_URL:-${RYK_BASE_URL:-https://github.com/christopherkarani/rykan/releases/download/v${VERSION}}}"
+INSTALL_DIR="${RYK_INSTALL_DIR:-${RYK_INSTALL_DIR:-${HOME}/.local/bin}}"
+# Phase 5a: keep existing share layout under share/ryk (path migrate is Phase 5b).
+SHARE_DIR="${RYK_SHARE_DIR:-${RYK_SHARE_DIR:-${HOME}/.local/share/ryk}}"
 RESOURCE_ROOT="${SHARE_DIR}/${VERSION}"
 CURRENT_LINK="${SHARE_DIR}/current"
-ARTIFACT_DIR="${RYK_ARTIFACT_DIR:-${ORCA_ARTIFACT_DIR:-}}"
+ARTIFACT_DIR="${RYK_ARTIFACT_DIR:-${RYK_ARTIFACT_DIR:-}}"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ryk-install.XXXXXX")"
-RUNTIME_DIRS="integrations fixtures schemas policies orca-pi"
-INSTALL_MARKER=".orca-installation"
+RUNTIME_DIRS="integrations fixtures schemas policies ryk-pi"
+INSTALL_MARKER=".ryk-installation"
 
 cleanup() {
   rm -rf "$TMP_DIR"
@@ -200,10 +200,10 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 detect_os() {
-  case "${ORCA_OS_OVERRIDE:-$(uname -s)}" in
+  case "${RYK_OS_OVERRIDE:-$(uname -s)}" in
     Darwin|darwin) printf 'darwin' ;;
     Linux|linux) printf 'linux' ;;
-    *) fail "unsupported operating system: ${ORCA_OS_OVERRIDE:-$(uname -s)}" \
+    *) fail "unsupported operating system: ${RYK_OS_OVERRIDE:-$(uname -s)}" \
          "ryk's curl installer supports macOS and Linux only.
 Windows: use scripts/install.ps1
 Docs:    https://github.com/christopherkarani/rykan/blob/main/docs/install.md" ;;
@@ -211,10 +211,10 @@ Docs:    https://github.com/christopherkarani/rykan/blob/main/docs/install.md" ;
 }
 
 detect_arch() {
-  case "${ORCA_ARCH_OVERRIDE:-$(uname -m)}" in
+  case "${RYK_ARCH_OVERRIDE:-$(uname -m)}" in
     x86_64|amd64) printf 'amd64' ;;
     arm64|aarch64) printf 'arm64' ;;
-    *) fail "unsupported architecture: ${ORCA_ARCH_OVERRIDE:-$(uname -m)}" \
+    *) fail "unsupported architecture: ${RYK_ARCH_OVERRIDE:-$(uname -m)}" \
          "Supported: amd64 (x86_64), arm64 (aarch64)." ;;
   esac
 }
@@ -300,7 +300,7 @@ safe_install() {
   destination="$2"
 
   reject_symlink_components "$destination" "binary destination"
-  if [ -e "$destination" ] && [ "${RYK_INSTALL_FORCE:-${ORCA_INSTALL_FORCE:-0}}" != "1" ]; then
+  if [ -e "$destination" ] && [ "${RYK_INSTALL_FORCE:-${RYK_INSTALL_FORCE:-0}}" != "1" ]; then
     if ! probe_existing_product "$destination" >/dev/null; then
       fail "refusing to overwrite non-ryk file at $destination" \
         "Set RYK_INSTALL_FORCE=1 to replace it, or choose another install dir."
@@ -350,14 +350,14 @@ install_runtime_assets() {
       fail "could not stage runtime directory: $dir"
     }
   done
-  if [ -d "$extract_root/orca-dashboard-ui" ]; then
-    cp -R "$extract_root/orca-dashboard-ui" "$runtime_stage/" || {
+  if [ -d "$extract_root/ryk-dashboard-ui" ]; then
+    cp -R "$extract_root/ryk-dashboard-ui" "$runtime_stage/" || {
       rm -rf "$runtime_stage"
       fail "could not stage dashboard UI assets"
     }
   fi
   {
-    printf 'orca-runtime-v1\n'
+    printf 'ryk-runtime-v1\n'
     printf 'version=%s\n' "$VERSION"
   } > "$runtime_stage/$INSTALL_MARKER"
 
@@ -370,7 +370,7 @@ install_runtime_assets() {
     }
     [ -f "$RESOURCE_ROOT/$INSTALL_MARKER" ] &&
       [ ! -L "$RESOURCE_ROOT/$INSTALL_MARKER" ] &&
-      grep -q '^orca-runtime-v1$' "$RESOURCE_ROOT/$INSTALL_MARKER" 2>/dev/null || {
+      grep -q '^ryk-runtime-v1$' "$RESOURCE_ROOT/$INSTALL_MARKER" 2>/dev/null || {
       rm -rf "$runtime_stage"
       fail "refusing to replace an unmanaged runtime directory: $RESOURCE_ROOT"
     }
@@ -437,7 +437,7 @@ ensure_path_entry() {
   fi
 
   marker="# Added by ryk installer"
-  legacy_marker="# Added by Orca installer"
+  legacy_marker="# Added by ryk installer"
   quoted_dir="$(shell_quote "$dir")"
   if [ "$shell_name" = "fish" ]; then
     path_line="fish_add_path -- $quoted_dir"
@@ -468,7 +468,7 @@ ensure_resource_root_entry() {
   shell_name="$(basename "$shell_path")"
   rc_file="$(rc_file_for_shell "$shell_path")"
   marker="# ryk runtime assets"
-  legacy_marker="# Orca runtime assets"
+  legacy_marker="# ryk runtime assets"
   quoted_current="$(shell_quote "$CURRENT_LINK")"
   if [ "$shell_name" = "fish" ]; then
     resource_line="set -gx RYK_RESOURCE_ROOT $quoted_current"
@@ -546,7 +546,7 @@ OS="$(detect_os)"
 ARCH="$(detect_arch)"
 # Prefer new ryk-v* artifact; fall back to legacy orca-v* during dual-publish window.
 ARTIFACT="ryk-v${VERSION}-${OS}-${ARCH}.tar.gz"
-LEGACY_ARTIFACT="orca-v${VERSION}-${OS}-${ARCH}.tar.gz"
+LEGACY_ARTIFACT="ryk-v${VERSION}-${OS}-${ARCH}.tar.gz"
 DESTINATION="$INSTALL_DIR/ryk"
 LEGACY_DESTINATION="$INSTALL_DIR/orca"
 
@@ -621,18 +621,18 @@ EXTRACT_ROOT="$(find "$TMP_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 FOUND_BIN=""
 if [ -x "$EXTRACT_ROOT/bin/ryk" ]; then
   FOUND_BIN="$EXTRACT_ROOT/bin/ryk"
-elif [ -x "$EXTRACT_ROOT/bin/orca" ]; then
-  FOUND_BIN="$EXTRACT_ROOT/bin/orca"
+elif [ -x "$EXTRACT_ROOT/bin/ryk" ]; then
+  FOUND_BIN="$EXTRACT_ROOT/bin/ryk"
 else
-  FOUND_BIN="$(find "$EXTRACT_ROOT" -type f \( -name ryk -o -name orca \) -perm -111 | head -n 1)"
+  FOUND_BIN="$(find "$EXTRACT_ROOT" -type f \( -name ryk -o -name ryk \) -perm -111 | head -n 1)"
 fi
 [ -n "$FOUND_BIN" ] || fail "artifact did not contain an executable ryk binary" \
   "Unexpected archive layout for ${ARTIFACT}."
 
 safe_install "$FOUND_BIN" "$DESTINATION"
 # Compat alias: same product as ryk for ≥1 major.
-if [ -x "$EXTRACT_ROOT/bin/orca" ]; then
-  safe_install "$EXTRACT_ROOT/bin/orca" "$LEGACY_DESTINATION"
+if [ -x "$EXTRACT_ROOT/bin/ryk" ]; then
+  safe_install "$EXTRACT_ROOT/bin/ryk" "$LEGACY_DESTINATION"
 else
   safe_install "$FOUND_BIN" "$LEGACY_DESTINATION"
 fi
@@ -712,15 +712,15 @@ summarize_ensure_receipt() {
 
 ONBOARDING_RAN=0
 ENSURE_MODE=doctor_fix
-if [ "${RYK_INSTALL_SKIP_ONBOARD:-${ORCA_INSTALL_SKIP_ONBOARD:-0}}" != "1" ]; then
+if [ "${RYK_INSTALL_SKIP_ONBOARD:-${RYK_INSTALL_SKIP_ONBOARD:-0}}" != "1" ]; then
   step_active "Set up protection"
   set +e
   # Always capture ensure: install owns presentation (no second banner / TUI dump).
   (
     cd "$HOME"
     RYK_RESOURCE_ROOT="$CURRENT_LINK"
-    ORCA_RESOURCE_ROOT="$CURRENT_LINK"
-    export RYK_RESOURCE_ROOT ORCA_RESOURCE_ROOT
+    RYK_RESOURCE_ROOT="$CURRENT_LINK"
+    export RYK_RESOURCE_ROOT RYK_RESOURCE_ROOT
     PATH="$INSTALL_DIR:$PATH"
     export PATH
     # Prefer plain ensure output if the CLI honors NO_COLOR / non-TTY.
@@ -779,7 +779,7 @@ Or upgrade to a release that supports doctor --fix, then re-run the installer."
 fi
 
 MISSING_DASHBOARD=0
-if [ ! -d "$RESOURCE_ROOT/orca-dashboard-ui" ]; then
+if [ ! -d "$RESOURCE_ROOT/ryk-dashboard-ui" ]; then
   MISSING_DASHBOARD=1
 fi
 

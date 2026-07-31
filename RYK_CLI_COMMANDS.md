@@ -2,13 +2,13 @@
 
 > Aligned with Safe Launch product surface (`src/cli/help.zig`, `src/cli/mod.zig`, command modules).
 > Version: 1.2.8 (from `VERSION`)
-> Product: **ryk** (formerly Orca) — Graded policy mediation for AI agent actions (Codex, Claude Code, OpenCode, OpenClaw, Hermes, Pi)
-> Dual-name: primary binary **`ryk`**; **`orca`** is a PATH alias of the same product for ≥1 major.
-> Workspace paths still use `.orca/` in Phase 5a (migration is Phase 5b).
+> Product: **ryk** (formerly ryk) — Graded policy mediation for AI agent actions (Codex, Claude Code, OpenCode, OpenClaw, Hermes, Pi)
+> Dual-name: primary binary **`ryk`**; **`ryk`** is a PATH alias of the same product for ≥1 major.
+> Workspace paths still use `.ryk/` in Phase 5a (migration is Phase 5b).
 
 ryk ships **one** product CLI (two PATH names):
 - **`ryk`** — primary Desktop/CI policy mediation binary (grades: hook | wrapper | proxy | OS-enforced)
-- **`orca`** — compatibility alias of the same binary for one major
+- **`ryk`** — compatibility alias of the same binary for one major
 
 **Safe Launch (taught path):**
 
@@ -48,7 +48,7 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 | Command | Summary | Source File |
 |---------|---------|-------------|
 | `run` | Run engine / custom agents / CI | `src/cli/run.zig` |
-| `init` | Create an Orca policy (power/CI scaffold) | `src/cli/init.zig` |
+| `init` | Create a ryk policy (power/CI scaffold) | `src/cli/init.zig` |
 | `policy` | Validate, explain, and apply policies | `src/cli/policy.zig` |
 | `credentials` | Check Secretless credential brokers | `src/cli/credentials.zig` |
 | `report` | Export a local safety report (free) | `src/cli/report.zig` |
@@ -65,7 +65,7 @@ Invocation: `ryk <command> [options]` (or `ryk <command> …`)
 | `version` | Print version | `src/cli/version.zig` |
 | `plugin` | Plugin management and diagnostics | `src/cli/plugin.zig` |
 | `decide` / `hook` / `evaluate` | Integration APIs | `src/cli/*.zig` |
-| `dashboard` | Local Orca dashboard | `src/cli/dashboard.zig` |
+| `dashboard` | Local ryk dashboard | `src/cli/dashboard.zig` |
 | `ci` | Local CI readiness checks | `src/cli/ci.zig` |
 | `shutdown` | Stop the background ryk daemon (live Zig) | `src/cli/shutdown.zig` |
 | `uninstall` | Uninstall ryk from this machine | `src/cli/uninstall.zig` |
@@ -141,7 +141,7 @@ Interactive colour TTY: scorecard + list/detail (`c` copy path, `o` reveal/open,
 
 ### `ryk stop`
 
-Disable Orca plugins from host agents (binary and policy remain). Restart with `ryk start`.
+Disable ryk plugins from host agents (binary and policy remain). Restart with `ryk start`.
 
 **Usage:** `ryk stop [codex|claude|cursor|opencode|openclaw|hermes|all] [--yes]`
 
@@ -180,7 +180,7 @@ Disable Orca plugins from host agents (binary and policy remain). Restart with `
 
 ### `ryk init`
 
-**Advanced.** Create an Orca policy file (`.orca/policy.yaml`) in the current directory. Day-1 users should prefer `ryk start`, which creates a policy when missing.
+**Advanced.** Create a ryk policy file (`.ryk/policy.yaml`) in the current directory. Day-1 users should prefer `ryk start`, which creates a policy when missing.
 
 **Usage:** `ryk init [--preset <name>] [--mode <mode>] [--ci] [--force] [--quiet]`
 
@@ -192,7 +192,7 @@ Disable Orca plugins from host agents (binary and policy remain). Restart with `
 | `--preset <name>` | Policy preset name |
 | `--mode <mode>` | Override the preset's mode: `strict`, `ask`, `observe`, `ci`, `trusted` |
 | `--ci` | Shorthand for `--mode ci` |
-| `--force` | Overwrite existing `.orca/policy.yaml` |
+| `--force` | Overwrite existing `.ryk/policy.yaml` |
 | `--quiet` | Suppress informational output |
 | `--help`, `-h` | Show help |
 
@@ -272,7 +272,7 @@ Replay an audit session — renders a timeline and can verify the event hash cha
 
 ### `ryk diff`
 
-Show unified diffs for Orca-mediated staged writes.
+Show unified diffs for ryk-mediated staged writes.
 
 **Usage:** `ryk diff [--session <id|last>] [--file <path>]`
 
@@ -316,7 +316,7 @@ MCP proxy and inspection commands.
 
 ### `ryk redteam`
 
-Run red-team test fixtures against Orca controls and report a scorecard.
+Run red-team test fixtures against ryk controls and report a scorecard.
 
 **Usage:** `ryk redteam [path] [--json] [--ci] [--fixture <id>]`
 
@@ -404,7 +404,7 @@ Evaluate a policy decision for host plugin integration. Returns JSON result.
 
 ### `ryk hook`
 
-Host-specific hook adapter — normalizes host-specific events to Orca policy decisions.
+Host-specific hook adapter — normalizes host-specific events to ryk policy decisions.
 
 **Usage:** `ryk hook <host> <event> [--ci]`
 
@@ -464,7 +464,7 @@ Explain why a shell command would be allowed or denied (pretty decision tree). D
 
 ### `ryk disable`
 
-Disable Orca plugins from host agents without removing the ryk binary or policy files.
+Disable ryk plugins from host agents without removing the ryk binary or policy files.
 
 **Usage:** `ryk disable [codex|claude|opencode|openclaw|hermes|all] [--yes]`
 
@@ -487,11 +487,11 @@ Completely remove ryk and its integrations from the machine (plugins, binaries, 
 | Flag | Description |
 |------|-------------|
 | `--plugins-only` | Only remove plugins; keep binary and config |
-| `--keep-config` | Keep `~/.config/orca/` and allow-once data; still remove runtime + binary |
+| `--keep-config` | Keep `~/.config/ryk/` and allow-once data; still remove runtime + binary |
 | `--dry-run` | Print what would be removed without changing anything |
 | `--yes` | Skip confirmation prompt |
 
-Does **not** remove project workspace `.orca/` dirs. Package-manager installs (brew/scoop/winget) must be uninstalled with those tools.
+Does **not** remove project workspace `.ryk/` dirs. Package-manager installs (brew/scoop/winget) must be uninstalled with those tools.
 
 ---
 
@@ -505,7 +505,7 @@ Show top-level or command-specific help.
 
 ### `ryk env`
 
-Print shell activation commands for installing Orca into PATH.
+Print shell activation commands for installing ryk into PATH.
 
 **Usage:** `ryk env`
 

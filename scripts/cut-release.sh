@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mac-local release cutter for ryk (Orca dual-name window).
+# Mac-local release cutter for ryk (ryk dual-name window).
 #
 # Orchestrates: preflight → version → notes → gate → bump → build → verify
 #               → publish-git → publish-npm → publish-homebrew → done
@@ -27,11 +27,11 @@ SKIP_NPM=0
 BUMP=""
 VERSION_ARG=""
 RESUME_FROM=""
-DIST_DIR="${RYK_DIST_DIR:-${ORCA_DIST_DIR:-dist}}"
+DIST_DIR="${RYK_DIST_DIR:-${RYK_DIST_DIR:-dist}}"
 STATE_DIR="${RYK_CUT_RELEASE_STATE_DIR:-${REPO_ROOT}/.release-cut}"
 STATE_FILE="${STATE_DIR}/state.env"
-CLI_BINS_DIR="${RYK_CLI_ARTIFACT_DIR:-${ORCA_CLI_ARTIFACT_DIR:-${REPO_ROOT}/.release-cli-bins}}"
-HOMEBREW_TAP_DIR="${RYK_HOMEBREW_TAP_DIR:-${ORCA_HOMEBREW_TAP_DIR:-${HOME}/code/homebrew-orca}}"
+CLI_BINS_DIR="${RYK_CLI_ARTIFACT_DIR:-${RYK_CLI_ARTIFACT_DIR:-${REPO_ROOT}/.release-cli-bins}}"
+HOMEBREW_TAP_DIR="${RYK_HOMEBREW_TAP_DIR:-${RYK_HOMEBREW_TAP_DIR:-${HOME}/code/homebrew-ryk}}"
 ALLOWED_BRANCHES="${RYK_RELEASE_BRANCHES:-main master}"
 LOG_FILE=""
 
@@ -318,7 +318,7 @@ phase_preflight() {
   if [[ "$LIVE" -eq 1 ]]; then
     if [[ ! -d "$HOMEBREW_TAP_DIR/.git" ]]; then
       fail "Homebrew tap clone missing or not a git repo: $HOMEBREW_TAP_DIR
-  Clone christopherkarani/homebrew-orca there, or set RYK_HOMEBREW_TAP_DIR."
+  Clone christopherkarani/homebrew-ryk there, or set RYK_HOMEBREW_TAP_DIR."
     fi
   elif [[ ! -d "$HOMEBREW_TAP_DIR/.git" ]]; then
     warn "Homebrew tap not found at $HOMEBREW_TAP_DIR (required only for --live)"
@@ -501,14 +501,14 @@ const j = JSON.parse(fs.readFileSync(p, "utf8"));
 j.version = v;
 if (j.dependencies) {
   for (const k of Object.keys(j.dependencies)) {
-    if (k === "@orca-sec/orca" || k === "@orca-sec/ryk") j.dependencies[k] = v;
+    if (k === "@rykan/ryk" || k === "@rykan/ryk") j.dependencies[k] = v;
   }
 }
 if (j.ryk && j.ryk.artifactBaseUrl) {
   j.ryk.artifactBaseUrl = j.ryk.artifactBaseUrl.replace(/\/v[0-9][^/]*$/, "/v" + v);
 }
-if (j.orca && j.orca.artifactBaseUrl) {
-  j.orca.artifactBaseUrl = j.orca.artifactBaseUrl.replace(/\/v[0-9][^/]*$/, "/v" + v);
+if (j.ryk && j.ryk.artifactBaseUrl) {
+  j.ryk.artifactBaseUrl = j.ryk.artifactBaseUrl.replace(/\/v[0-9][^/]*$/, "/v" + v);
 }
 fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
 ' "$file" "$ver"
@@ -522,7 +522,7 @@ phase_bump() {
   set_package_json_version packaging/npm/package.json "$VERSION"
   set_package_json_version integrations/openclaw-plugin/package.json "$VERSION"
   set_package_json_version integrations/opencode-plugin/package.json "$VERSION"
-  set_package_json_version orca-pi/package.json "$VERSION"
+  set_package_json_version ryk-pi/package.json "$VERSION"
 
   # Keep packaging npm artifact URLs current (checksums stay PLACEHOLDER until render).
   if [[ -f packaging/npm/package.json ]]; then
@@ -533,7 +533,7 @@ const v = process.argv[1];
 const j = JSON.parse(fs.readFileSync(p, "utf8"));
 const base = "https://github.com/christopherkarani/rykan/releases/download/v" + v;
 if (j.ryk) j.ryk.artifactBaseUrl = base;
-if (j.orca) j.orca.artifactBaseUrl = base;
+if (j.ryk) j.ryk.artifactBaseUrl = base;
 fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
 ' "$VERSION"
   fi
@@ -565,18 +565,18 @@ fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
     fi
   fi
 
-  # Refresh orca-pi lockfile version pins if present (best-effort).
-  if [[ -f orca-pi/package-lock.json ]]; then
-    (cd orca-pi && npm install --package-lock-only --ignore-scripts >/dev/null 2>&1) \
-      || warn "orca-pi package-lock-only update failed; commit may need manual lock refresh"
+  # Refresh ryk-pi lockfile version pins if present (best-effort).
+  if [[ -f ryk-pi/package-lock.json ]]; then
+    (cd ryk-pi && npm install --package-lock-only --ignore-scripts >/dev/null 2>&1) \
+      || warn "ryk-pi package-lock-only update failed; commit may need manual lock refresh"
   fi
 
   git add VERSION CHANGELOG.md packaging/npm/package.json \
     integrations/openclaw-plugin/package.json \
     integrations/opencode-plugin/package.json \
-    orca-pi/package.json
-  if [[ -f orca-pi/package-lock.json ]]; then
-    git add orca-pi/package-lock.json || true
+    ryk-pi/package.json
+  if [[ -f ryk-pi/package-lock.json ]]; then
+    git add ryk-pi/package-lock.json || true
   fi
 
   if git diff --cached --quiet; then
@@ -592,27 +592,27 @@ fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
 # ---------------------------------------------------------------------------
 phase_build() {
   log "build…"
-  export RYK_VERSION="$VERSION" ORCA_VERSION="$VERSION"
-  export RYK_COMMIT ORCA_COMMIT RYK_BUILD_DATE ORCA_BUILD_DATE
+  export RYK_VERSION="$VERSION" RYK_VERSION="$VERSION"
+  export RYK_COMMIT RYK_COMMIT RYK_BUILD_DATE RYK_BUILD_DATE
   RYK_COMMIT="$(git rev-parse --short=12 HEAD)"
-  ORCA_COMMIT="$RYK_COMMIT"
+  RYK_COMMIT="$RYK_COMMIT"
   RYK_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  ORCA_BUILD_DATE="$RYK_BUILD_DATE"
+  RYK_BUILD_DATE="$RYK_BUILD_DATE"
 
   # Dashboard assets required by build-release payload.
-  if [[ -f orca-dashboard-ui/package.json ]]; then
+  if [[ -f ryk-dashboard-ui/package.json ]]; then
     log "building dashboard UI…"
-    (cd orca-dashboard-ui && npm ci && npm run build)
-    [[ -f orca-dashboard-ui/dist/index.html ]] || fail "dashboard build missing dist/index.html"
+    (cd ryk-dashboard-ui && npm ci && npm run build)
+    [[ -f ryk-dashboard-ui/dist/index.html ]] || fail "dashboard build missing dist/index.html"
   fi
 
   # Linux binaries via Docker — stage outside dist/ (build-release wipes dist/).
   log "building Linux bins via Docker → ${CLI_BINS_DIR}…"
   rm -rf "$CLI_BINS_DIR"
   mkdir -p "$CLI_BINS_DIR"
-  ORCA_VERSION="$VERSION" RYK_VERSION="$VERSION" \
-    ORCA_COMMIT="$ORCA_COMMIT" RYK_COMMIT="$RYK_COMMIT" \
-    ORCA_BUILD_DATE="$ORCA_BUILD_DATE" RYK_BUILD_DATE="$RYK_BUILD_DATE" \
+  RYK_VERSION="$VERSION" RYK_VERSION="$VERSION" \
+    RYK_COMMIT="$RYK_COMMIT" RYK_COMMIT="$RYK_COMMIT" \
+    RYK_BUILD_DATE="$RYK_BUILD_DATE" RYK_BUILD_DATE="$RYK_BUILD_DATE" \
     ./scripts/build-linux-release-docker.sh "$CLI_BINS_DIR"
 
   # Prefer primary ryk staged name for CLI_ARTIFACT_DIR contract.
@@ -627,20 +627,20 @@ phase_build() {
   done
 
   log "building full release archives…"
-  ORCA_VERSION="$VERSION" RYK_VERSION="$VERSION" \
-    ORCA_COMMIT="$ORCA_COMMIT" RYK_COMMIT="$RYK_COMMIT" \
-    ORCA_BUILD_DATE="$ORCA_BUILD_DATE" RYK_BUILD_DATE="$RYK_BUILD_DATE" \
-    ORCA_CLI_ARTIFACT_DIR="$CLI_BINS_DIR" RYK_CLI_ARTIFACT_DIR="$CLI_BINS_DIR" \
-    ORCA_DIST_DIR="$DIST_DIR" RYK_DIST_DIR="$DIST_DIR" \
+  RYK_VERSION="$VERSION" RYK_VERSION="$VERSION" \
+    RYK_COMMIT="$RYK_COMMIT" RYK_COMMIT="$RYK_COMMIT" \
+    RYK_BUILD_DATE="$RYK_BUILD_DATE" RYK_BUILD_DATE="$RYK_BUILD_DATE" \
+    RYK_CLI_ARTIFACT_DIR="$CLI_BINS_DIR" RYK_CLI_ARTIFACT_DIR="$CLI_BINS_DIR" \
+    RYK_DIST_DIR="$DIST_DIR" RYK_DIST_DIR="$DIST_DIR" \
     ./scripts/build-release.sh
 
   log "packaging zip plugins…"
-  ORCA_VERSION="$VERSION" RYK_VERSION="$VERSION" \
-    ORCA_DIST_DIR="${DIST_DIR}/plugins" \
+  RYK_VERSION="$VERSION" RYK_VERSION="$VERSION" \
+    RYK_DIST_DIR="${DIST_DIR}/plugins" \
     ./scripts/package-plugins.sh
 
   log "packaging npm plugin tarballs (scan)…"
-  ORCA_DIST_DIR="${DIST_DIR}/npm" ./scripts/package-npm-plugins.sh || \
+  RYK_DIST_DIR="${DIST_DIR}/npm" ./scripts/package-npm-plugins.sh || \
     warn "package-npm-plugins failed; continuing if verify still passes"
 }
 
@@ -649,7 +649,7 @@ phase_build() {
 # ---------------------------------------------------------------------------
 phase_verify() {
   log "verify…"
-  ORCA_RELEASE_PRODUCT=all RYK_RELEASE_PRODUCT=all ./scripts/verify-release.sh "$DIST_DIR"
+  RYK_RELEASE_PRODUCT=all RYK_RELEASE_PRODUCT=all ./scripts/verify-release.sh "$DIST_DIR"
 
   local npm_pkg="${DIST_DIR}/package-manifests/npm/package.json"
   [[ -f "$npm_pkg" ]] || fail "missing rendered npm package: $npm_pkg"
@@ -700,7 +700,7 @@ phase_publish_git() {
   shopt -s nullglob
   for f in \
     "${DIST_DIR}/ryk-v${VERSION}-"*.tar.gz \
-    "${DIST_DIR}/orca-v${VERSION}-"*.tar.gz \
+    "${DIST_DIR}/ryk-v${VERSION}-"*.tar.gz \
     "${DIST_DIR}/checksums.txt" \
     "${DIST_DIR}/sbom.json" \
     "${DIST_DIR}/release-manifest.json" \
@@ -760,7 +760,7 @@ phase_publish_npm() {
     fail "refusing to publish npm package with PLACEHOLDER checksums"
   fi
 
-  log "publishing @orca-sec/ryk from rendered manifests…"
+  log "publishing @rykan/ryk from rendered manifests…"
   (cd "$npm_dir" && npm publish --access public)
 
   # Integration plugins from package roots (versions already bumped).
@@ -772,9 +772,9 @@ phase_publish_npm() {
   done
 
   # Pi last (depends on CLI package version pin).
-  if [[ -f orca-pi/package.json ]]; then
-    log "publishing orca-pi…"
-    (cd orca-pi && npm publish --access public)
+  if [[ -f ryk-pi/package.json ]]; then
+    log "publishing ryk-pi…"
+    (cd ryk-pi && npm publish --access public)
   fi
 }
 
@@ -788,20 +788,20 @@ phase_publish_homebrew() {
   mkdir -p "${HOMEBREW_TAP_DIR}/Formula"
 
   # Primary formula
-  ORCA_VERSION="$VERSION" RYK_VERSION="$VERSION" \
-    ORCA_DIST_DIR="$DIST_DIR" RYK_DIST_DIR="$DIST_DIR" \
-    ORCA_HOMEBREW_TAP_DIR="$HOMEBREW_TAP_DIR" RYK_HOMEBREW_TAP_DIR="$HOMEBREW_TAP_DIR" \
-    ORCA_HOMEBREW_FORMULA="${HOMEBREW_TAP_DIR}/Formula/ryk.rb" \
-    ORCA_HOMEBREW_TEMPLATE="packaging/homebrew/Formula/ryk.rb" \
+  RYK_VERSION="$VERSION" RYK_VERSION="$VERSION" \
+    RYK_DIST_DIR="$DIST_DIR" RYK_DIST_DIR="$DIST_DIR" \
+    RYK_HOMEBREW_TAP_DIR="$HOMEBREW_TAP_DIR" RYK_HOMEBREW_TAP_DIR="$HOMEBREW_TAP_DIR" \
+    RYK_HOMEBREW_FORMULA="${HOMEBREW_TAP_DIR}/Formula/ryk.rb" \
+    RYK_HOMEBREW_TEMPLATE="packaging/homebrew/Formula/ryk.rb" \
     ./scripts/update-homebrew-formula.sh "$VERSION"
 
   # Compat formula during dual-name window
   if [[ -f packaging/homebrew/Formula/orca.rb ]]; then
-    ORCA_VERSION="$VERSION" RYK_VERSION="$VERSION" \
-      ORCA_DIST_DIR="$DIST_DIR" RYK_DIST_DIR="$DIST_DIR" \
-      ORCA_HOMEBREW_TAP_DIR="$HOMEBREW_TAP_DIR" RYK_HOMEBREW_TAP_DIR="$HOMEBREW_TAP_DIR" \
-      ORCA_HOMEBREW_FORMULA="${HOMEBREW_TAP_DIR}/Formula/orca.rb" \
-      ORCA_HOMEBREW_TEMPLATE="packaging/homebrew/Formula/orca.rb" \
+    RYK_VERSION="$VERSION" RYK_VERSION="$VERSION" \
+      RYK_DIST_DIR="$DIST_DIR" RYK_DIST_DIR="$DIST_DIR" \
+      RYK_HOMEBREW_TAP_DIR="$HOMEBREW_TAP_DIR" RYK_HOMEBREW_TAP_DIR="$HOMEBREW_TAP_DIR" \
+      RYK_HOMEBREW_FORMULA="${HOMEBREW_TAP_DIR}/Formula/orca.rb" \
+      RYK_HOMEBREW_TEMPLATE="packaging/homebrew/Formula/orca.rb" \
       ./scripts/update-homebrew-formula.sh "$VERSION"
   fi
 
@@ -830,10 +830,10 @@ phase_done() {
   printf 'Version:  v%s\n' "$VERSION"
   printf 'Release:  %s\n' "$url"
   if [[ "$SKIP_NPM" -eq 1 ]]; then
-    printf 'npm:      SKIPPED — publish @orca-sec/ryk@%s (+ plugins) yourself\n' "$VERSION"
+    printf 'npm:      SKIPPED — publish @rykan/ryk@%s (+ plugins) yourself\n' "$VERSION"
     printf '          cd dist/package-manifests/npm && npm publish --access public\n'
   else
-    printf 'npm:      @orca-sec/ryk@%s (+ plugins)\n' "$VERSION"
+    printf 'npm:      @rykan/ryk@%s (+ plugins)\n' "$VERSION"
   fi
   printf 'brew:     tap %s (ryk %s)\n' "$HOMEBREW_TAP_DIR" "$VERSION"
   printf 'Log:      %s\n' "${LOG_FILE:-n/a}"

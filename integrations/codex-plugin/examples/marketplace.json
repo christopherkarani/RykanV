@@ -1,11 +1,11 @@
 {
-  "name": "orca-local-plugins",
+  "name": "ryk-local-plugins",
   "interface": {
     "displayName": "ryk Local Plugins"
   },
   "plugins": [
     {
-      "name": "orca",
+      "name": "ryk",
       "source": {
         "source": "local",
         "path": "./integrations/codex-plugin"

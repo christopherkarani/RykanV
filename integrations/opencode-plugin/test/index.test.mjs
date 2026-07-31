@@ -10,10 +10,10 @@ import orcaPlugin, { findOrca, parseHookResponse } from '../dist/index.js';
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 async function withFakeOrca(run, scriptBody) {
-  const directory = await mkdtemp(join(tmpdir(), 'orca-opencode-plugin-'));
+  const directory = await mkdtemp(join(tmpdir(), 'ryk-opencode-plugin-'));
   const orcaBin = join(directory, 'orca');
   const originalPath = process.env.PATH;
-  const originalAllow = process.env.ORCA_ALLOW_WORKSPACE_BIN;
+  const originalAllow = process.env.RYK_ALLOW_WORKSPACE_BIN;
 
   await writeFile(
     orcaBin,
@@ -29,14 +29,14 @@ esac
   );
   await chmod(orcaBin, 0o755);
   process.env.PATH = `${directory}:${originalPath ?? ''}`;
-  delete process.env.ORCA_ALLOW_WORKSPACE_BIN;
+  delete process.env.RYK_ALLOW_WORKSPACE_BIN;
 
   try {
     await run(await orcaPlugin({ directory, worktree: directory }));
   } finally {
     process.env.PATH = originalPath;
-    if (originalAllow === undefined) delete process.env.ORCA_ALLOW_WORKSPACE_BIN;
-    else process.env.ORCA_ALLOW_WORKSPACE_BIN = originalAllow;
+    if (originalAllow === undefined) delete process.env.RYK_ALLOW_WORKSPACE_BIN;
+    else process.env.RYK_ALLOW_WORKSPACE_BIN = originalAllow;
     await rm(directory, { recursive: true, force: true });
   }
 }
@@ -88,7 +88,7 @@ test('permission.ask denies ryk block', async () => {
 });
 
 test('permission.ask fail-closes unknown decisions', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'orca-opencode-plugin-'));
+  const directory = await mkdtemp(join(tmpdir(), 'ryk-opencode-plugin-'));
   const orcaBin = join(directory, 'orca');
   const originalPath = process.env.PATH;
   await writeFile(
@@ -137,12 +137,12 @@ test('orca.ts is a single-source sync of src/index.ts', async () => {
 });
 
 test('missing binary registers fail-closed veto hooks', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'orca-opencode-plugin-'));
+  const directory = await mkdtemp(join(tmpdir(), 'ryk-opencode-plugin-'));
   const originalPath = process.env.PATH;
-  const originalAllow = process.env.ORCA_ALLOW_WORKSPACE_BIN;
+  const originalAllow = process.env.RYK_ALLOW_WORKSPACE_BIN;
   // Empty PATH so `which orca` fails; no workspace candidates without env gate.
   process.env.PATH = directory;
-  delete process.env.ORCA_ALLOW_WORKSPACE_BIN;
+  delete process.env.RYK_ALLOW_WORKSPACE_BIN;
   try {
     const plugin = await orcaPlugin({ directory, worktree: directory });
     const before = plugin['tool.execute.before'];
@@ -163,8 +163,8 @@ test('missing binary registers fail-closed veto hooks', async () => {
     assert.equal(output.status, 'deny');
   } finally {
     process.env.PATH = originalPath;
-    if (originalAllow === undefined) delete process.env.ORCA_ALLOW_WORKSPACE_BIN;
-    else process.env.ORCA_ALLOW_WORKSPACE_BIN = originalAllow;
+    if (originalAllow === undefined) delete process.env.RYK_ALLOW_WORKSPACE_BIN;
+    else process.env.RYK_ALLOW_WORKSPACE_BIN = originalAllow;
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -228,24 +228,24 @@ printf '%s\\n' '{"decision":"unexpected","message":"bad decision"}'
 
 test('findOrca accepts absolute RYK_BIN when path exists', () => {
   const prevRyk = process.env.RYK_BIN;
-  const prevOrca = process.env.ORCA_BIN;
+  const prevOrca = process.env.RYK_BIN;
   try {
-    delete process.env.ORCA_BIN;
+    delete process.env.RYK_BIN;
     process.env.RYK_BIN = process.execPath;
     assert.equal(findOrca(), process.execPath);
   } finally {
     if (prevRyk === undefined) delete process.env.RYK_BIN;
     else process.env.RYK_BIN = prevRyk;
-    if (prevOrca === undefined) delete process.env.ORCA_BIN;
-    else process.env.ORCA_BIN = prevOrca;
+    if (prevOrca === undefined) delete process.env.RYK_BIN;
+    else process.env.RYK_BIN = prevOrca;
   }
 });
 
 test('findOrca rejects relative path-shaped RYK_BIN', () => {
   const prevRyk = process.env.RYK_BIN;
-  const prevOrca = process.env.ORCA_BIN;
+  const prevOrca = process.env.RYK_BIN;
   try {
-    delete process.env.ORCA_BIN;
+    delete process.env.RYK_BIN;
     process.env.RYK_BIN = './zig-out/bin/ryk';
     assert.equal(findOrca(), null);
     process.env.RYK_BIN = 'evil/ryk';
@@ -253,17 +253,17 @@ test('findOrca rejects relative path-shaped RYK_BIN', () => {
   } finally {
     if (prevRyk === undefined) delete process.env.RYK_BIN;
     else process.env.RYK_BIN = prevRyk;
-    if (prevOrca === undefined) delete process.env.ORCA_BIN;
-    else process.env.ORCA_BIN = prevOrca;
+    if (prevOrca === undefined) delete process.env.RYK_BIN;
+    else process.env.RYK_BIN = prevOrca;
   }
 });
 
-test('findOrca does not shell-interpolate metacharacters in bare RYK_BIN', () => {
+test('findryk does not shell-interpolate metacharacters in bare RYK_BIN', () => {
   const prevRyk = process.env.RYK_BIN;
-  const prevOrca = process.env.ORCA_BIN;
+  const prevOrca = process.env.RYK_BIN;
   const marker = join(tmpdir(), `opencode-inject-${Date.now()}`);
   try {
-    delete process.env.ORCA_BIN;
+    delete process.env.RYK_BIN;
     // Would create marker if interpolated into a shell; argv which must not.
     process.env.RYK_BIN = `ryk; touch ${marker}`;
     assert.equal(findOrca(), null);
@@ -280,58 +280,58 @@ test('findOrca does not shell-interpolate metacharacters in bare RYK_BIN', () =>
   } finally {
     if (prevRyk === undefined) delete process.env.RYK_BIN;
     else process.env.RYK_BIN = prevRyk;
-    if (prevOrca === undefined) delete process.env.ORCA_BIN;
-    else process.env.ORCA_BIN = prevOrca;
+    if (prevOrca === undefined) delete process.env.RYK_BIN;
+    else process.env.RYK_BIN = prevOrca;
   }
 });
 
-test('findOrca ignores workspace zig-out without ORCA_ALLOW_WORKSPACE_BIN', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'orca-opencode-plugin-'));
+test('findOrca ignores workspace zig-out without RYK_ALLOW_WORKSPACE_BIN', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'ryk-opencode-plugin-'));
   const zigOutBin = join(directory, 'zig-out', 'bin');
   const orcaBin = join(zigOutBin, 'orca');
   const originalPath = process.env.PATH;
-  const originalAllow = process.env.ORCA_ALLOW_WORKSPACE_BIN;
+  const originalAllow = process.env.RYK_ALLOW_WORKSPACE_BIN;
   await mkdir(zigOutBin, { recursive: true });
   await writeFile(orcaBin, '#!/bin/sh\necho ok\n');
   await chmod(orcaBin, 0o755);
-  process.env.PATH = directory; // no orca on PATH
-  delete process.env.ORCA_ALLOW_WORKSPACE_BIN;
+  process.env.PATH = directory; // no ryk on PATH
+  delete process.env.RYK_ALLOW_WORKSPACE_BIN;
   try {
     assert.equal(findOrca(directory), null);
   } finally {
     process.env.PATH = originalPath;
-    if (originalAllow === undefined) delete process.env.ORCA_ALLOW_WORKSPACE_BIN;
-    else process.env.ORCA_ALLOW_WORKSPACE_BIN = originalAllow;
+    if (originalAllow === undefined) delete process.env.RYK_ALLOW_WORKSPACE_BIN;
+    else process.env.RYK_ALLOW_WORKSPACE_BIN = originalAllow;
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test('findOrca accepts workspace zig-out when ORCA_ALLOW_WORKSPACE_BIN=1', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'orca-opencode-plugin-'));
+test('findOrca accepts workspace zig-out when RYK_ALLOW_WORKSPACE_BIN=1', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'ryk-opencode-plugin-'));
   const zigOutBin = join(directory, 'zig-out', 'bin');
   // Prefer ryk primary name under workspace allowlist.
   const rykBin = join(zigOutBin, 'ryk');
   const originalPath = process.env.PATH;
-  const originalAllow = process.env.ORCA_ALLOW_WORKSPACE_BIN;
+  const originalAllow = process.env.RYK_ALLOW_WORKSPACE_BIN;
   const prevRyk = process.env.RYK_BIN;
-  const prevOrca = process.env.ORCA_BIN;
+  const prevOrca = process.env.RYK_BIN;
   await mkdir(zigOutBin, { recursive: true });
   await writeFile(rykBin, '#!/bin/sh\necho ok\n');
   await chmod(rykBin, 0o755);
   process.env.PATH = directory; // no ryk/orca on PATH
-  process.env.ORCA_ALLOW_WORKSPACE_BIN = '1';
+  process.env.RYK_ALLOW_WORKSPACE_BIN = '1';
   delete process.env.RYK_BIN;
-  delete process.env.ORCA_BIN;
+  delete process.env.RYK_BIN;
   try {
     assert.equal(findOrca(directory), rykBin);
   } finally {
     process.env.PATH = originalPath;
-    if (originalAllow === undefined) delete process.env.ORCA_ALLOW_WORKSPACE_BIN;
-    else process.env.ORCA_ALLOW_WORKSPACE_BIN = originalAllow;
+    if (originalAllow === undefined) delete process.env.RYK_ALLOW_WORKSPACE_BIN;
+    else process.env.RYK_ALLOW_WORKSPACE_BIN = originalAllow;
     if (prevRyk === undefined) delete process.env.RYK_BIN;
     else process.env.RYK_BIN = prevRyk;
-    if (prevOrca === undefined) delete process.env.ORCA_BIN;
-    else process.env.ORCA_BIN = prevOrca;
+    if (prevOrca === undefined) delete process.env.RYK_BIN;
+    else process.env.RYK_BIN = prevOrca;
     await rm(directory, { recursive: true, force: true });
   }
 });

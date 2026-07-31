@@ -6,19 +6,19 @@ The v1.1.x line receives security fixes once a v1.1.0 tag is published. Do not t
 
 ## Reporting a Vulnerability
 
-Report suspected vulnerabilities privately to the project owner. Include the affected version or commit, operating system, reproduction steps, and any generated Orca audit directory if it contains only synthetic data.
+Report suspected vulnerabilities privately to the project owner. Include the affected version or commit, operating system, reproduction steps, and any generated ryk audit directory if it contains only synthetic data.
 
 Do not include real credentials, API keys, access tokens, private keys, customer data, or proprietary logs. Replace secrets with synthetic values such as `sk-fakeSyntheticOpenAIKey1234567890`.
 
 ## Safe Handling
 
-Orca security reports are handled as private by default. The project will avoid publishing exploit details until a fix or documented limitation is available. If the issue is a design limitation rather than a bug, the fix may be documentation, capability reporting, or a failing red-team fixture.
+ryk security reports are handled as private by default. The project will avoid publishing exploit details until a fix or documented limitation is available. If the issue is a design limitation rather than a bug, the fix may be documentation, capability reporting, or a failing red-team fixture.
 
 ## Current Security Scope
 
-Orca protects local agent runs that go through Orca-managed wrappers, shims, staging, policy checks, audit logging, and the stdio MCP proxy. It reduces blast radius and improves reviewability.
+ryk protects local agent runs that go through ryk-managed wrappers, shims, staging, policy checks, audit logging, and the stdio MCP proxy. It reduces blast radius and improves reviewability.
 
-Orca does not make arbitrary malicious code safe. It does not claim universal transparent filesystem or network enforcement on every operating system. Use `orca doctor` for actual local capability status.
+ryk does not make arbitrary malicious code safe. It does not claim universal transparent filesystem or network enforcement on every operating system. Use `ryk doctor` for actual local capability status.
 
 ## Security Regression Commands
 
@@ -28,8 +28,8 @@ Run:
 zig build
 zig build test
 zig build fuzz
-./zig-out/bin/orca redteam --ci
-./zig-out/bin/orca doctor
+./zig-out/bin/ryk redteam --ci
+./zig-out/bin/ryk doctor
 ```
 
 Raw secrets must not appear in `events.jsonl`, `summary.json`, `summary.md`, replay output, red-team output, doctor output, generated policies, or release/install files.

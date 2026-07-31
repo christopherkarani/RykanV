@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const platform = @import("orca_core").platform;
+const platform = @import("ryk_core").platform;
 const backend = @import("backend.zig");
 /// Single source of truth for Landlock ABI availability (M-16). Doctor/detect
 /// must not re-implement landlock_create_ruleset VERSION probe independently of attach.
@@ -130,7 +130,7 @@ fn detectCgroups() Probe {
     if (!pathExists("/sys/fs/cgroup/cgroup.controllers")) {
         return .{ .level = .unavailable, .note = "cgroup v2 controllers file is absent" };
     }
-    return .{ .level = .partial, .note = "cgroup v2 is visible; Orca does not create or manage a cleanup cgroup in this phase" };
+    return .{ .level = .partial, .note = "cgroup v2 is visible; ryk does not create or manage a cleanup cgroup in this phase" };
 }
 
 fn pathExists(path: []const u8) bool {

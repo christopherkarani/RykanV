@@ -413,7 +413,7 @@ test "activeReceiptWithNetwork + banner surfaces route-forced network_scope" {
     try std.testing.expect(std.mem.indexOf(u8, landlock_line, "Landlock") == null); // mechanism-neutral banner
 
     // Seatbelt: outbound loopback proxy only; inbound/bind residual is explicit.
-    const seatbelt_scope = "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind unrestricted)";
+    const seatbelt_scope = "proxy route-forced (outbound TCP to ryk loopback proxy only; inbound/bind unrestricted)";
     const seatbelt = try activeReceiptWithNetwork(
         .seatbelt,
         test_hash_64,
@@ -493,7 +493,7 @@ test "landlock active banner and audit omit seatbelt_profile token" {
 }
 
 test "session_banner_buf_len fits seatbelt grade token with route-forced network" {
-    const seatbelt_scope = "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind unrestricted)";
+    const seatbelt_scope = "proxy route-forced (outbound TCP to ryk loopback proxy only; inbound/bind unrestricted)";
     const fs_scope = "workspace RW, system RO, platform tmp RW, no home, control write-deny (readable), mach-lookup residual";
     const receipt = try activeReceiptWithNetworkAndGrade(
         .seatbelt,

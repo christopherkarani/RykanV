@@ -1,17 +1,17 @@
-# Orca OpenClaw Plugin — ClawHub Readiness Checklist
+# ryk OpenClaw Plugin — ClawHub Readiness Checklist
 
-This checklist tracks whether the Orca OpenClaw plugin is ready for ClawHub submission.
+This checklist tracks whether the ryk OpenClaw plugin is ready for ClawHub submission.
 
 ## Metadata Checklist
 
 - [x] `openclaw.plugin.json` validates as JSON.
 - [x] `openclaw.plugin.json` contains `id: "orca"`.
-- [x] `openclaw.plugin.json` contains `name: "Orca"`.
+- [x] `openclaw.plugin.json` contains `name: "ryk"`.
 - [x] `openclaw.plugin.json` contains `version`.
 - [x] `openclaw.plugin.json` contains `description`.
 - [x] `openclaw.plugin.json` contains `configSchema`.
 - [x] `package.json` validates as JSON.
-- [x] `package.json` `name` is `orca-openclaw-plugin`.
+- [x] `package.json` `name` is `ryk-openclaw-plugin`.
 - [x] `package.json` `main` points to `dist/index.js`.
 - [x] `package.json` `types` points to `dist/index.d.ts`.
 - [x] `package.json` `files` includes `dist`, `openclaw.plugin.json`, `README.md`, `package.json`.
@@ -52,7 +52,7 @@ This checklist tracks whether the Orca OpenClaw plugin is ready for ClawHub subm
 
 ## Docs Checklist
 
-- [x] `integrations/openclaw-plugin/README.md` explains Orca CLI dependency.
+- [x] `integrations/openclaw-plugin/README.md` explains ryk CLI dependency.
 - [x] `docs/integrations/openclaw.md` explains install paths.
 - [x] `docs/integrations/openclaw-clawhub.md` exists (ClawHub submission docs).
 - [x] `docs/integrations/openclaw-clawhub-checklist.md` exists (this checklist).
@@ -60,15 +60,15 @@ This checklist tracks whether the Orca OpenClaw plugin is ready for ClawHub subm
 - [x] Docs do not claim npm publication happened unless it did.
 - [x] Release notes are honest about publication status.
 
-## Orca CLI Checklist
+## ryk CLI Checklist
 
-- [x] `orca plugin doctor openclaw` reports plugin directory present.
-- [x] `orca plugin manifest openclaw` reports manifest exists.
-- [x] `orca plugin install openclaw --dry-run` succeeds.
+- [x] `ryk plugin doctor openclaw` reports plugin directory present.
+- [x] `ryk plugin manifest openclaw` reports manifest exists.
+- [x] `ryk plugin install openclaw --dry-run` succeeds.
 - [x] Hook smoke test (`tool.before` with safe fixture) returns `allow`.
 - [x] Hook smoke test (`tool.before` with dangerous fixture) returns `block`.
 - [x] `zig build test` passes.
-- [x] `orca redteam --ci` passes (10/10 fixtures).
+- [x] `ryk redteam --ci` passes (10/10 fixtures).
 
 ## Cross-Plugin Regression Checklist
 
@@ -91,20 +91,20 @@ This checklist tracks whether the Orca OpenClaw plugin is ready for ClawHub subm
 | npm Package | Ready |
 | Safety | Ready |
 | Docs | Ready |
-| Orca CLI | Ready |
+| ryk CLI | Ready |
 | Cross-plugin | Ready |
 | ClawHub CLI | Published |
 | Support links | Ready |
 | Release notes | Ready |
 
-**ClawHub submission is complete. The plugin is published as `orca-openclaw-plugin@1.1.3`.**
+**ClawHub submission is complete. The plugin is published as `ryk-openclaw-plugin@1.1.3`.**
 
 The manual publish command (when authorized) is:
 
 ```bash
 clawhub publish \
-  --slug orca \
-  --name "Orca" \
+  --slug ryk \
+  --name "ryk" \
   --version 1.1.3 \
   --tags "security,guardrails,ai-agents" \
   ./integrations/openclaw-plugin

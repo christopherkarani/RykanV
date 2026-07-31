@@ -1,5 +1,5 @@
 # Example user effect pack (Phase C).
-# Copy to .orca/effect-packs/ or ~/.config/orca/effect-packs/
+# Copy to .ryk/effect-packs/ or ~/.config/ryk/effect-packs/
 # then set policy effects.deny (e.g. comms.message) to enforce.
 #
 # Packs only extend classification — they never grant allow past effects.deny.

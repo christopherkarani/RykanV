@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-ORCA_BIN="${REPO_ROOT}/zig-out/bin/orca"
+RYK_BIN="${REPO_ROOT}/zig-out/bin/ryk"
 
 ERRORS=0
 
@@ -42,32 +42,32 @@ echo ""
 # 3. CLI smoke tests
 log_info "Running CLI smoke tests..."
 
-if [[ -x "${ORCA_BIN}" ]]; then
-    if "${ORCA_BIN}" --help >/dev/null 2>&1; then
-        log_pass "orca --help"
+if [[ -x "${RYK_BIN}" ]]; then
+    if "${RYK_BIN}" --help >/dev/null 2>&1; then
+        log_pass "ryk --help"
     else
-        log_fail "orca --help"
+        log_fail "ryk --help"
     fi
 
-    if "${ORCA_BIN}" version >/dev/null 2>&1; then
-        log_pass "orca version"
+    if "${RYK_BIN}" version >/dev/null 2>&1; then
+        log_pass "ryk version"
     else
-        log_fail "orca version"
+        log_fail "ryk version"
     fi
 
-    if "${ORCA_BIN}" doctor >/dev/null 2>&1; then
-        log_pass "orca doctor"
+    if "${RYK_BIN}" doctor >/dev/null 2>&1; then
+        log_pass "ryk doctor"
     else
-        log_fail "orca doctor"
+        log_fail "ryk doctor"
     fi
 
-    if "${ORCA_BIN}" redteam --ci >/dev/null 2>&1; then
-        log_pass "orca redteam --ci"
+    if "${RYK_BIN}" redteam --ci >/dev/null 2>&1; then
+        log_pass "ryk redteam --ci"
     else
-        log_fail "orca redteam --ci"
+        log_fail "ryk redteam --ci"
     fi
 else
-    log_fail "orca binary not found at ${ORCA_BIN}"
+    log_fail "orca binary not found at ${RYK_BIN}"
 fi
 echo ""
 

@@ -3,7 +3,7 @@
 Run:
 
 ```sh
-./zig-out/bin/orca doctor
+./zig-out/bin/ryk doctor
 ```
 
 ## Capability Matrix
@@ -22,7 +22,7 @@ Run:
 
 ## OS filesystem sandbox
 
-Protected agent launches (`orca <agent>`) use the run engine and can attach a Landlock filesystem boundary to the agent child. Advanced users can force the same path with `orca run --os-sandbox auto|on|off` (default `auto`):
+Protected agent launches (`ryk <agent>`) use the run engine and can attach a Landlock filesystem boundary to the agent child. Advanced users can force the same path with `ryk run --os-sandbox auto|on|off` (default `auto`):
 
 - **Probe ≠ session-attach.** Doctor Landlock / strong-sandbox reports are capability evidence only. Doctor never reports a live session as `active` from a probe alone.
 - **Session-attach** is claimable only after apply-before-exec child attach succeeds for that run (with a profile hash). The pre-exec status handshake (`status_ok`) does not prove `execve`; an `active` session can still fail at exec (e.g. exit 127).
@@ -38,7 +38,7 @@ Requirements: Linux kernel **5.13+** with Landlock **ABI ≥ 1**. Containers and
 
 ## Network route forcing
 
-When the proxy backend is active and Landlock ABI **>= 4** is available, Orca adds Landlock TCP network rules to the same child `restrict_self` call as the filesystem profile. The child env exports `ORCA_PROXY_ROUTE_FORCED=true` and `ORCA_TRANSPARENT_NETWORK_ENFORCEMENT=tcp-port-route-forced` (TCP port-scoped residual; not unqualified transparent-active).
+When the proxy backend is active and Landlock ABI **>= 4** is available, ryk adds Landlock TCP network rules to the same child `restrict_self` call as the filesystem profile. The child env exports `RYK_PROXY_ROUTE_FORCED=true` and `RYK_TRANSPARENT_NETWORK_ENFORCEMENT=tcp-port-route-forced` (TCP port-scoped residual; not unqualified transparent-active).
 
 **Honest Landlock network residual (do not describe as loopback-only):**
 
@@ -50,7 +50,7 @@ When the proxy backend is active and Landlock ABI **>= 4** is available, Orca ad
 | UDP / QUIC | **Unrestricted** under Landlock route force — no Landlock UDP net rules |
 | vs macOS Seatbelt | Seatbelt can express localhost:port outbound TCP; Landlock cannot |
 
-This blocks ordinary proxy-ignoring TCP clients that dial normal ports, but it is **not** "outbound TCP to Orca loopback proxy only." Linux matrix evidence must include the Landlock route-forcing canary and keep this residual visible.
+This blocks ordinary proxy-ignoring TCP clients that dial normal ports, but it is **not** "outbound TCP to ryk loopback proxy only." Linux matrix evidence must include the Landlock route-forcing canary and keep this residual visible.
 
 ## Backend Features
 
@@ -58,7 +58,7 @@ Doctor may report user namespaces, mount namespaces, seccomp, Landlock, cgroups,
 
 ## Fallback
 
-If kernel features are unavailable, Orca falls back to wrapper/proxy, staged-write, policy, and audit controls. Required backend features fail closed when requested with `--require-backend` or `--os-sandbox on`.
+If kernel features are unavailable, ryk falls back to wrapper/proxy, staged-write, policy, and audit controls. Required backend features fail closed when requested with `--require-backend` or `--os-sandbox on`.
 
 ## Limitations
 

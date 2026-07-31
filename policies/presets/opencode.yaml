@@ -1,4 +1,4 @@
-# Orca preset: opencode
+# ryk preset: opencode
 # Generic/experimental: tuned for local coding-agent workflows and editable allowlists.
 version: 1
 mode: ask
@@ -48,7 +48,7 @@ files:
       - "./**"
     deny:
       - "./.git/**"
-      - "./.orca/**"
+      - "./.ryk/**"
     mode: staged
 
 commands:

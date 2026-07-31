@@ -31,7 +31,7 @@ ryk replay --session last --json
 If no session exists, you will see an error like:
 
 ```
-No sessions found in .orca/sessions/
+No sessions found in .ryk/sessions/
 ```
 
 To create a session, run a command through ryk first:

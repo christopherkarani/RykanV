@@ -2,7 +2,7 @@
 
 ## Summary
 
-This phase prepared and published the Orca OpenClaw plugin to ClawHub. All metadata, documentation, validation, and safety checks are complete. The plugin is now live on ClawHub as `orca-openclaw-plugin@1.1.3`.
+This phase prepared and published the ryk OpenClaw plugin to ClawHub. All metadata, documentation, validation, and safety checks are complete. The plugin is now live on ClawHub as `ryk-openclaw-plugin@1.1.3`.
 
 **ClawHub submission is complete. The plugin is published.**
 
@@ -33,7 +33,7 @@ All checklist items are complete:
 - [x] Build validation (`npm run build` succeeds)
 - [x] npm package validation (`npm pack --dry-run` succeeds)
 - [x] Safety checks (no secrets, no unsafe scripts, no MCP/drone fields)
-- [x] Orca CLI checks (`plugin doctor`, `manifest`, `install --dry-run`)
+- [x] ryk CLI checks (`plugin doctor`, `manifest`, `install --dry-run`)
 - [x] Hook smoke tests (safe fixture returns `allow`, dangerous returns `block`)
 - [x] Cross-plugin regression tests (Codex, Claude Code, OpenCode all pass)
 - [x] Release notes are honest
@@ -84,8 +84,8 @@ Output:
 ```json
 {
   "source": "github:christopherkarani/rykan@p11-clawhub-submission-prep:integrations/openclaw-plugin",
-  "name": "orca-openclaw-plugin",
-  "displayName": "Orca",
+  "name": "ryk-openclaw-plugin",
+  "displayName": "ryk",
   "family": "code-plugin",
   "version": "1.1.3",
   "commit": "fb3828b0475dfe3847a7d429e962eb396e247d51",
@@ -104,19 +104,19 @@ The plugin was published with:
 clawhub package publish \
   ./integrations/openclaw-plugin \
   --family code-plugin \
-  --name "orca-openclaw-plugin" \
-  --display-name "Orca" \
+  --name "ryk-openclaw-plugin" \
+  --display-name "ryk" \
   --version "1.1.3" \
   --changelog "Initial ClawHub submission..." \
   --tags "security,guardrails,ai-agents,policy,audit,latest"
 ```
 
-Result: `✔ OK. Published orca-openclaw-plugin@1.1.3 (rd793zsj39hs3983na8h3pgv0s86f1yk)`
+Result: `✔ OK. Published ryk-openclaw-plugin@1.1.3 (rd793zsj39hs3983na8h3pgv0s86f1yk)`
 
 The install command is:
 
 ```bash
-openclaw plugins install clawhub:orca-openclaw-plugin
+openclaw plugins install clawhub:ryk-openclaw-plugin
 ```
 
 **Note:** The `clawhub:` install protocol requires a recent OpenClaw version. Older versions may fall back to local path or npm install.
@@ -129,7 +129,7 @@ openclaw plugins install clawhub:orca-openclaw-plugin
 openclaw plugins install ./integrations/openclaw-plugin
 ```
 
-Result: Install succeeded (plugin copied to `~/.openclaw/extensions/orca/`).
+Result: Install succeeded (plugin copied to `~/.openclaw/extensions/ryk/`).
 
 ```bash
 openclaw plugins list --json
@@ -154,40 +154,40 @@ Result: **All tests pass.**
 ### Plugin smoke tests
 
 ```bash
-cat tests/plugin-fixtures/openclaw/tool_command_safe.json | ./zig-out/bin/orca hook openclaw tool.before
+cat tests/plugin-fixtures/openclaw/tool_command_safe.json | ./zig-out/bin/ryk hook openclaw tool.before
 # Result: allow ✓
 
-cat tests/plugin-fixtures/openclaw/tool_command_dangerous.json | ./zig-out/bin/orca hook openclaw tool.before
+cat tests/plugin-fixtures/openclaw/tool_command_dangerous.json | ./zig-out/bin/ryk hook openclaw tool.before
 # Result: block ✓
 ```
 
 ### Cross-plugin regression tests
 
 ```bash
-cat tests/plugin-fixtures/codex/pre_tool_use_command_dangerous.json | ./zig-out/bin/orca hook codex PreToolUse
+cat tests/plugin-fixtures/codex/pre_tool_use_command_dangerous.json | ./zig-out/bin/ryk hook codex PreToolUse
 # Result: block ✓
 
-cat tests/plugin-fixtures/claude/pre_tool_use_command_dangerous.json | ./zig-out/bin/orca hook claude PreToolUse
+cat tests/plugin-fixtures/claude/pre_tool_use_command_dangerous.json | ./zig-out/bin/ryk hook claude PreToolUse
 # Result: block ✓
 
-cat tests/plugin-fixtures/opencode/tool_execute_before_command_dangerous.json | ./zig-out/bin/orca hook opencode tool.execute.before
+cat tests/plugin-fixtures/opencode/tool_execute_before_command_dangerous.json | ./zig-out/bin/ryk hook opencode tool.execute.before
 # Result: block ✓
 ```
 
 ### Redteam
 
 ```bash
-./zig-out/bin/orca redteam --ci
+./zig-out/bin/ryk redteam --ci
 ```
 
 Result: **10/10 fixtures passed (100%)** ✓
 
-### Orca plugin commands
+### ryk plugin commands
 
 ```bash
-./zig-out/bin/orca plugin doctor openclaw      # passed ✓
-./zig-out/bin/orca plugin manifest openclaw    # passed ✓
-./zig-out/bin/orca plugin install openclaw --dry-run  # passed ✓
+./zig-out/bin/ryk plugin doctor openclaw      # passed ✓
+./zig-out/bin/ryk plugin manifest openclaw    # passed ✓
+./zig-out/bin/ryk plugin install openclaw --dry-run  # passed ✓
 ```
 
 ## Known Limitations
@@ -196,7 +196,7 @@ Result: **10/10 fixtures passed (100%)** ✓
 2. **`clawhub:` install protocol requires recent OpenClaw.** Older OpenClaw versions may not support `clawhub:` installs. Use local path or npm install as fallback.
 3. **Local path install may show runtime warnings.** OpenClaw loads TypeScript source directly from local paths, which may cause context-shape mismatches. The npm/ClawHub distribution uses compiled `dist/index.js`.
 4. **Hooks are advisory for informational events.** Blocking depends on OpenClaw honoring thrown errors.
-5. **The strongest protection remains `orca openclaw`.**
+5. **The strongest protection remains `ryk openclaw`.**
 
 ## Manual Actions Already Completed
 
@@ -209,21 +209,21 @@ Result: **10/10 fixtures passed (100%)** ✓
 
 ## Remaining Manual Actions
 
-- **Monitor scan status:** ClawHub scan is currently `pending`. Check `clawhub package inspect orca-openclaw-plugin` for updates.
-- **Verify install on newer OpenClaw:** The `clawhub:` protocol requires a recent OpenClaw version. Test `openclaw plugins install clawhub:orca-openclaw-plugin` when a compatible version is available.
+- **Monitor scan status:** ClawHub scan is currently `pending`. Check `clawhub package inspect ryk-openclaw-plugin` for updates.
+- **Verify install on newer OpenClaw:** The `clawhub:` protocol requires a recent OpenClaw version. Test `openclaw plugins install clawhub:ryk-openclaw-plugin` when a compatible version is available.
 
 ## Whether ClawHub Submission Is Complete
 
-**Yes.** The Orca OpenClaw plugin has been successfully published to ClawHub:
+**Yes.** The ryk OpenClaw plugin has been successfully published to ClawHub:
 
 - All metadata validates (`openclaw.plugin.json`, `package.json`).
 - Build output exists (`dist/index.js`, `dist/index.d.ts`).
 - npm package is clean and minimal (`npm pack --dry-run` passes).
 - No secrets, no unsafe scripts, no MCP behavior, no drone behavior.
-- Orca CLI integration works (doctor, manifest, install dry-run, hooks).
+- ryk CLI integration works (doctor, manifest, install dry-run, hooks).
 - All existing tests pass (Zig tests, smoke tests, redteam).
 - ClawHub dry-run passed (after CLI upgrade).
-- ClawHub publication confirmed: `orca-openclaw-plugin@1.1.3`.
+- ClawHub publication confirmed: `ryk-openclaw-plugin@1.1.3`.
 - Documentation is complete and updated to reflect published status.
 
 ## Files Changed

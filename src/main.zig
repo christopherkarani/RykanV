@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const orca = @import("orca");
+const ryk = @import("ryk");
 
 pub fn main(init: std.process.Init) !u8 {
     if (builtin.os.tag == .windows) {
@@ -19,10 +19,10 @@ pub fn main(init: std.process.Init) !u8 {
         std.mem.eql(
             u8,
             argv[1],
-            orca.sandbox.linux_workspace_view_bootstrap.internal_command,
+            ryk.sandbox.linux_workspace_view_bootstrap.internal_command,
         ))
     {
-        return orca.sandbox.linux_workspace_view_bootstrap.command(allocator, argv[2..]);
+        return ryk.sandbox.linux_workspace_view_bootstrap.command(allocator, argv[2..]);
     }
 
     var stdout_buffer: [4096]u8 = undefined;
@@ -33,13 +33,13 @@ pub fn main(init: std.process.Init) !u8 {
     var stdout_writer = std.Io.File.stdout().writerStreaming(io, &stdout_buffer);
     var stderr_writer = std.Io.File.stderr().writerStreaming(io, &stderr_buffer);
 
-    _ = orca.cli.style.useColor(io, &stdout_writer.interface);
+    _ = ryk.cli.style.useColor(io, &stdout_writer.interface);
 
-    const shim_alias = if (builtin.os.tag == .windows) orca.intercept.commands.shimAliasFromExecutablePath(argv[0]) else null;
+    const shim_alias = if (builtin.os.tag == .windows) ryk.intercept.commands.shimAliasFromExecutablePath(argv[0]) else null;
     const code = if (shim_alias) |alias|
         try runWindowsExecutableShim(io, init.environ_map, allocator, alias, argv[1..], &stdout_writer.interface, &stderr_writer.interface)
     else
-        try orca.cli.run(io, init.environ_map, argv[1..], &stdout_writer.interface, &stderr_writer.interface);
+        try ryk.cli.run(io, init.environ_map, argv[1..], &stdout_writer.interface, &stderr_writer.interface);
     try stdout_writer.interface.flush();
     try stderr_writer.interface.flush();
     return code;
@@ -73,9 +73,9 @@ fn runWindowsExecutableShim(io: std.Io, environ_map: *const std.process.Environ.
     shim_argv[1] = "--";
     shim_argv[2] = alias;
     if (args.len > 0) @memcpy(shim_argv[3..], args);
-    return orca.cli.shim.command(io, environ_map, shim_argv, stdout, stderr);
+    return ryk.cli.shim.command(io, environ_map, shim_argv, stdout, stderr);
 }
 
 test {
-    _ = orca.cli;
+    _ = ryk.cli;
 }

@@ -1,22 +1,22 @@
-# Orca Claude Code Plugin Integration
+# ryk Claude Code Plugin Integration
 
-This document describes the Orca Claude Code plugin, how to install it, and how to use it.
+This document describes the ryk Claude Code plugin, how to install it, and how to use it.
 
 ## Overview
 
-The Orca Claude Code plugin is a local integration package that adds Orca skills and lifecycle hooks to Claude Code. It lives under `integrations/claude-code-plugin/` in the Orca repository.
+The ryk Claude Code plugin is a local integration package that adds ryk skills and lifecycle hooks to Claude Code. It lives under `integrations/claude-code-plugin/` in the ryk repository.
 
-The plugin is a thin layer. All policy decisions are made by the Orca CLI. The plugin does not duplicate policy logic.
+The plugin is a thin layer. All policy decisions are made by the ryk CLI. The plugin does not duplicate policy logic.
 
 ## Prerequisites
 
-- Zig 0.15.2 (to build Orca from source)
-- Orca CLI built and available in PATH
+- Zig 0.15.2 (to build ryk from source)
+- ryk CLI built and available in PATH
 - Claude Code host binary installed
 
 ## Install instructions
 
-### Build Orca
+### Build ryk
 
 ```bash
 zig build
@@ -31,19 +31,19 @@ zig build
 
 2. Verify the checksum:
    ```bash
-   sha256sum -c orca-plugin-checksums.txt
+   sha256sum -c ryk-plugin-checksums.txt
    ```
 
 3. Extract the plugin to your preferred location:
    ```bash
-   unzip orca-claude-code-plugin-vX.Y.Z.zip -d ~/orca-plugins/claude
+   unzip orca-claude-code-plugin-vX.Y.Z.zip -d ~/ryk-plugins/claude
    ```
 
 4. Point Claude Code to the extracted plugin directory.
 
 ### Install from local path (repo)
 
-1. Build Orca:
+1. Build ryk:
    ```bash
    zig build
    ```
@@ -55,7 +55,7 @@ zig build
 
 3. Verify the plugin is recognized:
    ```bash
-   ./zig-out/bin/orca plugin doctor claude
+   ./zig-out/bin/ryk plugin doctor claude
    ```
 
 ### Repo marketplace install
@@ -64,7 +64,7 @@ If your Claude Code version supports repo marketplace sources, add this reposito
 
 ```bash
 claude plugin marketplace add christopherkarani/rykan
-claude plugin install orca@orca --scope user
+claude plugin install orca@ryk --scope user
 ```
 
 Or inside Claude Code:
@@ -98,18 +98,18 @@ If your Claude Code version does not support automatic plugin loading:
 
 1. Copy the skills from `integrations/claude-code-plugin/skills/` into your Claude Code skills directory.
 2. Copy the hooks from `integrations/claude-code-plugin/hooks/hooks.json` into your Claude Code hooks configuration.
-3. Ensure `orca` is in PATH or use the full path to the binary.
+3. Ensure `ryk` is in PATH or use the full path to the binary.
 
 ## Verify install
 
 ### Plugin doctor
 
 ```bash
-./zig-out/bin/orca plugin doctor claude
+./zig-out/bin/ryk plugin doctor claude
 ```
 
 Expected output sections:
-- Orca version
+- ryk version
 - Policy status (present/valid)
 - Plugin directories (claude: found)
 - Host binaries (claude: detected or not detected)
@@ -117,7 +117,7 @@ Expected output sections:
 ### Plugin manifest
 
 ```bash
-./zig-out/bin/orca plugin manifest claude
+./zig-out/bin/ryk plugin manifest claude
 ```
 
 This reports the expected manifest path and existence status.
@@ -126,7 +126,7 @@ This reports the expected manifest path and existence status.
 
 ```bash
 cat tests/plugin-fixtures/claude/pre_tool_use_command_safe.json \
-  | ./zig-out/bin/orca hook claude PreToolUse
+  | ./zig-out/bin/ryk hook claude PreToolUse
 ```
 
 Expected: `allow` decision in valid JSON.
@@ -134,13 +134,13 @@ Expected: `allow` decision in valid JSON.
 ### Run redteam
 
 ```bash
-./zig-out/bin/orca redteam --ci
+./zig-out/bin/ryk redteam --ci
 ```
 
 ### Replay last session
 
 ```bash
-./zig-out/bin/orca replay --session last --verify
+./zig-out/bin/ryk replay --session last --verify
 ```
 
 ## Skill list
@@ -153,11 +153,11 @@ Expected: `allow` decision in valid JSON.
 | `redteam` | `skills/redteam/SKILL.md` | Run red-team fixtures |
 | `replay` | `skills/replay/SKILL.md` | Replay latest session |
 
-Skills are invoked as `/orca:doctor`, `/orca:init`, `/orca:protect`, `/orca:redteam`, `/orca:replay` depending on the Claude Code plugin namespace configuration.
+Skills are invoked as `/ryk:doctor`, `/ryk:init`, `/ryk:protect`, `/ryk:redteam`, `/ryk:replay` depending on the Claude Code plugin namespace configuration.
 
 ## Hook list
 
-Hooks call `orca hook claude <event>` with a JSON payload on stdin:
+Hooks call `ryk hook claude <event>` with a JSON payload on stdin:
 
 | Event | Description | Timeout |
 |-------|-------------|---------|
@@ -178,19 +178,19 @@ If you installed from a release artifact, simply delete the extracted directory.
 
 ### Plugin directory not found
 
-Ensure you run `orca plugin doctor claude` from the repository root. The doctor looks for `integrations/claude-code-plugin/` relative to the workspace root.
+Ensure you run `ryk plugin doctor claude` from the repository root. The doctor looks for `integrations/claude-code-plugin/` relative to the workspace root.
 
 ### Hooks timeout
 
-If hooks exceed their timeout, Claude Code may skip them. Check that `orca` is in PATH and that `.orca/policy.yaml` loads quickly.
+If hooks exceed their timeout, Claude Code may skip them. Check that `ryk` is in PATH and that `.ryk/policy.yaml` loads quickly.
 
 ### Policy not found
 
-Run `orca init --preset generic-agent` to create a default policy, then validate with `orca policy check .orca/policy.yaml`.
+Run `ryk init --preset generic-agent` to create a default policy, then validate with `ryk policy check .ryk/policy.yaml`.
 
-### Orca binary not found
+### ryk binary not found
 
-Build Orca with `zig build` or ensure `./zig-out/bin/orca` is in your PATH.
+Build ryk with `zig build` or ensure `./zig-out/bin/ryk` is in your PATH.
 
 ### Fake secret redaction questions
 
@@ -203,14 +203,14 @@ The marketplace catalog uses a relative path (`../claude-code-plugin`). If your 
 ## Limitations
 
 - Hooks are advisory; enforcement depends on Claude Code host support.
-- The strongest protection is `orca claude`.
+- The strongest protection is `ryk claude`.
 - Plugin installation is a preview/dry-run by default.
 - No telemetry is collected.
 - Official marketplace availability is not yet implemented.
 
 ## Security model
 
-- The Orca CLI is the source of truth.
+- The ryk CLI is the source of truth.
 - The plugin does not reimplement policy logic.
 - No secrets are stored in plugin files.
 - Hook stdout is host-valid JSON.
@@ -219,7 +219,7 @@ The marketplace catalog uses a relative path (`../claude-code-plugin`). If your 
 
 ## Separate workstream note
 
-A separate drone workstream exists in this repository under `packages/edge/`. The Orca Claude Code plugin does not expose or modify drone functionality.
+A separate drone workstream exists in this repository under `packages/edge/`. The ryk Claude Code plugin does not expose or modify drone functionality.
 
 ## No MCP support
 

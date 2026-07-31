@@ -9,8 +9,8 @@ $defaultVersion = "1.2.0"
 if (Test-Path -LiteralPath (Join-Path $repoRoot "VERSION")) {
     $defaultVersion = (Get-Content -LiteralPath (Join-Path $repoRoot "VERSION") -TotalCount 1).Trim()
 }
-$VERSION = if ($env:ORCA_PLUGIN_VERSION) { $env:ORCA_PLUGIN_VERSION } elseif ($env:ORCA_VERSION) { $env:ORCA_VERSION } else { $defaultVersion }
-$DIST_DIR = if ($env:ORCA_DIST_DIR) { $env:ORCA_DIST_DIR } else { "dist/plugins" }
+$VERSION = if ($env:RYK_PLUGIN_VERSION) { $env:RYK_PLUGIN_VERSION } elseif ($env:RYK_VERSION) { $env:RYK_VERSION } else { $defaultVersion }
+$DIST_DIR = if ($env:RYK_DIST_DIR) { $env:RYK_DIST_DIR } else { "dist/plugins" }
 $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
 $REPO_ROOT = Resolve-Path (Join-Path $SCRIPT_DIR "..")
 
@@ -32,7 +32,7 @@ function Package-Plugin {
     Write-Error "Plugin directory not found: $PluginDir"
   }
 
-  $tempDir = Join-Path $env:TEMP "orca-plugin-$(Get-Random)"
+  $tempDir = Join-Path $env:TEMP "ryk-plugin-$(Get-Random)"
   New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 
   try {
@@ -68,7 +68,7 @@ function Package-Plugin {
 
 # Package Codex plugin
 $CODEX_PLUGIN_DIR = Join-Path $REPO_ROOT "integrations/codex-plugin"
-$CODEX_ZIP = Join-Path $DIST_DIR "orca-codex-plugin-v${VERSION}.zip"
+$CODEX_ZIP = Join-Path $DIST_DIR "ryk-codex-plugin-v${VERSION}.zip"
 Package-Plugin -PluginDir $CODEX_PLUGIN_DIR -ZipPath $CODEX_ZIP -IncludeFiles @(
   ".codex-plugin/plugin.json",
   "skills",
@@ -88,7 +88,7 @@ Package-Plugin -PluginDir $CLAUDE_PLUGIN_DIR -ZipPath $CLAUDE_ZIP -IncludeFiles 
 
 # Package OpenCode plugin
 $OPENCODE_PLUGIN_DIR = Join-Path $REPO_ROOT "integrations/opencode-plugin"
-$OPENCODE_ZIP = Join-Path $DIST_DIR "orca-opencode-plugin-v${VERSION}.zip"
+$OPENCODE_ZIP = Join-Path $DIST_DIR "ryk-opencode-plugin-v${VERSION}.zip"
 if (Test-Path $OPENCODE_PLUGIN_DIR) {
   Package-Plugin -PluginDir $OPENCODE_PLUGIN_DIR -ZipPath $OPENCODE_ZIP -IncludeFiles @(
     "orca.ts",
@@ -114,7 +114,7 @@ if (Test-Path $MARKETPLACE_DIR) {
 
 # Generate checksums
 Write-Host "Generating checksums..."
-$CHECKSUMS_FILE = Join-Path $DIST_DIR "orca-plugin-checksums.txt"
+$CHECKSUMS_FILE = Join-Path $DIST_DIR "ryk-plugin-checksums.txt"
 $checksums = @()
 
 foreach ($file in Get-ChildItem -Path $DIST_DIR -Filter "*.zip") {

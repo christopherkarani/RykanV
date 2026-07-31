@@ -601,7 +601,7 @@ pub fn discover(
         return loadedPolicyWithPath(allocator, policy, .cli, path);
     }
 
-    const workspace_path = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "policy.yaml" });
+    const workspace_path = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "policy.yaml" });
     defer allocator.free(workspace_path);
     if (loadFile(io, allocator, workspace_path)) |policy| {
         return loadedPolicyWithPath(allocator, policy, .workspace, workspace_path);
@@ -612,7 +612,7 @@ pub fn discover(
 
     if (std.c.getenv("HOME")) |home_c| {
         const home = std.mem.sliceTo(home_c, 0);
-        const user_path = try std.fs.path.join(allocator, &.{ home, ".config", "orca", "policy.yaml" });
+        const user_path = try std.fs.path.join(allocator, &.{ home, ".config", "ryk", "policy.yaml" });
         defer allocator.free(user_path);
         if (loadFile(io, allocator, user_path)) |policy| {
             return loadedPolicyWithPath(allocator, policy, .user, user_path);
@@ -1341,9 +1341,9 @@ test "invalid policies fail closed with clear parser errors" {
 test "policy discovery honors CLI path before workspace policy" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer file.close(std.testing.io);
         try file.writeStreamingAll(std.testing.io, presets.text(.observe));
     }
@@ -1366,9 +1366,9 @@ test "policy discovery honors CLI path before workspace policy" {
 test "workspace policy discovery falls back only when missing" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer file.close(std.testing.io);
         try file.writeStreamingAll(std.testing.io, "version: 1\nmode: loose\n");
     }
@@ -1442,7 +1442,7 @@ test "credential broker config parses YAML and JSON" {
         \\      account: my-team
         \\    env_dev:
         \\      type: env-file-dev
-        \\      path: .orca/dev-secrets.env
+        \\      path: .ryk/dev-secrets.env
         \\  refs:
         \\    github_pat:
         \\      broker: onepassword
@@ -1465,12 +1465,12 @@ test "credential broker config parses YAML and JSON" {
     try std.testing.expectEqual(schema.CredentialBrokerKind.onepassword_cli, yaml_policy.credentials.brokers[0].kind);
     try std.testing.expectEqualStrings("my-team", yaml_policy.credentials.brokers[0].account.?);
     try std.testing.expectEqual(schema.CredentialBrokerKind.env_file_dev, yaml_policy.credentials.brokers[1].kind);
-    try std.testing.expectEqualStrings(".orca/dev-secrets.env", yaml_policy.credentials.brokers[1].path.?);
+    try std.testing.expectEqualStrings(".ryk/dev-secrets.env", yaml_policy.credentials.brokers[1].path.?);
     try std.testing.expectEqualStrings("github_pat", yaml_policy.credentials.refs[0].name);
     try std.testing.expectEqualStrings("op://Engineering/GitHub PAT/token", yaml_policy.credentials.refs[0].ref);
 
     var json_policy = try parseFromSlice(std.testing.allocator,
-        \\{"version":1,"mode":"strict","credentials":{"default_broker":"env_dev","brokers":{"env_dev":{"type":"env-file-dev","path":".orca/dev-secrets.env"}},"refs":{"github_pat":{"broker":"env_dev","ref":"GITHUB_PAT"}}},"network":{"backend":"proxy"}}
+        \\{"version":1,"mode":"strict","credentials":{"default_broker":"env_dev","brokers":{"env_dev":{"type":"env-file-dev","path":".ryk/dev-secrets.env"}},"refs":{"github_pat":{"broker":"env_dev","ref":"GITHUB_PAT"}}},"network":{"backend":"proxy"}}
     , "credentials.json");
     defer json_policy.deinit();
 

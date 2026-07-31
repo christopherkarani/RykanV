@@ -91,14 +91,14 @@ function buildPayload(event: string, data: unknown, sessionId?: string): object 
 
 /**
  * Resolve the ryk/orca binary (Phase 5a dual-name).
- * Prefer absolute RYK_BIN / ORCA_BIN, then PATH (`ryk` then `orca`). Relative
+ * Prefer absolute RYK_BIN / RYK_BIN, then PATH (`ryk` then `ryk`). Relative
  * env bins and workspace zig-out paths are agent-plantable (fake always-allow
  * binary), so:
  * - path-shaped env must be absolute
- * - workspace zig-out candidates require ORCA_ALLOW_WORKSPACE_BIN=1 (dev only)
+ * - workspace zig-out candidates require RYK_ALLOW_WORKSPACE_BIN=1 (dev only)
  */
 export function findOrca(cwd?: string): string | null {
-  const envBin = (process.env.RYK_BIN ?? process.env.ORCA_BIN)?.trim();
+  const envBin = (process.env.RYK_BIN ?? process.env.RYK_BIN)?.trim();
   if (envBin) {
     if (envBin.includes('/') || envBin.includes('\\')) {
       // Relative paths like ./zig-out/bin/ryk or evil/orca are agent-writable.
@@ -134,7 +134,7 @@ export function findOrca(cwd?: string): string | null {
   }
 
   // Dev-only: never trust agent-writable workspace bins in production loads.
-  if (process.env.ORCA_ALLOW_WORKSPACE_BIN === '1' || process.env.RYK_ALLOW_WORKSPACE_BIN === '1') {
+  if (process.env.RYK_ALLOW_WORKSPACE_BIN === '1' || process.env.RYK_ALLOW_WORKSPACE_BIN === '1') {
     const names = ['ryk', 'orca'] as const;
     const candidates: string[] = [];
     for (const name of names) {

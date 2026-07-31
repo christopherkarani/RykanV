@@ -186,7 +186,7 @@ fn validateSafePolicyValue(label: []const u8, value: []const u8, max_len: usize)
 fn validateDevEnvFilePath(path: []const u8) !void {
     if (std.fs.path.isAbsolute(path)) return error.InvalidPolicy;
     if (std.mem.indexOf(u8, path, "..") != null) return error.InvalidPolicy;
-    if (!(std.mem.startsWith(u8, path, ".orca/") or std.mem.startsWith(u8, path, ".orca\\"))) return error.InvalidPolicy;
+    if (!(std.mem.startsWith(u8, path, ".ryk/") or std.mem.startsWith(u8, path, ".ryk\\"))) return error.InvalidPolicy;
     if (std.mem.indexOf(u8, path, "dev") == null or !std.mem.endsWith(u8, path, ".env")) return error.InvalidPolicy;
 }
 
@@ -323,7 +323,7 @@ test "duplicate credential brokers and refs are rejected" {
         \\  brokers:
         \\    env_dev:
         \\      type: env-file-dev
-        \\      path: .orca/dev-secrets.env
+        \\      path: .ryk/dev-secrets.env
         \\    ENV_DEV:
         \\      type: local-dummy
     ;

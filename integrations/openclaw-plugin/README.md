@@ -71,8 +71,8 @@ These paths install metadata and may look successful, but in current OpenClaw **
 
 ```bash
 # NOT recommended for security — unprotected (hooks no-op)
-openclaw plugins install npm:orca-openclaw-plugin
-openclaw plugins install clawhub:orca-openclaw-plugin
+openclaw plugins install npm:ryk-openclaw-plugin
+openclaw plugins install clawhub:ryk-openclaw-plugin
 ```
 
 `--dangerously-force-unsafe-install` only bypasses OpenClaw’s security scanner so the package can load; it does **not** enable hook enforcement. Do not use it as a security install step.
@@ -174,7 +174,7 @@ This plugin does not mutate host configuration, so uninstalling is safe.
 - Hooks are advisory for informational events; blocking depends on OpenClaw honoring hook return values.
 - Plugin installation depends on OpenClaw version and plugin loading mechanism.
 - No telemetry is collected.
-- npm package name prepared: `orca-openclaw-plugin`. ClawHub package published for distribution — distribution ≠ enforcement.
+- npm package name prepared: `ryk-openclaw-plugin`. ClawHub package published for distribution — distribution ≠ enforcement.
 
 ## Security model
 

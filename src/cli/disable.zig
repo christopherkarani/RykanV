@@ -151,11 +151,11 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
 
 pub fn disableOpenCode(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) !bool {
     var removed = false;
-    const project_path = try std.fs.path.join(allocator, &.{ ".opencode", "plugins", "orca.ts" });
+    const project_path = try std.fs.path.join(allocator, &.{ ".opencode", "plugins", "ryk.ts" });
     defer allocator.free(project_path);
     const global_path = blk: {
         const home = std.c.getenv("HOME") orelse break :blk null;
-        break :blk try std.fs.path.join(allocator, &.{ std.mem.span(home), ".config", "opencode", "plugins", "orca.ts" });
+        break :blk try std.fs.path.join(allocator, &.{ std.mem.span(home), ".config", "opencode", "plugins", "ryk.ts" });
     };
     defer if (global_path) |p| allocator.free(p);
 
@@ -165,7 +165,7 @@ pub fn disableOpenCode(io: std.Io, allocator: std.mem.Allocator, stdout: anytype
                 try stdout.print("  project plugin: failed to remove ({s})\n", .{@errorName(err)});
                 break :blk;
             };
-            try stdout.writeAll("  project plugin: removed (.opencode/plugins/orca.ts)\n");
+            try stdout.writeAll("  project plugin: removed (.opencode/plugins/ryk.ts)\n");
             removed = true;
         }
     }
@@ -176,7 +176,7 @@ pub fn disableOpenCode(io: std.Io, allocator: std.mem.Allocator, stdout: anytype
                     try stdout.print("  global plugin: failed to remove ({s})\n", .{@errorName(err)});
                     break :blk;
                 };
-                try stdout.writeAll("  global plugin: removed (~/.config/opencode/plugins/orca.ts)\n");
+                try stdout.writeAll("  global plugin: removed (~/.config/opencode/plugins/ryk.ts)\n");
                 removed = true;
             }
         }
@@ -186,7 +186,7 @@ pub fn disableOpenCode(io: std.Io, allocator: std.mem.Allocator, stdout: anytype
 
 pub fn disableOpenClaw(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) !bool {
     if (plugin.binaryInPath(io, allocator, "openclaw")) {
-        try stdout.writeAll("  openclaw: running 'openclaw plugins uninstall orca-openclaw-plugin' (10s timeout)...\n");
+        try stdout.writeAll("  openclaw: running 'openclaw plugins uninstall ryk-openclaw-plugin' (10s timeout)...\n");
 
         const status = runOpenClawUninstall(allocator) catch |err| blk: {
             try stdout.print("  host uninstall: failed ({s})\n", .{@errorName(err)});
@@ -210,19 +210,19 @@ pub fn disableOpenClaw(io: std.Io, allocator: std.mem.Allocator, stdout: anytype
 pub fn disableHermes(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) !bool {
     var disabled = false;
     if (plugin.binaryInPath(io, allocator, "hermes")) {
-        try stdout.writeAll("  hermes: running 'hermes plugins disable orca' (10s timeout)...\n");
+        try stdout.writeAll("  hermes: running 'hermes plugins disable ryk' (10s timeout)...\n");
 
         const status = runHermesDisable(allocator) catch |err| blk: {
             try stdout.print("  host disable: failed ({s})\n", .{@errorName(err)});
-            try stdout.writeAll("    → Will perform direct file cleanup of ~/.hermes/plugins/orca/\n");
+            try stdout.writeAll("    → Will perform direct file cleanup of ~/.hermes/plugins/ryk/\n");
             break :blk 255;
         };
         if (status == 0) {
-            try stdout.writeAll("  host disable: hermes plugins disable orca\n");
+            try stdout.writeAll("  host disable: hermes plugins disable ryk\n");
             disabled = true;
         } else {
             try stdout.print("  host disable: hermes exited with code {d} (or timed out)\n", .{status});
-            try stdout.writeAll("    → Ensuring ~/.hermes/plugins/orca/ is removed directly...\n");
+            try stdout.writeAll("    → Ensuring ~/.hermes/plugins/ryk/ is removed directly...\n");
         }
     }
     const user_root = try plugin.hermesUserPluginRoot(allocator);
@@ -242,14 +242,14 @@ pub fn disableHermes(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) 
 
 pub fn disableCodex(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) !bool {
     return try removeKnownPluginPaths(io, allocator, stdout, "codex", &[_][]const u8{
-        ".agents/plugins/orca",
-        ".codex/plugins/orca",
+        ".agents/plugins/ryk",
+        ".codex/plugins/ryk",
     });
 }
 
 pub fn disableClaude(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) !bool {
     return try removeKnownPluginPaths(io, allocator, stdout, "claude", &[_][]const u8{
-        ".claude/plugins/orca",
+        ".claude/plugins/ryk",
     });
 }
 
@@ -275,7 +275,7 @@ pub fn disableGrok(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) !b
 
 pub fn disableCursor(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) !bool {
     var removed = try removeKnownPluginPaths(io, allocator, stdout, "cursor", &[_][]const u8{
-        ".cursor/hooks/orca-pre-shell.py",
+        ".cursor/hooks/ryk-pre-shell.py",
     });
 
     const global_hook = if (std.c.getenv("HOME")) |home|
@@ -313,7 +313,7 @@ fn disableCursorHooksJsonIfOrcaOnly(io: std.Io, allocator: std.mem.Allocator, st
     };
     defer allocator.free(content);
 
-    if (std.mem.indexOf(u8, content, "orca") == null) return false;
+    if (std.mem.indexOf(u8, content, "ryk") == null) return false;
     const is_orca_hook = std.mem.indexOf(u8, content, "orca-pre-shell.py") != null or
         std.mem.indexOf(u8, content, "\"orca\"") != null;
     if (!is_orca_hook) return false;
@@ -361,7 +361,7 @@ fn overwriteTextFile(io: std.Io, path: []const u8, content: []const u8) !void {
 
 pub fn runOpenClawUninstall(allocator: std.mem.Allocator) !u8 {
     const child_process = @import("child_process.zig");
-    const argv = [_][]const u8{ "openclaw", "plugins", "uninstall", "orca-openclaw-plugin" };
+    const argv = [_][]const u8{ "openclaw", "plugins", "uninstall", "ryk-openclaw-plugin" };
 
     // Use the robust timed runner (10s) so a stuck/broken/misbehaving openclaw
     // cannot hang `ryk uninstall` or `ryk stop` forever.
@@ -377,7 +377,7 @@ pub fn runOpenClawUninstall(allocator: std.mem.Allocator) !u8 {
 
 pub fn runHermesDisable(allocator: std.mem.Allocator) !u8 {
     const child_process = @import("child_process.zig");
-    const argv = [_][]const u8{ "hermes", "plugins", "disable", "orca" };
+    const argv = [_][]const u8{ "hermes", "plugins", "disable", "ryk"};
 
     const res = try child_process.runHostCommandTimed(allocator, &argv, 10_000, null, null);
     defer child_process.deinitHostCommandResult(res, allocator);
@@ -463,5 +463,5 @@ test "stop success output points at ryk start not setup" {
     try std.testing.expectEqual(exit_codes.success, code);
     const out = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "ryk start") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "orca setup") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "ryk setup") == null);
 }

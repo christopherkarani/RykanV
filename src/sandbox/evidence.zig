@@ -4,7 +4,7 @@
 //! contain raw secret values or live canary bodies.
 
 const std = @import("std");
-const util = @import("orca_core").core.util;
+const util = @import("ryk_core").core.util;
 
 pub const schema_version: u16 = 1;
 

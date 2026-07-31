@@ -1,8 +1,8 @@
 const std = @import("std");
-const core = @import("orca_core").core;
+const core = @import("ryk_core").core;
 const supervisor = core.supervisor;
-const core_api = @import("orca_core").api;
-const policy = @import("orca_core").policy;
+const core_api = @import("ryk_core").api;
+const policy = @import("ryk_core").policy;
 const shell_engine = @import("../shell_engine/mod.zig");
 
 const exit_codes = @import("exit_codes.zig");
@@ -891,7 +891,7 @@ test "decide human output matches captured contract fixture" {
 }
 
 test "decide human output is plain under --no-rich even when colour is available" {
-    // Phase 7 Task E exhaustiveness: the global --no-rich / ORCA_NO_RICH hatch
+    // Phase 7 Task E exhaustiveness: the global --no-rich / RYK_NO_RICH hatch
     // (resolved to theme.setRichEnabled(false) in mod.runWithCwdUsing) must gate
     // COLOUR output on the human path, not just banner presence. Force colour
     // on, then disable rich, and confirm no ANSI escapes leak into human output.
@@ -1160,9 +1160,9 @@ test "decide file normalizes absolute workspace paths to policy-relative targets
     const allocator = std.testing.allocator;
     const root = "/workspace/project";
 
-    const policy_relative = try file_policy_path.normalizeFilePolicyPathLexical(allocator, root, "/workspace/project/.orca/policy.yaml");
+    const policy_relative = try file_policy_path.normalizeFilePolicyPathLexical(allocator, root, "/workspace/project/.ryk/policy.yaml");
     defer allocator.free(policy_relative);
-    try std.testing.expectEqualStrings("./.orca/policy.yaml", policy_relative);
+    try std.testing.expectEqualStrings("./.ryk/policy.yaml", policy_relative);
 
     const git_relative = try file_policy_path.normalizeFilePolicyPathLexical(allocator, root, "/workspace/project/.git/config");
     defer allocator.free(git_relative);
@@ -1176,7 +1176,7 @@ test "decide file normalizes absolute workspace paths to policy-relative targets
     defer allocator.free(absolute_dot_segment);
     try std.testing.expectEqualStrings("./.env", absolute_dot_segment);
 
-    const protected_dot_segment = try file_policy_path.normalizeFilePolicyPathLexical(allocator, root, "/workspace/project/.orca/../.env");
+    const protected_dot_segment = try file_policy_path.normalizeFilePolicyPathLexical(allocator, root, "/workspace/project/.ryk/../.env");
     defer allocator.free(protected_dot_segment);
     try std.testing.expectEqualStrings("./.env", protected_dot_segment);
 
@@ -1288,7 +1288,7 @@ test "decide file CLI gives workspace-relative and absolute paths identical deci
         \\    allow:
         \\      - "./**"
         \\    deny:
-        \\      - "./.orca/**"
+        \\      - "./.ryk/**"
         \\      - "./.git/**"
         ,
     });
@@ -1302,11 +1302,11 @@ test "decide file CLI gives workspace-relative and absolute paths identical deci
         operation: []const u8,
         expected: u8,
     }{
-        .{ .relative = ".orca/policy.yaml", .operation = "write", .expected = exit_codes.denial },
+        .{ .relative = ".ryk/policy.yaml", .operation = "write", .expected = exit_codes.denial },
         .{ .relative = ".git/config", .operation = "write", .expected = exit_codes.denial },
         .{ .relative = ".env", .operation = "read", .expected = exit_codes.denial },
         .{ .relative = "src/../.env", .operation = "read", .expected = exit_codes.denial },
-        .{ .relative = ".orca/../.env", .operation = "read", .expected = exit_codes.denial },
+        .{ .relative = ".ryk/../.env", .operation = "read", .expected = exit_codes.denial },
         .{ .relative = "README.md", .operation = "read", .expected = exit_codes.success },
     };
 

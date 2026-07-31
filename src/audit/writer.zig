@@ -8,7 +8,7 @@ pub const SessionWriter = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
-    audit_dir_name: []const u8 = ".orca",
+    audit_dir_name: []const u8 = ".ryk",
     session_id: core.session.SessionId,
     session_dir_path: []u8,
     events_file: std.Io.File,
@@ -16,7 +16,7 @@ pub const SessionWriter = struct {
     event_count: usize = 0,
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator, session: core.session.Session) !SessionWriter {
-        return initWithDirName(io, allocator, session, ".orca");
+        return initWithDirName(io, allocator, session, ".ryk");
     }
 
     pub fn initWithDirName(io: std.Io, allocator: std.mem.Allocator, session: core.session.Session, audit_dir_name: []const u8) !SessionWriter {
@@ -46,7 +46,7 @@ pub const SessionWriter = struct {
     }
 
     pub fn openExisting(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8, session_id_text: []const u8) !SessionWriter {
-        return openExistingWithDirName(io, allocator, workspace_root, session_id_text, ".orca");
+        return openExistingWithDirName(io, allocator, workspace_root, session_id_text, ".ryk");
     }
 
     pub fn openExistingWithDirName(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8, session_id_text: []const u8, audit_dir_name: []const u8) !SessionWriter {
@@ -123,15 +123,15 @@ pub const SessionWriter = struct {
     }
 
     pub fn writeLastPointer(self: *const SessionWriter) !void {
-        const orca_dir = try std.fs.path.join(self.allocator, &.{ self.workspace_root, self.audit_dir_name });
-        defer self.allocator.free(orca_dir);
-        try std.Io.Dir.cwd().createDirPath(self.io, orca_dir);
+        const ryk_dir = try std.fs.path.join(self.allocator, &.{ self.workspace_root, self.audit_dir_name });
+        defer self.allocator.free(ryk_dir);
+        try std.Io.Dir.cwd().createDirPath(self.io, ryk_dir);
 
         const tmp_name = try std.fmt.allocPrint(self.allocator, "last.tmp.{s}", .{self.session_id.slice()});
         defer self.allocator.free(tmp_name);
-        const tmp_path = try std.fs.path.join(self.allocator, &.{ orca_dir, tmp_name });
+        const tmp_path = try std.fs.path.join(self.allocator, &.{ ryk_dir, tmp_name });
         defer self.allocator.free(tmp_path);
-        const last_path = try std.fs.path.join(self.allocator, &.{ orca_dir, "last" });
+        const last_path = try std.fs.path.join(self.allocator, &.{ ryk_dir, "last" });
         defer self.allocator.free(last_path);
 
         {
@@ -221,7 +221,7 @@ test "session writer creates directory and writes deterministic JSONL" {
         .event_id = event_id,
         .timestamp = ts,
         .event_type = .session_start,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .session, .value = session.id.slice() },
     };
 
@@ -229,7 +229,7 @@ test "session writer creates directory and writes deterministic JSONL" {
     defer session_writer.deinit();
     try session_writer.appendEvent(ev);
 
-    const rel_events_path = try std.fs.path.join(std.testing.allocator, &.{ ".orca", "sessions", session.id.slice(), "events.jsonl" });
+    const rel_events_path = try std.fs.path.join(std.testing.allocator, &.{ ".ryk", "sessions", session.id.slice(), "events.jsonl" });
     defer std.testing.allocator.free(rel_events_path);
     const events = try tmp.dir.readFileAlloc(std.testing.io, rel_events_path, std.testing.allocator, .limited(4096));
     defer std.testing.allocator.free(events);
@@ -284,7 +284,7 @@ test "session writer persists redacted synthetic secrets before JSONL write" {
         .event_id = event_id,
         .timestamp = ts,
         .event_type = .process_launch,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .command, .value = "echo fake_secret_value" },
     };
 
@@ -292,7 +292,7 @@ test "session writer persists redacted synthetic secrets before JSONL write" {
     defer session_writer.deinit();
     try session_writer.appendEvent(ev);
 
-    const rel_events_path = try std.fs.path.join(std.testing.allocator, &.{ ".orca", "sessions", session.id.slice(), "events.jsonl" });
+    const rel_events_path = try std.fs.path.join(std.testing.allocator, &.{ ".ryk", "sessions", session.id.slice(), "events.jsonl" });
     defer std.testing.allocator.free(rel_events_path);
     const events = try tmp.dir.readFileAlloc(std.testing.io, rel_events_path, std.testing.allocator, .limited(4096));
     defer std.testing.allocator.free(events);
@@ -325,7 +325,7 @@ test "session writer redacts embedded secret assignments in command targets" {
         .event_id = event_id,
         .timestamp = ts,
         .event_type = .process_launch,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .command, .value = "/bin/echo OPENAI_API_KEY=sk-fakeSyntheticOpenAIKey1234567890" },
     };
 
@@ -333,7 +333,7 @@ test "session writer redacts embedded secret assignments in command targets" {
     defer session_writer.deinit();
     try session_writer.appendEvent(ev);
 
-    const rel_events_path = try std.fs.path.join(std.testing.allocator, &.{ ".orca", "sessions", session.id.slice(), "events.jsonl" });
+    const rel_events_path = try std.fs.path.join(std.testing.allocator, &.{ ".ryk", "sessions", session.id.slice(), "events.jsonl" });
     defer std.testing.allocator.free(rel_events_path);
     const events = try tmp.dir.readFileAlloc(std.testing.io, rel_events_path, std.testing.allocator, .limited(4096));
     defer std.testing.allocator.free(events);
@@ -366,7 +366,7 @@ test "openExisting fails closed on tampered existing event chain" {
         .event_id = event_id,
         .timestamp = ts,
         .event_type = .session_start,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .session, .value = session.id.slice() },
     };
 
@@ -376,7 +376,7 @@ test "openExisting fails closed on tampered existing event chain" {
         try session_writer.appendEvent(ev);
     }
 
-    const rel_events_path = try std.fs.path.join(std.testing.allocator, &.{ ".orca", "sessions", session.id.slice(), "events.jsonl" });
+    const rel_events_path = try std.fs.path.join(std.testing.allocator, &.{ ".ryk", "sessions", session.id.slice(), "events.jsonl" });
     defer std.testing.allocator.free(rel_events_path);
     var events = try tmp.dir.readFileAlloc(std.testing.io, rel_events_path, std.testing.allocator, .limited(4096));
     defer std.testing.allocator.free(events);
@@ -436,7 +436,7 @@ test "openExisting accepts valid audit logs larger than one MCP message" {
                 .event_id = event_id,
                 .timestamp = ts,
                 .event_type = .process_launch,
-                .actor = .{ .kind = .orca, .display = "orca" },
+                .actor = .{ .kind = .ryk, .display = "ryk" },
                 .target = .{ .kind = .command, .value = large_target },
             };
             try session_writer.appendEvent(ev);
@@ -458,7 +458,7 @@ test "session writer preserves interleaved parent and shim appends" {
     const session: core.session.Session = .{
         .id = try core.session.generateSessionId(ts),
         .started_at = ts,
-        .command = "orca",
+        .command = "ryk",
         .args = &.{"run"},
         .workspace_root = root,
         .mode = .strict,
@@ -481,7 +481,7 @@ test "session writer preserves interleaved parent and shim appends" {
     defer resumed.deinit();
     try std.testing.expectEqual(@as(usize, 3), resumed.event_count);
 
-    const rel_events_path = try std.fs.path.join(std.testing.allocator, &.{ ".orca", "sessions", session.id.slice(), "events.jsonl" });
+    const rel_events_path = try std.fs.path.join(std.testing.allocator, &.{ ".ryk", "sessions", session.id.slice(), "events.jsonl" });
     defer std.testing.allocator.free(rel_events_path);
     const events = try tmp.dir.readFileAlloc(std.testing.io, rel_events_path, std.testing.allocator, .limited(8192));
     defer std.testing.allocator.free(events);
@@ -506,7 +506,7 @@ fn testEvent(
         .event_id = event_id,
         .timestamp = timestamp,
         .event_type = event_type,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = target_kind, .value = target_value },
     };
 }

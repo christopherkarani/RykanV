@@ -3,7 +3,7 @@ const std = @import("std");
 const shell_engine = @import("../shell_engine/mod.zig");
 const shell_eval = @import("shell_eval.zig");
 const pack_config = @import("pack_config.zig");
-const core = @import("orca_core").core;
+const core = @import("ryk_core").core;
 
 pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     if (argv.len == 0 or std.mem.eql(u8, argv[0], "--help") or std.mem.eql(u8, argv[0], "-h")) {
@@ -18,7 +18,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     }
 
     if (shell_eval.resolveShellEvalBackend() == .rust) {
-        try stderr.writeAll("ryk test: ORCA_SHELL_EVAL=rust is no longer supported; Zig shell_engine is the sole Evaluate authority\n");
+        try stderr.writeAll("ryk test: RYK_SHELL_EVAL=rust is no longer supported; Zig shell_engine is the sole Evaluate authority\n");
         return 3;
     }
 
@@ -40,7 +40,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     const command_text = try joinArgs(std.heap.smp_allocator, argv[cmd_start..]);
     defer std.heap.smp_allocator.free(command_text);
 
-    // Walk up from cwd so nested directories still load project .orca.toml.
+    // Walk up from cwd so nested directories still load project .ryk.toml.
     const workspace = core.supervisor.resolveWorkspaceRoot(io, std.heap.smp_allocator, null, ".") catch ".";
     defer if (!std.mem.eql(u8, workspace, ".")) std.heap.smp_allocator.free(workspace);
 
@@ -217,10 +217,10 @@ fn sProductWireIsolateXdg() !struct {
 }
 
 fn sProductWireWriteProjectRuleAllow(root: []const u8, rule_id: []const u8, reason: []const u8) !void {
-    const orca_dir = try sProductWireJoin(&.{ root, ".orca" });
-    defer std.testing.allocator.free(orca_dir);
-    try std.Io.Dir.cwd().createDirPath(std.testing.io, orca_dir);
-    const path = try sProductWireJoin(&.{ root, ".orca", "allowlist.toml" });
+    const ryk_dir = try sProductWireJoin(&.{ root, ".ryk" });
+    defer std.testing.allocator.free(ryk_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, ryk_dir);
+    const path = try sProductWireJoin(&.{ root, ".ryk", "allowlist.toml" });
     defer std.testing.allocator.free(path);
     try shell_engine.allowlist_store.addEntry(
         std.testing.io,
@@ -244,12 +244,12 @@ fn sProductWireSeedAllowOnce(
     cwd: []const u8,
     reason: []const u8,
 ) !void {
-    const orca_dir = try sProductWireJoin(&.{ xdg_data, "orca" });
-    defer std.testing.allocator.free(orca_dir);
-    try std.Io.Dir.cwd().createDirPath(std.testing.io, orca_dir);
-    const pending_path = try sProductWireJoin(&.{ xdg_data, "orca", shell_engine.allow_once.pending_file_name });
+    const ryk_dir = try sProductWireJoin(&.{ xdg_data, "ryk"});
+    defer std.testing.allocator.free(ryk_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, ryk_dir);
+    const pending_path = try sProductWireJoin(&.{ xdg_data, "ryk", shell_engine.allow_once.pending_file_name });
     defer std.testing.allocator.free(pending_path);
-    const once_path = try sProductWireJoin(&.{ xdg_data, "orca", shell_engine.allow_once.allow_once_file_name });
+    const once_path = try sProductWireJoin(&.{ xdg_data, "ryk", shell_engine.allow_once.allow_once_file_name });
     defer std.testing.allocator.free(once_path);
 
     var issued = try shell_engine.allow_once.issuePending(

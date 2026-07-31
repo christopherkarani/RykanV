@@ -333,7 +333,7 @@ fn decisionResultSeverity(result: core.decision.DecisionResult) u8 {
 
 /// When `effects:` is active, raise restriction for curated hosts (e.g. api.twitter.com → comms.publish).
 /// Only applies when a host tag hits — does not apply effects.default to untagged destinations.
-/// Used by the runtime proxy path (`orca run`) so it matches `policy explain network`.
+/// Used by the runtime proxy path (`ryk run`) so it matches `policy explain network`.
 fn mergeNetworkEffectTags(
     allocator: std.mem.Allocator,
     policy: *const schema.Policy,
@@ -560,10 +560,10 @@ pub fn redactedDestinationAlloc(allocator: std.mem.Allocator, destination: Desti
     return try list.toOwnedSlice(allocator);
 }
 
-/// Inject Orca loopback proxy mediation into the child env map.
+/// Inject ryk loopback proxy mediation into the child env map.
 ///
 /// Sets **both** uppercase and lowercase of `HTTP_PROXY`, `HTTPS_PROXY`,
-/// `ALL_PROXY`, and `NO_PROXY` so host lowercase proxies cannot bypass Orca
+/// `ALL_PROXY`, and `NO_PROXY` so host lowercase proxies cannot bypass ryk
 /// inject (M-3 / fn-security-1). `put` overwrites any pre-existing host values
 /// for those keys. Callers should prefer this after host env filtering and
 /// before attach allowlist so loopback wins.
@@ -576,8 +576,8 @@ pub fn appendProxyEnvironment(env_map: *std.process.Environ.Map, proxy_url: []co
     try env_map.put("all_proxy", proxy_url);
     try env_map.put("NO_PROXY", no_proxy);
     try env_map.put("no_proxy", no_proxy);
-    try env_map.put("ORCA_NETWORK_ENFORCEMENT", "proxy-mediated");
-    try env_map.put("ORCA_PROXY_ROUTE_FORCED", "false");
+    try env_map.put("RYK_NETWORK_ENFORCEMENT", "proxy-mediated");
+    try env_map.put("RYK_PROXY_ROUTE_FORCED", "false");
 }
 
 fn buildDecision(
@@ -1063,7 +1063,7 @@ test "service-aware network policy allows scoped github issue and pull requests"
     , "network-services.yaml");
     defer policy.deinit();
 
-    var allowed = try evaluate(std.testing.allocator, &policy, .strict, "https://api.github.com/repos/orca/orca/issues", .{ .method = "POST" });
+    var allowed = try evaluate(std.testing.allocator, &policy, .strict, "https://api.github.com/repos/ryk/ryk/issues", .{ .method = "POST" });
     defer allowed.deinit(std.testing.allocator);
     try std.testing.expectEqual(core.decision.DecisionResult.allow, allowed.decision.result);
     try std.testing.expectEqualStrings("services.github.paths.allow[0]", allowed.decision.rule_id.?);
@@ -1074,7 +1074,7 @@ test "service-aware network policy allows scoped github issue and pull requests"
     try std.testing.expectEqual(core.decision.DecisionResult.deny, denied.decision.result);
     try std.testing.expectEqualStrings("services.github.paths.deny[0]", denied.decision.rule_id.?);
 
-    var unmatched = try evaluate(std.testing.allocator, &policy, .strict, "https://api.github.com/repos/orca/orca/actions/secrets", .{ .method = "GET" });
+    var unmatched = try evaluate(std.testing.allocator, &policy, .strict, "https://api.github.com/repos/ryk/ryk/actions/secrets", .{ .method = "GET" });
     defer unmatched.deinit(std.testing.allocator);
     try std.testing.expectEqual(core.decision.DecisionResult.deny, unmatched.decision.result);
     try std.testing.expectEqualStrings("services.github.unmatched", unmatched.decision.rule_id.?);
@@ -1097,7 +1097,7 @@ test "service-aware network policy honors network off ci ask conversion and meth
     , "network-off-services.yaml");
     defer off_policy.deinit();
 
-    var off = try evaluate(std.testing.allocator, &off_policy, .strict, "https://api.github.com/repos/orca/orca/issues", .{});
+    var off = try evaluate(std.testing.allocator, &off_policy, .strict, "https://api.github.com/repos/ryk/ryk/issues", .{});
     defer off.deinit(std.testing.allocator);
     try std.testing.expectEqual(core.decision.DecisionResult.deny, off.decision.result);
 
@@ -1136,11 +1136,11 @@ test "service-aware network policy honors network off ci ask conversion and meth
     , "network-method-services.yaml");
     defer method_policy.deinit();
 
-    var missing_method = try evaluate(std.testing.allocator, &method_policy, .strict, "https://api.github.com/repos/orca/orca/issues", .{});
+    var missing_method = try evaluate(std.testing.allocator, &method_policy, .strict, "https://api.github.com/repos/ryk/ryk/issues", .{});
     defer missing_method.deinit(std.testing.allocator);
     try std.testing.expectEqual(core.decision.DecisionResult.deny, missing_method.decision.result);
 
-    var post_method = try evaluate(std.testing.allocator, &method_policy, .strict, "https://api.github.com/repos/orca/orca/issues", .{ .method = "POST" });
+    var post_method = try evaluate(std.testing.allocator, &method_policy, .strict, "https://api.github.com/repos/ryk/ryk/issues", .{ .method = "POST" });
     defer post_method.deinit(std.testing.allocator);
     try std.testing.expectEqual(core.decision.DecisionResult.deny, post_method.decision.result);
 }
@@ -1345,7 +1345,7 @@ test "appendProxyEnvironment sets both cases and overwrites host proxies (M-3)" 
     const orca_no = "localhost,127.0.0.1,::1";
     try appendProxyEnvironment(&env_map, orca_url, orca_no);
 
-    // Both casings point at Orca loopback (Orca inject wins).
+    // Both casings point at ryk loopback (ryk inject wins).
     try std.testing.expectEqualStrings(orca_url, env_map.get("HTTP_PROXY").?);
     try std.testing.expectEqualStrings(orca_url, env_map.get("http_proxy").?);
     try std.testing.expectEqualStrings(orca_url, env_map.get("HTTPS_PROXY").?);
@@ -1354,8 +1354,8 @@ test "appendProxyEnvironment sets both cases and overwrites host proxies (M-3)" 
     try std.testing.expectEqualStrings(orca_url, env_map.get("all_proxy").?);
     try std.testing.expectEqualStrings(orca_no, env_map.get("NO_PROXY").?);
     try std.testing.expectEqualStrings(orca_no, env_map.get("no_proxy").?);
-    try std.testing.expectEqualStrings("proxy-mediated", env_map.get("ORCA_NETWORK_ENFORCEMENT").?);
-    try std.testing.expectEqualStrings("false", env_map.get("ORCA_PROXY_ROUTE_FORCED").?);
+    try std.testing.expectEqualStrings("proxy-mediated", env_map.get("RYK_NETWORK_ENFORCEMENT").?);
+    try std.testing.expectEqualStrings("false", env_map.get("RYK_PROXY_ROUTE_FORCED").?);
 
     // No host credential residue in any proxy value.
     inline for (.{ "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy" }) |key| {

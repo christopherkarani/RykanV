@@ -13,7 +13,7 @@
 #   A - empty-backpack child environment omits all host canaries
 #   B - empty-backpack child cannot print the planted workspace .env body
 #   C - empty backpack rejects --os-sandbox off with exit 2
-#   D - an unminted orca-secret:// reference is absent from the child
+#   D - an unminted ryk-secret:// reference is absent from the child
 #   E - escape warns and exposes a synthetic canary with sandbox off
 #   F - --secretless and --with-host-secrets conflict before child launch
 #
@@ -120,7 +120,7 @@ ATTACH_STATE=unknown
 PHASE_1E_PRESENT=false
 INCOMPLETE=false
 SAFE_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
-UNMINTED_REF="orca-secret://evil/session/not-minted"
+UNMINTED_REF="ryk-secret://evil/session/not-minted"
 FORBIDDEN_SUBSTRINGS=(
   "SuperSecretPass99"
   "ghp_fake"
@@ -156,7 +156,7 @@ contains_forbidden() {
 }
 
 scan_audit_forbidden() {
-  local audit_root="$WORKSPACE/.orca"
+  local audit_root="$WORKSPACE/.ryk"
   local needle
   local grep_status
   [[ -d "$audit_root" ]] || return 1
@@ -189,7 +189,7 @@ attests_active_sandbox() {
 }
 
 attests_latest_session_active() {
-  local last_file="$WORKSPACE/.orca/last"
+  local last_file="$WORKSPACE/.ryk/last"
   local session_id
   local events_file
   [[ -f "$last_file" && ! -L "$last_file" ]] || return 1
@@ -197,7 +197,7 @@ attests_latest_session_active() {
   case "$session_id" in
     ''|*[!A-Za-z0-9_-]*) return 1 ;;
   esac
-  events_file="$WORKSPACE/.orca/sessions/$session_id/events.jsonl"
+  events_file="$WORKSPACE/.ryk/sessions/$session_id/events.jsonl"
   [[ -f "$events_file" && ! -L "$events_file" ]] || return 1
   grep -Eq \
     '"type":"sandbox_posture".*"reason":"posture=active; profile_hash=[0-9A-Fa-f]{64};' \
@@ -275,7 +275,7 @@ elif ! attests_latest_session_active; then
   fail_case 'A env canary dump lacked active sandbox_posture audit with profile hash'
 elif contains_forbidden "$A_STDOUT" || contains_forbidden "$A_STDERR"; then
   fail_case 'A env canary dump exposed a forbidden synthetic substring'
-elif ! grep -Eq '^OPENAI_API_KEY=orca-secret://session/[^/]+/OPENAI_API_KEY/[0-9a-f]{16}$' "$A_STDOUT"; then
+elif ! grep -Eq '^OPENAI_API_KEY=ryk-secret://session/[^/]+/OPENAI_API_KEY/[0-9a-f]{16}$' "$A_STDOUT"; then
   fail_case 'A provider key was not replaced with an exact session-minted phantom'
 elif ! grep -Eq '^OPENAI_BASE_URL=http://127[.]0[.]0[.]1:[0-9]+/v1$' "$A_STDOUT"; then
   fail_case 'A provider gateway loopback base URL was not injected'

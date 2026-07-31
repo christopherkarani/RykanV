@@ -20,7 +20,7 @@ function makeApi(overrides: Partial<Parameters<typeof orcaPlugin>[0]> = {}) {
   return {
     id: 'test',
     name: 'test-plugin',
-    source: '/bundled/plugins/orca',
+    source: '/bundled/plugins/ryk',
     config: {},
     runtime: {},
     logger,
@@ -30,43 +30,43 @@ function makeApi(overrides: Partial<Parameters<typeof orcaPlugin>[0]> = {}) {
 }
 
 describe('findOrca', () => {
-  it('rejects relative ORCA_BIN paths (agent-plantable)', () => {
-    const prevBin = process.env.ORCA_BIN;
-    const prevAllow = process.env.ORCA_ALLOW_WORKSPACE_BIN;
-    delete process.env.ORCA_ALLOW_WORKSPACE_BIN;
+  it('rejects relative RYK_BIN paths (agent-plantable)', () => {
+    const prevBin = process.env.RYK_BIN;
+    const prevAllow = process.env.RYK_ALLOW_WORKSPACE_BIN;
+    delete process.env.RYK_ALLOW_WORKSPACE_BIN;
     try {
-      process.env.ORCA_BIN = './zig-out/bin/orca';
+      process.env.RYK_BIN = './zig-out/bin/ryk';
       assert.strictEqual(findOrca(process.cwd()), null);
 
-      process.env.ORCA_BIN = 'evil/orca';
+      process.env.RYK_BIN = 'evil/orca';
       assert.strictEqual(findOrca(process.cwd()), null);
     } finally {
-      if (prevBin === undefined) delete process.env.ORCA_BIN;
-      else process.env.ORCA_BIN = prevBin;
-      if (prevAllow === undefined) delete process.env.ORCA_ALLOW_WORKSPACE_BIN;
-      else process.env.ORCA_ALLOW_WORKSPACE_BIN = prevAllow;
+      if (prevBin === undefined) delete process.env.RYK_BIN;
+      else process.env.RYK_BIN = prevBin;
+      if (prevAllow === undefined) delete process.env.RYK_ALLOW_WORKSPACE_BIN;
+      else process.env.RYK_ALLOW_WORKSPACE_BIN = prevAllow;
     }
   });
 
-  it('accepts absolute ORCA_BIN when the path exists', () => {
-    const prevBin = process.env.ORCA_BIN;
+  it('accepts absolute RYK_BIN when the path exists', () => {
+    const prevBin = process.env.RYK_BIN;
     try {
-      process.env.ORCA_BIN = process.execPath;
+      process.env.RYK_BIN = process.execPath;
       assert.strictEqual(findOrca(), process.execPath);
     } finally {
-      if (prevBin === undefined) delete process.env.ORCA_BIN;
-      else process.env.ORCA_BIN = prevBin;
+      if (prevBin === undefined) delete process.env.RYK_BIN;
+      else process.env.RYK_BIN = prevBin;
     }
   });
 
-  it('returns null for absolute ORCA_BIN that does not exist', () => {
-    const prevBin = process.env.ORCA_BIN;
+  it('returns null for absolute RYK_BIN that does not exist', () => {
+    const prevBin = process.env.RYK_BIN;
     try {
-      process.env.ORCA_BIN = '/tmp/orca-definitely-missing-deadbeef';
+      process.env.RYK_BIN = '/tmp/ryk-definitely-missing-deadbeef';
       assert.strictEqual(findOrca(), null);
     } finally {
-      if (prevBin === undefined) delete process.env.ORCA_BIN;
-      else process.env.ORCA_BIN = prevBin;
+      if (prevBin === undefined) delete process.env.RYK_BIN;
+      else process.env.RYK_BIN = prevBin;
     }
   });
 });
@@ -78,12 +78,12 @@ describe('isOnNoop', () => {
   });
 
   it('returns true when source contains node_modules', () => {
-    const api = makeApi({ source: '/path/to/node_modules/orca-openclaw-plugin' });
+    const api = makeApi({ source: '/path/to/node_modules/ryk-openclaw-plugin' });
     assert.strictEqual(isOnNoop(api), true);
   });
 
   it('returns true when source contains .openclaw/npm', () => {
-    const api = makeApi({ source: '/home/user/.openclaw/npm/orca-openclaw-plugin' });
+    const api = makeApi({ source: '/home/user/.openclaw/npm/ryk-openclaw-plugin' });
     assert.strictEqual(isOnNoop(api), true);
   });
 
@@ -186,7 +186,7 @@ describe('normalizeOpenClawToolEvent', () => {
 describe('orcaPlugin', () => {
   it('warns about unprotected noop api.on for npm installs', () => {
     const api = makeApi({
-      source: '/path/to/node_modules/orca-openclaw-plugin',
+      source: '/path/to/node_modules/ryk-openclaw-plugin',
     });
     orcaPlugin(api);
 
@@ -224,13 +224,13 @@ describe('orcaPlugin', () => {
   });
 
   it('registers fail-closed before_tool_call when binary is missing on a real hook API', async () => {
-    const prevBin = process.env.ORCA_BIN;
-    const prevAllow = process.env.ORCA_ALLOW_WORKSPACE_BIN;
-    delete process.env.ORCA_BIN;
-    delete process.env.ORCA_ALLOW_WORKSPACE_BIN;
+    const prevBin = process.env.RYK_BIN;
+    const prevAllow = process.env.RYK_ALLOW_WORKSPACE_BIN;
+    delete process.env.RYK_BIN;
+    delete process.env.RYK_ALLOW_WORKSPACE_BIN;
     // Force PATH miss by using a name that won't exist if which is used...
-    // findOrca uses which orca; in CI orca may exist. Prefer ORCA_BIN pointing at missing path.
-    process.env.ORCA_BIN = '/tmp/orca-definitely-missing-deadbeef';
+    // findOrca uses which orca; in CI ryk may exist. Prefer RYK_BIN pointing at missing path.
+    process.env.RYK_BIN = '/tmp/ryk-definitely-missing-deadbeef';
 
     try {
       // Bundled source: api.on is real; missing binary must veto tools.
@@ -255,22 +255,22 @@ describe('orcaPlugin', () => {
         'missing binary must veto tools'
       );
     } finally {
-      if (prevBin === undefined) delete process.env.ORCA_BIN;
-      else process.env.ORCA_BIN = prevBin;
-      if (prevAllow === undefined) delete process.env.ORCA_ALLOW_WORKSPACE_BIN;
-      else process.env.ORCA_ALLOW_WORKSPACE_BIN = prevAllow;
+      if (prevBin === undefined) delete process.env.RYK_BIN;
+      else process.env.RYK_BIN = prevBin;
+      if (prevAllow === undefined) delete process.env.RYK_ALLOW_WORKSPACE_BIN;
+      else process.env.RYK_ALLOW_WORKSPACE_BIN = prevAllow;
     }
   });
 
   it('does not register no-op veto handlers for npm installs when binary is missing', () => {
-    const prevBin = process.env.ORCA_BIN;
-    const prevAllow = process.env.ORCA_ALLOW_WORKSPACE_BIN;
-    process.env.ORCA_BIN = '/tmp/orca-definitely-missing-deadbeef';
-    delete process.env.ORCA_ALLOW_WORKSPACE_BIN;
+    const prevBin = process.env.RYK_BIN;
+    const prevAllow = process.env.RYK_ALLOW_WORKSPACE_BIN;
+    process.env.RYK_BIN = '/tmp/ryk-definitely-missing-deadbeef';
+    delete process.env.RYK_ALLOW_WORKSPACE_BIN;
 
     try {
       const api = makeApi({
-        source: '/path/to/node_modules/orca-openclaw-plugin',
+        source: '/path/to/node_modules/ryk-openclaw-plugin',
       });
       orcaPlugin(api);
 
@@ -287,10 +287,10 @@ describe('orcaPlugin', () => {
       );
       assert.ok(unprotected, 'must still warn that npm path is unprotected');
     } finally {
-      if (prevBin === undefined) delete process.env.ORCA_BIN;
-      else process.env.ORCA_BIN = prevBin;
-      if (prevAllow === undefined) delete process.env.ORCA_ALLOW_WORKSPACE_BIN;
-      else process.env.ORCA_ALLOW_WORKSPACE_BIN = prevAllow;
+      if (prevBin === undefined) delete process.env.RYK_BIN;
+      else process.env.RYK_BIN = prevBin;
+      if (prevAllow === undefined) delete process.env.RYK_ALLOW_WORKSPACE_BIN;
+      else process.env.RYK_ALLOW_WORKSPACE_BIN = prevAllow;
     }
   });
 
@@ -298,11 +298,11 @@ describe('orcaPlugin', () => {
     // With a resolved binary on an npm path we still warn unprotected and
     // refuse to register handlers on a known no-op api.on.
     const api = makeApi({
-      source: '/path/to/node_modules/orca-openclaw-plugin',
+      source: '/path/to/node_modules/ryk-openclaw-plugin',
     });
     // Ensure binary appears present so we exercise the binary-present branch.
-    const prevBin = process.env.ORCA_BIN;
-    process.env.ORCA_BIN = process.execPath; // any existing absolute path
+    const prevBin = process.env.RYK_BIN;
+    process.env.RYK_BIN = process.execPath; // any existing absolute path
     try {
       orcaPlugin(api);
       const onCalls = (api.on as any).mock.calls;
@@ -312,8 +312,8 @@ describe('orcaPlugin', () => {
         'npm no-op path must not register lifecycle hooks'
       );
     } finally {
-      if (prevBin === undefined) delete process.env.ORCA_BIN;
-      else process.env.ORCA_BIN = prevBin;
+      if (prevBin === undefined) delete process.env.RYK_BIN;
+      else process.env.RYK_BIN = prevBin;
     }
   });
 });

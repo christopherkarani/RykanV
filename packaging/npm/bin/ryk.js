@@ -13,13 +13,13 @@ const packageJson = require(path.join(packageRoot, "package.json"));
 const binDir = path.join(packageRoot, "vendor");
 const resourceDir = path.join(binDir, "resources");
 const primaryName = process.platform === "win32" ? "ryk.exe" : "ryk";
-const aliasName = process.platform === "win32" ? "orca.exe" : "orca";
+const aliasName = process.platform === "win32" ? "ryk.exe" : "orca";
 const installedBinary = path.join(binDir, primaryName);
 const installedAlias = path.join(binDir, aliasName);
 const maxDownloadBytes = 512 * 1024 * 1024;
 
 function metaBlock() {
-  return packageJson.ryk || packageJson.orca || {};
+  return packageJson.ryk || packageJson.ryk || {};
 }
 
 function platformName() {
@@ -137,7 +137,7 @@ function installReleasePayload(extractDir, platform, arch) {
   }
   const sourcePrimary = path.join(top, "bin", primaryName);
   const sourceAlias = path.join(top, "bin", aliasName);
-  const sourceLegacy = path.join(top, "bin", process.platform === "win32" ? "orca.exe" : "orca");
+  const sourceLegacy = path.join(top, "bin", process.platform === "win32" ? "ryk.exe" : "orca");
   let source = sourcePrimary;
   if (!fs.existsSync(source)) {
     source = fs.existsSync(sourceAlias) ? sourceAlias : sourceLegacy;
@@ -149,7 +149,7 @@ function installReleasePayload(extractDir, platform, arch) {
   fs.mkdirSync(binDir, { recursive: true });
   fs.copyFileSync(source, installedBinary);
   if (platform !== "windows") fs.chmodSync(installedBinary, 0o755);
-  // Always materialize orca compat alias next to ryk.
+  // Always materialize ryk compat alias next to ryk.
   if (fs.existsSync(sourceAlias) && sourceAlias !== source) {
     fs.copyFileSync(sourceAlias, installedAlias);
   } else {
@@ -157,7 +157,7 @@ function installReleasePayload(extractDir, platform, arch) {
   }
   if (platform !== "windows") fs.chmodSync(installedAlias, 0o755);
   fs.mkdirSync(resourceDir, { recursive: true });
-  for (const dir of ["docs", "examples", "fixtures", "integrations", "orca-dashboard-ui", "policies", "schemas"]) {
+  for (const dir of ["docs", "examples", "fixtures", "integrations", "ryk-dashboard-ui", "policies", "schemas"]) {
     const sourceDir = path.join(top, dir);
     if (fs.existsSync(sourceDir)) {
       fs.cpSync(sourceDir, path.join(resourceDir, dir), { recursive: true });
@@ -182,7 +182,7 @@ async function install() {
   const name = artifactName(platform, arch);
   const baseUrl = meta.artifactBaseUrl;
   const url = `${baseUrl}/${name}`;
-  const legacyUrl = `${baseUrl}/orca-v${packageJson.version}-${platform}-${arch}.${platform === "windows" ? "zip" : "tar.gz"}`;
+  const legacyUrl = `${baseUrl}/ryk-v${packageJson.version}-${platform}-${arch}.${platform === "windows" ? "zip" : "tar.gz"}`;
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ryk-npm-"));
   try {
     const archive = path.join(tmpRoot, name);
@@ -215,7 +215,7 @@ if (process.argv.includes("--install")) {
   return;
 }
 
-// When invoked as `orca` npm bin, prefer alias binary if present.
+// When invoked as `ryk` npm bin, prefer alias binary if present.
 const invoked = path.basename(process.argv[1] || "");
 const runBinary =
   (invoked === "orca" || invoked === "orca.js") && fs.existsSync(installedAlias)
@@ -229,7 +229,7 @@ if (!fs.existsSync(runBinary)) {
 
 const env = { ...process.env };
 if (fs.existsSync(resourceDir)) {
-  env.ORCA_RESOURCE_ROOT = resourceDir;
+  env.RYK_RESOURCE_ROOT = resourceDir;
   env.RYK_RESOURCE_ROOT = resourceDir;
 }
 const result = childProcess.spawnSync(runBinary, process.argv.slice(2), { stdio: "inherit", env });

@@ -34,7 +34,7 @@ The binary will be at `./zig-out/bin/ryk`.
 
 ### Missing policy
 
-If `.orca/policy.yaml` is missing, initialize one:
+If `.ryk/policy.yaml` is missing, initialize one:
 
 ```bash
 ryk init --preset claude-code
@@ -49,7 +49,7 @@ ryk init --preset generic-agent
 Then validate it:
 
 ```bash
-ryk policy check .orca/policy.yaml
+ryk policy check .ryk/policy.yaml
 ```
 
 ### Missing Claude Code plugin install

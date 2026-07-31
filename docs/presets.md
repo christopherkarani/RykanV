@@ -5,13 +5,13 @@ Presets live under `policies/presets/` and are plain YAML with comments. They ar
 Create a policy:
 
 ```bash
-orca init --preset generic-agent
-orca policy check .orca/policy.yaml
+ryk init --preset generic-agent
+ryk policy check .ryk/policy.yaml
 ```
 
 Available presets:
 
-- `generic-agent`: conservative local coding-agent baseline (the default for `orca init --preset` and `orca start` / `start --auto`). The on-disk YAML documents the structure; the generated policy uses the stricter embedded variant (network default deny + expanded secret protections — see the file header and `src/policy/presets.zig`).
+- `generic-agent`: conservative local coding-agent baseline (the default for `ryk init --preset` and `ryk start` / `start --auto`). The on-disk YAML documents the structure; the generated policy uses the stricter embedded variant (network default deny + expanded secret protections — see the file header and `src/policy/presets.zig`).
 - `claude-code`: generic/experimental local coding-agent assumptions for Claude Code-style use.
 - `codex`: generic/experimental local coding-agent assumptions for Codex-style use.
 - `cursor-agent`: generic/experimental local editor-agent assumptions.
@@ -29,18 +29,18 @@ Available presets:
 Productized policy packs can also be inspected and applied through the policy command:
 
 ```bash
-orca policy packs
-orca policy apply-pack solo-dev
-orca policy apply-pack team-ci --force
-orca policy apply-pack openclaw-hermes --force
+ryk policy packs
+ryk policy apply-pack solo-dev
+ryk policy apply-pack team-ci --force
+ryk policy apply-pack openclaw-hermes --force
 ```
 
 All presets preserve:
 
 - deny-priority semantics;
 - secret redaction before persistence;
-- staged writes for Orca-mediated writes;
+- staged writes for ryk-mediated writes;
 - no real secrets in policy text;
 - no external service dependency for policy validation.
 
-Agent-specific presets are marked generic/experimental when Orca cannot verify proprietary agent internals. Binary detection in `orca doctor` only reports presence in PATH; it does not prove an agent is configured safely.
+Agent-specific presets are marked generic/experimental when ryk cannot verify proprietary agent internals. Binary detection in `ryk doctor` only reports presence in PATH; it does not prove an agent is configured safely.

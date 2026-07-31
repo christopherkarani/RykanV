@@ -53,7 +53,7 @@ jobs:
           ./scripts/os-sandbox-adversarial-e2e.sh \
             --require-attach \
             --case "$CASE_ID" \
-            --binary ./zig-out/bin/orca \
+            --binary ./zig-out/bin/ryk \
             --out planning/security/evidence
           test -n "$(ls "planning/security/evidence/${CASE_ID}"-*.json 2>/dev/null)"
           newest="$(ls -t "planning/security/evidence/${CASE_ID}"-*.json | head -1)"

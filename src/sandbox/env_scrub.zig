@@ -15,7 +15,7 @@
 //!
 //! ## Keep class (not scrubbed by denylist)
 //! - `PATH`, `HOME`, `LANG`, `TERM`
-//! - `ORCA_*` / `RYK_*` session vars when present
+//! - `RYK_*` / `RYK_*` session vars when present
 //!
 //! ## Launch allowlist (complete form on sandbox attach path)
 //! After denylist scrub, `applyBeforeExec` applies a **launch allowlist** only
@@ -33,9 +33,9 @@
 //!
 //! ## Proxy env (M-3)
 //! Proxy keys (`HTTP(S)_PROXY` / `ALL_PROXY` / `NO_PROXY`, both cases) are on the
-//! allowlist so Orca loopback inject survives attach. Host proxy **values** that
+//! allowlist so ryk loopback inject survives attach. Host proxy **values** that
 //! carry URL userinfo (`scheme://user:pass@host`) are rewritten to drop userinfo
-//! (`scheme://host…`) so credentials cannot ride into the child. Prefer Orca
+//! (`scheme://host…`) so credentials cannot ride into the child. Prefer ryk
 //! `appendProxyEnvironment` (both cases) so loopback wins over host proxies.
 
 const std = @import("std");
@@ -113,7 +113,7 @@ pub const launch_allow_exact = [_][]const u8{
     "SHLVL",
     // EDITOR/VISUAL intentionally omitted: host editor preference can
     // influence agent tooling; keep SHELL for shell workflows.
-    // Proxy/network mediation vars installed by Orca itself for the session.
+    // Proxy/network mediation vars installed by ryk itself for the session.
     "HTTP_PROXY",
     "HTTPS_PROXY",
     "http_proxy",
@@ -154,7 +154,7 @@ pub const launch_allow_exact = [_][]const u8{
 
 /// Prefixes retained by the launch allowlist (in addition to exact keys).
 pub const launch_allow_prefixes = [_][]const u8{
-    "ORCA_",
+    "RYK_",
     "RYK_",
     "LC_",
     "XDG_",
@@ -211,12 +211,12 @@ pub fn shouldScrubKey(name: []const u8) bool {
     return false;
 }
 
-/// True for documented keepers and `ORCA_*` / `RYK_*` session vars.
+/// True for documented keepers and `RYK_*` / `RYK_*` session vars.
 pub fn isKeepClass(name: []const u8) bool {
     for (keep_keys) |key| {
         if (std.mem.eql(u8, name, key)) return true;
     }
-    if (std.mem.startsWith(u8, name, "ORCA_")) return true;
+    if (std.mem.startsWith(u8, name, "RYK_")) return true;
     if (std.mem.startsWith(u8, name, "RYK_")) return true;
     return false;
 }
@@ -246,7 +246,7 @@ pub const MintedEnvLookup = struct {
 };
 
 /// True when a key/value pair is retained for sandboxed launch.
-/// Allowlist-only: empty backpack does not emit `orca-secret://` local-dummy refs.
+/// Allowlist-only: empty backpack does not emit `ryk-secret://` local-dummy refs.
 pub fn shouldRetainLaunchEnv(name: []const u8, value: []const u8) bool {
     return shouldRetainLaunchEnvWithMints(name, value, null);
 }
@@ -493,21 +493,21 @@ test "shouldScrubKey removes BASH_FUNC_ prefix vars" {
     try std.testing.expect(!shouldScrubKey("MY_BASH_FUNC_X")); // not a prefix match
 }
 
-test "shouldScrubKey keeps PATH HOME LANG TERM and ORCA_/RYK_ session vars" {
+test "shouldScrubKey keeps PATH HOME LANG TERM and RYK_/RYK_ session vars" {
     try std.testing.expect(!shouldScrubKey("PATH"));
     try std.testing.expect(!shouldScrubKey("HOME"));
     try std.testing.expect(!shouldScrubKey("LANG"));
     try std.testing.expect(!shouldScrubKey("TERM"));
-    try std.testing.expect(!shouldScrubKey("ORCA_SESSION_ID"));
-    try std.testing.expect(!shouldScrubKey("ORCA_MODE"));
+    try std.testing.expect(!shouldScrubKey("RYK_SESSION_ID"));
+    try std.testing.expect(!shouldScrubKey("RYK_MODE"));
     try std.testing.expect(!shouldScrubKey("RYK_SESSION_ID"));
     try std.testing.expect(!shouldScrubKey("RYK_MODE"));
     try std.testing.expect(isKeepClass("PATH"));
     try std.testing.expect(isKeepClass("HOME"));
     try std.testing.expect(isKeepClass("LANG"));
     try std.testing.expect(isKeepClass("TERM"));
-    try std.testing.expect(isKeepClass("ORCA_SESSION_ID"));
-    try std.testing.expect(isKeepClass("ORCA_MODE"));
+    try std.testing.expect(isKeepClass("RYK_SESSION_ID"));
+    try std.testing.expect(isKeepClass("RYK_MODE"));
     try std.testing.expect(isKeepClass("RYK_SESSION_ID"));
     try std.testing.expect(isKeepClass("RYK_MODE"));
 }
@@ -526,7 +526,7 @@ test "scrubEnvMap filters denylist and preserves keepers" {
     try source.put("HOME", "/home/agent");
     try source.put("LANG", "C");
     try source.put("TERM", "xterm");
-    try source.put("ORCA_SESSION_ID", "sess-1");
+    try source.put("RYK_SESSION_ID", "sess-1");
     try source.put("LD_PRELOAD", "evil.so");
     try source.put("LD_LIBRARY_PATH", "/evil");
     try source.put("LD_AUDIT", "evil_audit.so");
@@ -556,7 +556,7 @@ test "scrubEnvMap filters denylist and preserves keepers" {
     try std.testing.expectEqualStrings("/home/agent", scrubbed.get("HOME").?);
     try std.testing.expectEqualStrings("C", scrubbed.get("LANG").?);
     try std.testing.expectEqualStrings("xterm", scrubbed.get("TERM").?);
-    try std.testing.expectEqualStrings("sess-1", scrubbed.get("ORCA_SESSION_ID").?);
+    try std.testing.expectEqualStrings("sess-1", scrubbed.get("RYK_SESSION_ID").?);
     try std.testing.expectEqualStrings("ok", scrubbed.get("SAFE_CUSTOM").?);
 
     try std.testing.expect(scrubbed.get("LD_PRELOAD") == null);
@@ -592,12 +592,12 @@ test "scrubEnvMapInPlace removes denylist keys" {
     try env_map.put("NODE_OPTIONS", "--require x");
     try env_map.put("JAVA_TOOL_OPTIONS", "-javaagent:x");
     try env_map.put("BASH_FUNC_x%%", "() { :; }");
-    try env_map.put("ORCA_FOO", "bar");
+    try env_map.put("RYK_FOO", "bar");
 
     const removed = try scrubEnvMapInPlace(&env_map);
     try std.testing.expectEqual(@as(usize, 4), removed);
     try std.testing.expectEqualStrings("/bin", env_map.get("PATH").?);
-    try std.testing.expectEqualStrings("bar", env_map.get("ORCA_FOO").?);
+    try std.testing.expectEqualStrings("bar", env_map.get("RYK_FOO").?);
     try std.testing.expect(env_map.get("LD_PRELOAD") == null);
     try std.testing.expect(env_map.get("NODE_OPTIONS") == null);
     try std.testing.expect(env_map.get("JAVA_TOOL_OPTIONS") == null);
@@ -651,7 +651,7 @@ test "launch allowlist keeps runtime keys and strips secrets" {
     // Inline OpenCode config can contain provider and MCP credentials. A file
     // path can be narrowly granted; an arbitrary inherited blob cannot.
     try std.testing.expect(!isLaunchAllowlisted("OPENCODE_CONFIG_CONTENT"));
-    try std.testing.expect(isLaunchAllowlisted("ORCA_SESSION_ID"));
+    try std.testing.expect(isLaunchAllowlisted("RYK_SESSION_ID"));
     try std.testing.expect(isLaunchAllowlisted("LC_ALL"));
     try std.testing.expect(isLaunchAllowlisted("XDG_RUNTIME_DIR"));
     try std.testing.expect(isLaunchAllowlisted("TMPDIR"));
@@ -679,13 +679,13 @@ test "launch allowlist keeps TLS trust and strips SSH_AUTH_SOCK" {
 
 test "shouldRetainLaunchEnv is allowlist-only (value shape ignored)" {
     // Retention is allowlist + optional mint table only; untrusted keys reject
-    // regardless of orca-secret:// value shape (no local-dummy matrix).
+    // regardless of ryk-secret:// value shape (no local-dummy matrix).
     try std.testing.expect(!shouldRetainLaunchEnv(
         "GITHUB_TOKEN",
-        "orca-secret://local-dummy/env/GITHUB_TOKEN/d1c2f8b4",
+        "ryk-secret://local-dummy/env/GITHUB_TOKEN/d1c2f8b4",
     ));
-    try std.testing.expect(!shouldRetainLaunchEnv("SMUGGLE", "orca-secret://evil/env/X/deadbeef"));
-    try std.testing.expect(shouldRetainLaunchEnv("PATH", "orca-secret://evil"));
+    try std.testing.expect(!shouldRetainLaunchEnv("SMUGGLE", "ryk-secret://evil/env/X/deadbeef"));
+    try std.testing.expect(shouldRetainLaunchEnv("PATH", "ryk-secret://evil"));
     try std.testing.expect(!shouldRetainLaunchEnv("OPENAI_API_KEY", "sk-raw-synthetic"));
 }
 
@@ -701,7 +701,7 @@ test "launch allowlist retains only exact mint-table phantom pairs" {
                 std.mem.eql(
                     u8,
                     value,
-                    "orca-secret://session/0123456789abcdef0123456789abcdef/ANTHROPIC_API_KEY/0123456789abcdef",
+                    "ryk-secret://session/0123456789abcdef0123456789abcdef/ANTHROPIC_API_KEY/0123456789abcdef",
                 );
         }
     };
@@ -710,13 +710,13 @@ test "launch allowlist retains only exact mint-table phantom pairs" {
         .context = &sentinel,
         .containsFn = MintFixture.contains,
     };
-    const minted = "orca-secret://session/0123456789abcdef0123456789abcdef/ANTHROPIC_API_KEY/0123456789abcdef";
+    const minted = "ryk-secret://session/0123456789abcdef0123456789abcdef/ANTHROPIC_API_KEY/0123456789abcdef";
 
     try std.testing.expect(shouldRetainLaunchEnvWithMints("ANTHROPIC_API_KEY", minted, lookup));
     try std.testing.expect(!shouldRetainLaunchEnvWithMints("OPENAI_API_KEY", minted, lookup));
     try std.testing.expect(!shouldRetainLaunchEnvWithMints(
         "ANTHROPIC_API_KEY",
-        "orca-secret://session/evil/ANTHROPIC_API_KEY/0123456789abcdef",
+        "ryk-secret://session/evil/ANTHROPIC_API_KEY/0123456789abcdef",
         lookup,
     ));
     try std.testing.expect(!shouldRetainLaunchEnvWithMints("ANTHROPIC_API_KEY", "sk-ant-raw", lookup));
@@ -757,12 +757,12 @@ test "applyLaunchAllowlistInPlace strips non-allowlisted keys" {
     defer env_map.deinit();
     try env_map.put("PATH", "/bin");
     try env_map.put("HOME", "/home/agent");
-    try env_map.put("ORCA_SESSION_ID", "s1");
+    try env_map.put("RYK_SESSION_ID", "s1");
     try env_map.put("OPENAI_API_KEY", "sk-test");
     try env_map.put("AWS_SECRET_ACCESS_KEY", "secret");
     try env_map.put("RANDOM_HOST_VAR", "x");
-    try env_map.put("SMUGGLE2", "orca-secret://local-dummy/env/FAKE/aaaaaaaa");
-    try env_map.put("GITHUB_TOKEN", "orca-secret://local-dummy/env/GITHUB_TOKEN/d1c2f8b4");
+    try env_map.put("SMUGGLE2", "ryk-secret://local-dummy/env/FAKE/aaaaaaaa");
+    try env_map.put("GITHUB_TOKEN", "ryk-secret://local-dummy/env/GITHUB_TOKEN/d1c2f8b4");
     try env_map.put("SSL_CERT_FILE", "/etc/ssl/cert.pem");
     try env_map.put("NODE_EXTRA_CA_CERTS", "/etc/ssl/node-ca.pem");
     try env_map.put("GIT_SSL_CAINFO", "/etc/ssl/git-ca.pem");
@@ -773,7 +773,7 @@ test "applyLaunchAllowlistInPlace strips non-allowlisted keys" {
     try std.testing.expectEqual(@as(usize, 6), removed);
     try std.testing.expectEqualStrings("/bin", env_map.get("PATH").?);
     try std.testing.expectEqualStrings("/home/agent", env_map.get("HOME").?);
-    try std.testing.expectEqualStrings("s1", env_map.get("ORCA_SESSION_ID").?);
+    try std.testing.expectEqualStrings("s1", env_map.get("RYK_SESSION_ID").?);
     try std.testing.expect(env_map.get("OPENAI_API_KEY") == null);
     try std.testing.expect(env_map.get("AWS_SECRET_ACCESS_KEY") == null);
     try std.testing.expect(env_map.get("RANDOM_HOST_VAR") == null);
@@ -835,7 +835,7 @@ test "applyLaunchAllowlistInPlace redacts credentialed host proxy URLs (M-3)" {
     try std.testing.expectEqualStrings("localhost,127.0.0.1", env_map.get("NO_PROXY").?);
     try std.testing.expect(env_map.get("OPENAI_API_KEY") == null);
 
-    // Orca loopback inject without userinfo is preserved as-is.
+    // ryk loopback inject without userinfo is preserved as-is.
     try env_map.put("HTTP_PROXY", "http://127.0.0.1:9");
     try env_map.put("http_proxy", "http://127.0.0.1:9");
     _ = try applyLaunchAllowlistInPlace(&env_map);
@@ -846,7 +846,7 @@ test "applyLaunchAllowlistInPlace redacts credentialed host proxy URLs (M-3)" {
 test "appendProxyEnvironment dual-case inject wins over host proxies (M-3)" {
     // Production inject lives in policy.network_eval; covered here so test-lib
     // actually executes it (orca_core package tests do not pull network_eval).
-    const network_eval = @import("orca_core").policy.network_eval;
+    const network_eval = @import("ryk_core").policy.network_eval;
     var env_map = std.process.Environ.Map.init(std.testing.allocator);
     defer env_map.deinit();
 
@@ -871,9 +871,9 @@ test "appendProxyEnvironment dual-case inject wins over host proxies (M-3)" {
     try std.testing.expectEqualStrings(orca_url, env_map.get("all_proxy").?);
     try std.testing.expectEqualStrings(orca_no, env_map.get("NO_PROXY").?);
     try std.testing.expectEqualStrings(orca_no, env_map.get("no_proxy").?);
-    try std.testing.expectEqualStrings("proxy-mediated", env_map.get("ORCA_NETWORK_ENFORCEMENT").?);
+    try std.testing.expectEqualStrings("proxy-mediated", env_map.get("RYK_NETWORK_ENFORCEMENT").?);
 
-    // After inject + allowlist, Orca loopback survives and host credentials stay gone.
+    // After inject + allowlist, ryk loopback survives and host credentials stay gone.
     _ = try applyLaunchAllowlistInPlace(&env_map);
     try std.testing.expectEqualStrings(orca_url, env_map.get("HTTP_PROXY").?);
     try std.testing.expectEqualStrings(orca_url, env_map.get("http_proxy").?);

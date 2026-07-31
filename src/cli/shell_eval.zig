@@ -1,14 +1,14 @@
 //! Shared shell command evaluation for `ryk hook`, `ryk run`, and shims.
 //!
 //! Security decisions are owned exclusively by the in-process Zig shell_engine
-//! (default / `ORCA_SHELL_EVAL=zig`). `ORCA_SHELL_EVAL=rust` is rejected — the
+//! (default / `RYK_SHELL_EVAL=zig`). `RYK_SHELL_EVAL=rust` is rejected — the
 //! legacy Rust daemon Evaluate backend is no longer a supported product path.
 
 const std = @import("std");
 
-const core = @import("orca_core").core;
-const core_api = @import("orca_core").api;
-const policy = @import("orca_core").policy;
+const core = @import("ryk_core").core;
+const core_api = @import("ryk_core").api;
+const policy = @import("ryk_core").policy;
 const intercept = @import("../intercept/mod.zig");
 const shell_engine = @import("../shell_engine/mod.zig");
 const daemon = @import("daemon.zig");
@@ -24,7 +24,7 @@ pub const ShellCommandEvent = struct {
     /// Session/workspace root for pack config + permanent allowlist loads.
     /// When set (hook/session), product stores load from this root only.
     /// When null, `zigEvaluator` walks up from tool cwd — residual: nested
-    /// `.git` / `.orca` under agent-controlled cwd can still hijack loads (M-9).
+    /// `.git` / `.ryk` under agent-controlled cwd can still hijack loads (M-9).
     workspace_root: ?[]const u8 = null,
 };
 
@@ -50,7 +50,7 @@ pub const ShellEvalBackend = enum { zig, rust };
 /// callers can hard-error — it must never select `daemon.evaluate`.
 pub fn resolveShellEvalBackend() ShellEvalBackend {
     const env_util = @import("../env_util.zig");
-    // Prefer RYK_SHELL_EVAL then ORCA_SHELL_EVAL (Phase 5a dual-read).
+    // Prefer RYK_SHELL_EVAL then RYK_SHELL_EVAL (Phase 5a dual-read).
     const value_z = env_util.getenvBrand("SHELL_EVAL") orelse return .zig;
     const value = std.mem.span(value_z);
     if (std.ascii.eqlIgnoreCase(value, "rust")) return .rust;
@@ -243,13 +243,13 @@ fn resolveUserAllowlistPath(allocator: std.mem.Allocator) error{OutOfMemory}!?[]
     if (std.c.getenv("XDG_CONFIG_HOME")) |xdg_z| {
         const xdg = std.mem.span(xdg_z);
         if (xdg.len > 0) {
-            return try std.fs.path.join(allocator, &.{ xdg, "orca", "allowlist.toml" });
+            return try std.fs.path.join(allocator, &.{ xdg, "ryk", "allowlist.toml" });
         }
     }
     if (std.c.getenv("HOME")) |home_z| {
         const home = std.mem.span(home_z);
         if (home.len > 0) {
-            return try std.fs.path.join(allocator, &.{ home, ".config", "orca", "allowlist.toml" });
+            return try std.fs.path.join(allocator, &.{ home, ".config", "ryk", "allowlist.toml" });
         }
     }
     return null;
@@ -261,8 +261,7 @@ fn resolveAllowOnceJsonlPath(allocator: std.mem.Allocator) error{OutOfMemory}!?[
         const xdg = std.mem.span(xdg_z);
         if (xdg.len > 0) {
             return try std.fs.path.join(allocator, &.{
-                xdg,
-                "orca",
+                xdg, "ryk",
                 shell_engine.allow_once.allow_once_file_name,
             });
         }
@@ -273,8 +272,7 @@ fn resolveAllowOnceJsonlPath(allocator: std.mem.Allocator) error{OutOfMemory}!?[
             return try std.fs.path.join(allocator, &.{
                 home,
                 ".local",
-                "share",
-                "orca",
+                "share", "ryk",
                 shell_engine.allow_once.allow_once_file_name,
             });
         }
@@ -285,10 +283,10 @@ fn resolveAllowOnceJsonlPath(allocator: std.mem.Allocator) error{OutOfMemory}!?[
 /// Load permanent allowlist (user + project) and resolve allow-once path for product
 /// evaluate paths (hook/run/shim, `ryk test`, `ryk explain`).
 ///
-/// - Project file: `<workspace>/.orca/allowlist.toml`
-/// - User file: `$XDG_CONFIG_HOME/orca/allowlist.toml` or `~/.config/orca/allowlist.toml`
+/// - Project file: `<workspace>/.ryk/allowlist.toml`
+/// - User file: `$XDG_CONFIG_HOME/ryk/allowlist.toml` or `~/.config/ryk/allowlist.toml`
 ///   (empty `XDG_CONFIG_HOME` falls back to HOME, matching allowlist CLI)
-/// - Allow-once: `$XDG_DATA_HOME/orca/allow_once.jsonl` or `~/.local/share/orca/allow_once.jsonl`
+/// - Allow-once: `$XDG_DATA_HOME/ryk/allow_once.jsonl` or `~/.local/share/ryk/allow_once.jsonl`
 ///   (empty `XDG_DATA_HOME` falls back to HOME, matching allow-once CLI)
 ///
 /// Missing files → empty layer / match miss. Corrupt permanent file → empty + no panic.
@@ -320,7 +318,7 @@ pub fn loadProductShellStores(
     const user_path = try resolveUserAllowlistPath(allocator);
     defer if (user_path) |p| allocator.free(p);
 
-    const project_path = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "allowlist.toml" });
+    const project_path = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "allowlist.toml" });
     defer allocator.free(project_path);
 
     // loadMerged only fails on OOM; corrupt/missing → empty store (fail closed, no unlock).
@@ -405,7 +403,7 @@ fn zigEvaluator(
     defer allocator.free(eval_cwd);
 
     // M-9: prefer session-bound workspace_root when provided (hook). When null,
-    // walk up from tool cwd — residual hijack if agent plants nested .git/.orca.
+    // walk up from tool cwd — residual hijack if agent plants nested .git/.ryk.
     var walkup_owned: ?[]const u8 = null;
     defer if (walkup_owned) |w| allocator.free(w);
     const workspace: []const u8 = if (shell_event.workspace_root) |wr| wr else blk: {
@@ -1004,7 +1002,7 @@ pub const DaemonPolicyOpts = struct {
     host: ?[]const u8 = null,
     /// Injectable FM client for tests. Null → `fm_steward_client.defaultClient()`.
     fm_client: ?fm_steward_client.Client = null,
-    /// Skip FM entirely (tests / host kill). Independent of `ORCA_FM_STEWARD=0`.
+    /// Skip FM entirely (tests / host kill). Independent of `RYK_FM_STEWARD=0`.
     disable_fm: bool = false,
     /// Wall budget for classify (default StewardSession 3000ms).
     fm_timeout_ms: u32 = fm_steward_client.default_timeout_ms,
@@ -1509,7 +1507,7 @@ pub fn failClosedDaemonUnavailableDecision(allocator: std.mem.Allocator, err: da
 }
 
 /// Evaluate a shell command via Zig `shell_engine` and return a run/shim `CommandDecision`.
-/// `ORCA_SHELL_EVAL=rust` fails closed (`RustShellEvalRemoved`) without daemon Evaluate.
+/// `RYK_SHELL_EVAL=rust` fails closed (`RustShellEvalRemoved`) without daemon Evaluate.
 ///
 /// `commands_allow` is `policy.commands.allow` (exact or trailing-`*` prefix globs).
 /// Empty disables strict permit refuse (matrix-only Strict).
@@ -1906,7 +1904,7 @@ test "shell_eval fail_closed is typed on Evaluate failures only" {
 test "shell_eval reports a missing command working directory explicitly" {
     try std.testing.expectError(
         error.InvalidWorkingDirectory,
-        resolveEffectiveCwd(std.testing.allocator, "/definitely/missing/orca-working-directory"),
+        resolveEffectiveCwd(std.testing.allocator, "/definitely/missing/ryk-working-directory"),
     );
     try std.testing.expectEqualStrings(
         "daemon unavailable: command working directory does not exist",
@@ -1983,40 +1981,40 @@ extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 
 fn restoreShellEvalEnv(previous: ?[*:0]const u8) void {
     if (previous) |value| {
-        _ = setenv("ORCA_SHELL_EVAL", value, 1);
+        _ = setenv("RYK_SHELL_EVAL", value, 1);
     } else {
-        _ = unsetenv("ORCA_SHELL_EVAL");
+        _ = unsetenv("RYK_SHELL_EVAL");
     }
 }
 
 test "resolveShellEvalBackend defaults to zig when unset" {
-    const previous = std.c.getenv("ORCA_SHELL_EVAL");
+    const previous = std.c.getenv("RYK_SHELL_EVAL");
     defer restoreShellEvalEnv(previous);
-    _ = unsetenv("ORCA_SHELL_EVAL");
+    _ = unsetenv("RYK_SHELL_EVAL");
     try std.testing.expectEqual(ShellEvalBackend.zig, resolveShellEvalBackend());
 }
 
-test "ORCA_SHELL_EVAL=rust rejects without daemon evaluate" {
+test "RYK_SHELL_EVAL=rust rejects without daemon evaluate" {
     const allocator = std.testing.allocator;
-    const previous = std.c.getenv("ORCA_SHELL_EVAL");
+    const previous = std.c.getenv("RYK_SHELL_EVAL");
     defer restoreShellEvalEnv(previous);
-    try std.testing.expectEqual(@as(c_int, 0), setenv("ORCA_SHELL_EVAL", "rust", 1));
+    try std.testing.expectEqual(@as(c_int, 0), setenv("RYK_SHELL_EVAL", "rust", 1));
     try std.testing.expectEqual(ShellEvalBackend.rust, resolveShellEvalBackend());
     try std.testing.expectError(
         error.RustShellEvalRemoved,
         defaultEvaluator(allocator, .{ .command = "git status", .cwd = null }),
     );
     try std.testing.expectEqualStrings(
-        "ORCA_SHELL_EVAL=rust is no longer supported; Zig shell_engine is the sole Evaluate authority",
+        "RYK_SHELL_EVAL=rust is no longer supported; Zig shell_engine is the sole Evaluate authority",
         daemonUnavailableReason(error.RustShellEvalRemoved),
     );
 }
 
 test "default zig evaluator denies destructive rm via shell_engine" {
     const allocator = std.testing.allocator;
-    const previous = std.c.getenv("ORCA_SHELL_EVAL");
+    const previous = std.c.getenv("RYK_SHELL_EVAL");
     defer restoreShellEvalEnv(previous);
-    _ = unsetenv("ORCA_SHELL_EVAL");
+    _ = unsetenv("RYK_SHELL_EVAL");
     try std.testing.expectEqual(ShellEvalBackend.zig, resolveShellEvalBackend());
 
     var parsed = try defaultEvaluator(allocator, .{ .command = "rm -rf /", .cwd = null });
@@ -3112,7 +3110,7 @@ test "mode-softened high severity maps to valid plugin decision vocabulary" {
     try std.testing.expectEqual(PluginDecision.block, pluginDecisionFromModeAndSeverity(.strict, .high));
 }
 
-test "zigEvaluator applies opt-in packs from cwd .orca.toml" {
+test "zigEvaluator applies opt-in packs from cwd .ryk.toml" {
     const allocator = std.testing.allocator;
 
     // Clean project workspace without pack config → baseline allows docker prune.
@@ -3139,7 +3137,7 @@ test "zigEvaluator applies opt-in packs from cwd .orca.toml" {
         \\enabled = ["containers.docker"]
         \\
     ;
-    const file = try tmp.dir.createFile(std.testing.io, ".orca.toml", .{});
+    const file = try tmp.dir.createFile(std.testing.io, ".ryk.toml", .{});
     defer file.close(std.testing.io);
     try file.writeStreamingAll(std.testing.io, body);
 
@@ -3154,7 +3152,7 @@ test "zigEvaluator applies opt-in packs from cwd .orca.toml" {
         try std.testing.expectEqual(daemon.ResponseStatus.deny, daemon.responseStatus(parsed.value.result));
     }
 
-    // Nested working directory under the repo must still load /repo/.orca.toml.
+    // Nested working directory under the repo must still load /repo/.ryk.toml.
     try tmp.dir.createDirPath(std.testing.io, "src/nested");
     const nested = try tmp.dir.realPathFileAlloc(std.testing.io, "src/nested", allocator);
     defer allocator.free(nested);
@@ -3524,7 +3522,7 @@ test "Fm decisionFromDaemonResultWithPolicy card includes cwd session host" {
         .ask,
         .{
             .command = "git status",
-            .cwd = "/tmp/orca-card-meta",
+            .cwd = "/tmp/ryk-card-meta",
             .session_id = "sess-card-meta",
             .host = "claude",
             .fm_client = client,
@@ -3534,7 +3532,7 @@ test "Fm decisionFromDaemonResultWithPolicy card includes cwd session host" {
 
     try std.testing.expectEqual(@as(u32, 1), state.call_count);
     const card = state.lastCardJson();
-    try std.testing.expect(std.mem.indexOf(u8, card, "/tmp/orca-card-meta") != null);
+    try std.testing.expect(std.mem.indexOf(u8, card, "/tmp/ryk-card-meta") != null);
     try std.testing.expect(std.mem.indexOf(u8, card, "sess-card-meta") != null);
     try std.testing.expect(std.mem.indexOf(u8, card, "claude") != null);
 }
@@ -3634,10 +3632,10 @@ fn sProductWireWriteProjectCommandAllow(
     cmd_text: []const u8,
     reason: []const u8,
 ) !void {
-    const orca_dir = try sProductWireJoin(&.{ root, ".orca" });
-    defer std.testing.allocator.free(orca_dir);
-    try std.Io.Dir.cwd().createDirPath(std.testing.io, orca_dir);
-    const path = try sProductWireJoin(&.{ root, ".orca", "allowlist.toml" });
+    const ryk_dir = try sProductWireJoin(&.{ root, ".ryk" });
+    defer std.testing.allocator.free(ryk_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, ryk_dir);
+    const path = try sProductWireJoin(&.{ root, ".ryk", "allowlist.toml" });
     defer std.testing.allocator.free(path);
     try shell_engine.allowlist_store.addEntry(
         std.testing.io,
@@ -3660,10 +3658,10 @@ fn sProductWireWriteProjectRuleAllow(
     rule_id: []const u8,
     reason: []const u8,
 ) !void {
-    const orca_dir = try sProductWireJoin(&.{ root, ".orca" });
-    defer std.testing.allocator.free(orca_dir);
-    try std.Io.Dir.cwd().createDirPath(std.testing.io, orca_dir);
-    const path = try sProductWireJoin(&.{ root, ".orca", "allowlist.toml" });
+    const ryk_dir = try sProductWireJoin(&.{ root, ".ryk" });
+    defer std.testing.allocator.free(ryk_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, ryk_dir);
+    const path = try sProductWireJoin(&.{ root, ".ryk", "allowlist.toml" });
     defer std.testing.allocator.free(path);
     try shell_engine.allowlist_store.addEntry(
         std.testing.io,
@@ -3686,10 +3684,10 @@ fn sProductWireWriteUserCommandAllow(
     cmd_text: []const u8,
     reason: []const u8,
 ) !void {
-    const orca_dir = try sProductWireJoin(&.{ xdg_config, "orca" });
-    defer std.testing.allocator.free(orca_dir);
-    try std.Io.Dir.cwd().createDirPath(std.testing.io, orca_dir);
-    const path = try sProductWireJoin(&.{ xdg_config, "orca", "allowlist.toml" });
+    const ryk_dir = try sProductWireJoin(&.{ xdg_config, "ryk"});
+    defer std.testing.allocator.free(ryk_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, ryk_dir);
+    const path = try sProductWireJoin(&.{ xdg_config, "ryk", "allowlist.toml" });
     defer std.testing.allocator.free(path);
     try shell_engine.allowlist_store.addEntry(
         std.testing.io,
@@ -3713,12 +3711,12 @@ fn sProductWireSeedAllowOnce(
     cwd: []const u8,
     reason: []const u8,
 ) !void {
-    const orca_dir = try sProductWireJoin(&.{ xdg_data, "orca" });
-    defer std.testing.allocator.free(orca_dir);
-    try std.Io.Dir.cwd().createDirPath(std.testing.io, orca_dir);
-    const pending_path = try sProductWireJoin(&.{ xdg_data, "orca", shell_engine.allow_once.pending_file_name });
+    const ryk_dir = try sProductWireJoin(&.{ xdg_data, "ryk"});
+    defer std.testing.allocator.free(ryk_dir);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, ryk_dir);
+    const pending_path = try sProductWireJoin(&.{ xdg_data, "ryk", shell_engine.allow_once.pending_file_name });
     defer std.testing.allocator.free(pending_path);
-    const once_path = try sProductWireJoin(&.{ xdg_data, "orca", shell_engine.allow_once.allow_once_file_name });
+    const once_path = try sProductWireJoin(&.{ xdg_data, "ryk", shell_engine.allow_once.allow_once_file_name });
     defer std.testing.allocator.free(once_path);
 
     var issued = try shell_engine.allow_once.issuePending(

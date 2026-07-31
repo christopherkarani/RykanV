@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-DIST_DIR="${ORCA_DIST_DIR:-dist/npm}"
+DIST_DIR="${RYK_DIST_DIR:-dist/npm}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 case "${DIST_DIR}" in
@@ -12,13 +12,13 @@ esac
 PACKAGES="
 integrations/opencode-plugin
 integrations/openclaw-plugin
-orca-pi
+ryk-pi
 "
 
 rm -rf "${DIST_DIR_ABS}"
 mkdir -p "${DIST_DIR_ABS}"
 
-CHECKSUMS_FILE="${DIST_DIR_ABS}/orca-npm-plugin-checksums.txt"
+CHECKSUMS_FILE="${DIST_DIR_ABS}/ryk-npm-plugin-checksums.txt"
 : > "${CHECKSUMS_FILE}"
 
 TOTAL_ISSUES=0
@@ -42,10 +42,10 @@ for rel_path in ${PACKAGES}; do
 
   if [ -f "${PACKAGE_DIR}/dist/index.js" ]; then
     :
-  elif [ -f "${PACKAGE_DIR}/extensions/orca.ts" ]; then
+  elif [ -f "${PACKAGE_DIR}/extensions/ryk.ts" ]; then
     :
   else
-    echo "ERROR: no packable entry found in ${PACKAGE_DIR} (expected dist/index.js or extensions/orca.ts)" >&2
+    echo "ERROR: no packable entry found in ${PACKAGE_DIR} (expected dist/index.js or extensions/ryk.ts)" >&2
     exit 1
   fi
 

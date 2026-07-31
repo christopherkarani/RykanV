@@ -149,7 +149,7 @@ fn discoverOpenCode(io: std.Io, allocator: std.mem.Allocator, options: Discovery
 }
 
 fn discoverRyk(io: std.Io, allocator: std.mem.Allocator, options: DiscoveryOptions, host: *HostDiscovery) !void {
-    const session_roots = [_][]const u8{ "/.orca/sessions", "/.ryk/sessions" };
+    const session_roots = [_][]const u8{ "/.ryk/sessions", "/.ryk/sessions" };
     var any = false;
     var unreadable = false;
     for (session_roots) |rel| {
@@ -198,7 +198,7 @@ fn discoverRyk(io: std.Io, allocator: std.mem.Allocator, options: DiscoveryOptio
         }
     }
     // Also note dashboard registry presence (bridge pointer, not full scan).
-    const dash = try paths.resolveHomeRoot(allocator, options.home, "/.orca/dashboard/workspaces.json");
+    const dash = try paths.resolveHomeRoot(allocator, options.home, "/.ryk/dashboard/workspaces.json");
     defer allocator.free(dash);
     const has_dash = pathExists(io, dash);
 
@@ -207,7 +207,7 @@ fn discoverRyk(io: std.Io, allocator: std.mem.Allocator, options: DiscoveryOptio
         host.note = if (has_dash)
             "ryk sessions found; use ryk replay --session <id> for full timeline"
         else
-            "ryk sessions found under .orca/.ryk";
+            "ryk sessions found under .ryk/.ryk";
     } else if (unreadable) {
         host.status = .unreadable;
         host.note = "ryk session dirs present but unreadable";
@@ -219,7 +219,7 @@ fn discoverRyk(io: std.Io, allocator: std.mem.Allocator, options: DiscoveryOptio
         host.note = "dashboard registry present; no session dirs in window";
     } else {
         host.status = .not_found;
-        host.note = "no .orca/.ryk session roots";
+        host.note = "no .ryk/.ryk session roots";
     }
 }
 

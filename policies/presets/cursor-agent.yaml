@@ -1,4 +1,4 @@
-# Orca preset: cursor-agent
+# ryk preset: cursor-agent
 # Generic/experimental: this is a conservative local editor-agent policy, not a claim about Cursor internals.
 version: 1
 mode: ask
@@ -48,7 +48,7 @@ files:
       - "./**"
     deny:
       - "./.git/**"
-      - "./.orca/**"
+      - "./.ryk/**"
     mode: staged
 
 commands:

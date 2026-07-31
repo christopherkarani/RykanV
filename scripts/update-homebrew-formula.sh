@@ -1,10 +1,10 @@
 #!/usr/bin/env sh
 set -eu
 
-VERSION="${1:-${RYK_VERSION:-${ORCA_VERSION:-}}}"
-HOMEBREW_TAP_DIR="${RYK_HOMEBREW_TAP_DIR:-${ORCA_HOMEBREW_TAP_DIR:-${HOME}/code/homebrew-orca}}"
-FORMULA_OUT="${ORCA_HOMEBREW_FORMULA:-${RYK_HOMEBREW_FORMULA:-${HOMEBREW_TAP_DIR}/Formula/ryk.rb}}"
-TEMPLATE="${ORCA_HOMEBREW_TEMPLATE:-${RYK_HOMEBREW_TEMPLATE:-packaging/homebrew/Formula/ryk.rb}}"
+VERSION="${1:-${RYK_VERSION:-${RYK_VERSION:-}}}"
+HOMEBREW_TAP_DIR="${RYK_HOMEBREW_TAP_DIR:-${RYK_HOMEBREW_TAP_DIR:-${HOME}/code/homebrew-ryk}}"
+FORMULA_OUT="${RYK_HOMEBREW_FORMULA:-${RYK_HOMEBREW_FORMULA:-${HOMEBREW_TAP_DIR}/Formula/ryk.rb}}"
+TEMPLATE="${RYK_HOMEBREW_TEMPLATE:-${RYK_HOMEBREW_TEMPLATE:-packaging/homebrew/Formula/ryk.rb}}"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ryk-homebrew.XXXXXX")"
 
 cleanup() {
@@ -17,11 +17,11 @@ fail() {
   exit 1
 }
 
-[ -n "$VERSION" ] || fail "usage: $0 <version>  (or set RYK_VERSION / ORCA_VERSION)"
+[ -n "$VERSION" ] || fail "usage: $0 <version>  (or set RYK_VERSION / RYK_VERSION)"
 [ -f "$TEMPLATE" ] || fail "homebrew template not found: $TEMPLATE"
 
 BASE_URL="https://github.com/christopherkarani/rykan/releases/download/v${VERSION}"
-DIST_DIR="${RYK_DIST_DIR:-${ORCA_DIST_DIR:-}}"
+DIST_DIR="${RYK_DIST_DIR:-${RYK_DIST_DIR:-}}"
 
 if [ -n "$DIST_DIR" ]; then
   printf 'Using local release assets for ryk %s from %s...\n' "$VERSION" "$DIST_DIR"
@@ -32,7 +32,7 @@ fi
 for plat in darwin-arm64 darwin-amd64 linux-arm64 linux-amd64; do
   # Prefer primary ryk-v* artifacts; fall back to dual-published orca-v*.
   artifact="ryk-v${VERSION}-${plat}.tar.gz"
-  legacy="orca-v${VERSION}-${plat}.tar.gz"
+  legacy="ryk-v${VERSION}-${plat}.tar.gz"
   output="${TMP_DIR}/${artifact}"
 
   printf '  → %s\n' "$artifact"
@@ -42,11 +42,11 @@ for plat in darwin-arm64 darwin-amd64 linux-arm64 linux-amd64; do
     cp "${DIST_DIR}/${legacy}" "$output"
   elif command -v curl >/dev/null 2>&1; then
     if ! curl -fsSL -o "$output" "${BASE_URL}/${artifact}"; then
-      curl -fsSL -o "$output" "${BASE_URL}/${legacy}" || fail "failed to download ryk or orca artifact for $plat"
+      curl -fsSL -o "$output" "${BASE_URL}/${legacy}" || fail "failed to download ryk or ryk artifact for $plat"
     fi
   elif command -v wget >/dev/null 2>&1; then
     if ! wget -q -O "$output" "${BASE_URL}/${artifact}"; then
-      wget -q -O "$output" "${BASE_URL}/${legacy}" || fail "failed to download ryk or orca artifact for $plat"
+      wget -q -O "$output" "${BASE_URL}/${legacy}" || fail "failed to download ryk or ryk artifact for $plat"
     fi
   else
     fail "curl or wget is required"

@@ -16,5 +16,5 @@ echo "[build-all] Building Zig binary..."
 
 echo "[build-all] Done."
 echo ""
-echo "  Zig binary:    zig-out/bin/orca"
-echo "  Note: orca-rs / orca-daemon was removed; shell eval is in-process Zig."
+echo "  Zig binary:    zig-out/bin/ryk"
+echo "  Note: orca-rs / ryk-daemon was removed; shell eval is in-process Zig."

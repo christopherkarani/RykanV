@@ -1,8 +1,8 @@
-//! Stdin agent-hook mode for bare `orca` invocations (no subcommand).
+//! Stdin agent-hook mode for bare `ryk` invocations (no subcommand).
 //!
-//! Rust `orca` falls through to hook evaluation when argv has no subcommand and stdin
+//! Rust `ryk` falls through to hook evaluation when argv has no subcommand and stdin
 //! carries agent hook JSON (`tool_name` / `tool_input`). Zig must match that contract so
-//! Cursor's `beforeShellExecution` wrapper and direct `orca` hook entries receive valid JSON.
+//! Cursor's `beforeShellExecution` wrapper and direct `ryk` hook entries receive valid JSON.
 //!
 //! Invariants:
 //! - Interactive TTY with no args still shows help (not hook mode).
@@ -15,8 +15,8 @@ const build_options = @import("build_options");
 const exit_codes = @import("exit_codes.zig");
 const shell_eval = @import("shell_eval.zig");
 const fm_steward_client = @import("fm_steward_client.zig");
-const core_api = @import("orca_core").api;
-const policy = @import("orca_core").policy;
+const core_api = @import("ryk_core").api;
+const policy = @import("ryk_core").policy;
 
 const max_payload_len = 256 * 1024;
 
@@ -27,7 +27,7 @@ pub const InputFormat = enum {
 
 pub const ShellCommandEvaluatorFn = shell_eval.ShellCommandEvaluatorFn;
 
-/// True when `orca` was invoked with no subcommand and stdin is piped (non-TTY).
+/// True when `ryk` was invoked with no subcommand and stdin is piped (non-TTY).
 pub fn shouldEnter(io: std.Io) bool {
     const stdin_tty = std.Io.File.stdin().isTty(io) catch true;
     return !stdin_tty;
@@ -82,9 +82,9 @@ fn envFlagTruthy(name: [*:0]const u8) bool {
 
 /// Resolve mode for bare agent-hook (no loaded policy YAML).
 ///
-/// Floor is **strict**. `RYK_MODE`/`ORCA_MODE` may only *raise* strictness (strict →
+/// Floor is **strict**. `RYK_MODE`/`RYK_MODE` may only *raise* strictness (strict →
 /// redteam/ci). Soft modes from env (`observe`/`ask`/`trusted`) are ignored
-/// unless the operator explicitly sets `RYK_ALLOW_MODE_SOFTEN`/`ORCA_ALLOW_MODE_SOFTEN=1`, so a
+/// unless the operator explicitly sets `RYK_ALLOW_MODE_SOFTEN`/`RYK_ALLOW_MODE_SOFTEN=1`, so a
 /// hostile process env cannot silently downgrade bare Cursor/agent hooks.
 /// Prefer `ryk run` (session `shim_mode`) for intentional soft modes.
 pub fn resolveModeFromEnv() policy.schema.Mode {
@@ -121,7 +121,7 @@ fn moreRestrictiveMode(a: policy.schema.Mode, b: policy.schema.Mode) policy.sche
 
 /// Options for `evaluatePayloadWithMode` / unit tests that must not hit live FM.
 pub const EvaluatePayloadOpts = struct {
-    /// Skip FM soft seatbelt (tests / host kill). Independent of `ORCA_FM_STEWARD=0`.
+    /// Skip FM soft seatbelt (tests / host kill). Independent of `RYK_FM_STEWARD=0`.
     disable_fm: bool = false,
     /// Injectable FM client for product-path tests. Null → `defaultClient()`.
     fm_client: ?fm_steward_client.Client = null,
@@ -608,7 +608,7 @@ test "agent hook mode version is wired into build metadata" {
     try std.testing.expect(build_options.version.len > 0);
 }
 
-test "resolveModeFromEnv floors soft modes without ORCA_ALLOW_MODE_SOFTEN" {
+test "resolveModeFromEnv floors soft modes without RYK_ALLOW_MODE_SOFTEN" {
     // Unit-test the pure helpers rather than mutating process env (not safe in
     // parallel test runners). Soft modes without opt-in must not drop below strict.
     try std.testing.expect(isSoftMode(.observe));

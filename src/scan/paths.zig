@@ -48,9 +48,9 @@ pub const host_path_table = [_]HostPathSpec{
     },
     .{
         .host = .ryk,
-        // ryk/orca: ~/.orca/sessions + dashboard registry; optional ~/.ryk dual-read
-        .home_relative = &.{ "/.orca/sessions", "/.orca/dashboard", "/.ryk/sessions", "/.ryk/dashboard" },
-        .note = "ryk bridge: .orca (+ .ryk if present) sessions + dashboard",
+        // ryk/ryk: ~/.ryk/sessions + dashboard registry; optional ~/.ryk dual-read
+        .home_relative = &.{ "/.ryk/sessions", "/.ryk/dashboard", "/.ryk/sessions", "/.ryk/dashboard" },
+        .note = "ryk bridge: .ryk (+ .ryk if present) sessions + dashboard",
     },
 };
 

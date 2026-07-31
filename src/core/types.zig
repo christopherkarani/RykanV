@@ -19,7 +19,7 @@ pub const ActorKind = enum {
     process,
     mcp_client,
     mcp_server,
-    orca,
+    ryk,
     unknown,
 };
 
@@ -152,7 +152,7 @@ test "path wrapper validates utf8 and classifies path kind" {
     const relative = try Path.init("src/root.zig");
     try std.testing.expectEqual(PathKind.relative, relative.kind);
 
-    const absolute = try Path.init("/tmp/orca");
+    const absolute = try Path.init("/tmp/ryk");
     try std.testing.expectEqual(PathKind.absolute, absolute.kind);
 
     try std.testing.expectError(error.InvalidPath, Path.init(""));

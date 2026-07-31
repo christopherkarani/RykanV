@@ -38,11 +38,11 @@ Separators are `|` so rule ids that contain `:` stay unambiguous. Approving `cur
 
 ### CI / noninteractive
 
-When `CI`, `ORCA_CI`, or `ORCA_NONINTERACTIVE` is set truthily, ryk `ask` is hardened to Hermes `block` (no approval prompt). Hermes also fail-closes plugin-escalated approvals in non-interactive non-gateway contexts.
+When `CI`, `RYK_CI`, or `RYK_NONINTERACTIVE` is set truthily, ryk `ask` is hardened to Hermes `block` (no approval prompt). Hermes also fail-closes plugin-escalated approvals in non-interactive non-gateway contexts.
 
 ## Failure modes
 
-- **`pre_tool_call`**: Uses the mapping above. When ryk is missing, too old for Hermes hooks, or returns a Hermes host mismatch, the default is fail-open with a warning (`ORCA_HERMES_FAIL_OPEN=1`, the default). Set `ORCA_HERMES_FAIL_OPEN=0` to block tool calls until ryk is upgraded.
+- **`pre_tool_call`**: Uses the mapping above. When ryk is missing, too old for Hermes hooks, or returns a Hermes host mismatch, the default is fail-open with a warning (`RYK_HERMES_FAIL_OPEN=1`, the default). Set `RYK_HERMES_FAIL_OPEN=0` to block tool calls until ryk is upgraded.
 - **`pre_llm_call`**: **Context-only** — Hermes cannot veto the turn or open an approval dialog on this hook. ryk `warn` / `context_only` inject advisory notes. ryk `ask` and `block` inject **honest** notes that do **not** claim enforcement or auto-triggered approval; the strongest real gate for prompts remains `ryk run -- hermes ...`. Other ryk failures log a warning and continue without injecting policy context.
 - **Informational hooks** (`post_tool_call`, session lifecycle, etc.): Log warnings on ryk failure and never block Hermes.
 
@@ -64,7 +64,7 @@ hermes plugins enable orca
 ryk plugin doctor hermes
 ```
 
-The installer copies this directory to `~/.hermes/plugins/orca/` and enables it with `hermes plugins enable orca` when the `hermes` binary is available.
+The installer copies this directory to `~/.hermes/plugins/ryk/` and enables it with `hermes plugins enable orca` when the `hermes` binary is available.
 
 ## Hook Coverage
 
@@ -90,25 +90,25 @@ Limitations (honest):
 
 ## ryk discovery
 
-The plugin resolves ryk once per process (cached until `ORCA_BIN` changes), probing candidates in this order:
+The plugin resolves ryk once per process (cached until `RYK_BIN` changes), probing candidates in this order:
 
 1. `RYK_BIN`
-2. `ORCA_BIN` (legacy environment compatibility)
-3. `~/.local/bin/ryk` / `~/.orca/bin` / `~/.ryk/bin`
-4. `ryk` / `orca` on `PATH`
+2. `RYK_BIN` (legacy environment compatibility)
+3. `~/.local/bin/ryk` / `~/.ryk/bin` / `~/.ryk/bin`
+4. `ryk` / `ryk` on `PATH`
 5. `./zig-out/bin/ryk` (current repo and parents — last; avoids planted cwd binary beating installs)
 
 Only regular files that are executable and pass a Hermes `pre_tool_call` smoke test are selected (exit 0 and hook decision is not `block`, matching `tests/fixtures/hook-safe.json`). `ryk plugin doctor` uses a stricter allow-only check on the running ryk binary.
 
 Environment:
 
-- `ORCA_BIN` — force a specific ryk executable (must be executable on disk).
-- `ORCA_HERMES_FAIL_OPEN` — `1` (default) allows Hermes tools when ryk is degraded; `0` blocks `pre_tool_call` instead.
-- `CI` / `ORCA_CI` / `ORCA_NONINTERACTIVE` — when truthy, harden ryk `ask` on tools to Hermes `block`.
+- `RYK_BIN` — force a specific ryk executable (must be executable on disk).
+- `RYK_HERMES_FAIL_OPEN` — `1` (default) allows Hermes tools when ryk is degraded; `0` blocks `pre_tool_call` instead.
+- `CI` / `RYK_CI` / `RYK_NONINTERACTIVE` — when truthy, harden ryk `ask` on tools to Hermes `block`.
 
 ## Manual verification (CLI approve UI)
 
-1. Install/enable the plugin and point `ORCA_BIN` at a Hermes-capable ryk build.
+1. Install/enable the plugin and point `RYK_BIN` at a Hermes-capable ryk build.
 2. Run Hermes interactively so a policy `ask` tool fires (or temporarily configure a policy that returns `ask` for a known tool).
 3. Confirm Hermes shows the once/session/always/deny approval UI — not a permanent block error with no resume.
 4. Approve once → tool runs. Deny → tool blocked. Always → subsequent identical args under the same `rule_key` skip the prompt.

@@ -1,10 +1,8 @@
 # ryk &nbsp;[![Version](https://img.shields.io/badge/version-1.2.9-blue)](https://github.com/christopherkarani/rykan/releases) [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE) [![Zig](https://img.shields.io/badge/built%20with-Zig-orange)](https://ziglang.org) [![Build](https://img.shields.io/github/actions/workflow/status/christopherkarani/rykan/build.yml?branch=main&label=build)](https://github.com/christopherkarani/rykan/actions/workflows/build.yml) [![Stars](https://img.shields.io/github/stars/christopherkarani/rykan?style=social)](https://github.com/christopherkarani/rykan)
 
-# ryk
+# Rykan V (`ryk`)
 
 **The safety layer for autonomous AI agents running on real machines.**
-
-*(Formerly **Orca**. The `orca` binary remains a PATH alias for one major. Workspace paths still use `.orca/` — path migration is a later phase.)*
 
 ryk lets you give AI agents more autonomy by evaluating risky shell, file, network, and tool actions against your policy — when those actions actually pass through ryk’s mediation path.
 
@@ -18,7 +16,7 @@ ryk is **graded mediation** (not a universal sandbox): it evaluates actions on p
 
 ```bash
 # Install and configure protection
-brew install christopherkarani/orca/ryk
+brew install christopherkarani/ryk/ryk
 
 # Run your agent
 ryk claude
@@ -34,7 +32,7 @@ This project is free and open source under Apache 2.0. If ryk is useful to you, 
 
 ---
 
-## Why Orca exists
+## Why Rykan V exists
 
 Developers and teams are starting to give autonomous agents real access:
 
@@ -59,15 +57,15 @@ Today, the safety model is usually one of these:
 
 That does not scale.
 
-Orca gives you a reusable policy layer across agents.
+ryk gives you a reusable policy layer across agents.
 
 Write the rules once. Apply them everywhere.
 
 ---
 
-## What Orca protects against
+## What ryk protects against
 
-Orca focuses on the actions that can ruin your day:
+ryk focuses on the actions that can ruin your day:
 
 ```text
 git push --force
@@ -87,11 +85,11 @@ modifying protected config
 sending data to unknown hosts
 ```
 
-Orca can allow, deny, ask for approval, or log these actions depending on your policy. Mediation is **graded** (hook / wrapper / proxy / OS-enforced) — see [docs/compatibility.md](docs/compatibility.md). Absolute paths (for example `/bin/rm`) can skip PATH shims unless a host hook or OS sandbox also covers them.
+ryk can allow, deny, ask for approval, or log these actions depending on your policy. Mediation is **graded** (hook / wrapper / proxy / OS-enforced) — see [docs/compatibility.md](docs/compatibility.md). Absolute paths (for example `/bin/rm`) can skip PATH shims unless a host hook or OS sandbox also covers them.
 
 ---
 
-## Before Orca
+## Before Rykan V
 
 You give an agent a task:
 
@@ -119,11 +117,11 @@ You find out after the damage is done.
 
 ---
 
-## With Orca
+## With Rykan V
 
 The agent tries the same action.
 
-When the command is **mediated** (PATH shim and/or a host hook that fires and honors veto), Orca intercepts it first. See protection grades in [docs/compatibility.md](docs/compatibility.md).
+When the command is **mediated** (PATH shim and/or a host hook that fires and honors veto), ryk intercepts it first. See protection grades in [docs/compatibility.md](docs/compatibility.md).
 
 ```text
 Action blocked
@@ -143,7 +141,7 @@ Command was not executed (mediated path).
 
 Bare `PATH` names such as `rm` hit session shims when installed; absolute `/bin/rm`, `command -p`, aliases, and nested absolute exec may still bypass wrapper mediation.
 
-For actions that might be valid but risky, Orca asks in plain language:
+For actions that might be valid but risky, ryk asks in plain language:
 
 ```text
 Approval required
@@ -164,14 +162,14 @@ Pushing to a protected branch requires human approval.
 
 ## Core idea
 
-Orca is not another AI agent.
+ryk is not another AI agent.
 
-Orca is the policy enforcement layer underneath the agents you already use.
+ryk is the policy enforcement layer underneath the agents you already use.
 
 ```text
 You
   ↓
-Orca policy layer
+ryk policy layer
   ↓
 Hermes / Claude Code / Codex / OpenClaw / OpenCode / Cursor
   ↓
@@ -189,11 +187,11 @@ Actions on a mediation path are evaluated against your policy. Paths that bypass
 | Agent                  | Usage                                |
 | ---------------------- | ------------------------------------ |
 | Claude Code            | `ryk claude`                        |
-| Codex CLI              | `orca codex`                         |
-| Pi                     | `orca pi`                            |
-| OpenCode               | `orca opencode`                      |
-| OpenClaw               | `orca openclaw`                      |
-| Hermes                 | `orca hermes`                        |
+| Codex CLI              | `ryk codex`                         |
+| Pi                     | `ryk pi`                            |
+| OpenCode               | `ryk opencode`                      |
+| OpenClaw               | `ryk openclaw`                      |
+| Hermes                 | `ryk hermes`                        |
 | Custom commands        | advanced: `ryk run -- <command>`     |
 
 One policy file can protect multiple agents. Host aliases (`ryk <agent>`) are the taught launch path; `ryk run` is the advanced engine for custom commands and CI flags.
@@ -205,7 +203,7 @@ One policy file can protect multiple agents. Host aliases (`ryk <agent>`) are th
 ### 1. Install ryk
 
 ```bash
-brew install christopherkarani/orca/ryk
+brew install christopherkarani/ryk/ryk
 ```
 
 Or use the install script:
@@ -233,10 +231,10 @@ ryk start
 Then check the traffic light:
 
 ```bash
-orca status
+ryk status
 ```
 
-You should see **Protected** or **Limited**, plus a plain-language note that some paths can still bypass. Use `orca doctor` only when you need a deep capability matrix.
+You should see **Protected** or **Limited**, plus a plain-language note that some paths can still bypass. Use `ryk doctor` only when you need a deep capability matrix.
 
 ---
 
@@ -247,11 +245,11 @@ ryk claude
 ```
 
 ```bash
-orca codex
+ryk codex
 ```
 
 ```bash
-orca hermes
+ryk hermes
 ```
 
 When something looks risky, the interactive prompt offers **Once** / **Always** / **Never** — no rule ids required.
@@ -259,10 +257,10 @@ When something looks risky, the interactive prompt offers **Once** / **Always** 
 Review what happened:
 
 ```bash
-orca replay
+ryk replay
 ```
 
-Bare `orca replay` shows the last session; denied actions are highlighted. Off-ramp:
+Bare `ryk replay` shows the last session; denied actions are highlighted. Off-ramp:
 
 ```bash
 ryk stop
@@ -271,25 +269,25 @@ ryk stop
 For CI / automation (fails closed, no prompts), use the run engine:
 
 ```bash
-orca run --ci -- ./scripts/agent-task.sh
+ryk run --ci -- ./scripts/agent-task.sh
 ```
 
 ---
 
 ## Protection grades
 
-Orca is **graded mediation**, not a universal OS sandbox. Canonical definitions and bypass classes live in **[docs/compatibility.md](docs/compatibility.md#protection-grades-canonical)** (also linked from [docs/threat-model.md](docs/threat-model.md)).
+ryk is **graded mediation**, not a universal OS sandbox. Canonical definitions and bypass classes live in **[docs/compatibility.md](docs/compatibility.md#protection-grades-canonical)** (also linked from [docs/threat-model.md](docs/threat-model.md)).
 
 | Grade | Meaning | Typical surface |
 | --- | --- | --- |
-| `hook` | Host invokes Orca and honors veto | Native plugin / host hook that fires |
-| `wrapper` | PATH shims / agent launch under Orca | Finite executable list; absolute paths may bypass |
-| `proxy` | Traffic must traverse an Orca proxy | MCP / optional network proxies |
+| `hook` | Host invokes ryk and honors veto | Native plugin / host hook that fires |
+| `wrapper` | PATH shims / agent launch under ryk | Finite executable list; absolute paths may bypass |
+| `proxy` | Traffic must traverse a ryk proxy | MCP / optional network proxies |
 | `OS-enforced` | Kernel/sandbox backend enforcing for that session | After protected child session-attach succeeds; doctor probes alone are not enough |
 
 **Safe Launch default:** `ryk start` auto-selects the best available **Ask on risk** posture (hooks + wrappers when available). Day-1 status is **Protected | Limited | Off** with an honest caveat — not a grade matrix. **`OS-enforced`** FS isolation only after a successful Landlock (Linux) or Seatbelt (macOS) attach for that child.
 
-Power users: `orca help --all` lists the full surface (`run`, `doctor`, `policy`, …).
+Power users: `ryk help --all` lists the full surface (`run`, `doctor`, `policy`, …).
 
 ---
 
@@ -317,7 +315,7 @@ No AI agent required.
 Start the local dashboard:
 
 ```bash
-orca dashboard
+ryk dashboard
 ```
 
 Open:
@@ -352,7 +350,7 @@ ryk start
 ryk claude
 ```
 
-Use Orca to ask (Once / Always / Never) before risky actions and block destructive ones.
+Use ryk to ask (Once / Always / Never) before risky actions and block destructive ones.
 
 ---
 
@@ -373,17 +371,17 @@ Protect:
 
 ```bash
 ryk start
-orca hermes
+ryk hermes
 ```
 
 ---
 
 ### 3. Team policy
 
-Commit Orca policy to your repo:
+Commit ryk policy to your repo:
 
 ```text
-.orca/policy.yaml
+.ryk/policy.yaml
 ```
 
 Now every developer and agent runs under the same safety rules.
@@ -397,10 +395,10 @@ No more one-off scripts per person.
 Run autonomous agents in CI without interactive approval.
 
 ```bash
-orca run --ci -- ./scripts/agent-task.sh
+ryk run --ci -- ./scripts/agent-task.sh
 ```
 
-In CI, Orca converts `ask` into `deny`.
+In CI, ryk converts `ask` into `deny`.
 
 If the agent tries something dangerous, the job fails safely.
 
@@ -411,44 +409,44 @@ If the agent tries something dangerous, the job fails safely.
 Run built-in fixture engine self-tests (internal `builtin:redteam` preset — not your workspace policy):
 
 ```bash
-orca redteam --ci
+ryk redteam --ci
 ```
 
-This catches regressions in Orca’s fixture evaluators. It does **not** prove your installed policy, daemon, or host enforcement is correct. See [docs/redteam.md](docs/redteam.md).
+This catches regressions in ryk’s fixture evaluators. It does **not** prove your installed policy, daemon, or host enforcement is correct. See [docs/redteam.md](docs/redteam.md).
 
 ---
 
 ## Security model
 
-Orca is designed to be honest about what it does and does not protect.
+ryk is designed to be honest about what it does and does not protect.
 
-### What Orca does (when mediation is active)
+### What Rykan V does (when mediation is active)
 
-* launches agents through a policy-controlled process (`ryk <agent>` / wrapper grade; `orca run` is the engine)
+* launches agents through a policy-controlled process (`ryk <agent>` / wrapper grade; `ryk run` is the engine)
 * evaluates shell commands that hit PATH shims or host hooks that fire and honor veto
-* mediates file access on Orca-mediated write paths (staged writes; OS FS enforcement only after session-attach succeeds)
-* filters sensitive environment variables for Orca-launched children
+* mediates file access on ryk-mediated write paths (staged writes; OS FS enforcement only after session-attach succeeds)
+* filters sensitive environment variables for ryk-launched children
 * detects secret-like access patterns on mediated paths and redacts audit output
 * applies network **decisions** for mediated traffic; blocks only when a proxy or OS-enforced backend is actually in path
-* records tamper-evident audit logs for Orca-managed sessions
+* records tamper-evident audit logs for ryk-managed sessions
 * supports replayable sessions
 * fails closed in CI mode for evaluated actions
 
-### What Orca does not claim
+### What ryk does not claim
 
-Orca is not a perfect kernel sandbox and is not universal transparent FS/network interception.
+ryk is not a perfect kernel sandbox and is not universal transparent FS/network interception.
 
-It does not protect agents that are not launched through Orca (or host hooks that do not fire).
+It does not protect agents that are not launched through ryk (or host hooks that do not fire).
 
 It does not replace Docker, VMs, OS permissions, VPNs, SSH hardening, or least-privilege infrastructure.
 
 Use those too.
 
-Orca is a graded, behavior-level policy layer on top of paths it actually mediates — see [Protection grades](#protection-grades).
+ryk is a graded, behavior-level policy layer on top of paths it actually mediates — see [Protection grades](#protection-grades).
 
 Docker controls the environment.
 
-Orca controls what the agent is allowed to do on mediated paths inside that environment.
+ryk controls what the agent is allowed to do on mediated paths inside that environment.
 
 ---
 
@@ -470,33 +468,33 @@ mode: ask
 For automation:
 
 ```bash
-orca run --ci -- ./scripts/agent-task.sh
+ryk run --ci -- ./scripts/agent-task.sh
 ```
 
 ---
 
 ## Audit and replay
 
-After each session, Orca stores a local audit trail.
+After each session, ryk stores a local audit trail.
 
 Last session timeline (denials highlighted):
 
 ```bash
-orca replay
+ryk replay
 ```
 
 Denied actions only / verify integrity / JSON:
 
 ```bash
-orca replay --only denied
-orca replay --verify
-orca replay --json
+ryk replay --only denied
+ryk replay --verify
+ryk replay --json
 ```
 
 Session artifacts live under:
 
 ```text
-.orca/sessions/
+.ryk/sessions/
 ```
 
 Audit logs are tamper-evident using chained hashes.
@@ -505,7 +503,7 @@ Audit logs are tamper-evident using chained hashes.
 
 ## Credential and secret protection
 
-Orca can block or redact access to sensitive files and values.
+ryk can block or redact access to sensitive files and values.
 
 Examples:
 
@@ -545,9 +543,9 @@ Some agents also support native plugins or hooks for deeper integration (grade *
 ```bash
 ryk start --hosts hermes
 # or repair later:
-orca plugin install hermes --yes
-hermes plugins enable orca
-orca plugin doctor hermes
+ryk plugin install hermes --yes
+hermes plugins enable ryk
+ryk plugin doctor hermes
 ```
 
 ### OpenClaw
@@ -555,10 +553,10 @@ orca plugin doctor hermes
 **Supported protection path** (grade **`wrapper`**):
 
 ```bash
-orca openclaw
+ryk openclaw
 ```
 
-Optional plugin install (local path / `orca plugin install openclaw`) is install plumbing only — it does **not** prove **`hook`** enforcement. npm, ClawHub, and CLI-metadata loads of the native plugin are **`unprotected`**: OpenClaw currently no-ops `api.on`, so tool hooks do not fire and cannot block. See [`integrations/openclaw-plugin/README.md`](integrations/openclaw-plugin/README.md) and [protection grades](#protection-grades).
+Optional plugin install (local path / `ryk plugin install openclaw`) is install plumbing only — it does **not** prove **`hook`** enforcement. npm, ClawHub, and CLI-metadata loads of the native plugin are **`unprotected`**: OpenClaw currently no-ops `api.on`, so tool hooks do not fire and cannot block. See [`integrations/openclaw-plugin/README.md`](integrations/openclaw-plugin/README.md) and [protection grades](#protection-grades).
 
 ---
 
@@ -568,11 +566,11 @@ Docker is useful.
 
 You should use it where it makes sense.
 
-But Docker and Orca solve different problems.
+But Docker and ryk solve different problems.
 
 Docker controls what the process can access.
 
-Orca controls what the AI agent is allowed to do.
+ryk controls what the AI agent is allowed to do.
 
 An agent inside Docker can still:
 
@@ -584,7 +582,7 @@ An agent inside Docker can still:
 * modify config
 * exfiltrate data over allowed network paths
 
-Orca adds behavior-level policy, approvals, and auditability on top of your existing isolation.
+ryk adds behavior-level policy, approvals, and auditability on top of your existing isolation.
 
 ---
 
@@ -604,7 +602,7 @@ They write:
 
 That works until every agent, repo, machine, and teammate needs a different version.
 
-Orca turns those guardrails into a reusable policy layer.
+ryk turns those guardrails into a reusable policy layer.
 
 ---
 
@@ -644,7 +642,7 @@ Longer-term:
 * [Plugin security model](docs/integrations/plugin-security-model.md)
 * [Plugin troubleshooting](docs/integrations/plugin-troubleshooting.md)
 
-Default CLI help teaches Safe Launch only; full surface: `orca help --all`.
+Default CLI help teaches Safe Launch only; full surface: `ryk help --all`.
 
 ---
 
@@ -653,15 +651,15 @@ Default CLI help teaches Safe Launch only; full surface: `orca help --all`.
 ```bash
 ./scripts/zig build
 ./scripts/zig build test
-./zig-out/bin/orca help
-./zig-out/bin/orca redteam --ci
+./zig-out/bin/ryk help
+./zig-out/bin/ryk redteam --ci
 ```
 
 ---
 
 ## Project status
 
-Orca is early, open source, and actively evolving.
+ryk is early, open source, and actively evolving.
 
 Current focus:
 
@@ -673,4 +671,4 @@ Current focus:
 
 Feedback, issues, PRs, and roasts are welcome.
 
-If Orca helps you, please leave a star. It genuinely motivates continued work.
+If ryk helps you, please leave a star. It genuinely motivates continued work.

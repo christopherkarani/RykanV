@@ -23,12 +23,12 @@ jobs:
       - name: Red-team CI
         run: |
           ./scripts/zig build
-          ./zig-out/bin/orca redteam --ci
+          ./zig-out/bin/ryk redteam --ci
       - name: Validate presets
         shell: bash
         run: |
           for policy in policies/presets/*.yaml; do
-            ./zig-out/bin/orca policy check "$policy"
+            ./zig-out/bin/ryk policy check "$policy"
           done
       - name: Package metadata syntax
         shell: bash
@@ -53,8 +53,8 @@ jobs:
           grep -q checksum packaging/docker/Dockerfile
       - name: OS sandbox e2e selftest (fixtures only)
         shell: bash
-        run: ORCA_E2E_SELFTEST=1 ./scripts/os-sandbox-adversarial-e2e.sh
-      # release-dry-run → install-layout-smoke requires orca-dashboard-ui/dist.
+        run: RYK_E2E_SELFTEST=1 ./scripts/os-sandbox-adversarial-e2e.sh
+      # release-dry-run → install-layout-smoke requires ryk-dashboard-ui/dist.
       # Dashboard CI is a separate path-filtered job (no shared FS/artifacts), so
       # build the production bundle here before packaging.
       - name: Setup Node.js (dashboard bundle for release dry-run)
@@ -62,9 +62,9 @@ jobs:
         with:
           node-version: 22.6.0
           cache: npm
-          cache-dependency-path: orca-dashboard-ui/package-lock.json
+          cache-dependency-path: ryk-dashboard-ui/package-lock.json
       - name: Build dashboard production bundle
-        working-directory: orca-dashboard-ui
+        working-directory: ryk-dashboard-ui
         run: |
           npm ci
           npm run build
@@ -84,7 +84,7 @@ jobs:
         with:
           filters: |
             dashboard:
-              - 'orca-dashboard-ui/**'
+              - 'ryk-dashboard-ui/**'
               # Legacy assets loaded by dashboard-contract.test.ts (remediation helpers).
               - 'src/dashboard/**'
       - name: Setup Node.js
@@ -93,14 +93,14 @@ jobs:
         with:
           node-version: 22.6.0
           cache: npm
-          cache-dependency-path: orca-dashboard-ui/package-lock.json
+          cache-dependency-path: ryk-dashboard-ui/package-lock.json
       - name: Dashboard tests and production build
         if: steps.filter.outputs.dashboard == 'true'
-        working-directory: orca-dashboard-ui
+        working-directory: ryk-dashboard-ui
         run: |
           npm ci
           npm test
           npm run build
       - name: Skip notice
         if: steps.filter.outputs.dashboard != 'true'
-        run: echo "No orca-dashboard-ui or src/dashboard changes; skipping dashboard job work."
+        run: echo "No ryk-dashboard-ui or src/dashboard changes; skipping dashboard job work."

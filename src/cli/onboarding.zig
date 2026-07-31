@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const core = @import("orca_core").core;
+const core = @import("ryk_core").core;
 const supervisor = core.supervisor;
 
 const exit_codes = @import("exit_codes.zig");
@@ -167,7 +167,7 @@ pub fn resolveWorkspaceRootFromCwd(io: std.Io, allocator: std.mem.Allocator, cwd
 }
 
 pub fn policyPath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
-    return std.fs.path.join(allocator, &.{ workspace_root, ".orca", "policy.yaml" });
+    return std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "policy.yaml" });
 }
 
 pub fn policyExists(io: std.Io, workspace_root: []const u8) bool {
@@ -177,7 +177,7 @@ pub fn policyExists(io: std.Io, workspace_root: []const u8) bool {
     return plugin.fileExistsAbsolute(io, path);
 }
 
-/// Creates `.orca/policy.yaml` when missing under `workspace_root` (not process cwd).
+/// Creates `.ryk/policy.yaml` when missing under `workspace_root` (not process cwd).
 /// Never passes `--quiet` so init prints next steps.
 pub fn ensurePolicy(
     io: std.Io,
@@ -593,11 +593,11 @@ test "onboarding policyPath and policyExists" {
 
     const path = try policyPath(std.testing.allocator, root);
     defer std.testing.allocator.free(path);
-    try std.testing.expect(std.mem.endsWith(u8, path, ".orca/policy.yaml"));
+    try std.testing.expect(std.mem.endsWith(u8, path, ".ryk/policy.yaml"));
 
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer file.close(std.testing.io);
         try file.writeStreamingAll(std.testing.io, "version: 1\nmode: observe\n");
     }
@@ -612,7 +612,7 @@ test "onboarding parseFlags accepts preset and auto" {
     const flags = try parseFlags(
         &.{ "--auto", "--preset", "strict-local" },
         &stderr_writer,
-        "orca setup",
+        "ryk setup",
         true,
     );
     try std.testing.expect(flags.auto);
@@ -738,9 +738,9 @@ test "onboarding verifyFirewallReady requires policy file" {
     defer std.testing.allocator.free(root);
 
     try std.testing.expect(!verifyFirewallReady(std.testing.io, root));
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer file.close(std.testing.io);
         try file.writeStreamingAll(std.testing.io, "version: 1\nmode: strict\n");
     }
@@ -753,9 +753,9 @@ test "onboarding runVerification for firewall skips shell evaluation" {
 
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer file.close(std.testing.io);
         try file.writeStreamingAll(std.testing.io, "version: 1\nmode: strict\n");
     }
@@ -780,9 +780,9 @@ test "onboarding runVerification for maximum protection with mocks" {
 
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer file.close(std.testing.io);
         try file.writeStreamingAll(std.testing.io, "version: 1\nmode: strict\n");
     }

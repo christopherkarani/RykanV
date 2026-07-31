@@ -1,8 +1,8 @@
 const std = @import("std");
-const orca_policy = @import("orca_core").policy;
-const core = @import("orca_core").core;
+const orca_policy = @import("ryk_core").policy;
+const core = @import("ryk_core").core;
 const supervisor = core.supervisor;
-const core_api = @import("orca_core").api;
+const core_api = @import("ryk_core").api;
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
 const tui = @import("../tui/render.zig");
@@ -42,7 +42,7 @@ fn check(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
                 \\  ryk policy check --preset <observe|ask|strict|ci|redteam|trusted>
                 \\  ryk policy check builtin:<preset>
                 \\
-                \\With no path, validates the workspace policy at .orca/policy.yaml.
+                \\With no path, validates the workspace policy at .ryk/policy.yaml.
                 \\Built-in presets require --preset or an explicit builtin:<name> path.
                 \\
             );
@@ -416,22 +416,22 @@ fn applyPack(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyt
     const cwd = std.Io.Dir.cwd();
     const root = supervisor.resolveWorkspaceRoot(io, allocator, null, ".") catch try cwd.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(root);
-    const orca_dir = try std.fs.path.join(allocator, &.{ root, ".orca" });
-    defer allocator.free(orca_dir);
-    try cwd.createDirPath(io, orca_dir);
-    const path = try std.fs.path.join(allocator, &.{ orca_dir, "policy.yaml" });
+    const ryk_dir = try std.fs.path.join(allocator, &.{ root, ".ryk" });
+    defer allocator.free(ryk_dir);
+    try cwd.createDirPath(io, ryk_dir);
+    const path = try std.fs.path.join(allocator, &.{ ryk_dir, "policy.yaml" });
     defer allocator.free(path);
     const flags: std.Io.File.CreateFlags = if (force) .{} else .{ .exclusive = true };
     const file = cwd.createFile(io, path, flags) catch |err| switch (err) {
         error.PathAlreadyExists => {
-            try stderr.writeAll("ryk policy apply-pack: .orca/policy.yaml already exists; use --force to overwrite.\n");
+            try stderr.writeAll("ryk policy apply-pack: .ryk/policy.yaml already exists; use --force to overwrite.\n");
             return exit_codes.general;
         },
         else => return err,
     };
     defer file.close(io);
     try file.writeStreamingAll(io, orca_policy.presets.agentPresetText(pack));
-    try stdout.print("Applied policy pack '{s}' to .orca/policy.yaml.\n", .{pack_name});
+    try stdout.print("Applied policy pack '{s}' to .ryk/policy.yaml.\n", .{pack_name});
     return exit_codes.success;
 }
 
@@ -506,7 +506,7 @@ test "policy check without path validates workspace policy not builtin" {
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
     const code = try command(std.testing.io, &.{"check"}, &stdout_writer, &stderr_writer);
-    // Workspace may or may not have .orca/policy.yaml depending on cwd.
+    // Workspace may or may not have .ryk/policy.yaml depending on cwd.
     if (code == exit_codes.success) {
         const out = stdout_writer.buffered();
         try std.testing.expect(std.mem.indexOf(u8, out, "Policy OK:") != null);
@@ -550,7 +550,7 @@ test "policy check missing explicit path fails without falling back to builtin" 
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
-    const code = try command(std.testing.io, &.{ "check", "/no/such/orca-policy-check-missing.yaml" }, &stdout_writer, &stderr_writer);
+    const code = try command(std.testing.io, &.{ "check", "/no/such/ryk-policy-check-missing.yaml" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.general, code);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "invalid policy") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Policy OK: builtin:") == null);
@@ -574,12 +574,12 @@ test "policy explain reports matched deny rule" {
 test "policy explain target parser accepts network method option" {
     var stderr_buf: [512]u8 = undefined;
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-    const parsed = try parseExplainTarget(std.testing.allocator, .network, &.{ "--method", "POST", "https://api.github.com/repos/orca/orca/issues" }, &stderr_writer);
+    const parsed = try parseExplainTarget(std.testing.allocator, .network, &.{ "--method", "POST", "https://api.github.com/repos/ryk/ryk/issues" }, &stderr_writer);
     defer parsed.deinit(std.testing.allocator);
 
     try std.testing.expect(!parsed.invalid);
     try std.testing.expectEqualStrings("POST", parsed.method.?);
-    try std.testing.expectEqualStrings("https://api.github.com/repos/orca/orca/issues", parsed.target);
+    try std.testing.expectEqualStrings("https://api.github.com/repos/ryk/ryk/issues", parsed.target);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 

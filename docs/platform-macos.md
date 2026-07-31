@@ -3,7 +3,7 @@
 Run:
 
 ```sh
-./zig-out/bin/orca doctor
+./zig-out/bin/ryk doctor
 ```
 
 Current macOS local output reports process supervision, env filtering, staged writes, MCP stdio proxy, network decision engine, and audit/replay as active.
@@ -67,7 +67,7 @@ These use the run engine with default `--os-sandbox auto` and attach a custom Se
 ```sh
 # Advanced residual override only — default is already hardened.
 ryk run --seatbelt-profile compatible|hardened|strict -- ...
-# or: ORCA_SEATBELT_PROFILE=compatible|hardened|strict
+# or: RYK_SEATBELT_PROFILE=compatible|hardened|strict
 ```
 
 | Grade | Default | Process | Bootstrap FS | Network without route-force | Network with route-force |
@@ -78,13 +78,13 @@ ryk run --seatbelt-profile compatible|hardened|strict -- ...
 
 All grades still allow unfiltered `(allow mach-lookup)` (dyld/system services residual — not an XPC allowlist) and do **not** provide process isolation. Use `compatible` if a tool regresses under `hardened`.
 
-Invalid `ORCA_SEATBELT_PROFILE` values are **ignored with a stderr warning** and keep the default `hardened` (never silently select a weaker grade). Invalid `--seatbelt-profile` fails usage.
+Invalid `RYK_SEATBELT_PROFILE` values are **ignored with a stderr warning** and keep the default `hardened` (never silently select a weaker grade). Invalid `--seatbelt-profile` fails usage.
 
 **Residual identity fields:** active-session `profile_hash` is the SHA-256 of the portable **grant model** (`CompiledProfile`) only — it does **not** incorporate residual grade or the rendered SBPL baselines. Compatible vs hardened vs strict (and route-forced vs not) can share one hash while residual process/FS/network surface differs. Pair hash with `seatbelt_profile=<grade>` and the grade-aware `network_scope` string on the banner / `sandbox_posture` audit reason for full residual identity.
 
 ## Network route forcing
 
-When the proxy backend is active and OS sandbox attach succeeds, Orca renders the child Seatbelt profile without broad `(allow network*)` and permits outbound TCP only to the Orca loopback proxy port.
+When the proxy backend is active and OS sandbox attach succeeds, ryk renders the child Seatbelt profile without broad `(allow network*)` and permits outbound TCP only to the ryk loopback proxy port.
 
 **Agent hosts (`ryk pi`, `ryk claude`, …):** mediation (proxy + route-force) is the default. If either cannot start, the session **fails closed**. Escape with `ryk run --network open -- <agent>` (loud unrestricted warning). Kill switch: `ORCA_AGENT_NETWORK_DEFAULT=legacy`. See `docs/network.md`.
 
@@ -113,9 +113,9 @@ Under **`hardened` / `compatible`**, inbound TCP and bind remain allowed so agen
 
 Under **`strict`**, inbound/bind are omitted (listener lockdown — intentional Landlock parity break). Without route force, `strict` also omits broad `network*` so deny-default blocks network.
 
-The runtime banner reports `network: proxy route-forced...`, and the child env exports `ORCA_PROXY_ROUTE_FORCED=true` plus `ORCA_TRANSPARENT_NETWORK_ENFORCEMENT=tcp-port-route-forced` (TCP route-force honesty label; Seatbelt still does not claim full XPC/mach isolation).
+The runtime banner reports `network: proxy route-forced...`, and the child env exports `RYK_PROXY_ROUTE_FORCED=true` plus `RYK_TRANSPARENT_NETWORK_ENFORCEMENT=tcp-port-route-forced` (TCP route-force honesty label; Seatbelt still does not claim full XPC/mach isolation).
 
-Proxy startup alone is not enough: without a route-forced OS sandbox session, the child env reports `ORCA_PROXY_ROUTE_FORCED=false`, and `--require-backend network_enforce` fails closed.
+Proxy startup alone is not enough: without a route-forced OS sandbox session, the child env reports `RYK_PROXY_ROUTE_FORCED=false`, and `--require-backend network_enforce` fails closed.
 
 **Version gate vs CI evidence:** Seatbelt **capability** remains product majors **14–26** inclusive (version-gated). Outside the matrix → unavailable. **CI attach evidence** is currently collected on **macos-14** only (plus Linux amd64 for Landlock); other matrix majors are local/capability until freeze CI jobs cover them — not silently CI-proven for 14–26. Nested re-apply is not supported; children inherit the first successful apply.
 
@@ -125,11 +125,11 @@ Policies deny common secret paths such as `.env`, `~/.ssh/**`, cloud credential 
 
 ## Limitations
 
-Orca does not install an Endpoint Security extension, kernel extension, or admin-only network filter by default. Seatbelt attach is limited to protected agent child paths under the OS sandbox setting and the version matrix above. Wrapper-level protections alone are not transparent OS enforcement.
+ryk does not install an Endpoint Security extension, kernel extension, or admin-only network filter by default. Seatbelt attach is limited to protected agent child paths under the OS sandbox setting and the version matrix above. Wrapper-level protections alone are not transparent OS enforcement.
 
 ## Seatbelt residual (intentional non-goals)
 
-Seatbelt session attach enforces filesystem path scope for the agent child and, when proxy route forcing is requested, child outbound TCP scope to the Orca proxy port. It does **not** provide general process isolation or IPC isolation.
+Seatbelt session attach enforces filesystem path scope for the agent child and, when proxy route forcing is requested, child outbound TCP scope to the ryk proxy port. It does **not** provide general process isolation or IPC isolation.
 
 Baseline SBPL residuals (not a claim of full confinement). **Default grade is `hardened`:**
 
@@ -144,6 +144,6 @@ Baseline SBPL residuals (not a claim of full confinement). **Default grade is `h
 
 **FS claims that remain accurate** when session-attach succeeds: workspace RW (minus control-root write carve-outs on `.orca` and `.git`), system RO prefixes, no broad `$HOME` grant, and deny of the `/System/Volumes/Data` firmlink home surface (with workspace grants emitted as `/Users/…` form so Seatbelt path filters match live). Under `hardened`/`strict`, bootstrap reads no longer grant broad `/private/var` (only dyld, `/private/var/select`, and tmp).
 
-**Multi-thread / fork residual:** `sandbox_init` is not async-signal-safe; Orca may fork while the parent has (or will have) threads. SBPL is parent-pre-rendered and the child path is short; residual libsystem risk remains accepted. A multi-thread stress canary exists in unit tests; do not claim async-signal-safe attach.
+**Multi-thread / fork residual:** `sandbox_init` is not async-signal-safe; ryk may fork while the parent has (or will have) threads. SBPL is parent-pre-rendered and the child path is short; residual libsystem risk remains accepted. A multi-thread stress canary exists in unit tests; do not claim async-signal-safe attach.
 
 Do not treat Seatbelt attach as process confinement, XPC/mach isolation, or credential isolation.

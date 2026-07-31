@@ -4,7 +4,7 @@ const std = @import("std");
 // Codex Plugin Structure Tests
 // ---------------------------------------------------------------------------
 // These tests validate the P03 Codex plugin package without requiring
-// the Orca binary to be built. They check file existence, JSON validity,
+// the ryk binary to be built. They check file existence, JSON validity,
 // and content invariants.
 // ---------------------------------------------------------------------------
 
@@ -75,7 +75,7 @@ test "codex plugin manifest contains expected fields" {
     try std.testing.expect(obj.get("interface") != null);
 
     const name = obj.get("name").?.string;
-    try std.testing.expectEqualStrings("orca", name);
+    try std.testing.expectEqualStrings("ryk", name);
 }
 
 test "codex plugin manifest points to skills directory" {
@@ -132,7 +132,7 @@ test "each skill has non-empty SKILL.md" {
     }
 }
 
-test "each skill references real orca commands" {
+test "each skill references real ryk commands" {
     for (skills) |skill| {
         const skill_path = std.fmt.allocPrint(std.testing.allocator, "{s}/skills/{s}/SKILL.md", .{ plugin_dir, skill }) catch unreachable;
         defer std.testing.allocator.free(skill_path);
@@ -140,18 +140,18 @@ test "each skill references real orca commands" {
         const content = try readFile(std.testing.allocator, skill_path);
         defer std.testing.allocator.free(content);
 
-        // Every skill should mention "orca" at least once
-        try std.testing.expect(std.mem.indexOf(u8, content, "orca") != null);
+        // Every skill should mention "ryk" at least once
+        try std.testing.expect(std.mem.indexOf(u8, content, "ryk") != null);
     }
 }
 
 test "no drone skill exists in codex plugin" {
-    const drone_skill_path = plugin_dir ++ "/skills/orca-drone/SKILL.md";
+    const drone_skill_path = plugin_dir ++ "/skills/ryk-drone/SKILL.md";
     try std.testing.expect(!fileExists(drone_skill_path));
 }
 
 test "no mcp skill exists in codex plugin" {
-    const mcp_skill_path = plugin_dir ++ "/skills/orca-mcp/SKILL.md";
+    const mcp_skill_path = plugin_dir ++ "/skills/ryk-mcp/SKILL.md";
     try std.testing.expect(!fileExists(mcp_skill_path));
 }
 
@@ -175,7 +175,7 @@ test "codex hooks config is valid JSON" {
     defer parsed.deinit();
 }
 
-test "codex hooks config calls orca hook codex" {
+test "codex hooks config calls ryk hook codex" {
     var dbg_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = dbg_state.deinit();
     const allocator = dbg_state.allocator();
@@ -183,8 +183,8 @@ test "codex hooks config calls orca hook codex" {
     const content = try readFile(allocator, hooks_path);
     defer allocator.free(content);
 
-    // Every hook should reference "orca hook codex"
-    try std.testing.expect(std.mem.indexOf(u8, content, "orca hook codex") != null);
+    // Every hook should reference "ryk hook codex"
+    try std.testing.expect(std.mem.indexOf(u8, content, "ryk hook codex") != null);
 }
 
 test "codex hooks config does not call nonexistent scripts" {
@@ -282,7 +282,7 @@ test "plugin README includes strongest-protection warning" {
     defer std.testing.allocator.free(content);
 
     try std.testing.expect(std.mem.indexOf(u8, content, "strongest local protection") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "orca run --") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "ryk run --") != null);
 }
 
 test "plugin README states no MCP server behavior" {
@@ -321,7 +321,7 @@ test "docs do not claim official marketplace availability" {
 // Hook fixture integration tests (requires built binary)
 // ---------------------------------------------------------------------------
 
-test "fake codex hook payload fixtures still work with orca hook codex" {
+test "fake codex hook payload fixtures still work with ryk hook codex" {
     // This test is a smoke test that validates fixture files are present.
     // Full integration requires the built binary and is tested manually.
     const fixture_dir = "tests/plugin-fixtures/codex";

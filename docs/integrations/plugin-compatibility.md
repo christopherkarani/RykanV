@@ -1,10 +1,10 @@
 # Plugin Compatibility Matrix
 
-This document describes feature compatibility across the Orca CLI and host plugins.
+This document describes feature compatibility across the ryk CLI and host plugins.
 
 ## Feature Matrix
 
-| Feature | Orca CLI | Codex Plugin | Claude Code Plugin | OpenCode Plugin | OpenClaw Plugin |
+| Feature | ryk CLI | Codex Plugin | Claude Code Plugin | OpenCode Plugin | OpenClaw Plugin |
 |---------|-----------|--------------|-------------------|-----------------|-----------------|
 | plugin doctor | yes | calls CLI | calls CLI | calls CLI | calls CLI |
 | manifest status | yes | yes | yes | yes | yes |
@@ -18,15 +18,15 @@ This document describes feature compatibility across the Orca CLI and host plugi
 
 ## Command Compatibility
 
-| Command | Orca CLI | Codex Plugin | Claude Code Plugin | OpenCode Plugin | OpenClaw Plugin |
+| Command | ryk CLI | Codex Plugin | Claude Code Plugin | OpenCode Plugin | OpenClaw Plugin |
 |---------|-----------|--------------|-------------------|-----------------|-----------------|
-| `orca plugin doctor` | native | calls CLI | calls CLI | calls CLI | calls CLI |
-| `orca plugin manifest` | native | calls CLI | calls CLI | calls CLI | calls CLI |
-| `orca plugin install --dry-run` | native | calls CLI | calls CLI | calls CLI | calls CLI |
-| `orca decide` | native | calls CLI | calls CLI | calls CLI | calls CLI |
-| `orca hook` | native | calls CLI | calls CLI | calls CLI | calls CLI |
-| `orca redteam --ci` | native | calls CLI | calls CLI | calls CLI | calls CLI |
-| `orca replay` | native | calls CLI | calls CLI | calls CLI | calls CLI |
+| `ryk plugin doctor` | native | calls CLI | calls CLI | calls CLI | calls CLI |
+| `ryk plugin manifest` | native | calls CLI | calls CLI | calls CLI | calls CLI |
+| `ryk plugin install --dry-run` | native | calls CLI | calls CLI | calls CLI | calls CLI |
+| `ryk decide` | native | calls CLI | calls CLI | calls CLI | calls CLI |
+| `ryk hook` | native | calls CLI | calls CLI | calls CLI | calls CLI |
+| `ryk redteam --ci` | native | calls CLI | calls CLI | calls CLI | calls CLI |
+| `ryk replay` | native | calls CLI | calls CLI | calls CLI | calls CLI |
 
 ## Host Limitations
 
@@ -52,31 +52,31 @@ This document describes feature compatibility across the Orca CLI and host plugi
 ### OpenClaw
 
 - Hooks are advisory; enforcement depends on OpenClaw host support.
-- **npm/ClawHub/CLI-metadata installs are `unprotected`** (`api.on` no-op; hooks do not fire). Supported path: `orca openclaw` (grade **`wrapper`**).
+- **npm/ClawHub/CLI-metadata installs are `unprotected`** (`api.on` no-op; hooks do not fire). Supported path: `ryk openclaw` (grade **`wrapper`**).
 - Actual plugin loading mechanism depends on OpenClaw version.
 - OpenClaw uses hooks, not skills.
-- OpenClaw hooks: `session_start`, `before_tool_call`, `after_tool_call`, `session_end` (map to Orca CLI events `session.start`, `tool.before`, `tool.after`, `session.end`).
+- OpenClaw hooks: `session_start`, `before_tool_call`, `after_tool_call`, `session_end` (map to ryk CLI events `session.start`, `tool.before`, `tool.after`, `session.end`).
 - OpenClaw does not expose dedicated permission hooks; blocking is handled via `before_tool_call` only when hooks actually fire.
-- npm package: published (orca-openclaw-plugin@1.1.3) — distribution only, not enforcement
-- ClawHub submission: published (orca-openclaw-plugin@1.1.3) — distribution only, not enforcement
+- npm package: published (ryk-openclaw-plugin@1.1.3) — distribution only, not enforcement
+- ClawHub submission: published (ryk-openclaw-plugin@1.1.3) — distribution only, not enforcement
 
 ## Version Compatibility
 
-| Component | Version | Minimum Orca CLI |
+| Component | Version | Minimum ryk CLI |
 |-----------|---------|-------------------|
-| Orca core | 1.1.0 | 1.0.0 |
+| ryk core | 1.1.0 | 1.0.0 |
 | Codex plugin | 1.1.0 | 1.0.0 |
 | Claude Code plugin | 1.1.0 | 1.0.0 |
 | OpenCode plugin | 1.1.0 | 1.0.0 |
 | OpenClaw plugin | 1.1.3 | 1.0.0 |
 
-Orca plugins 1.x require Orca CLI >= 1.0.0.
+ryk plugins 1.x require ryk CLI >= 1.0.0.
 
 ## Platform Support
 
-All plugin features work on the same platforms as the Orca CLI:
+All plugin features work on the same platforms as the ryk CLI:
 
-| Platform | Orca CLI | Codex Plugin | Claude Code Plugin | OpenCode Plugin | OpenClaw Plugin |
+| Platform | ryk CLI | Codex Plugin | Claude Code Plugin | OpenCode Plugin | OpenClaw Plugin |
 |----------|-----------|--------------|-------------------|-----------------|-----------------|
 | macOS (arm64) | yes | yes | yes | yes | yes |
 | macOS (x86_64) | yes | yes | yes | yes | yes |
@@ -90,7 +90,7 @@ All plugin features work on the same platforms as the Orca CLI:
 |------------------|-------|-------------|----------|----------|
 | Repo marketplace | `.agents/plugins/marketplace.json` | `.claude-plugin/marketplace.json` | n/a | n/a |
 | Official marketplace | not yet listed | not yet listed | n/a | ClawHub: published |
-| npm package | n/a | n/a | published (orca-opencode-plugin@1.1.1) | published (orca-openclaw-plugin@1.1.3) |
+| npm package | n/a | n/a | published (ryk-opencode-plugin@1.1.1) | published (ryk-openclaw-plugin@1.1.3) |
 
 Repo marketplace files point to the local plugin directories:
 - Codex: `integrations/codex-plugin/`
@@ -108,12 +108,12 @@ These are repo marketplace sources, not official marketplace listings.
 | Telemetry | not included | No phone-home behavior |
 | SaaS requirement | not included | All operations are local |
 | Official marketplace | not yet implemented | Repo marketplace is available; official listing is separate |
-| OpenClaw npm package | published | orca-openclaw-plugin@1.1.3 |
-| OpenClaw ClawHub submission | published in P11 | Published as `orca-openclaw-plugin@1.1.3` |
+| OpenClaw npm package | published | ryk-openclaw-plugin@1.1.3 |
+| OpenClaw ClawHub submission | published in P11 | Published as `ryk-openclaw-plugin@1.1.3` |
 
 ## See Also
 
-- `docs/integrations/orca-cli-plugin.md`
+- `docs/integrations/ryk-cli-plugin.md`
 - `docs/integrations/codex.md`
 - `docs/integrations/claude-code.md`
 - `docs/integrations/opencode.md`

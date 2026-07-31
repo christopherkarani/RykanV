@@ -1,10 +1,10 @@
 const std = @import("std");
 
-const env_util = @import("orca").env_util;
-const redteam = @import("orca").redteam;
+const env_util = @import("ryk").env_util;
+const redteam = @import("ryk").redteam;
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
-const resource_root = @import("orca").resource_root;
+const resource_root = @import("ryk").resource_root;
 const suggestions = @import("suggestions.zig");
 
 const Options = struct {
@@ -29,7 +29,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         if (options.root.len > 0) break :blk try allocator.dupe(u8, options.root);
         var env_map = try env_util.createProcessMap(allocator);
         defer env_map.deinit();
-        const workspace_owned = try env_util.getOwned(&env_map, allocator, "ORCA_WORKSPACE_ROOT");
+        const workspace_owned = try env_util.getOwned(&env_map, allocator, "RYK_WORKSPACE_ROOT");
         defer if (workspace_owned) |owned| allocator.free(owned);
         const workspace_root = workspace_owned orelse ".";
         const resolved = resource_root.resolveResourcePath(io, allocator, .{
@@ -37,14 +37,14 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         }, "fixtures") catch |err| switch (err) {
             error.ResourceNotFound => {
                 // Improved for packaged installs in non-interactive / CI / docker sh -c contexts
-                // where the login-time ORCA_RESOURCE_ROOT export from install.sh is not active.
+                // where the login-time RYK_RESOURCE_ROOT export from install.sh is not active.
                 // Points users at the reliable `ryk env` activation primitive (post-audit DX win)
                 // while still offering the previous escape hatches.
                 try stderr.writeAll(
                     "ryk redteam: no fixtures directory found.\n\n" ++
                         "Fixtures are part of the ryk runtime assets. After a normal install, activate them in the current shell with:\n" ++
                         "    eval \"$(ryk env 2>/dev/null || ryk --print-install-env)\"\n\n" ++
-                        "Then retry. Or set ORCA_RESOURCE_ROOT explicitly to the installed share/orca/current directory, pass an explicit fixture path, or run from a source checkout.\n",
+                        "Then retry. Or set RYK_RESOURCE_ROOT explicitly to the installed share/ryk/current directory, pass an explicit fixture path, or run from a source checkout.\n",
                 );
                 return exit_codes.general;
             },

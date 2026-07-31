@@ -1,9 +1,9 @@
 const std = @import("std");
 
 const env_util = @import("../env_util.zig");
-const audit = @import("orca_core").audit;
-const core = @import("orca_core").core;
-const policy = @import("orca_core").policy;
+const audit = @import("ryk_core").audit;
+const core = @import("ryk_core").core;
+const policy = @import("ryk_core").policy;
 const windows_backend = @import("../sandbox/windows.zig");
 
 pub const max_staged_file_bytes: usize = 16 * 1024 * 1024;
@@ -148,7 +148,7 @@ const read_rules = [_]BuiltinRule{
 
 const write_rules = [_]BuiltinRule{
     .{ .id = "builtin.files.write.deny[0]", .pattern = "./.git/**" },
-    .{ .id = "builtin.files.write.deny[1]", .pattern = "./.orca/**" },
+    .{ .id = "builtin.files.write.deny[1]", .pattern = "./.ryk/**" },
 };
 
 pub fn normalizePath(io: std.Io, allocator: std.mem.Allocator, workspace_root_raw: []const u8, raw_path: []const u8) !NormalizedPath {
@@ -310,7 +310,7 @@ pub fn stageDelete(
         .staged_hash = null,
         .operation = .delete,
         .timestamp = try timestampNowAlloc(io, allocator),
-        .actor = try allocator.dupe(u8, "orca"),
+        .actor = try allocator.dupe(u8, "ryk"),
     });
     try writeIndex(io, allocator, session_dir, session_id, index.entries.items);
     try auditFileEvent(audit_context, .file_write_staged, normalized.policy_path, .{
@@ -380,7 +380,7 @@ pub const StagedPreview = struct {
     }
 };
 
-/// Capture the exact staged generation presented for confirmation. Every Orca staging
+/// Capture the exact staged generation presented for confirmation. Every ryk staging
 /// writer holds the same lock, preventing a writer from changing the index between the
 /// visible summary and its confirmation fingerprint.
 pub fn previewStaged(
@@ -468,7 +468,7 @@ pub fn resolveSessionId(io: std.Io, allocator: std.mem.Allocator, workspace_root
         try validateSessionId(requested);
         return try allocator.dupe(u8, requested);
     }
-    const last_path = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "last" });
+    const last_path = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "last" });
     defer allocator.free(last_path);
     const text = try std.Io.Dir.cwd().readFileAlloc(io, last_path, allocator, std.Io.Limit.limited(core.limits.max_session_id_len + 2));
     defer allocator.free(text);
@@ -531,7 +531,7 @@ fn stageBytes(
         .staged_hash = staged_hash,
         .operation = if (existed) .update else .create,
         .timestamp = try timestampNowAlloc(io, allocator),
-        .actor = try allocator.dupe(u8, "orca"),
+        .actor = try allocator.dupe(u8, "ryk"),
     });
     original_hash = null;
     try writeIndex(io, allocator, session_dir, session_id, index.entries.items);
@@ -699,7 +699,7 @@ fn applyBytesAtomically(
     const parent = std.fs.path.dirname(entry.original_path) orelse ".";
     const base = std.fs.path.basename(entry.original_path);
     // Same directory as the destination so rename is atomic on the same volume.
-    const tmp_name = try std.fmt.allocPrint(allocator, ".orca-apply-{s}.tmp", .{base});
+    const tmp_name = try std.fmt.allocPrint(allocator, ".ryk-apply-{s}.tmp", .{base});
     defer allocator.free(tmp_name);
     const tmp_path = try std.fs.path.join(allocator, &.{ parent, tmp_name });
     defer allocator.free(tmp_path);
@@ -933,7 +933,7 @@ fn auditFileEvent(audit_context: ?AuditContext, event_type: core.event.EventType
         .event_id = try core.event.generateEventId(ts),
         .timestamp = ts,
         .event_type = event_type,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .file_path, .value = target },
         .decision = decision,
     };
@@ -1191,7 +1191,7 @@ fn isWindowsAbsolutePath(path: []const u8) bool {
 
 fn sessionDirPath(allocator: std.mem.Allocator, workspace_root: []const u8, session_id: []const u8) ![]u8 {
     try validateSessionId(session_id);
-    return try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "sessions", session_id });
+    return try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "sessions", session_id });
 }
 
 fn ensureStagingDirs(io: std.Io, session_dir: []const u8) !void {
@@ -1293,7 +1293,7 @@ test "absolute path normalization and workspace containment" {
     defer normalized.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings("src/main.zig", normalized.relative_path);
 
-    try std.testing.expectError(error.OutsideWorkspace, normalizePath(io, std.testing.allocator, root, "/tmp/orca-outside-file"));
+    try std.testing.expectError(error.OutsideWorkspace, normalizePath(io, std.testing.allocator, root, "/tmp/ryk-outside-file"));
 }
 
 test "path traversal cannot escape workspace" {
@@ -1585,7 +1585,7 @@ test "staged create update diff apply discard and index integrity" {
     try std.testing.expect(std.mem.indexOf(u8, diff, "-old") != null);
     try std.testing.expect(std.mem.indexOf(u8, diff, "+newer") != null);
 
-    const index_path = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", "sessions", session_id, "staging-index.json" });
+    const index_path = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", "sessions", session_id, "staging-index.json" });
     defer std.testing.allocator.free(index_path);
     const index_text = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, index_path, std.testing.allocator, .limited(8192));
     defer std.testing.allocator.free(index_text);
@@ -1652,8 +1652,8 @@ test "staging commands reject non-object staging index without panicking" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.createDirPath(std.testing.io, ".git");
-    try tmp.dir.createDirPath(std.testing.io, ".orca/sessions/bad-index");
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = ".orca/sessions/bad-index/staging-index.json", .data = "[]" });
+    try tmp.dir.createDirPath(std.testing.io, ".ryk/sessions/bad-index");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = ".ryk/sessions/bad-index/staging-index.json", .data = "[]" });
     const root = try testAllocRealPath(std.testing.io, tmp.dir, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
 
@@ -1687,7 +1687,7 @@ test "staging index rejects paths outside workspace and session" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.createDirPath(std.testing.io, ".git");
-    try tmp.dir.createDirPath(std.testing.io, ".orca/sessions/evil/staged");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk/sessions/evil/staged");
     const root = try testAllocRealPath(std.testing.io, tmp.dir, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
     const tmp_root = try testAllocRealPath(std.testing.io, tmp.dir, "..", std.testing.allocator);
@@ -1695,13 +1695,13 @@ test "staging index rejects paths outside workspace and session" {
 
     const outside_original = try std.fs.path.join(std.testing.allocator, &.{ tmp_root, "outside-created.txt" });
     defer std.testing.allocator.free(outside_original);
-    const staged_path = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", "sessions", "evil", "staged", "safe.txt" });
+    const staged_path = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", "sessions", "evil", "staged", "safe.txt" });
     defer std.testing.allocator.free(staged_path);
     try writeAbsoluteFile(staged_path, "reviewed\n");
     const staged_hash = try sha256HexAlloc(std.testing.allocator, "reviewed\n");
     defer std.testing.allocator.free(staged_hash);
 
-    const index_path = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", "sessions", "evil", "staging-index.json" });
+    const index_path = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", "sessions", "evil", "staging-index.json" });
     defer std.testing.allocator.free(index_path);
     const index_text = try std.fmt.allocPrint(
         std.testing.allocator,
@@ -1783,8 +1783,8 @@ test "atomic apply writes staged content for create and update" {
     try std.testing.expectEqualStrings("updated\n", upd_text);
 
     // Temp apply artifacts must not remain beside the destination.
-    try std.testing.expectError(error.FileNotFound, tmp.dir.access(io, "src/.orca-apply-new.txt.tmp", .{}));
-    try std.testing.expectError(error.FileNotFound, tmp.dir.access(io, "src/.orca-apply-existing.txt.tmp", .{}));
+    try std.testing.expectError(error.FileNotFound, tmp.dir.access(io, "src/.ryk-apply-new.txt.tmp", .{}));
+    try std.testing.expectError(error.FileNotFound, tmp.dir.access(io, "src/.ryk-apply-existing.txt.tmp", .{}));
 }
 
 test "apply rejects tampered staged blob hash" {
@@ -1843,7 +1843,7 @@ test "filesystem audit events are emitted through session writer" {
     const session: core.session.Session = .{
         .id = try core.session.generateSessionId(ts),
         .started_at = ts,
-        .command = "orca",
+        .command = "ryk",
         .args = &.{"stage"},
         .workspace_root = root,
         .mode = .strict,
@@ -1857,7 +1857,7 @@ test "filesystem audit events are emitted through session writer" {
     defer staged.deinit(std.testing.allocator);
     _ = try discardStaged(io, std.testing.allocator, root, session.id.slice(), "created.txt", ctx);
 
-    const events_path = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", "sessions", session.id.slice(), "events.jsonl" });
+    const events_path = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", "sessions", session.id.slice(), "events.jsonl" });
     defer std.testing.allocator.free(events_path);
     const events = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, events_path, std.testing.allocator, .limited(8192));
     defer std.testing.allocator.free(events);

@@ -1,10 +1,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const env_util = @import("../env_util.zig");
-const core = @import("orca_core").core;
+const core = @import("ryk_core").core;
 const supervisor = core.supervisor;
 const orca_mcp = @import("../mcp/mod.zig");
-const orca_policy = @import("orca_core").policy;
+const orca_policy = @import("ryk_core").policy;
 const sandbox = @import("../sandbox/mod.zig");
 const resource_root = @import("../resource_root.zig");
 const tui = @import("../tui/mod.zig");
@@ -196,7 +196,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     const core_ready = readiness.assess(context.daemon_health, context.policy_present, context.policy_valid);
     if (options.json) {
         // --json frozen: never enter TUI even when --tui is also present.
-        const policy_path = try std.fs.path.join(allocator, &.{ context.workspace_root, ".orca", "policy.yaml" });
+        const policy_path = try std.fs.path.join(allocator, &.{ context.workspace_root, ".ryk", "policy.yaml" });
         defer allocator.free(policy_path);
         try readiness.writeJsonEnvelope(stdout, .{
             .assessment = core_ready,
@@ -658,12 +658,12 @@ fn writeIntegrationReport(io: std.Io, stdout: anytype, context: IntegrationConte
     try stdout.print("  git repository: {s}\n", .{if (context.git_present) "detected" else "not detected"});
     if (context.policy_present) {
         if (context.policy_valid) {
-            try stdout.writeAll("  .orca/policy.yaml: present and valid\n");
+            try stdout.writeAll("  .ryk/policy.yaml: present and valid\n");
         } else {
-            try writeDynamicLine(stdout, "  .orca/policy.yaml: invalid (", context.policy_error orelse "validation failed", ")\n");
+            try writeDynamicLine(stdout, "  .ryk/policy.yaml: invalid (", context.policy_error orelse "validation failed", ")\n");
         }
     } else {
-        try stdout.writeAll("  .orca/policy.yaml: missing\n");
+        try stdout.writeAll("  .ryk/policy.yaml: missing\n");
     }
     if (context.agent_found.len == 0) {
         try stdout.writeAll("  known agent binaries: none detected in PATH\n");
@@ -676,7 +676,7 @@ fn writeIntegrationReport(io: std.Io, stdout: anytype, context: IntegrationConte
         try stdout.writeAll(" (presence only; not a security claim)\n");
     }
     if (context.mcp_manifest_count == 0) {
-        try stdout.writeAll("  MCP manifests: none detected under .orca/mcp\n");
+        try stdout.writeAll("  MCP manifests: none detected under .ryk/mcp\n");
     } else {
         try stdout.print("  MCP manifests: {d} found, {d} invalid\n", .{ context.mcp_manifest_count, context.mcp_manifest_invalid_count });
     }
@@ -698,7 +698,7 @@ fn writeIntegrationReport(io: std.Io, stdout: anytype, context: IntegrationConte
             if (context.daemon_binary_executable) "executable" else "not executable",
         });
         if (context.daemon_binary_untrusted) {
-            try stdout.writeAll("  daemon binary trust: world-writable ORCA_DAEMON path (refused for shell evaluation)\n");
+            try stdout.writeAll("  daemon binary trust: world-writable RYK_DAEMON path (refused for shell evaluation)\n");
         }
     } else {
         try stdout.writeAll("  daemon binary: unresolved\n");
@@ -827,7 +827,7 @@ fn writeHermesFailOpenWarning(io: std.Io, stdout: anytype, context: IntegrationC
         stdout,
         .warn,
         "Hermes effective fail-open",
-        "Hermes allows tools when ryk is missing/old. Not silent (warning each degraded allow). New installs write fail-closed stance; existing stay open until you set ORCA_HERMES_FAIL_OPEN=0 or use `ryk run -- hermes`. Gateway chats may omit the block reason — check agent tool errors.",
+        "Hermes allows tools when ryk is missing/old. Not silent (warning each degraded allow). New installs write fail-closed stance; existing stay open until you set RYK_HERMES_FAIL_OPEN=0 or use `ryk run -- hermes`. Gateway chats may omit the block reason — check agent tool errors.",
     );
 }
 
@@ -876,14 +876,14 @@ fn writeRecommendations(stdout: anytype, context: IntegrationContext) !void {
             try stdout.writeAll("  Reinstall ryk or rebuild with `./scripts/build-all.sh`, then re-run `ryk doctor`.\n");
         }
         if (!context.policy_present) {
-            try stdout.writeAll("  Then run `ryk doctor --fix` and review .orca/policy.yaml.\n");
+            try stdout.writeAll("  Then run `ryk doctor --fix` and review .ryk/policy.yaml.\n");
         } else if (!context.policy_valid) {
-            try stdout.writeAll("  After the daemon is healthy, fix `.orca/policy.yaml`, then run `ryk policy check .orca/policy.yaml`.\n");
+            try stdout.writeAll("  After the daemon is healthy, fix `.ryk/policy.yaml`, then run `ryk policy check .ryk/policy.yaml`.\n");
         }
     } else if (!context.policy_present) {
-        try stdout.writeAll("  Run `ryk doctor --fix` and review .orca/policy.yaml.\n");
+        try stdout.writeAll("  Run `ryk doctor --fix` and review .ryk/policy.yaml.\n");
     } else if (!context.policy_valid) {
-        try stdout.writeAll("  Fix `.orca/policy.yaml`, then run `ryk policy check .orca/policy.yaml`.\n");
+        try stdout.writeAll("  Fix `.ryk/policy.yaml`, then run `ryk policy check .ryk/policy.yaml`.\n");
     } else if (context.mcp_manifest_invalid_count > 0) {
         try stdout.writeAll("  Fix invalid MCP manifests with `ryk mcp manifest check <path>`.\n");
     } else if (!context.redteam_fixtures_present) {
@@ -891,7 +891,7 @@ fn writeRecommendations(stdout: anytype, context: IntegrationContext) !void {
         try stdout.writeAll("  This is common after a fresh packaged install (curl|sh, Homebrew, npm).\n\n");
         try stdout.writeAll("  Paste these two lines in your current terminal (then re-run `ryk doctor`):\n\n");
         try stdout.writeAll("      export PATH=\"$HOME/.local/bin:$PATH\"\n");
-        try stdout.writeAll("      export RYK_RESOURCE_ROOT=\"$HOME/.local/share/orca/current\"\n\n");
+        try stdout.writeAll("      export RYK_RESOURCE_ROOT=\"$HOME/.local/share/ryk/current\"\n\n");
         try stdout.writeAll("  (Use the exact paths printed by your installer if they differ.)\n");
     } else {
         try stdout.writeAll("  Run `ryk run -- <command>` or `ryk redteam --ci` for a local smoke test.\n");
@@ -907,7 +907,7 @@ fn collectIntegrationContext(io: std.Io, allocator: std.mem.Allocator, ensure_ru
 fn collectIntegrationContextAt(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8, ensure_running: bool) !IntegrationContext {
     const git_present = hasPath(io, workspace_root, ".git");
 
-    const policy_path = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "policy.yaml" });
+    const policy_path = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "policy.yaml" });
     defer allocator.free(policy_path);
     var policy_assessment = try readiness.assessPolicyFile(io, allocator, policy_path);
     const policy_present = policy_assessment.present;
@@ -973,7 +973,7 @@ fn collectIntegrationContextAt(io: std.Io, allocator: std.mem.Allocator, workspa
         .ci_detected = ci_status.detected,
         .ci_provider = ci_status.provider,
         .shell_name = shell_name,
-        .audit_sessions_present = hasPath(io, workspace_root, ".orca/sessions"),
+        .audit_sessions_present = hasPath(io, workspace_root, ".ryk/sessions"),
         .redteam_fixtures_present = resource_root.resourcePathExists(io, allocator, .{ .workspace_root = workspace_root }, "fixtures"),
         .daemon_binary_path = if (daemon_inspection) |value| try allocator.dupe(u8, value.path) else null,
         .daemon_binary_exists = if (daemon_inspection) |value| value.exists else false,
@@ -1087,7 +1087,7 @@ fn fileExistsAbsolute(io: std.Io, path: []const u8) bool {
 const ManifestCounts = struct { total: usize = 0, invalid: usize = 0 };
 
 fn countMcpManifests(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8) ManifestCounts {
-    const mcp_dir_path = std.fs.path.join(allocator, &.{ workspace_root, ".orca", "mcp" }) catch return .{};
+    const mcp_dir_path = std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "mcp" }) catch return .{};
     defer allocator.free(mcp_dir_path);
     var dir = std.Io.Dir.cwd().openDir(io, mcp_dir_path, .{ .iterate = true }) catch return .{};
     defer dir.close(io);
@@ -1314,9 +1314,9 @@ test "doctor detects valid policy in current workspace" {
     const tmp_path = try std.testing.allocator.dupe(u8, tmp_path_z);
 
     try tmp.dir.createDirPath(std.testing.io, ".git");
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer file.close(std.testing.io);
         try file.writeStreamingAll(std.testing.io, orca_policy.presets.agentPresetText(.generic_agent));
     }
@@ -1329,7 +1329,7 @@ test "doctor detects valid policy in current workspace" {
     defer context.deinit();
 
     try writeReport(std.testing.io, &stdout_writer, core.platform.detectOs(), sandbox.backend.detect(core.platform.detectOs()), context, true);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), ".orca/policy.yaml: present and valid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), ".ryk/policy.yaml: present and valid") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "git repository: detected") != null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
@@ -1341,9 +1341,9 @@ test "doctor reports invalid policy clearly without printing synthetic secrets" 
     defer std.testing.allocator.free(tmp_path_z);
     const tmp_path = try std.testing.allocator.dupe(u8, tmp_path_z);
 
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer file.close(std.testing.io);
         try file.writeStreamingAll(std.testing.io,
             \\version: 1
@@ -1361,7 +1361,7 @@ test "doctor reports invalid policy clearly without printing synthetic secrets" 
 
     try writeReport(std.testing.io, &stdout_writer, core.platform.detectOs(), sandbox.backend.detect(core.platform.detectOs()), context, true);
     const output = stdout_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, ".orca/policy.yaml: invalid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, ".ryk/policy.yaml: invalid") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "UnsupportedPolicyMode") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "ghp_fakeSecretShouldNotPrint") == null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
@@ -1503,21 +1503,21 @@ test "doctor integration report includes daemon health details" {
     try std.testing.expect(std.mem.indexOf(u8, written, "does not match this ryk CLI") != null);
 }
 
-test "doctor integration report warns on world-writable ORCA_DAEMON path" {
+test "doctor integration report warns on world-writable RYK_DAEMON path" {
     var stdout_buf: [32768]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     const report = sandbox.backend.detect(.linux);
     var context = try testContext(std.testing.allocator, .{
         .daemon_health = .unavailable,
-        .daemon_detail = "ORCA_DAEMON points at a world-writable path.",
+        .daemon_detail = "RYK_DAEMON points at a world-writable path.",
         .daemon_binary_untrusted = true,
     });
     defer context.deinit();
 
     try writeReport(std.testing.io, &stdout_writer, .linux, report, context, true);
     const written = stdout_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, written, "daemon binary trust: world-writable ORCA_DAEMON path") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_DAEMON points at a world-writable path.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "daemon binary trust: world-writable RYK_DAEMON path") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_DAEMON points at a world-writable path.") != null);
 }
 
 test "doctor recommendations prioritize daemon remediation over missing policy" {
@@ -1608,7 +1608,7 @@ test "doctor warns when Hermes is installed with fail-open default" {
     try writeReport(std.testing.io, &stdout_writer, .linux, report, context, false);
     const written = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, written, "Hermes effective fail-open") != null or std.mem.indexOf(u8, written, "fail-open") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_HERMES_FAIL_OPEN=0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_HERMES_FAIL_OPEN=0") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "ryk run -- hermes") != null);
 }
 
@@ -2593,7 +2593,7 @@ fn testContext(allocator: std.mem.Allocator, options: TestContextOptions) !Integ
         .shell_name = try allocator.dupe(u8, "zsh"),
         .audit_sessions_present = false,
         .redteam_fixtures_present = true,
-        .daemon_binary_path = try allocator.dupe(u8, "/tmp/orca-daemon"),
+        .daemon_binary_path = try allocator.dupe(u8, "/tmp/ryk-daemon"),
         .daemon_binary_exists = options.daemon_binary_exists,
         .daemon_binary_executable = options.daemon_binary_executable,
         .daemon_binary_untrusted = options.daemon_binary_untrusted,

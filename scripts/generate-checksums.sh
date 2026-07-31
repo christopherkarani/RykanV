@@ -34,7 +34,7 @@ hash_artifact() {
 }
 
 # Use nullglob-friendly loop: expand both brand prefixes; skip missing globs.
-for pattern in "$ARTIFACT_DIR"/ryk-v* "$ARTIFACT_DIR"/orca-v*; do
+for pattern in "$ARTIFACT_DIR"/ryk-v* "$ARTIFACT_DIR"/ryk-v*; do
   # When a glob matches nothing, the literal pattern remains; skip non-files.
   hash_artifact "$pattern"
 done

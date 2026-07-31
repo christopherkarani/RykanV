@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-DIST_DIR="${ORCA_DIST_DIR:-dist}"
+DIST_DIR="${RYK_DIST_DIR:-dist}"
 VERSION="$(tr -d '[:space:]' < "${REPO_ROOT}/VERSION")"
 
 fail() {
@@ -72,11 +72,11 @@ version_output="$(docker run --rm "${image}" version)"
 run_output="$(docker run --rm --entrypoint sh "${image}" -ec '
   mkdir -p "$HOME/workspace"
   cd "$HOME/workspace"
-  # Prefer primary binary; fall back to orca alias.
+  # Prefer primary binary; fall back to ryk alias.
   CLI=ryk
   command -v ryk >/dev/null 2>&1 || CLI=orca
   "$CLI" init --preset generic-agent >/dev/null
-  "$CLI" policy check .orca/policy.yaml >/dev/null
+  "$CLI" policy check .ryk/policy.yaml >/dev/null
   "$CLI" run -- echo docker-smoke-ok
 ')"
 [[ "${run_output}" == *"docker-smoke-ok"* ]] || fail "container could not protect and run a command"

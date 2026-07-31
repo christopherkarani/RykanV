@@ -1,4 +1,4 @@
-name: orca
+name: ryk
 on:
   push:
   pull_request:
@@ -13,11 +13,11 @@ jobs:
       - name: Test
         run: zig build test
       - name: Red-team
-        run: ./zig-out/bin/orca redteam --ci --json > orca-redteam.json
+        run: ./zig-out/bin/ryk redteam --ci --json > orca-redteam.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: orca-artifacts
+          name: ryk-artifacts
           path: |
-            .orca/**
+            .ryk/**
             orca-redteam.json

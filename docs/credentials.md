@@ -1,10 +1,10 @@
 # Credential Guardrails
 
-Orca implements defense-in-depth credential protection across eight layers. This document describes how each layer works, what patterns are detected, and how to configure credential management.
+ryk implements defense-in-depth credential protection across eight layers. This document describes how each layer works, what patterns are detected, and how to configure credential management.
 
 ## Overview
 
-When you run an AI agent through Orca, your environment variables, files, and network requests may contain sensitive credentials. Orca detects and protects these automatically—before they reach the agent process, before they are written to disk, and (for non-allowlisted destinations) before they leave your machine. **Allowlisted HTTPS** still completes by default: network exfiltration detection is **annotate/audit only** (findings are recorded; there is no config switch that denies allowlisted hosts for secret-like URL surfaces).
+When you run an AI agent through ryk, your environment variables, files, and network requests may contain sensitive credentials. ryk detects and protects these automatically—before they reach the agent process, before they are written to disk, and (for non-allowlisted destinations) before they leave your machine. **Allowlisted HTTPS** still completes by default: network exfiltration detection is **annotate/audit only** (findings are recorded; there is no config switch that denies allowlisted hosts for secret-like URL surfaces).
 
 The protection layers are:
 
@@ -51,7 +51,7 @@ The following env var name patterns are automatically flagged as secret-like:
 
 ### Value Classification
 
-Orca inspects values and classifies them into specific secret types:
+ryk inspects values and classifies them into specific secret types:
 
 | Secret Type | Pattern | Example |
 |-------------|---------|---------|
@@ -90,7 +90,7 @@ The engine also finds secrets embedded in:
 
 **File**: `src/intercept/env.zig`
 
-Before launching the agent process, Orca filters the environment variables based on policy mode and detected secrets.
+Before launching the agent process, ryk filters the environment variables based on policy mode and detected secrets.
 
 ### Filtering Behavior by Mode
 
@@ -113,9 +113,9 @@ A workspace file named like an agent (`./codex`) is **not** treated as that host
 
 In this mode:
 - The child env is **public host keys only** from the launch exact allowlist (PATH, HOME, TERM, display, selected proxy/TLS trust keys, etc.) — secret-like names and values are not passed through. Prefix families such as `LC_*` / `XDG_*` are **not** automatically retained unless listed exactly
-- Granted `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` values are replaced with session-minted `orca-secret://session/...` phantoms; free-form references are rejected
+- Granted `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` values are replaced with session-minted `ryk-secret://session/...` phantoms; free-form references are rejected
 - A ryk-owned loopback provider gateway sets `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` and swaps an exact phantom for raw bytes only on the fixed provider upstream
-- There is **no** `orca-secret://local-dummy/...` substitution into the child env
+- There is **no** `ryk-secret://local-dummy/...` substitution into the child env
 - Raw secret values are never written to policy, audit, or replay artifacts
 - An **active OS sandbox is required** (`--os-sandbox off` is rejected; `auto` promotes to required on)
 - When OS attach succeeds, workspace `.env` / `.env.*` secret forms are denied at the OS layer (exact safe templates `.env.example` / `.env.sample` / `.env.template` remain readable)
@@ -162,7 +162,7 @@ Clients using env keys must honor the injected Anthropic/OpenAI base URL. Otherw
 
 ### Redaction Records
 
-When env vars are filtered, Orca creates redaction records for the audit trail:
+When env vars are filtered, ryk creates redaction records for the audit trail:
 
 ```
 Name: GITHUB_TOKEN
@@ -176,14 +176,14 @@ Reason: environment variable name matches secret pattern
 
 **File**: `src/intercept/credentials.zig`
 
-Orca supports multiple credential brokers for secure secret resolution. The broker system ensures raw secrets are never stored in policy files or exposed in logs.
+ryk supports multiple credential brokers for secure secret resolution. The broker system ensures raw secrets are never stored in policy files or exposed in logs.
 
 ### Supported Brokers
 
 | Broker | Type | Description |
 |--------|------|-------------|
 | `local-dummy` | Reference-only | Creates non-authoritative references for legacy testing; not used by the empty-backpack provider path. |
-| `env-file-dev` | File-based | Reads from `.orca/*.env` files. Local development only. |
+| `env-file-dev` | File-based | Reads from `.ryk/*.env` files. Local development only. |
 | `1password-cli` | CLI integration | Resolves via `op read` command. Requires 1Password CLI. |
 | `macos-keychain` | OS integration | Resolves via `/usr/bin/security` command. macOS only. |
 | `infisical-agent-vault` | Config boundary | Status/config check only. Resolution disabled pending verification. |
@@ -199,7 +199,7 @@ credentials:
       account: my-team
     env_dev:
       type: env-file-dev
-      path: .orca/dev-secrets.env
+      path: .ryk/dev-secrets.env
     macos:
       type: macos-keychain
   refs:
@@ -216,17 +216,17 @@ credentials:
 - **Secure memory wiping**: Resolved secrets are zeroed in memory before deallocation (`@memset(value, 0)`)
 - **Timeout protection**: Broker CLI commands time out after 5 seconds with automatic kill
 - **Redacted errors**: Errors are classified as `login-required`, `missing-ref`, `timeout` without leaking details
-- **Path validation**: `env-file-dev` paths must be under `.orca/` and contain `dev`
-- **Reference checking**: `orca credentials check` validates broker availability without printing values
+- **Path validation**: `env-file-dev` paths must be under `.ryk/` and contain `dev`
+- **Reference checking**: `ryk credentials check` validates broker availability without printing values
 
 ### Checking Broker Status
 
 ```bash
 # Check all brokers
-orca credentials check
+ryk credentials check
 
 # Check a specific credential reference
-orca credentials check github_pat
+ryk credentials check github_pat
 ```
 
 Output:
@@ -243,14 +243,14 @@ Credential brokers:
 
 **File**: `src/policy/validate.zig`
 
-Orca validates credential configurations when loading policies and rejects unsafe setups.
+ryk validates credential configurations when loading policies and rejects unsafe setups.
 
 ### Validation Rules
 
 - **Broker names** must be unique (case-insensitive)
 - **Credential refs** must be unique (case-insensitive)
 - **Credential refs** cannot contain raw secret values (rejected if `classifyString()` detects a secret)
-- **Env-file paths** must be relative, under `.orca/`, and contain `dev`
+- **Env-file paths** must be relative, under `.ryk/`, and contain `dev`
 - **Service credential references** must point to defined refs
 - **Default broker** must exist if brokers are configured
 
@@ -284,7 +284,7 @@ credentials:
 
 **File**: `src/intercept/network.zig`
 
-Orca scans **visible** network surfaces for secret-like values and flags potential exfiltration. Default policy is **annotate/audit only**: findings do not flip allowlisted destinations to deny. There is no body/query DLP on TLS without a MITM architecture (explicit non-goal).
+ryk scans **visible** network surfaces for secret-like values and flags potential exfiltration. Default policy is **annotate/audit only**: findings do not flip allowlisted destinations to deny. There is no body/query DLP on TLS without a MITM architecture (explicit non-goal).
 
 **What is visible:**
 
@@ -316,7 +316,7 @@ When secrets are detected in URLs, they are redacted before audit persistence:
 https://example.com/path?token=[REDACTED:secret:openai_api_key:sha256:a1b2c3d4]&ok=1
 ```
 
-Orca also handles percent-encoded secrets:
+ryk also handles percent-encoded secrets:
 
 ```
 https://example.com/path?token=sk%2DfakeSyntheticOpenAIKey1234567890
@@ -339,7 +339,7 @@ network:
 
 **File**: `src/intercept/commands.zig`
 
-Orca classifies commands by risk and denies credential inspection attempts automatically.
+ryk classifies commands by risk and denies credential inspection attempts automatically.
 
 ### Credential Inspection Risk Class
 
@@ -371,7 +371,7 @@ The classifier checks for access to:
 
 **File**: `src/intercept/files.zig`
 
-Orca denies file read/write access to credential paths through built-in rules.
+ryk denies file read/write access to credential paths through built-in rules.
 
 ### Built-in Read Deny Patterns
 
@@ -407,12 +407,12 @@ The following patterns are denied by default for file reads:
 
 ```
 ./.git/**
-./.orca/**
+./.ryk/**
 ```
 
 ### Symlink Protection
 
-Orca resolves symlinks and denies access if they escape the workspace or point to protected paths.
+ryk resolves symlinks and denies access if they escape the workspace or point to protected paths.
 
 ---
 
@@ -467,7 +467,7 @@ Policy Load → Validation → Runtime → Audit
 
 ## Testing
 
-Orca includes comprehensive tests for credential guardrails:
+ryk includes comprehensive tests for credential guardrails:
 
 ```bash
 # Run all tests

@@ -1,1 +1,1 @@
-{"version":1,"host":"hermes","event":"on_session_start","payload":{"session_id":"test-session-001","workspace":"/tmp/orca-hermes-test"}}
+{"version":1,"host":"hermes","event":"on_session_start","payload":{"session_id":"test-session-001","workspace":"/tmp/ryk-hermes-test"}}

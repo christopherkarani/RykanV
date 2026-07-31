@@ -1,27 +1,27 @@
 # Plugin Troubleshooting
 
-This document covers common issues when installing, running, or uninstalling Orca plugins.
+This document covers common issues when installing, running, or uninstalling ryk plugins.
 
-## Orca binary not found
+## ryk binary not found
 
-**Symptom:** `orca: command not found` or plugin doctor reports `orca binary: not found`.
+**Symptom:** `orca: command not found` or plugin doctor reports `ryk binary: not found`.
 
 **Fix:**
 1. Use the one-command bootstrap:
    ```bash
-   ./scripts/install-orca-plugin.sh opencode project
+   ./scripts/install-ryk-plugin.sh opencode project
    # or
-   ./scripts/install-orca-plugin.sh openclaw project
+   ./scripts/install-ryk-plugin.sh openclaw project
    # or
-   ./scripts/install-orca-plugin.sh hermes project
+   ./scripts/install-ryk-plugin.sh hermes project
    ```
-2. Or build Orca from source:
+2. Or build ryk from source:
    ```bash
    zig build
    ```
 3. Use the full path:
    ```bash
-   ./zig-out/bin/orca plugin doctor codex
+   ./zig-out/bin/ryk plugin doctor codex
    ```
 4. Or add to PATH:
    ```bash
@@ -30,7 +30,7 @@ This document covers common issues when installing, running, or uninstalling Orc
 
 ## Plugin manifest missing
 
-**Symptom:** `orca plugin manifest codex` reports `missing`.
+**Symptom:** `ryk plugin manifest codex` reports `missing`.
 
 **Fix:**
 1. Ensure you are running from the repository root.
@@ -56,7 +56,7 @@ This document covers common issues when installing, running, or uninstalling Orc
 
 ## Codex host not found
 
-**Symptom:** `orca plugin doctor codex` reports `codex binary: not detected`.
+**Symptom:** `ryk plugin doctor codex` reports `codex binary: not detected`.
 
 **Fix:**
 1. Ensure Codex is installed and in PATH.
@@ -64,7 +64,7 @@ This document covers common issues when installing, running, or uninstalling Orc
 
 ## Claude host not found
 
-**Symptom:** `orca plugin doctor claude` reports `claude binary: not detected`.
+**Symptom:** `ryk plugin doctor claude` reports `claude binary: not detected`.
 
 **Fix:**
 1. Ensure Claude Code is installed and in PATH.
@@ -72,10 +72,10 @@ This document covers common issues when installing, running, or uninstalling Orc
 
 ## Hooks not firing
 
-**Symptom:** No Orca output appears when host triggers hooks.
+**Symptom:** No ryk output appears when host triggers hooks.
 
 **Fix:**
-1. Check that `orca` is in PATH.
+1. Check that `ryk` is in PATH.
 2. Check hook configuration exists:
    ```bash
    ls integrations/codex-plugin/hooks/hooks.json
@@ -84,7 +84,7 @@ This document covers common issues when installing, running, or uninstalling Orc
 3. Test manually:
    ```bash
    cat tests/plugin-fixtures/codex/pre_tool_use_command_safe.json \
-     | ./zig-out/bin/orca hook codex PreToolUse
+     | ./zig-out/bin/ryk hook codex PreToolUse
    ```
 4. Check that the host IDE's plugin system is enabled and configured to load hooks.
 
@@ -96,13 +96,13 @@ This document covers common issues when installing, running, or uninstalling Orc
 Hook "orca" returned invalid JSON. The command was blocked for safety.
 ```
 
-**Cause:** Cursor's `beforeShellExecution` hook expects valid JSON on stdout (`permission`, `continue`, …). If `~/.cursor/hooks.json` points at bare `orca` and the binary prints human help instead of JSON, Cursor fail-closes every shell command.
+**Cause:** Cursor's `beforeShellExecution` hook expects valid JSON on stdout (`permission`, `continue`, …). If `~/.cursor/hooks.json` points at bare `ryk` and the binary prints human help instead of JSON, Cursor fail-closes every shell command.
 
-**Fix (recommended):** Re-run Orca install so Cursor uses the generated Python wrapper:
+**Fix (recommended):** Re-run ryk install so Cursor uses the generated Python wrapper:
 
 ```bash
-# From an Orca install tree or release bundle
-./install.sh   # configure_cursor() writes ~/.cursor/hooks/orca-pre-shell.py
+# From a ryk install tree or release bundle
+./install.sh   # configure_cursor() writes ~/.cursor/hooks/ryk-pre-shell.py
 ```
 
 Expected `~/.cursor/hooks.json`:
@@ -113,14 +113,14 @@ Expected `~/.cursor/hooks.json`:
   "hooks": {
     "beforeShellExecution": [
       {
-        "command": "$HOME/.cursor/hooks/orca-pre-shell.py"
+        "command": "$HOME/.cursor/hooks/ryk-pre-shell.py"
       }
     ]
   }
 }
 ```
 
-**Fix (bare `orca` on PATH):** Zig `orca` now supports Rust-compatible stdin agent-hook mode when invoked with no subcommand and piped JSON. Verify outside Cursor's agent shell:
+**Fix (bare `ryk` on PATH):** Zig `ryk` now supports Rust-compatible stdin agent-hook mode when invoked with no subcommand and piped JSON. Verify outside Cursor's agent shell:
 
 ```bash
 echo '{"tool_name":"Bash","tool_input":{"command":"git status"}}' | orca
@@ -133,21 +133,21 @@ echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' | orca
 # deny: {"hookSpecificOutput":{"permissionDecision":"deny",...}}
 ```
 
-Interactive `orca` with no args on a TTY still shows help (not hook mode).
+Interactive `ryk` with no args on a TTY still shows help (not hook mode).
 
-**Mode (bare hook):** Default is `strict`. Ambient `ORCA_MODE=observe` / `ask` / `trusted` is **ignored** so a hostile env cannot soften bare hooks. To intentionally soften bare-hook mode, set both:
+**Mode (bare hook):** Default is `strict`. Ambient `RYK_MODE=observe` / `ask` / `trusted` is **ignored** so a hostile env cannot soften bare hooks. To intentionally soften bare-hook mode, set both:
 
 ```bash
-export ORCA_ALLOW_MODE_SOFTEN=1
-export ORCA_MODE=observe
+export RYK_ALLOW_MODE_SOFTEN=1
+export RYK_MODE=observe
 ```
 
-Prefer `orca run -- …` (session-recorded `shim_mode`) for intentional soft modes under an agent session.
+Prefer `ryk run -- …` (session-recorded `shim_mode`) for intentional soft modes under an agent session.
 
 **Wrapper smoke test:**
 
 ```bash
-echo '{"command":"echo hello","cwd":"'"$PWD"'"}' | python3 ~/.cursor/hooks/orca-pre-shell.py
+echo '{"command":"echo hello","cwd":"'"$PWD"'"}' | python3 ~/.cursor/hooks/ryk-pre-shell.py
 ```
 
 Should print one JSON object with `"permission":"allow"` for safe commands.
@@ -160,7 +160,7 @@ Should print one JSON object with `"permission":"allow"` for safe commands.
 1. Test the hook manually and inspect stdout:
    ```bash
    cat tests/plugin-fixtures/codex/pre_tool_use_command_safe.json \
-     | ./zig-out/bin/orca hook codex PreToolUse 2>/dev/null
+     | ./zig-out/bin/ryk hook codex PreToolUse 2>/dev/null
    ```
 2. Ensure stderr is separate from stdout. Human-readable logs go to stderr; only JSON goes to stdout.
 3. If stdout contains non-JSON text, check that no shell aliases or wrappers are interfering.
@@ -170,19 +170,19 @@ Should print one JSON object with `"permission":"allow"` for safe commands.
 **Symptom:** Host IDE reports hook timed out.
 
 **Fix:**
-1. Check that `.orca/policy.yaml` is small and loads quickly.
+1. Check that `.ryk/policy.yaml` is small and loads quickly.
 2. Ensure the machine is not under extreme load.
 3. The default timeouts are 10s for most hooks, 15s for PreToolUse and PermissionRequest.
 4. If policy evaluation is slow, consider simplifying the policy file.
 
 ## Permission errors
 
-**Symptom:** `Permission denied` when running `orca` or accessing plugin files.
+**Symptom:** `Permission denied` when running `ryk` or accessing plugin files.
 
 **Fix:**
-1. Ensure the `orca` binary has execute permissions:
+1. Ensure the `ryk` binary has execute permissions:
    ```bash
-   chmod +x ./zig-out/bin/orca
+   chmod +x ./zig-out/bin/ryk
    ```
 2. Ensure plugin directories are readable:
    ```bash
@@ -197,16 +197,16 @@ Should print one JSON object with `"permission":"allow"` for safe commands.
 **Fix:**
 1. Create a default policy:
    ```bash
-   ./zig-out/bin/orca init --preset generic-agent
+   ./zig-out/bin/ryk init --preset generic-agent
    ```
 2. Validate the policy:
    ```bash
-   ./zig-out/bin/orca policy check .orca/policy.yaml
+   ./zig-out/bin/ryk policy check .ryk/policy.yaml
    ```
 
 ## Redteam failure
 
-**Symptom:** `orca redteam --ci` reports failures.
+**Symptom:** `ryk redteam --ci` reports failures.
 
 **Fix:**
 1. Check that all fixtures are present:
@@ -239,7 +239,7 @@ Should print one JSON object with `"permission":"allow"` for safe commands.
 **Reinstall:**
 1. Uninstall first.
 2. Reinstall from the release artifact or local path.
-3. Run `orca plugin doctor <host>` to verify.
+3. Run `ryk plugin doctor <host>` to verify.
 
 ## Marketplace path issues
 
@@ -255,7 +255,7 @@ Should print one JSON object with `"permission":"allow"` for safe commands.
 
 ## Still stuck?
 
-1. Run `orca doctor` for a full capability report.
-2. Run `orca plugin doctor <host> --json` for detailed plugin status.
-3. Check `docs/troubleshooting.md` for general Orca issues.
+1. Run `ryk doctor` for a full capability report.
+2. Run `ryk plugin doctor <host> --json` for detailed plugin status.
+3. Check `docs/troubleshooting.md` for general ryk issues.
 4. Review the phase handoffs in `docs/integrations/` for known limitations.

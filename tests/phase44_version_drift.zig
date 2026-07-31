@@ -28,7 +28,7 @@ test "phase 44 VERSION matches install script defaults" {
     const install_sh = try readFile("scripts/install.sh");
     defer std.testing.allocator.free(install_sh);
     try expectContains(install_sh, "../VERSION");
-    try expectContains(install_sh, "ORCA_RESOURCE_ROOT");
+    try expectContains(install_sh, "RYK_RESOURCE_ROOT");
     try expectContains(install_sh, "integrations");
     try expectContains(install_sh, "CLI-only");
     try expectContains(install_sh, "shell_engine");
@@ -38,8 +38,8 @@ test "phase 44 VERSION matches install script defaults" {
     try expectContains(build_release, "../VERSION");
     try expectContains(build_release, "CLI-only");
     try expectContains(build_release, "shell_engine");
-    try expectContains(build_release, "if [ -d \"orca-dashboard-ui/dist\" ]");
-    try expectContains(build_release, "cp -R orca-dashboard-ui/dist");
+    try expectContains(build_release, "if [ -d \"ryk-dashboard-ui/dist\" ]");
+    try expectContains(build_release, "cp -R ryk-dashboard-ui/dist");
 
     const render_manifests = try readFile("scripts/render-package-manifests.sh");
     defer std.testing.allocator.free(render_manifests);
@@ -48,34 +48,34 @@ test "phase 44 VERSION matches install script defaults" {
     const install_ps1 = try readFile("scripts/install.ps1");
     defer std.testing.allocator.free(install_ps1);
     try expectContains(install_ps1, "VERSION");
-    try expectContains(install_ps1, "ORCA_RESOURCE_ROOT");
+    try expectContains(install_ps1, "RYK_RESOURCE_ROOT");
     try expectContains(install_ps1, "CLI-only");
     try expectContains(install_ps1, "shell_engine");
 
-    const homebrew = try readFile("packaging/homebrew/Formula/orca.rb");
+    const homebrew = try readFile("packaging/homebrew/Formula/ryk.rb");
     defer std.testing.allocator.free(homebrew);
     const version_needle = try std.fmt.allocPrint(std.testing.allocator, "version \"{s}\"", .{canonical});
     defer std.testing.allocator.free(version_needle);
     try expectContains(homebrew, version_needle);
     try expectContains(homebrew, "bin.install \"bin/orca\"");
-    try std.testing.expect(std.mem.indexOf(u8, homebrew, "bin.install \"bin/orca-daemon\"") == null);
-    try expectContains(homebrew, "pkgshare.install \"orca-dashboard-ui\"");
+    try std.testing.expect(std.mem.indexOf(u8, homebrew, "bin.install \"bin/ryk-daemon\"") == null);
+    try expectContains(homebrew, "pkgshare.install \"ryk-dashboard-ui\"");
 
-    const npm_launcher = try readFile("packaging/npm/bin/orca.js");
+    const npm_launcher = try readFile("packaging/npm/bin/ryk.js");
     defer std.testing.allocator.free(npm_launcher);
-    try expectContains(npm_launcher, "\"orca-dashboard-ui\"");
-    try std.testing.expect(std.mem.indexOf(u8, npm_launcher, "orca-daemon") == null);
+    try expectContains(npm_launcher, "\"ryk-dashboard-ui\"");
+    try std.testing.expect(std.mem.indexOf(u8, npm_launcher, "ryk-daemon") == null);
 
     const dockerfile = try readFile("packaging/docker/Dockerfile");
     defer std.testing.allocator.free(dockerfile);
-    try expectContains(dockerfile, "COPY orca /opt/orca");
-    try expectContains(dockerfile, "ORCA_RESOURCE_ROOT=\"/opt/orca\"");
+    try expectContains(dockerfile, "COPY ryk /opt/ryk");
+    try expectContains(dockerfile, "RYK_RESOURCE_ROOT=\"/opt/orca\"");
     try expectContains(dockerfile, "USER orca");
-    try expectContains(dockerfile, "test ! -e /opt/orca/bin/orca-daemon");
+    try expectContains(dockerfile, "test ! -e /opt/ryk/bin/ryk-daemon");
 }
 
 test "dashboard CI and release workflows honor the declared Node engine" {
-    const package_json = try readFile("orca-dashboard-ui/package.json");
+    const package_json = try readFile("ryk-dashboard-ui/package.json");
     defer std.testing.allocator.free(package_json);
     try expectContains(package_json, "\"node\": \">=22.6.0\"");
 
@@ -85,7 +85,7 @@ test "dashboard CI and release workflows honor the declared Node engine" {
 
     const test_workflow = try readFile(".github/workflows/test.yml");
     defer std.testing.allocator.free(test_workflow);
-    for ([_][]const u8{ "node-version: 22.6.0", "working-directory: orca-dashboard-ui", "npm ci", "npm test", "npm run build" }) |required| {
+    for ([_][]const u8{ "node-version: 22.6.0", "working-directory: ryk-dashboard-ui", "npm ci", "npm test", "npm run build" }) |required| {
         try expectContains(test_workflow, required);
     }
 }

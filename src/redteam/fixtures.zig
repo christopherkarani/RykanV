@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const core = @import("orca_core").core;
-const policy = @import("orca_core").policy;
+const core = @import("ryk_core").core;
+const policy = @import("ryk_core").policy;
 const sandbox = @import("../sandbox/mod.zig");
 
 pub const max_fixture_yaml_bytes: usize = 64 * 1024;

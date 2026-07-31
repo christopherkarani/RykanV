@@ -1,10 +1,10 @@
-# @orca-sec/ryk (npm launcher)
+# @rykan/ryk (npm launcher)
 
 npm launcher template for the Zig-built **ryk** CLI (shell evaluation is in-process Zig `shell_engine`).
 
-- **Primary package name:** `@orca-sec/ryk`
-- **Bins:** `ryk` (primary), `orca` (compat alias for one major)
-- **Scope:** remains `@orca-sec` (do not rename scope in Phase 5a)
+- **Primary package name:** `@rykan/ryk`
+- **Bins:** `ryk` (primary), `ryk` (compat alias for one major)
+- **Scope:** remains `@rykan` (do not rename scope in Phase 5a)
 - **Artifacts:** downloads `ryk-v{version}-*` release archives (falls back to dual-published `orca-v*` if needed)
 
 > **Do not publish** this template directory while checksums are still `PLACEHOLDER_*`.
@@ -12,12 +12,12 @@ npm launcher template for the Zig-built **ryk** CLI (shell evaluation is in-proc
 
 Primary publisher: `./scripts/cut-release.sh --live` (see `docs/dev/cut-release-shortcut.md`).
 
-Legacy package name `@orca-sec/orca` is superseded by `@orca-sec/ryk`; keep installs working via the `orca` bin shim during the dual-name window.
+Legacy package name `@rykan/ryk` is superseded by `@rykan/ryk`; keep installs working via the `ryk` bin shim during the dual-name window.
 
 ## Install (after publish)
 
 ```sh
-npm install -g @orca-sec/ryk
+npm install -g @rykan/ryk
 ryk version
-orca version   # same product, compat name
+ryk version   # same product, compat name
 ```

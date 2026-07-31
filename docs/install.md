@@ -8,7 +8,7 @@
 ./zig-out/bin/ryk version --json
 ```
 
-Use Zig `0.16.0` (see `.zigversion`; prefer `./scripts/zig`). The product CLI is Zig-only: shell evaluation runs in-process via `shell_engine` (no Rust toolchain or `orca-daemon` companion). `./scripts/build-all.sh` and `./scripts/zig build` both produce `./zig-out/bin/ryk` (and `orca` compat alias).
+Use Zig `0.16.0` (see `.zigversion`; prefer `./scripts/zig`). The product CLI is Zig-only: shell evaluation runs in-process via `shell_engine` (no Rust toolchain or `ryk-daemon` companion). `./scripts/build-all.sh` and `./scripts/zig build` both produce `./zig-out/bin/ryk` (and `ryk` compat alias).
 
 ## Release Artifacts
 
@@ -32,7 +32,7 @@ Do not use an install-only path without verification. Download the archive, veri
 
 ## Homebrew
 
-Homebrew distribution uses the `christopherkarani/homebrew-orca` tap and the GitHub Release archives from `christopherkarani/rykan`.
+Homebrew distribution uses the `christopherkarani/homebrew-ryk` tap and the GitHub Release archives from `christopherkarani/rykan`.
 
 Maintainer release flow:
 
@@ -46,7 +46,7 @@ brew test dist/package-manifests/homebrew/Formula/orca.rb
 User install after the tap repository is published:
 
 ```sh
-brew install christopherkarani/orca/ryk
+brew install christopherkarani/ryk/ryk
 ```
 
 ## Manual Artifact Install
@@ -66,9 +66,9 @@ ryk update --check  # report only
 ryk update --yes    # non-interactive
 ```
 
-`ryk update` reuses the official installer (checksums + atomic replace). Homebrew/npm installs should use `brew upgrade ryk` / `npm update -g @orca-sec/ryk` instead (or `ryk update --force` to override).
+`ryk update` reuses the official installer (checksums + atomic replace). Homebrew/npm installs should use `brew upgrade ryk` / `npm update -g @rykan/ryk` instead (or `ryk update --force` to override).
 
-The curl installer (`scripts/install.sh`) prints a step-based receipt (brand header, phases, activation hero). It honors `NO_COLOR` and `RYK_INSTALL_QUIET=1` / `ORCA_INSTALL_QUIET=1` (non-error silence; activation line still printed). Host configuration is never performed by the installer — that remains `ryk start` (orca alias works).
+The curl installer (`scripts/install.sh`) prints a step-based receipt (brand header, phases, activation hero). It honors `NO_COLOR` and `RYK_INSTALL_QUIET=1` (non-error silence; activation line still printed). Host configuration is never performed by the installer — that remains `ryk start`.
 
 Windows (`scripts/install.ps1`) shares the same core contracts (checksum verify, binary + runtime install, structured failures, quiet mode, activation handoff) with a smaller surface: it does not manage `PATH` (use your profile / user PATH) and does not soft-warn on a missing dashboard UI bundle.
 
@@ -76,9 +76,9 @@ Windows (`scripts/install.ps1`) shares the same core contracts (checksum verify,
 
 Templates exist under `packaging/`:
 
-- Homebrew: `packaging/homebrew/Formula/ryk.rb` (primary), `orca.rb` (compat)
-- Scoop: `packaging/scoop/ryk.json` (primary), `orca.json` (compat)
-- WinGet: `packaging/winget/ryk.yaml` (primary), `orca.yaml` (compat)
+- Homebrew: `packaging/homebrew/Formula/ryk.rb`
+- Scoop: `packaging/scoop/ryk.json`
+- WinGet: `packaging/winget/ryk.yaml`
 - npm wrapper: `packaging/npm/package.json`
 - Docker: `packaging/docker/Dockerfile`
 
@@ -86,12 +86,12 @@ They contain release-time placeholders until artifacts and checksums are generat
 
 ## macOS Notes
 
-macOS builds provide process supervision, environment filtering, staged writes, PATH/shell shims, MCP stdio proxying, audit/replay, and network policy decisions. Proxy route forcing is available per session when the proxy backend and OS sandbox attach are both active; proxy startup alone is not route forcing. OS filesystem isolation for protected agent children is available through the run engine (`orca <agent>`; advanced flag: `orca run --os-sandbox auto|on|off`) using Seatbelt on product majors **14–26** (capability/version gate). **CI attach evidence** is currently **macos-14** (plus Linux amd64 for Landlock); other majors are local until freeze CI covers them. Doctor capability probes are not a live session claim; session-attach is proven only after child apply-before-exec succeeds.
+macOS builds provide process supervision, environment filtering, staged writes, PATH/shell shims, MCP stdio proxying, audit/replay, and network policy decisions. Proxy route forcing is available per session when the proxy backend and OS sandbox attach are both active; proxy startup alone is not route forcing. OS filesystem isolation for protected agent children is available through the run engine (`ryk <agent>`; advanced flag: `ryk run --os-sandbox auto|on|off`) using Seatbelt on product majors **14–26** (capability/version gate). **CI attach evidence** is currently **macos-14** (plus Linux amd64 for Landlock); other majors are local until freeze CI covers them. Doctor capability probes are not a live session claim; session-attach is proven only after child apply-before-exec succeeds.
 
 ## Linux Notes
 
-Linux builds use backend detection for namespace, seccomp, Landlock, cgroup, and process supervision capability. OS filesystem isolation for protected agent children is available through the run engine (`orca <agent>`; advanced flag: `orca run --os-sandbox auto|on|off`) using Landlock when the host supports **ABI ≥ 1** (kernel **5.13+**). **CI attach evidence** is currently **linux amd64**; other cells are local until freeze jobs exist. Doctor Landlock probes are capability evidence only and never alone authorize a session `active` claim. `--os-sandbox on` fails closed when attach cannot complete.
+Linux builds use backend detection for namespace, seccomp, Landlock, cgroup, and process supervision capability. OS filesystem isolation for protected agent children is available through the run engine (`ryk <agent>`; advanced flag: `ryk run --os-sandbox auto|on|off`) using Landlock when the host supports **ABI ≥ 1** (kernel **5.13+**). **CI attach evidence** is currently **linux amd64**; other cells are local until freeze jobs exist. Doctor Landlock probes are capability evidence only and never alone authorize a session `active` claim. `--os-sandbox on` fails closed when attach cannot complete.
 
 ## Windows Notes
 
-Windows builds use `ryk.exe` (`orca.exe` alias), PowerShell scripts, path normalization, command wrappers, and process cleanup support where implemented. Transparent filesystem and network enforcement are limited; there is no kernel OS filesystem session-attach backend on Windows in this release.
+Windows builds use `ryk.exe` (`ryk.exe` alias), PowerShell scripts, path normalization, command wrappers, and process cleanup support where implemented. Transparent filesystem and network enforcement are limited; there is no kernel OS filesystem session-attach backend on Windows in this release.

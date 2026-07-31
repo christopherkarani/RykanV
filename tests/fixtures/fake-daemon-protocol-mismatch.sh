@@ -13,7 +13,7 @@ home = os.environ.get("HOME")
 if not home:
     sys.exit(1)
 
-runtime = pathlib.Path(home) / ".orca"
+runtime = pathlib.Path(home) / ".ryk"
 runtime.mkdir(parents=True, exist_ok=True, mode=0o700)
 socket_path = runtime / "daemon.sock"
 pid_path = runtime / "daemon.pid"

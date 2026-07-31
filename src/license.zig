@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const core = @import("orca_core").core;
+const core = @import("ryk_core").core;
 const Ed25519 = std.crypto.sign.Ed25519;
 
 pub const Feature = enum {
@@ -85,7 +85,7 @@ pub const ActivationResult = struct {
     }
 };
 
-const dev_issuer = "orca-local-dev-ed25519";
+const dev_issuer = "ryk-local-dev-ed25519";
 const dev_public_key_hex = "a9ab1957b0ef6d1403de507376dc5edfa2c6af06446117424e3410c35edfc087";
 
 const dev_free_payload = "{\"version\":1,\"license_id\":\"dev-free\",\"tier\":\"Free\",\"subject\":\"local development\",\"issued_at\":\"2026-01-01\",\"expires_at\":null}";
@@ -139,24 +139,24 @@ pub fn activateToPath(io: std.Io, allocator: std.mem.Allocator, key_or_file: []c
 
 pub fn defaultLicensePath(allocator: std.mem.Allocator) ![]u8 {
     if (std.c.getenv("XDG_CONFIG_HOME")) |xdg| {
-        return std.fs.path.join(allocator, &.{ std.mem.sliceTo(xdg, 0), "orca", "license.json" });
+        return std.fs.path.join(allocator, &.{ std.mem.sliceTo(xdg, 0), "ryk", "license.json" });
     }
     const home = std.c.getenv("HOME") orelse return error.EnvironmentVariableMissing;
     return licensePathFromHome(allocator, std.mem.sliceTo(home, 0));
 }
 
 pub fn licensePathFromHome(allocator: std.mem.Allocator, home: []const u8) ![]u8 {
-    return std.fs.path.join(allocator, &.{ home, ".config", "orca", "license.json" });
+    return std.fs.path.join(allocator, &.{ home, ".config", "ryk", "license.json" });
 }
 
 fn signedTextForActivationInput(io: std.Io, allocator: std.mem.Allocator, key_or_file: []const u8) ![]u8 {
-    if (std.mem.eql(u8, key_or_file, "dev-free") or std.mem.eql(u8, key_or_file, "orca-dev-free")) {
+    if (std.mem.eql(u8, key_or_file, "dev-free") or std.mem.eql(u8, key_or_file, "ryk-dev-free")) {
         return writeDevSignedText(allocator, dev_free_payload, dev_free_signature);
     }
-    if (std.mem.eql(u8, key_or_file, "dev-pro") or std.mem.eql(u8, key_or_file, "orca-dev-pro")) {
+    if (std.mem.eql(u8, key_or_file, "dev-pro") or std.mem.eql(u8, key_or_file, "ryk-dev-pro")) {
         return writeDevSignedText(allocator, dev_pro_payload, dev_pro_signature);
     }
-    if (std.mem.eql(u8, key_or_file, "dev-team") or std.mem.eql(u8, key_or_file, "orca-dev-team")) {
+    if (std.mem.eql(u8, key_or_file, "dev-team") or std.mem.eql(u8, key_or_file, "ryk-dev-team")) {
         return writeDevSignedText(allocator, dev_team_payload, dev_team_signature);
     }
     return try std.Io.Dir.cwd().readFileAlloc(io, key_or_file, allocator, .limited(core.limits.max_policy_file_len));
@@ -289,13 +289,13 @@ test "activation writes signed license to requested config path" {
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    const path = try std.fs.path.join(std.testing.allocator, &.{ root, ".config", "orca", "license.json" });
+    const path = try std.fs.path.join(std.testing.allocator, &.{ root, ".config", "ryk", "license.json" });
     defer std.testing.allocator.free(path);
 
     var activated = try activateToPath(std.testing.io, std.testing.allocator, "dev-team", path);
     defer activated.deinit();
     try std.testing.expectEqual(Tier.team, activated.license.tier);
-    try tmp.dir.access(std.testing.io, ".config/orca/license.json", .{});
+    try tmp.dir.access(std.testing.io, ".config/ryk/license.json", .{});
     var current = try statusFromPath(std.testing.io, std.testing.allocator, path);
     defer current.deinit();
     try std.testing.expectEqual(Tier.team, current.tier);

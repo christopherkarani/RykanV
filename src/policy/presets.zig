@@ -113,70 +113,70 @@ pub fn defaultPreset() Preset {
 }
 
 const generic_agent_policy =
-    \\# Orca preset: generic-agent
+    \\# ryk preset: generic-agent
     \\# Conservative starting point for local coding agents with no proprietary assumptions.
     \\# Edit allowlists for your repository before switching broad actions from ask to allow.
     \\
 ++ ask_policy;
 
 const claude_code_policy =
-    \\# Orca preset: claude-code
+    \\# ryk preset: claude-code
     \\# Generic/experimental: assumes a normal local coding-agent workflow, not private Claude Code internals.
     \\
 ++ ask_policy;
 
 const codex_policy =
-    \\# Orca preset: codex
+    \\# ryk preset: codex
     \\# Generic/experimental: designed for local Codex-style coding tasks without model-provider secrets.
     \\
 ++ ask_policy;
 
 const cursor_agent_policy =
-    \\# Orca preset: cursor-agent
+    \\# ryk preset: cursor-agent
     \\# Generic/experimental: conservative local editor-agent policy, not a claim about Cursor internals.
     \\
 ++ ask_policy;
 
 const opencode_policy =
-    \\# Orca preset: opencode
+    \\# ryk preset: opencode
     \\# Generic/experimental: tuned for local coding-agent workflows and editable allowlists.
     \\
 ++ ask_policy;
 
 const cline_roo_policy =
-    \\# Orca preset: cline-roo
+    \\# ryk preset: cline-roo
     \\# Generic/experimental: conservative policy for local editor agents with MCP-style extensions.
     \\
 ++ ask_policy;
 
 const mcp_dev_policy =
-    \\# Orca preset: mcp-dev
-    \\# Conservative preset for developing stdio MCP servers through Orca.
+    \\# ryk preset: mcp-dev
+    \\# Conservative preset for developing stdio MCP servers through ryk.
     \\# Manifests still need explicit command/hash binding; this policy does not trust servers by name alone.
     \\
 ++ ask_policy;
 
 const github_actions_policy =
-    \\# Orca preset: github-actions
+    \\# ryk preset: github-actions
     \\# CI-safe preset. CI mode never prompts; ask-class decisions are denied unless explicitly allowed.
     \\# Do not put workflow tokens or repository secrets in this policy.
     \\
 ++ ci_policy;
 
 const solo_dev_policy =
-    \\# Orca policy pack: solo-dev
+    \\# ryk policy pack: solo-dev
     \\# Ask-mode local development pack for one developer. Keeps secret and destructive-action denies active.
     \\
 ++ ask_policy;
 
 const strict_local_policy =
-    \\# Orca preset: strict-local
+    \\# ryk preset: strict-local
     \\# Local strict mode. Unknown actions are denied or staged; add narrow allow rules as needed.
     \\
 ++ strict_policy;
 
 const no_external_comms_policy =
-    \\# Orca preset: no-external-comms
+    \\# ryk preset: no-external-comms
     \\# Strict local baseline plus effect-class denials for messaging, social publish, and payments.
     \\# Blocks tools like send_email / send_imessage / post_twitter by semantic effect, not exact tool names.
     \\
@@ -196,19 +196,19 @@ const no_external_comms_policy =
 ;
 
 const team_ci_policy =
-    \\# Orca policy pack: team-ci
+    \\# ryk policy pack: team-ci
     \\# CI-safe team baseline. Ask-class decisions deny in CI; core safety and redteam commands are allowed.
     \\
 ++ ci_policy;
 
 const openclaw_hermes_policy =
-    \\# Orca policy pack: openclaw-hermes
+    \\# ryk policy pack: openclaw-hermes
     \\# Local plugin workflow pack for OpenClaw and Hermes hook development.
     \\
 ++ ask_policy;
 
 const trusted_local_policy =
-    \\# Orca preset: trusted-local
+    \\# ryk preset: trusted-local
     \\# Less restrictive local preset for trusted repositories. Secret redaction and deny rules remain enabled.
     \\
 ++ trusted_policy;
@@ -288,8 +288,8 @@ const common_strict_rules =
     \\      # Dual patterns for robustness across hook/plugin path normalizations.
     \\      - "./.git/**"
     \\      - ".git/**"
-    \\      - "./.orca/**"
-    \\      - ".orca/**"
+    \\      - "./.ryk/**"
+    \\      - ".ryk/**"
     \\    mode: staged
     \\
     \\commands:
@@ -417,7 +417,7 @@ pub const ask_policy =
 /// YOLO + seatbelt hero preset: same conservative rule body as ask/strict, `mode: yolo`.
 /// Shares the ask severity matrix under sandbox + hard fence; not refuse-all.
 pub const yolo_policy =
-    \\# Orca preset: yolo
+    \\# ryk preset: yolo
     \\# YOLO + seatbelt: autonomous local agent under sandbox and hard fence.
     \\# Severity matrix matches ask (not refuse-all). Critical/catastrophe always denied.
     \\# Sticky trust (once/session/effect-class) may skip re-ask after user allow — never for hard fence.
@@ -552,8 +552,8 @@ pub const trusted_policy =
     \\      # Dual patterns for robustness across hook/plugin path normalizations.
     \\      - "./.git/**"
     \\      - ".git/**"
-    \\      - "./.orca/**"
-    \\      - ".orca/**"
+    \\      - "./.ryk/**"
+    \\      - ".ryk/**"
     \\    mode: staged
     \\
     \\commands:
@@ -688,7 +688,7 @@ test "no-external-comms on-disk YAML matches embedded effect rules" {
 
 // Quick-install DX invariants: the presets used by `ryk init --preset` and `setup --auto`
 // (generic-agent and friends via common_strict_rules) must remain conservative.
-// These properties are the "source of truth" for the generated .orca/policy.yaml.
+// These properties are the "source of truth" for the generated .ryk/policy.yaml.
 // A future semantic sync test will also load the on-disk YAMLs in policies/presets/ and assert parity.
 test "quick install agent presets have conservative defaults (network deny + broad secret protection)" {
     const generic = agentPresetText(.generic_agent);
@@ -707,7 +707,7 @@ test "quick install agent presets have conservative defaults (network deny + bro
 
     // Protected write directories present (the DX fix will make these robust to bare paths too).
     try std.testing.expect(std.mem.indexOf(u8, generic, "./.git/**") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generic, "./.orca/**") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generic, "./.ryk/**") != null);
 
     // Same invariants for other quick-install used presets that inherit common_strict_rules.
     try std.testing.expect(std.mem.indexOf(u8, openclaw, "default: deny") != null);
@@ -719,7 +719,7 @@ test "quick install agent presets have conservative defaults (network deny + bro
     // NOTE: Full on-disk YAML parity is still manual (see comment above); a future
     // generator or stricter embed-based test can enforce it when package path rules allow.
     try std.testing.expect(std.mem.indexOf(u8, generic, ".git/**") != null);
-    try std.testing.expect(std.mem.indexOf(u8, generic, ".orca/**") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generic, ".ryk/**") != null);
     try std.testing.expect(std.mem.indexOf(u8, generic, "    - \"zig build\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, generic, "    - \"make test*\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, generic, "    - \"make build*\"") != null);

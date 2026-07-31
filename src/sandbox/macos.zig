@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const backend = @import("backend.zig");
-const platform = @import("orca_core").platform;
+const platform = @import("ryk_core").platform;
 const macos_seatbelt = @import("macos_seatbelt.zig");
 const posture = @import("posture.zig");
 
@@ -11,9 +11,9 @@ pub const implemented = true;
 pub fn detect() backend.ReportSet {
     var reports = backend.baseReports(.macos);
     backend.setReport(&reports, .process_supervision, .active, "macOS child process-group supervision and best-effort descendant cleanup are enabled");
-    backend.setReport(&reports, .shell_wrapping, .wrapper_only, "sh, bash, and zsh are wrapped when resolved through the Orca shim PATH");
-    backend.setReport(&reports, .path_shims, .wrapper_only, "Orca prepends session shims to PATH for wrapper-mediated command checks");
-    backend.setReport(&reports, .network_observe, .observe_only, "network policy decisions are audited for Orca-mediated actions");
+    backend.setReport(&reports, .shell_wrapping, .wrapper_only, "sh, bash, and zsh are wrapped when resolved through the ryk shim PATH");
+    backend.setReport(&reports, .path_shims, .wrapper_only, "ryk prepends session shims to PATH for wrapper-mediated command checks");
+    backend.setReport(&reports, .network_observe, .observe_only, "network policy decisions are audited for ryk-mediated actions");
     backend.setReport(&reports, .network_enforce, .unavailable, "transparent macOS network enforcement is not installed; only wrapper/proxy-mediated hooks are available");
     backend.setReport(&reports, .user_namespaces, .unsupported, "Linux user namespaces are not a macOS feature");
     backend.setReport(&reports, .mount_namespaces, .unsupported, "Linux mount namespaces are not a macOS feature");

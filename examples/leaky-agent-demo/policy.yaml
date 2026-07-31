@@ -13,7 +13,7 @@ env:
     - HOME
     - LANG
     - TERM
-    - ORCA_DEMO_WORKSPACE
+    - RYK_DEMO_WORKSPACE
   deny_patterns:
     - "*TOKEN*"
     - "*SECRET*"
@@ -35,7 +35,7 @@ files:
     allow:
       - "./**"
     deny:
-      - "./.orca/**"
+      - "./.ryk/**"
       - "./.git/**"
     mode: staged
 

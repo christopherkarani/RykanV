@@ -1,7 +1,7 @@
 //! Allow-once pending + active stores (JSONL under XDG data).
 //!
-//! Product paths (brand `orca`, not `dcg`):
-//! - Dir: `$XDG_DATA_HOME/orca/` or `~/.local/share/orca/`
+//! Product paths (brand `ryk`, not `dcg`):
+//! - Dir: `$XDG_DATA_HOME/ryk/` or `~/.local/share/ryk/`
 //! - `pending_exceptions.jsonl` — issued on deny (short code, full hash, command, cwd, reason, expires)
 //! - `allow_once.jsonl` — redeemed active entries (scope cwd|project, single_use, expires, command)
 //!

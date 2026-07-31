@@ -7,7 +7,7 @@ Production package templates live under:
 - `homebrew/Formula/ryk.rb` (primary), `homebrew/Formula/orca.rb` (compat)
 - `scoop/ryk.json` (primary), `scoop/orca.json` (compat)
 - `winget/ryk.yaml` (primary), `winget/orca.yaml` (compat)
-- `npm/package.json` (`@orca-sec/ryk`, bins `ryk` + `orca`)
+- `npm/package.json` (`@rykan/ryk`, bins `ryk` + `ryk`)
 - `docker/Dockerfile` (ENTRYPOINT `ryk`)
 - `edge/Dockerfile`
 - `systemd/edge.service`

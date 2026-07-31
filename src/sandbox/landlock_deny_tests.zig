@@ -30,7 +30,7 @@ test "real FS deny: outside denied; neighbor RW; control root not writable" {
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     try ws_tmp.dir.createDirPath(io, ".git");
     try ws_tmp.dir.writeFile(io, .{ .sub_path = "neighbor.txt", .data = "WORKSPACE_NEIGHBOR_OK" });
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
@@ -46,7 +46,7 @@ test "real FS deny: outside denied; neighbor RW; control root not writable" {
     defer allocator.free(canary_path);
     const neighbor_path = try std.fs.path.join(allocator, &.{ ws_root, "neighbor.txt" });
     defer allocator.free(neighbor_path);
-    const control_write = try std.fs.path.join(allocator, &.{ ws_root, ".orca", "policy.yaml" });
+    const control_write = try std.fs.path.join(allocator, &.{ ws_root, ".ryk", "policy.yaml" });
     defer allocator.free(control_write);
     const git_control_write = try std.fs.path.join(allocator, &.{ ws_root, ".git", "phase2-probe" });
     defer allocator.free(git_control_write);
@@ -200,7 +200,7 @@ test "real network route forcing: proxy port allowed and neighboring loopback po
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
 
@@ -245,7 +245,7 @@ test "real network route forcing: proxy port allowed and neighboring loopback po
 
 // Production-defaults canary: null system_ro_prefixes installs system RO +
 // device RW (same as production apply). Classic /tmp is NOT RW-granted by
-// default (session temp lives under workspace `.orca-tmp`). Outside canary
+// default (session temp lives under workspace `.ryk-tmp`). Outside canary
 // must live outside the workspace — testing.tmpDir is under /tmp and is
 // agent-unwritable under production defaults (good for deny of bare /tmp).
 // Unit canaries above keep include_tmp=false isolation; this test proves the
@@ -260,9 +260,9 @@ test "real FS deny under production defaults: outside denied; neighbor RW; contr
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     // Production attach pre-creates session tmp so Landlock expand sees an RW leaf.
-    try ws_tmp.dir.createDirPath(io, ".orca-tmp");
+    try ws_tmp.dir.createDirPath(io, ".ryk-tmp");
     try ws_tmp.dir.writeFile(io, .{ .sub_path = "neighbor.txt", .data = "WORKSPACE_NEIGHBOR_OK" });
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
@@ -277,7 +277,7 @@ test "real FS deny under production defaults: outside denied; neighbor RW; contr
         if (profile.isPathWithin(home, tmp_prefix)) return error.SkipZigTest;
     }
 
-    const outside_dir = try std.fs.path.join(allocator, &.{ home, ".orca-ll-prod-canary" });
+    const outside_dir = try std.fs.path.join(allocator, &.{ home, ".ryk-ll-prod-canary" });
     defer allocator.free(outside_dir);
     std.Io.Dir.cwd().createDirPath(io, outside_dir) catch return error.SkipZigTest;
     defer std.Io.Dir.cwd().deleteTree(io, outside_dir) catch {};
@@ -288,9 +288,9 @@ test "real FS deny under production defaults: outside denied; neighbor RW; contr
 
     const neighbor_path = try std.fs.path.join(allocator, &.{ ws_root, "neighbor.txt" });
     defer allocator.free(neighbor_path);
-    const control_write = try std.fs.path.join(allocator, &.{ ws_root, ".orca", "policy.yaml" });
+    const control_write = try std.fs.path.join(allocator, &.{ ws_root, ".ryk", "policy.yaml" });
     defer allocator.free(control_write);
-    const session_tmp_probe = try std.fs.path.join(allocator, &.{ ws_root, ".orca-tmp", ".orca-ll-prod-session-probe" });
+    const session_tmp_probe = try std.fs.path.join(allocator, &.{ ws_root, ".ryk-tmp", ".ryk-ll-prod-session-probe" });
     defer allocator.free(session_tmp_probe);
 
     // Production defaults: system_ro_prefixes null → system RO + device RW;
@@ -351,7 +351,7 @@ test "real FS deny under production defaults: outside denied; neighbor RW; contr
 
         // Classic /tmp must NOT be RW under production defaults (M-8). Success
         // here is a grant-width hole — fail closed with exit 11.
-        const tmp_probe = "/tmp/.orca-ll-prod-tmp-probe";
+        const tmp_probe = "/tmp/.ryk-ll-prod-tmp-probe";
         @memcpy(path_buf[0..tmp_probe.len], tmp_probe);
         path_buf[tmp_probe.len] = 0;
         const tfd = linux.open(
@@ -365,7 +365,7 @@ test "real FS deny under production defaults: outside denied; neighbor RW; contr
             linux.exit(11);
         }
 
-        // Session temp under workspace `.orca-tmp` remains the RW scratch surface.
+        // Session temp under workspace `.ryk-tmp` remains the RW scratch surface.
         @memcpy(path_buf[0..session_tmp_probe.len], session_tmp_probe);
         path_buf[session_tmp_probe.len] = 0;
         const sfd = linux.open(
@@ -417,7 +417,7 @@ test "control expand: chdir workspace root works; create at root denied; control
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     try ws_tmp.dir.writeFile(io, .{ .sub_path = "neighbor.txt", .data = "NEIGHBOR" });
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
@@ -426,7 +426,7 @@ test "control expand: chdir workspace root works; create at root denied; control
     defer allocator.free(neighbor_path);
     const at_root_path = try std.fs.path.join(allocator, &.{ ws_root, "created_at_root.txt" });
     defer allocator.free(at_root_path);
-    const control_write = try std.fs.path.join(allocator, &.{ ws_root, ".orca", "policy.yaml" });
+    const control_write = try std.fs.path.join(allocator, &.{ ws_root, ".ryk", "policy.yaml" });
     defer allocator.free(control_write);
 
     // Production system RO defaults without temp RW.
@@ -522,7 +522,7 @@ test "symlink to outside is not granted by control expand" {
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     try ws_tmp.dir.writeFile(io, .{ .sub_path = "neighbor.txt", .data = "NEIGHBOR" });
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
@@ -637,7 +637,7 @@ test "hardlink to outside is not granted by control expand" {
     // Single tmpDir so link(2) stays on the same filesystem.
     var parent = std.testing.tmpDir(.{});
     defer parent.cleanup();
-    try parent.dir.createDirPath(io, "ws/.orca");
+    try parent.dir.createDirPath(io, "ws/.ryk");
     try parent.dir.writeFile(io, .{ .sub_path = "ws/neighbor.txt", .data = "NEIGHBOR" });
     try parent.dir.createDirPath(io, "out");
     try parent.dir.writeFile(io, .{ .sub_path = "out/secret.txt", .data = "OUTSIDE_SECRET" });
@@ -749,7 +749,7 @@ test "landlock inheritance: grandchild after nested exec still denies outside an
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     try ws_tmp.dir.writeFile(io, .{ .sub_path = "neighbor.txt", .data = "WORKSPACE_NEIGHBOR_OK" });
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
@@ -764,7 +764,7 @@ test "landlock inheritance: grandchild after nested exec still denies outside an
     defer allocator.free(canary_path);
     const neighbor_path = try std.fs.path.join(allocator, &.{ ws_root, "neighbor.txt" });
     defer allocator.free(neighbor_path);
-    const control_write = try std.fs.path.join(allocator, &.{ ws_root, ".orca", "policy.yaml" });
+    const control_write = try std.fs.path.join(allocator, &.{ ws_root, ".ryk", "policy.yaml" });
     defer allocator.free(control_write);
 
     // Paths from tmpDir have no single quotes; embed into the probe script.

@@ -2,39 +2,39 @@
 # Regenerate MVP shell-eval goldens from an *independent* oracle binary.
 #
 # Usage:
-#   ORCA_ORACLE_BIN=/path/to/pinned-orca ./scripts/generate-shell-eval-corpus.sh commands.txt
+#   RYK_ORACLE_BIN=/path/to/pinned-orca ./scripts/generate-shell-eval-corpus.sh commands.txt
 #
 # Refuses to use this checkout's zig-out binary (that would copy bugs into goldens).
-# Without ORCA_ORACLE_BIN, leaves the checked-in JSONL unchanged.
+# Without RYK_ORACLE_BIN, leaves the checked-in JSONL unchanged.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${ROOT}/src/shell_engine/mvp_corpus.jsonl"
 CMDS="${1:-}"
 
-if [[ -z "${ORCA_ORACLE_BIN:-}" ]]; then
-  echo "ORCA_ORACLE_BIN is required (path to an independent, version-pinned orca oracle)." >&2
+if [[ -z "${RYK_ORACLE_BIN:-}" ]]; then
+  echo "RYK_ORACLE_BIN is required (path to an independent, version-pinned ryk oracle)." >&2
   echo "Refusing to regenerate goldens from this checkout's build under test." >&2
   echo "Leaving ${OUT} unchanged." >&2
   exit 0
 fi
 
-ORCA_BIN="${ORCA_ORACLE_BIN}"
-if [[ ! -x "${ORCA_BIN}" ]]; then
-  echo "ORCA_ORACLE_BIN is not executable: ${ORCA_BIN}" >&2
+RYK_BIN="${RYK_ORACLE_BIN}"
+if [[ ! -x "${RYK_BIN}" ]]; then
+  echo "RYK_ORACLE_BIN is not executable: ${RYK_BIN}" >&2
   exit 1
 fi
 
 # Hard fail if someone points the oracle at this tree's build output.
-case "${ORCA_BIN}" in
+case "${RYK_BIN}" in
   "${ROOT}/zig-out/"*|"${ROOT}/.zig-cache/"*)
-    echo "ORCA_ORACLE_BIN must not be this checkout's zig-out/.zig-cache binary: ${ORCA_BIN}" >&2
+    echo "RYK_ORACLE_BIN must not be this checkout's zig-out/.zig-cache binary: ${RYK_BIN}" >&2
     exit 1
     ;;
 esac
 
 if [[ -z "${CMDS}" ]]; then
   echo "Pass a commands file (one command per line) to regenerate goldens." >&2
-  echo "Example: ORCA_ORACLE_BIN=/opt/orca-oracle/bin/orca ./scripts/generate-shell-eval-corpus.sh /tmp/cmds.txt" >&2
+  echo "Example: RYK_ORACLE_BIN=/opt/ryk-oracle/bin/ryk ./scripts/generate-shell-eval-corpus.sh /tmp/cmds.txt" >&2
   exit 0
 fi
 
@@ -42,7 +42,7 @@ tmp="$(mktemp)"
 trap 'rm -f "${tmp}"' EXIT
 while IFS= read -r cmd || [[ -n "${cmd}" ]]; do
   [[ -z "${cmd}" || "${cmd}" == \#* ]] && continue
-  json="$("${ORCA_BIN}" test --format json "${cmd}" 2>/dev/null || true)"
+  json="$("${RYK_BIN}" test --format json "${cmd}" 2>/dev/null || true)"
   if [[ -z "${json}" ]]; then
     echo "skip (no json): ${cmd}" >&2
     continue
@@ -62,7 +62,7 @@ done <"${CMDS}"
 
 if [[ -s "${tmp}" ]]; then
   mv "${tmp}" "${OUT}"
-  echo "Wrote $(wc -l <"${OUT}") goldens to ${OUT} (oracle=${ORCA_BIN})"
+  echo "Wrote $(wc -l <"${OUT}") goldens to ${OUT} (oracle=${RYK_BIN})"
 else
   echo "No goldens produced." >&2
   exit 1

@@ -16,15 +16,15 @@ const daemon = @import("daemon.zig");
 const exit_codes = @import("exit_codes.zig");
 const feed_writer = @import("feed_writer.zig");
 const help = @import("help.zig");
-const core = @import("orca_core").core;
-const core_api = @import("orca_core").api;
-const core_policy = @import("orca_core").policy;
+const core = @import("ryk_core").core;
+const core_api = @import("ryk_core").api;
+const core_policy = @import("ryk_core").policy;
 const intercept = @import("../intercept/mod.zig");
 
 const default_host = "127.0.0.1";
 const default_port: u16 = 7742;
 const canonical_ui_dir = "src/dashboard/assets";
-const installed_ui_dir = "orca-dashboard-ui/dist";
+const installed_ui_dir = "ryk-dashboard-ui/dist";
 const dashboard_ui_missing_html =
     \\<!doctype html>
     \\<html lang="en">
@@ -258,7 +258,7 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
         try stderr.writeAll("ryk dashboard: --workspace and --machine cannot be used together.\n");
         return error.Usage;
     }
-    // Prefer RYK_DASHBOARD_WORKSPACE, fall back to ORCA_DASHBOARD_WORKSPACE.
+    // Prefer RYK_DASHBOARD_WORKSPACE, fall back to RYK_DASHBOARD_WORKSPACE.
     const environment_workspace = blk: {
         const env_util = @import("../env_util.zig");
         if (env_util.getenvBrand("DASHBOARD_WORKSPACE")) |value| {
@@ -539,7 +539,7 @@ fn sendFile(io: std.Io, stream: std.Io.net.Stream, file: std.Io.File, content_ty
         }
         const raw = try raw_list.toOwnedSlice(allocator);
         defer allocator.free(raw);
-        const html = try std.mem.replaceOwned(u8, allocator, raw, "__ORCA_DASHBOARD_TOKEN__", csrf_token);
+        const html = try std.mem.replaceOwned(u8, allocator, raw, "__RYK_DASHBOARD_TOKEN__", csrf_token);
         defer allocator.free(html);
         try sendText(io, stream, 200, "OK", content_type, html);
         return;
@@ -629,8 +629,8 @@ fn parseRequest(bytes: []const u8) !Request {
         .method = method,
         .path = path,
         .body = bytes[body_start .. body_start + content_length],
-        // Dual-read Phase 5a: prefer ryk header, accept legacy orca header.
-        .csrf_token = headerValue(headers, "x-ryk-dashboard-token") orelse headerValue(headers, "x-orca-dashboard-token"),
+        // Dual-read Phase 5a: prefer ryk header, accept legacy ryk header.
+        .csrf_token = headerValue(headers, "x-ryk-dashboard-token") orelse headerValue(headers, "x-ryk-dashboard-token"),
         .host = headerValue(headers, "host"),
         .origin = headerValue(headers, "origin"),
     };
@@ -820,7 +820,7 @@ fn runAllowedAction(io: std.Io, allocator: std.mem.Allocator, action: []const u8
 
     // Policy check can use an absolute policy path without changing process cwd.
     if (kind == .policy_check) {
-        const policy_path = try std.fs.path.join(allocator, &.{ workspace_root.?, ".orca", "policy.yaml" });
+        const policy_path = try std.fs.path.join(allocator, &.{ workspace_root.?, ".ryk", "policy.yaml" });
         defer allocator.free(policy_path);
         const code = try policy.command(io, &.{ "check", policy_path }, stdout, stderr);
         return .{
@@ -1082,11 +1082,11 @@ test "dashboard ignores workspace assets and accepts explicit trusted resource r
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.createDirPath(std.testing.io, "src/dashboard/assets");
-    try tmp.dir.createDirPath(std.testing.io, "orca-dashboard-ui/dist");
+    try tmp.dir.createDirPath(std.testing.io, "ryk-dashboard-ui/dist");
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "src/dashboard/assets/index.html", .data = "legacy" });
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "orca-dashboard-ui/dist/index.html", .data = "polished" });
-    try tmp.dir.createDirPath(std.testing.io, "trusted/orca-dashboard-ui/dist");
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "trusted/orca-dashboard-ui/dist/index.html", .data = "trusted" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "ryk-dashboard-ui/dist/index.html", .data = "polished" });
+    try tmp.dir.createDirPath(std.testing.io, "trusted/ryk-dashboard-ui/dist");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "trusted/ryk-dashboard-ui/dist/index.html", .data = "trusted" });
     const trusted_root = try tmp.dir.realPathFileAlloc(std.testing.io, "trusted", std.testing.allocator);
     defer std.testing.allocator.free(trusted_root);
 
@@ -1215,7 +1215,7 @@ test "workspace dashboard actions run in the selected canonical workspace" {
     defer std.testing.allocator.free(result.stdout);
     defer std.testing.allocator.free(result.stderr);
     try std.testing.expectEqual(exit_codes.success, result.exit_code);
-    const policy_path = try std.fs.path.join(std.testing.allocator, &.{ selected, ".orca", "policy.yaml" });
+    const policy_path = try std.fs.path.join(std.testing.allocator, &.{ selected, ".ryk", "policy.yaml" });
     defer std.testing.allocator.free(policy_path);
     try std.Io.Dir.cwd().access(std.testing.io, policy_path, .{});
 
@@ -1237,9 +1237,9 @@ test "dashboard action workspace cwd classification matches remediation surface"
 test "workspace dashboard doctor inspects the selected workspace" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDir(std.testing.io, ".orca", .default_dir);
+    try tmp.dir.createDir(std.testing.io, ".ryk", .default_dir);
     try tmp.dir.writeFile(std.testing.io, .{
-        .sub_path = ".orca/policy.yaml",
+        .sub_path = ".ryk/policy.yaml",
         .data = "version: 1\nmode: definitely-invalid\n",
     });
     const selected = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
@@ -1293,7 +1293,7 @@ test "dashboard proxy-smoke action verifies local proxy forwarding" {
 
 test "request parser handles post body and query stripping" {
     const request_text =
-        "POST /api/actions?x=1 HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Orca-Dashboard-Token: abc\r\nContent-Length: 19\r\n\r\n{\"action\":\"doctor\"}";
+        "POST /api/actions?x=1 HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Ryk-Dashboard-Token: abc\r\nContent-Length: 19\r\n\r\n{\"action\":\"doctor\"}";
     const request = try parseRequest(request_text);
     try std.testing.expectEqualStrings("POST", request.method);
     try std.testing.expectEqualStrings("/api/actions", request.path);

@@ -7,7 +7,7 @@
 //!   grants from the precomputed plan only (open + landlock syscalls; **no**
 //!   opendir/readdir) → prctl(NO_NEW_PRIVS) → landlock_restrict_self → exec.
 //!
-//! Never box the parent Orca CLI. Filesystem PATH_BENEATH rules come from
+//! Never box the parent ryk CLI. Filesystem PATH_BENEATH rules come from
 //! `CompiledProfile` grants + expand plan. Optional Phase 2 TCP route forcing
 //! uses Landlock network port rules in the same child-only restrict_self call.
 //! Landlock network rules are port-scoped, not address-scoped; the launcher must
@@ -876,14 +876,14 @@ test "buildControlExpandSurfaces enumerates RW children and skips control + syml
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     try ws_tmp.dir.createDirPath(io, "src");
     try ws_tmp.dir.writeFile(io, .{ .sub_path = "neighbor.txt", .data = "ok" });
     try ws_tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "fn" });
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
 
-    const control = try std.fs.path.join(allocator, &.{ ws_root, ".orca" });
+    const control = try std.fs.path.join(allocator, &.{ ws_root, ".ryk" });
     defer allocator.free(control);
 
     // Plant a symlink child that must not become an RW surface.
@@ -914,7 +914,7 @@ test "buildControlExpandSurfaces enumerates RW children and skips control + syml
     defer allocator.free(src_dir);
     const link_joined = try std.fmt.allocPrint(allocator, "{s}/escape_link", .{ws_root});
     defer allocator.free(link_joined);
-    const control_joined = try std.fmt.allocPrint(allocator, "{s}/.orca", .{ws_root});
+    const control_joined = try std.fmt.allocPrint(allocator, "{s}/.ryk", .{ws_root});
     defer allocator.free(control_joined);
 
     var saw_neighbor = false;
@@ -937,14 +937,14 @@ test "buildControlExpandSurfaces recurses when child covers nested control root"
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    // Nested control: ws/pkg/.orca — pkg must be expand-root RO, not leaf RW.
-    try ws_tmp.dir.createDirPath(io, "pkg/.orca");
+    // Nested control: ws/pkg/.ryk — pkg must be expand-root RO, not leaf RW.
+    try ws_tmp.dir.createDirPath(io, "pkg/.ryk");
     try ws_tmp.dir.writeFile(io, .{ .sub_path = "pkg/code.txt", .data = "c" });
     try ws_tmp.dir.writeFile(io, .{ .sub_path = "top.txt", .data = "t" });
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
 
-    const nested_control = try std.fs.path.join(allocator, &.{ ws_root, "pkg", ".orca" });
+    const nested_control = try std.fs.path.join(allocator, &.{ ws_root, "pkg", ".ryk" });
     defer allocator.free(nested_control);
 
     var surfaces = try buildControlExpandSurfaces(allocator, ws_root, &[_][]const u8{nested_control});
@@ -986,7 +986,7 @@ test "verifyApplyInChild and applySelf skip or run on Linux only" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "neighbor.txt", .data = "ok" });
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
 
@@ -1003,7 +1003,7 @@ test "verifyApplyInChild and applySelf skip or run on Linux only" {
 }
 
 // Empty workspace with only the default control root has no RW leaf until
-// attach pre-creates `{workspace}/.orca-tmp`. Production apply/apply_posix do that
+// attach pre-creates `{workspace}/.ryk-tmp`. Production apply/apply_posix do that
 // before buildChildLandlockPlan; this test asserts the expand contract.
 test "empty workspace only control root gains RW after session tmp precreate" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
@@ -1014,7 +1014,7 @@ test "empty workspace only control root gains RW after session tmp precreate" {
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(io, ".orca");
+    try tmp.dir.createDirPath(io, ".ryk");
     // No neighbor files — only control root.
     const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(root);
@@ -1034,7 +1034,7 @@ test "empty workspace only control root gains RW after session tmp precreate" {
     }
 
     // Production attach precreate (session_tmp.ensureWorkspaceSessionTmp / apply_posix).
-    try tmp.dir.createDirPath(io, ".orca-tmp");
+    try tmp.dir.createDirPath(io, ".ryk-tmp");
 
     var plan = try buildChildLandlockPlan(allocator, &compiled);
     defer plan.deinit();
@@ -1042,7 +1042,7 @@ test "empty workspace only control root gains RW after session tmp precreate" {
     try std.testing.expect(surfaces.anyRw());
     var saw_session_tmp = false;
     for (surfaces.rw_paths) |p| {
-        if (std.mem.endsWith(u8, p, "/.orca-tmp") or std.mem.eql(u8, p, ".orca-tmp")) {
+        if (std.mem.endsWith(u8, p, "/.ryk-tmp") or std.mem.eql(u8, p, ".ryk-tmp")) {
             saw_session_tmp = true;
         }
     }
@@ -1052,10 +1052,10 @@ test "empty workspace only control root gains RW after session tmp precreate" {
 }
 
 test "rwGrantNeedsControlExpand when workspace contains control roots" {
-    try std.testing.expect(rwGrantNeedsControlExpand("/ws", &[_][]const u8{"/ws/.orca"}));
+    try std.testing.expect(rwGrantNeedsControlExpand("/ws", &[_][]const u8{"/ws/.ryk"}));
     try std.testing.expect(rwGrantNeedsControlExpand("/ws", &[_][]const u8{"/ws"}));
-    try std.testing.expect(!rwGrantNeedsControlExpand("/ws/src", &[_][]const u8{"/ws/.orca"}));
-    try std.testing.expect(!rwGrantNeedsControlExpand("/tmp", &[_][]const u8{"/ws/.orca"}));
+    try std.testing.expect(!rwGrantNeedsControlExpand("/ws/src", &[_][]const u8{"/ws/.ryk"}));
+    try std.testing.expect(!rwGrantNeedsControlExpand("/tmp", &[_][]const u8{"/ws/.ryk"}));
 }
 
 // Hardlink residual filter (M-12): same-FS hardlink to an outside secret must
@@ -1068,7 +1068,7 @@ test "buildControlExpandSurfaces skips hardlinked non-dir leaves" {
 
     var parent = std.testing.tmpDir(.{});
     defer parent.cleanup();
-    try parent.dir.createDirPath(io, "ws/.orca");
+    try parent.dir.createDirPath(io, "ws/.ryk");
     try parent.dir.writeFile(io, .{ .sub_path = "ws/neighbor.txt", .data = "ok" });
     try parent.dir.createDirPath(io, "out");
     try parent.dir.writeFile(io, .{ .sub_path = "out/secret.txt", .data = "OUTSIDE_SECRET" });
@@ -1081,7 +1081,7 @@ test "buildControlExpandSurfaces skips hardlinked non-dir leaves" {
 
     const ws_root = try parent.dir.realPathFileAlloc(io, "ws", allocator);
     defer allocator.free(ws_root);
-    const control = try std.fs.path.join(allocator, &.{ ws_root, ".orca" });
+    const control = try std.fs.path.join(allocator, &.{ ws_root, ".ryk" });
     defer allocator.free(control);
     const hardlink_path = try std.fmt.allocPrint(allocator, "{s}/escape_hl", .{ws_root});
     defer allocator.free(hardlink_path);
@@ -1108,7 +1108,7 @@ test "ChildLandlockPlan owns grant_path independent of profile lifetime" {
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(io, ".orca");
+    try tmp.dir.createDirPath(io, ".ryk");
     try tmp.dir.writeFile(io, .{ .sub_path = "neighbor.txt", .data = "ok" });
     const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(root);
@@ -1130,13 +1130,13 @@ test "ChildLandlockPlan owns grant_path independent of profile lifetime" {
 
 test "pathIsWithin and control expand treat filesystem root correctly" {
     // Without the `/` special-case, pathIsWithin("/etc", "/") is false and
-    // rwGrantNeedsControlExpand("/", &.{"/.orca"}) skips expand → full RW on `/`.
+    // rwGrantNeedsControlExpand("/", &.{"/.ryk"}) skips expand → full RW on `/`.
     try std.testing.expect(pathIsWithin("/", "/"));
     try std.testing.expect(pathIsWithin("/etc", "/"));
-    try std.testing.expect(pathIsWithin("/tmp/ws/.orca", "/"));
-    try std.testing.expect(pathIsWithin("/.orca", "/"));
-    try std.testing.expect(rwGrantNeedsControlExpand("/", &[_][]const u8{"/.orca"}));
-    try std.testing.expect(rwGrantNeedsControlExpand("/", &[_][]const u8{"/tmp/.orca"}));
+    try std.testing.expect(pathIsWithin("/tmp/ws/.ryk", "/"));
+    try std.testing.expect(pathIsWithin("/.ryk", "/"));
+    try std.testing.expect(rwGrantNeedsControlExpand("/", &[_][]const u8{"/.ryk"}));
+    try std.testing.expect(rwGrantNeedsControlExpand("/", &[_][]const u8{"/tmp/.ryk"}));
     try std.testing.expect(!pathIsWithin("relative", "/"));
 }
 

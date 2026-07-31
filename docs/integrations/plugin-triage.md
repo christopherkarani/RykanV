@@ -1,6 +1,6 @@
 # Plugin Issue Triage
 
-Use this document to triage plugin issues for the Orca Codex plugin, Claude Code plugin, CLI plugin surface, packaging, and release flow.
+Use this document to triage plugin issues for the ryk Codex plugin, Claude Code plugin, CLI plugin surface, packaging, and release flow.
 
 ## Recommended labels
 
@@ -25,7 +25,7 @@ Use this document to triage plugin issues for the Orca Codex plugin, Claude Code
 
 ## Triage process
 
-1. Confirm the host, plugin version, Orca version, install method, and exact reproduction path.
+1. Confirm the host, plugin version, ryk version, install method, and exact reproduction path.
 2. Reproduce locally with the smallest safe fixture, command, or hook payload.
 3. Classify the issue by surface: Codex, Claude, CLI, hooks, install, marketplace, security, compatibility, docs, packaging, or release.
 4. Assign the smallest accurate label set from the recommended labels above.

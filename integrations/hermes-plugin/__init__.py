@@ -86,7 +86,7 @@ _orca_cache_env: str | None = None
 _orca_cache_path: str | None = None
 
 
-_FAIL_STANCE_FILENAMES = (".orca_fail_stance", "ORCA_FAIL_STANCE")
+_FAIL_STANCE_FILENAMES = (".ryk_fail_stance", "RYK_FAIL_STANCE")
 _FAIL_CLOSED_TOKENS = frozenset({"0", "false", "no", "off", "fail-closed", "closed"})
 _FAIL_OPEN_TOKENS = frozenset({"1", "true", "yes", "on", "fail-open", "open"})
 
@@ -126,12 +126,12 @@ def _stance_file_fail_open() -> bool | None:
 def _fail_open_enabled() -> bool:
     """Allow Hermes to proceed without ryk when degraded.
 
-    Precedence: RYK_HERMES_FAIL_OPEN then ORCA_HERMES_FAIL_OPEN env (when set) →
+    Precedence: RYK_HERMES_FAIL_OPEN then RYK_HERMES_FAIL_OPEN env (when set) →
     install stance file → product default fail-open.
-    New installs via `ryk plugin install hermes` write `.orca_fail_stance` = fail-closed.
+    New installs via `ryk plugin install hermes` write `.ryk_fail_stance` = fail-closed.
     """
-    # Dual-read brand env (prefer RYK_ then ORCA_) — doctor/formatFix copy matches.
-    for key in ("RYK_HERMES_FAIL_OPEN", "ORCA_HERMES_FAIL_OPEN"):
+    # Dual-read brand env (prefer RYK_ then RYK_) — doctor/formatFix copy matches.
+    if "RYK_HERMES_FAIL_OPEN" in os.environ:  # hard-cut
         if key in os.environ:
             value = os.environ.get(key, "").strip().lower()
             if value:
@@ -215,8 +215,8 @@ def _supports_hermes_host(orca: str) -> bool:
 
 def _orca_candidates() -> list[str]:
     trusted: list[str] = []
-    # Phase 5a dual-read: prefer RYK_BIN then ORCA_BIN.
-    for env_key in ("RYK_BIN", "ORCA_BIN"):
+    # Phase 5a dual-read: prefer RYK_BIN then RYK_BIN.
+    for env_key in ("RYK_BIN",):
         configured = os.environ.get(env_key)
         if configured:
             resolved = _orca_executable(configured)
@@ -227,7 +227,7 @@ def _orca_candidates() -> list[str]:
     # ./zig-out/bin/ryk must not beat ~/.local/bin or PATH when both exist.
     home = Path.home()
     for name in ("ryk", "orca"):
-        for path in (home / ".local" / "bin" / name, home / ".orca" / "bin" / name, home / ".ryk" / "bin" / name):
+        for path in (home / ".local" / "bin" / name, home / ".ryk" / "bin" / name, home / ".ryk" / "bin" / name):
             resolved = _orca_executable(str(path))
             if resolved:
                 trusted.append(resolved)
@@ -266,7 +266,7 @@ def _orca_candidates() -> list[str]:
 def _find_orca() -> str | None:
     global _orca_cache_env, _orca_cache_path
     # Cache key tracks both brand env vars.
-    env_bin = os.environ.get("RYK_BIN") or os.environ.get("ORCA_BIN")
+    env_bin = os.environ.get("RYK_BIN") or os.environ.get("RYK_BIN")
     if _orca_cache_path is not None and _orca_cache_env == env_bin:
         return _orca_cache_path
 
@@ -298,7 +298,7 @@ def _handle_hook_error(ctx: Any, event: str, exc: BaseException) -> Any:
                 "action": "block",
                 "message": (
                     f"ryk unavailable for Hermes pre_tool_call: {exc} "
-                    "(set ORCA_HERMES_FAIL_OPEN=1 to allow without guardrails)"
+                    "(set RYK_HERMES_FAIL_OPEN=1 to allow without guardrails)"
                 ),
             }
         _warn_degraded(
@@ -306,7 +306,7 @@ def _handle_hook_error(ctx: Any, event: str, exc: BaseException) -> Any:
             event,
             "FAIL-OPEN: ryk is missing or too old for Hermes hooks; upgrade ryk or set RYK_BIN. "
             "Allowing tool call WITHOUT ryk guardrails. "
-            "Set ORCA_HERMES_FAIL_OPEN=0 to block, or use `ryk run -- hermes`.",
+            "Set RYK_HERMES_FAIL_OPEN=0 to block, or use `ryk run -- hermes`.",
         )
         return None
     if event == "pre_tool_call":
@@ -375,7 +375,7 @@ def _payload(event: str, data: Any) -> str:
 
 
 def _call_orca(event: str, data: Any) -> dict[str, Any]:
-    orca = _find_orca()
+    ryk = _find_orca()
     if not orca:
         raise RuntimeError(
             "ryk binary not found or too old for Hermes hooks. "

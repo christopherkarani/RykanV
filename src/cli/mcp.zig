@@ -3,13 +3,13 @@ const std = @import("std");
 const env_util = @import("../env_util.zig");
 const orca_mcp = @import("../mcp/mod.zig");
 const sandbox = @import("../sandbox/mod.zig");
-const core = @import("orca_core").core;
+const core = @import("ryk_core").core;
 const supervisor = core.supervisor;
-const core_api = @import("orca_core").api;
+const core_api = @import("ryk_core").api;
 const brand = @import("brand.zig");
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
-const policy = @import("orca_core").policy;
+const policy = @import("ryk_core").policy;
 const version_command = @import("version.zig");
 const suggestions = @import("suggestions.zig");
 const tui = @import("../tui/mod.zig");
@@ -488,7 +488,7 @@ fn safeProxyAuditDirName(value: []const u8) bool {
 fn initializeRequestAlloc(allocator: std.mem.Allocator) ![]u8 {
     return try std.fmt.allocPrint(
         allocator,
-        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"orca\",\"version\":\"{s}\"}}}}}}",
+        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"ryk\",\"version\":\"{s}\"}}}}}}",
         .{version_command.current().version},
     );
 }
@@ -523,13 +523,13 @@ fn list(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) 
         for (inventory.items) |item| item.deinit(allocator);
         inventory.deinit(allocator);
     }
-    if (std.Io.Dir.cwd().openDir(io, ".orca/mcp", .{ .iterate = true })) |dir_value| {
+    if (std.Io.Dir.cwd().openDir(io, ".ryk/mcp", .{ .iterate = true })) |dir_value| {
         var dir = dir_value;
         defer dir.close(io);
         var it = dir.iterate();
         while (try it.next(io)) |entry| {
             if (entry.kind != .file or !(std.mem.endsWith(u8, entry.name, ".yaml") or std.mem.endsWith(u8, entry.name, ".yml"))) continue;
-            const path = try std.fs.path.join(allocator, &.{ ".orca", "mcp", entry.name });
+            const path = try std.fs.path.join(allocator, &.{ ".ryk", "mcp", entry.name });
             defer allocator.free(path);
             var manifest = orca_mcp.manifests.loadFile(io, allocator, path) catch |err| {
                 try tui.render.callout(io, stdout, .warn, "Invalid MCP manifest", path);
@@ -1057,7 +1057,7 @@ test "Codex inventory refresh restores exact in-memory argv and environment" {
 test "mcp initialize request uses build version metadata" {
     const request = try initializeRequestAlloc(std.testing.allocator);
     defer std.testing.allocator.free(request);
-    try std.testing.expect(std.mem.indexOf(u8, request, "\"clientInfo\":{\"name\":\"orca\",\"version\":\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, request, "\"clientInfo\":{\"name\":\"ryk\",\"version\":\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, request, version_command.current().version) != null);
     try std.testing.expect(std.mem.indexOf(u8, request, "\"version\":\"1.0.0\"") == null or std.mem.eql(u8, version_command.current().version, "1.0.0"));
 }
@@ -1317,9 +1317,9 @@ test "mcp manifest check list trust and generate commands are safe" {
     try std.process.setCurrentDir(std.testing.io, tmp.dir);
     defer std.process.setCurrentPath(std.testing.io, prev_cwd) catch {};
 
-    try tmp.dir.createDirPath(std.testing.io, ".orca/mcp");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk/mcp");
     {
-        const file = try tmp.dir.createFile(std.testing.io, ".orca/mcp/github.yaml", .{});
+        const file = try tmp.dir.createFile(std.testing.io, ".ryk/mcp/github.yaml", .{});
         defer file.close(std.testing.io);
         try file.writeStreamingAll(std.testing.io,
             \\version: 1
@@ -1345,7 +1345,7 @@ test "mcp manifest check list trust and generate commands are safe" {
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
-    const check_code = try command(std.testing.io, &.{ "manifest", "check", ".orca/mcp/github.yaml" }, &stdout_writer, &stderr_writer);
+    const check_code = try command(std.testing.io, &.{ "manifest", "check", ".ryk/mcp/github.yaml" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, check_code);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "valid MCP manifest") != null);
 

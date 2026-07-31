@@ -2,8 +2,8 @@
 //! `ryk tools classify` and `ryk tools packs` — not shell `ryk classify`.
 
 const std = @import("std");
-const orca_policy = @import("orca_core").policy;
-const core = @import("orca_core").core;
+const orca_policy = @import("ryk_core").policy;
+const core = @import("ryk_core").core;
 const supervisor = core.supervisor;
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
@@ -153,7 +153,7 @@ fn listPacks(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyt
             \\  ryk tools packs
             \\
             \\List loaded user effect pack ids and source paths.
-            \\Search order: ~/.config/orca/effect-packs then .orca/effect-packs
+            \\Search order: ~/.config/ryk/effect-packs then .ryk/effect-packs
             \\
         );
         return exit_codes.success;
@@ -178,7 +178,7 @@ fn listPacks(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyt
 
     if (pack_set.isEmpty()) {
         try stdout.writeAll("Effect packs: (none)\n");
-        try stdout.writeAll("  Looked in: <user-config>/orca/effect-packs and .orca/effect-packs\n");
+        try stdout.writeAll("  Looked in: <user-config>/ryk/effect-packs and .ryk/effect-packs\n");
         return exit_codes.success;
     }
     try stdout.writeAll("Effect packs:\n");
@@ -337,9 +337,9 @@ test "tools classify residual denies acme_mailer_job despite arg decoys" {
 test "loadPacks classifies pack mapped tool" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca/effect-packs");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk/effect-packs");
     {
-        const f = try tmp.dir.createFile(std.testing.io, ".orca/effect-packs/acme.yaml", .{});
+        const f = try tmp.dir.createFile(std.testing.io, ".ryk/effect-packs/acme.yaml", .{});
         defer f.close(std.testing.io);
         try f.writeStreamingAll(std.testing.io,
             \\version: 1

@@ -1,11 +1,11 @@
-# Orca
+# ryk
 
-Orca is the desktop and CI AI-agent runtime firewall product.
+ryk is the desktop and CI AI-agent runtime firewall product.
 
 ## What Belongs Here
 
-- `orca` command parsing, help, version, doctor, policy, replay, run, MCP, red-team, and staging commands.
-- Desktop and CI process supervision behavior for Orca-managed child sessions.
+- `ryk` command parsing, help, version, doctor, policy, replay, run, MCP, red-team, and staging commands.
+- Desktop and CI process supervision behavior for ryk-managed child sessions.
 - Desktop file, network, command, MCP, installer, release, and CLI documentation surfaces.
 - CLI examples and CI recipes.
 
@@ -17,7 +17,7 @@ Orca is the desktop and CI AI-agent runtime firewall product.
 
 ## Current Status
 
-Phase 25 keeps the existing `orca` binary and CLI behavior intact while hardening command UX, Core integration, redaction, audit/replay, red-team, MCP, docs, and packaging behavior after the Core/CLI/Edge split.
+Phase 25 keeps the existing `ryk` binary and CLI behavior intact while hardening command UX, Core integration, redaction, audit/replay, red-team, MCP, docs, and packaging behavior after the Core/CLI/Edge split.
 
 ## Future Phases
 

@@ -1,12 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const core = @import("orca_core").core;
+const core = @import("ryk_core").core;
 const supervisor = core.supervisor;
-const core_api = @import("orca_core").api;
+const core_api = @import("ryk_core").api;
 const env_util = @import("../env_util.zig");
 const intercept = @import("../intercept/mod.zig");
-const policy = @import("orca_core").policy;
+const policy = @import("ryk_core").policy;
 const sandbox = @import("../sandbox/mod.zig");
 const brand = @import("brand.zig");
 const exit_codes = @import("exit_codes.zig");
@@ -38,7 +38,7 @@ const RunOptions = struct {
     network_backend: ?policy.schema.NetworkBackend = null,
     /// OS FS sandbox mode (`--os-sandbox`). Default auto (on when available).
     os_sandbox: sandbox.posture.OsSandboxMode = .auto,
-    /// macOS Seatbelt residual grade (`--seatbelt-profile` / `ORCA_SEATBELT_PROFILE`).
+    /// macOS Seatbelt residual grade (`--seatbelt-profile` / `RYK_SEATBELT_PROFILE`).
     /// Default hardened. Ignored on non-macOS.
     seatbelt_profile: sandbox.posture.SeatbeltProfileGrade = sandbox.posture.SeatbeltProfileGrade.default_grade,
     allow_network_values: [32][]const u8 = undefined,
@@ -233,7 +233,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     const effective_policy_mode = if (options.mode_explicit) coreModeToPolicyMode(options.mode) else loaded_policy.policy.mode();
     const session_mode = effective_policy_mode.toCoreMode();
 
-    // Detect first session *before* any .orca/sessions/ creation so the warm welcome
+    // Detect first session *before* any .ryk/sessions/ creation so the warm welcome
     // celebration can be emitted exactly once for a brand-new user/workspace.
     const is_first_session = isFirstSession(io, allocator, workspace_root_for_policy);
 
@@ -278,7 +278,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         allocator,
         workspace_root_for_policy,
     ) catch |err| {
-        try stderr.print("ryk run: invalid .orca/env.schema.yaml: {s}\n", .{@errorName(err)});
+        try stderr.print("ryk run: invalid .ryk/env.schema.yaml: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer if (project_env_schema) |*schema_value| schema_value.deinit();
@@ -399,11 +399,11 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         if (proxy_runtime) |runtime| {
             try intercept.network.appendProxyEnvironment(&filtered_env.env_map, runtime.bindUrl(), "localhost,127.0.0.1,::1");
             // Do not claim MEDIATED=active until route-force is proven (post-apply).
-            try filtered_env.env_map.put("ORCA_PROXY_MEDIATED_NETWORK_ENFORCEMENT", "bind-only");
-            try filtered_env.env_map.put("ORCA_PROXY_BIND", runtime.bindUrl());
-            // ORCA_PROXY_ROUTE_FORCED=false is set by appendProxyEnvironment; only flip to true when route-forced below.
-            try filtered_env.env_map.put("ORCA_PROXY_HTTPS_VISIBILITY", "host-port-only");
-            try filtered_env.env_map.put("ORCA_PROXY_METHOD_PATH_VISIBILITY", "http-and-cooperative-hooks");
+            try filtered_env.env_map.put("RYK_PROXY_MEDIATED_NETWORK_ENFORCEMENT", "bind-only");
+            try filtered_env.env_map.put("RYK_PROXY_BIND", runtime.bindUrl());
+            // RYK_PROXY_ROUTE_FORCED=false is set by appendProxyEnvironment; only flip to true when route-forced below.
+            try filtered_env.env_map.put("RYK_PROXY_HTTPS_VISIBILITY", "host-port-only");
+            try filtered_env.env_map.put("RYK_PROXY_METHOD_PATH_VISIBILITY", "http-and-cooperative-hooks");
         }
     }
     const backend_report = sandbox.backend.detect(core.platform.detectOs());
@@ -522,12 +522,12 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         return exit_codes.unsupported;
     }
     if (proxy_runtime != null and apply_result.network_route_forced) {
-        try filtered_env.env_map.put("ORCA_PROXY_ROUTE_FORCED", "true");
-        try filtered_env.env_map.put("ORCA_PROXY_MEDIATED_NETWORK_ENFORCEMENT", "active");
+        try filtered_env.env_map.put("RYK_PROXY_ROUTE_FORCED", "true");
+        try filtered_env.env_map.put("RYK_PROXY_MEDIATED_NETWORK_ENFORCEMENT", "active");
         // Honest for both Seatbelt and Landlock: this feature is TCP localhost
         // proxy-port scoped (not full transparent network / not UDP-scoped).
-        try filtered_env.env_map.put("ORCA_TRANSPARENT_NETWORK_ENFORCEMENT", "tcp-port-route-forced");
-        try filtered_env.env_map.put("ORCA_BACKEND_NETWORK_ENFORCEMENT", "tcp-port-route-forced");
+        try filtered_env.env_map.put("RYK_TRANSPARENT_NETWORK_ENFORCEMENT", "tcp-port-route-forced");
+        try filtered_env.env_map.put("RYK_BACKEND_NETWORK_ENFORCEMENT", "tcp-port-route-forced");
     }
     // RT-09: session-effective env filtering label (free-form; not backend.Level).
     // Capability/doctor may still report env_filtering=active via installBackendEnvironment;
@@ -656,7 +656,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                         .event_id = try core.event.generateEventId(ts),
                         .timestamp = ts,
                         .event_type = .session_exit,
-                        .actor = .{ .kind = .orca, .display = "ryk" },
+                        .actor = .{ .kind = .ryk, .display = "ryk" },
                         .target = .{ .kind = .session, .value = ended.id.slice() },
                     };
                     try core_api.appendAuditEvent(writer, ev);
@@ -935,10 +935,10 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                     },
                 );
             }
-            try self.env_map.put("ORCA_SESSION_ID", session.id.slice());
-            try self.env_map.put("ORCA_WORKSPACE_ROOT", session.workspace_root);
-            if (self.selected_policy.source_path) |path| try self.env_map.put("ORCA_POLICY_PATH", path);
-            try self.env_map.put("ORCA_MODE", self.effective_mode.toString());
+            try self.env_map.put("RYK_SESSION_ID", session.id.slice());
+            try self.env_map.put("RYK_WORKSPACE_ROOT", session.workspace_root);
+            if (self.selected_policy.source_path) |path| try self.env_map.put("RYK_POLICY_PATH", path);
+            try self.env_map.put("RYK_MODE", self.effective_mode.toString());
             // Durable mode for path-shim callbacks — env alone is child-writable.
             const shim_mod = @import("shim.zig");
             try shim_mod.writeSessionShimMode(
@@ -987,7 +987,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 .event_id = try core.event.generateEventId(ts),
                 .timestamp = ts,
                 .event_type = .backend_capability,
-                .actor = .{ .kind = .orca, .display = "ryk" },
+                .actor = .{ .kind = .ryk, .display = "ryk" },
                 .target = .{ .kind = .unknown, .value = target },
                 .decision = decision,
             };
@@ -1011,7 +1011,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 .event_id = try core.event.generateEventId(ts),
                 .timestamp = ts,
                 .event_type = .backend_capability,
-                .actor = .{ .kind = .orca, .display = "ryk" },
+                .actor = .{ .kind = .ryk, .display = "ryk" },
                 .target = .{ .kind = .unknown, .value = target },
                 .decision = decision,
             };
@@ -1101,7 +1101,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 .event_id = try core.event.generateEventId(ts),
                 .timestamp = ts,
                 .event_type = event_type,
-                .actor = .{ .kind = .orca, .display = "ryk" },
+                .actor = .{ .kind = .ryk, .display = "ryk" },
                 .target = .{ .kind = .command, .value = target },
                 .decision = maybe_decision,
                 .metadata = metadata,
@@ -1117,7 +1117,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 .event_id = try core.event.generateEventId(ts),
                 .timestamp = ts,
                 .event_type = event_type,
-                .actor = .{ .kind = .orca, .display = "ryk" },
+                .actor = .{ .kind = .ryk, .display = "ryk" },
                 .target = .{ .kind = .network_endpoint, .value = target },
                 .decision = maybe_decision,
             };
@@ -1404,7 +1404,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                         .event_id = try core.event.generateEventId(event_ts),
                         .timestamp = event_ts,
                         .event_type = proxy_event.event_type,
-                        .actor = .{ .kind = .orca, .display = "ryk" },
+                        .actor = .{ .kind = .ryk, .display = "ryk" },
                         .target = .{ .kind = .network_endpoint, .value = proxy_event.target },
                         .decision = if (proxy_event.result) |decision_result| .{
                             .result = decision_result,
@@ -1420,7 +1420,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                     .event_id = try core.event.generateEventId(ts),
                     .timestamp = ts,
                     .event_type = .network_proxy_stop,
-                    .actor = .{ .kind = .orca, .display = "ryk" },
+                    .actor = .{ .kind = .ryk, .display = "ryk" },
                     .target = .{ .kind = .network_endpoint, .value = runtime.bindUrl() },
                     .decision = .{ .result = if (required_proxy_failed) .deny else .observe, .reason = if (required_proxy_failed) "required proxy backend failed during child run" else "proxy-mediated network backend stopped", .ci_may_proceed = !required_proxy_failed },
                 };
@@ -1443,7 +1443,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                         .event_id = try core.event.generateEventId(event_ts),
                         .timestamp = event_ts,
                         .event_type = if (allowed) .phantom_swap else .phantom_denied,
-                        .actor = .{ .kind = .orca, .display = "ryk" },
+                        .actor = .{ .kind = .ryk, .display = "ryk" },
                         .target = .{ .kind = .env_var, .value = gateway_event.env_var },
                         .decision = .{
                             .result = if (allowed) .allow else .deny,
@@ -1531,14 +1531,14 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
     var options: RunOptions = .{};
     // Env default; CLI `--seatbelt-profile` overrides when present.
     // Invalid values keep the hardened default and warn (flag path still fails closed).
-    if (std.c.getenv("ORCA_SEATBELT_PROFILE")) |raw| {
+    if (std.c.getenv("RYK_SEATBELT_PROFILE")) |raw| {
         const value = std.mem.span(raw);
         if (value.len > 0) {
             if (sandbox.posture.SeatbeltProfileGrade.parse(value)) |grade| {
                 options.seatbelt_profile = grade;
             } else {
                 try stderr.print(
-                    "ryk run: WARNING: ignoring invalid ORCA_SEATBELT_PROFILE={s} (use compatible|hardened|strict); defaulting to {s}.\n",
+                    "ryk run: WARNING: ignoring invalid RYK_SEATBELT_PROFILE={s} (use compatible|hardened|strict); defaulting to {s}.\n",
                     .{ value, sandbox.posture.SeatbeltProfileGrade.default_grade.toString() },
                 );
             }
@@ -1970,10 +1970,10 @@ fn requiresBackend(options: RunOptions, feature: sandbox.backend.Feature) bool {
 }
 
 fn installNetworkEnvironment(allocator: std.mem.Allocator, env_map: *std.process.Environ.Map, network_policy: policy.schema.NetworkPolicy) !void {
-    try env_map.put("ORCA_NETWORK_POLICY_ENGINE", "active");
-    try env_map.put("ORCA_NETWORK_MODE", network_policy.effectiveMode().toString());
-    try env_map.put("ORCA_TRANSPARENT_NETWORK_ENFORCEMENT", "unavailable");
-    try env_map.put("ORCA_PROXY_MEDIATED_NETWORK_ENFORCEMENT", "unavailable");
+    try env_map.put("RYK_NETWORK_POLICY_ENGINE", "active");
+    try env_map.put("RYK_NETWORK_MODE", network_policy.effectiveMode().toString());
+    try env_map.put("RYK_TRANSPARENT_NETWORK_ENFORCEMENT", "unavailable");
+    try env_map.put("RYK_PROXY_MEDIATED_NETWORK_ENFORCEMENT", "unavailable");
     if (network_policy.allow.len > 0) {
         var list: std.ArrayList(u8) = .empty;
         defer list.deinit(allocator);
@@ -1983,29 +1983,29 @@ fn installNetworkEnvironment(allocator: std.mem.Allocator, env_map: *std.process
         }
         const owned = try list.toOwnedSlice(allocator);
         defer allocator.free(owned);
-        try env_map.put("ORCA_NETWORK_ALLOW", owned);
+        try env_map.put("RYK_NETWORK_ALLOW", owned);
     }
 }
 
 fn installBackendEnvironment(env_map: *std.process.Environ.Map, report: sandbox.backend.ReportSet) !void {
-    try env_map.put("ORCA_BACKEND", report.backend_name);
-    try env_map.put("ORCA_BACKEND_FALLBACK", report.fallback_level.toString());
+    try env_map.put("RYK_BACKEND", report.backend_name);
+    try env_map.put("RYK_BACKEND_FALLBACK", report.fallback_level.toString());
     // Capability seed only — session-effective label is restamped after applyForRun
     // (see sessionEnvFilteringLabel). Do not stuff denylist-only / host-secrets into backend.Level.
-    try env_map.put("ORCA_BACKEND_ENV_FILTERING", report.get(.env_filtering).level.toString());
-    try env_map.put("ORCA_BACKEND_PATH_STAGING", report.get(.path_staging).level.toString());
-    try env_map.put("ORCA_BACKEND_SHELL_WRAPPING", report.get(.shell_wrapping).level.toString());
-    try env_map.put("ORCA_BACKEND_PATH_SHIMS", report.get(.path_shims).level.toString());
-    try env_map.put("ORCA_BACKEND_STRONG_SANDBOX", report.get(.strong_sandbox).level.toString());
-    try env_map.put("ORCA_BACKEND_PROCESS_SUPERVISION", report.get(.process_supervision).level.toString());
-    try env_map.put("ORCA_BACKEND_USER_NAMESPACES", report.get(.user_namespaces).level.toString());
-    try env_map.put("ORCA_BACKEND_MOUNT_NAMESPACES", report.get(.mount_namespaces).level.toString());
-    try env_map.put("ORCA_BACKEND_SECCOMP", report.get(.seccomp).level.toString());
-    try env_map.put("ORCA_BACKEND_LANDLOCK", report.get(.landlock).level.toString());
-    try env_map.put("ORCA_BACKEND_CGROUPS", report.get(.cgroups).level.toString());
-    try env_map.put("ORCA_BACKEND_NETWORK_OBSERVE", report.get(.network_observe).level.toString());
-    try env_map.put("ORCA_BACKEND_NETWORK_PROXY_ENFORCEMENT", report.get(.network_proxy_enforce).level.toString());
-    try env_map.put("ORCA_BACKEND_NETWORK_ENFORCEMENT", report.get(.network_enforce).level.toString());
+    try env_map.put("RYK_BACKEND_ENV_FILTERING", report.get(.env_filtering).level.toString());
+    try env_map.put("RYK_BACKEND_PATH_STAGING", report.get(.path_staging).level.toString());
+    try env_map.put("RYK_BACKEND_SHELL_WRAPPING", report.get(.shell_wrapping).level.toString());
+    try env_map.put("RYK_BACKEND_PATH_SHIMS", report.get(.path_shims).level.toString());
+    try env_map.put("RYK_BACKEND_STRONG_SANDBOX", report.get(.strong_sandbox).level.toString());
+    try env_map.put("RYK_BACKEND_PROCESS_SUPERVISION", report.get(.process_supervision).level.toString());
+    try env_map.put("RYK_BACKEND_USER_NAMESPACES", report.get(.user_namespaces).level.toString());
+    try env_map.put("RYK_BACKEND_MOUNT_NAMESPACES", report.get(.mount_namespaces).level.toString());
+    try env_map.put("RYK_BACKEND_SECCOMP", report.get(.seccomp).level.toString());
+    try env_map.put("RYK_BACKEND_LANDLOCK", report.get(.landlock).level.toString());
+    try env_map.put("RYK_BACKEND_CGROUPS", report.get(.cgroups).level.toString());
+    try env_map.put("RYK_BACKEND_NETWORK_OBSERVE", report.get(.network_observe).level.toString());
+    try env_map.put("RYK_BACKEND_NETWORK_PROXY_ENFORCEMENT", report.get(.network_proxy_enforce).level.toString());
+    try env_map.put("RYK_BACKEND_NETWORK_ENFORCEMENT", report.get(.network_enforce).level.toString());
 }
 
 /// Session-effective `ORCA_BACKEND_ENV_FILTERING` vocabulary (RT-09).
@@ -2403,7 +2403,7 @@ fn flushIfSupported(writer: anytype) !void {
 
 /// After the shield card is painted + flushed, dwell ~2s on an interactive TTY
 /// so humans can actually read it. Skips pipes, dumb terminals, tests, and
-/// `ORCA_SHIELD_HOLD=0` / `RYK_SHIELD_HOLD=0`.
+/// `RYK_SHIELD_HOLD=0` / `RYK_SHIELD_HOLD=0`.
 fn holdShieldCardIfNeeded(io: std.Io, stdout: anytype, receipt: sandbox.posture.AttachReceipt) void {
     const posture = tui.sandbox_card.PostureKind.parse(@tagName(receipt.posture));
     const is_tty = stdoutIsTty(io, stdout);
@@ -2416,8 +2416,8 @@ fn holdShieldCardIfNeeded(io: std.Io, stdout: anytype, receipt: sandbox.posture.
 }
 
 fn shieldHoldDisabledByEnv() bool {
-    // Dual-read ryk/orca env (Phase 5a brand cut).
-    for ([_][:0]const u8{ "RYK_SHIELD_HOLD", "ORCA_SHIELD_HOLD" }) |name| {
+    // Dual-read ryk/ryk env (Phase 5a brand cut).
+    for ([_][:0]const u8{ "RYK_SHIELD_HOLD", "RYK_SHIELD_HOLD" }) |name| {
         if (std.c.getenv(name)) |raw| {
             const v = std.mem.sliceTo(raw, 0);
             if (v.len == 0) continue;
@@ -2454,7 +2454,7 @@ fn stdoutIsTty(io: std.Io, stdout: anytype) bool {
     return std.Io.File.stdout().isTty(io) catch false;
 }
 
-/// Returns true if the workspace has no prior .orca/sessions/ entries.
+/// Returns true if the workspace has no prior .ryk/sessions/ entries.
 /// Checked *before* the current session creates its directory so the first-run
 /// celebration can be emitted exactly once.
 ///
@@ -2463,7 +2463,7 @@ fn stdoutIsTty(io: std.Io, stdout: anytype) bool {
 /// manually cleaned sessions while keeping the workspace. The celebration is
 /// a warm UX nicety — occasional false positives are acceptable.
 fn isFirstSession(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8) bool {
-    const sessions_dir = std.fs.path.join(allocator, &.{ workspace_root, ".orca", "sessions" }) catch return true;
+    const sessions_dir = std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "sessions" }) catch return true;
     defer allocator.free(sessions_dir);
 
     var dir = std.Io.Dir.cwd().openDir(io, sessions_dir, .{ .iterate = true }) catch return true;
@@ -2780,7 +2780,7 @@ test "run secretless injects a minted provider phantom and keeps raw secrets out
     try std.testing.expectEqualStrings("", fields.next().?);
     try std.testing.expectEqualStrings("", fields.next().?);
     const openai_phantom = fields.next().?;
-    try std.testing.expect(std.mem.startsWith(u8, openai_phantom, "orca-secret://session/"));
+    try std.testing.expect(std.mem.startsWith(u8, openai_phantom, "ryk-secret://session/"));
     const name_marker = "/OPENAI_API_KEY/";
     const marker_index = std.mem.indexOf(u8, openai_phantom, name_marker) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 16), openai_phantom.len - marker_index - name_marker.len);
@@ -2808,14 +2808,14 @@ test "run secretless resolves broker grant in parent and injects phantom only" {
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    try tmp.dir.createDir(std.testing.io, ".orca", .default_dir);
+    try tmp.dir.createDir(std.testing.io, ".ryk", .default_dir);
     {
-        const secret_file = try tmp.dir.createFile(std.testing.io, ".orca/dev-secrets.env", .{});
+        const secret_file = try tmp.dir.createFile(std.testing.io, ".ryk/dev-secrets.env", .{});
         defer secret_file.close(std.testing.io);
         try secret_file.writeStreamingAll(std.testing.io, "OPENAI_BROKER_KEY=sk-openai-broker-parent-canary\n");
     }
     {
-        const schema_file = try tmp.dir.createFile(std.testing.io, ".orca/env.schema.yaml", .{});
+        const schema_file = try tmp.dir.createFile(std.testing.io, ".ryk/env.schema.yaml", .{});
         defer schema_file.close(std.testing.io);
         try schema_file.writeStreamingAll(std.testing.io,
             \\defaults:
@@ -2837,7 +2837,7 @@ test "run secretless resolves broker grant in parent and injects phantom only" {
             \\  brokers:
             \\    env_dev:
             \\      type: env-file-dev
-            \\      path: .orca/dev-secrets.env
+            \\      path: .ryk/dev-secrets.env
             \\  refs:
             \\    openai_key:
             \\      broker: env_dev
@@ -2883,7 +2883,7 @@ test "run secretless resolves broker grant in parent and injects phantom only" {
     try std.testing.expectEqual(exit_codes.success, code);
     const child_env = try tmp.dir.readFileAlloc(std.testing.io, "child-env.txt", std.testing.allocator, .limited(1024));
     defer std.testing.allocator.free(child_env);
-    try std.testing.expect(std.mem.startsWith(u8, child_env, "orca-secret://session/"));
+    try std.testing.expect(std.mem.startsWith(u8, child_env, "ryk-secret://session/"));
     try std.testing.expect(std.mem.indexOf(u8, child_env, "sk-openai-broker-parent-canary") == null);
     try std.testing.expect(std.mem.indexOf(u8, child_env, "|http://127.0.0.1:") != null);
     const events = try readLastEvents(std.testing.allocator, root);
@@ -2940,7 +2940,7 @@ test "run command guard allows safe command and creates session shim directory" 
 
     const session_id = try readLastSessionId(std.testing.allocator, root);
     defer std.testing.allocator.free(session_id);
-    const shim_path = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", "sessions", session_id, "shims", "git" });
+    const shim_path = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", "sessions", session_id, "shims", "git" });
     defer std.testing.allocator.free(shim_path);
     try std.Io.Dir.cwd().access(std.testing.io, shim_path, .{});
 
@@ -4460,9 +4460,9 @@ test "run defaults to network ask, secretless off, posture line; noninteractive 
 
     const written = try tmp.dir.readFileAlloc(std.testing.io, "default-env.txt", std.testing.allocator, .limited(16384));
     defer std.testing.allocator.free(written);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_NETWORK_MODE=ask") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_NETWORK_MODE=ask") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "GITHUB_TOKEN=ghp_rawDefaultSecretShouldStay") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "orca-secret://") == null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "ryk-secret://") == null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "--secretless rewrote") == null);
 
     // CI + default network ask: no session-start stdin prompt; completes without hang.
@@ -4518,16 +4518,16 @@ test "run exports backend capability status to child environment" {
 
     const written = try tmp.dir.readFileAlloc(std.testing.io, "out/backend-env.txt", std.testing.allocator, .limited(8192));
     defer std.testing.allocator.free(written);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND_ENV_FILTERING=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND_PATH_STAGING=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND_SHELL_WRAPPING=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND_PATH_SHIMS=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND_STRONG_SANDBOX=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND_PROCESS_SUPERVISION=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND_NETWORK_OBSERVE=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND_NETWORK_PROXY_ENFORCEMENT=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND_NETWORK_ENFORCEMENT=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_BACKEND=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_BACKEND_ENV_FILTERING=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_BACKEND_PATH_STAGING=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_BACKEND_SHELL_WRAPPING=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_BACKEND_PATH_SHIMS=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_BACKEND_STRONG_SANDBOX=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_BACKEND_PROCESS_SUPERVISION=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_BACKEND_NETWORK_OBSERVE=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_BACKEND_NETWORK_PROXY_ENFORCEMENT=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_BACKEND_NETWORK_ENFORCEMENT=") != null);
 }
 
 test "run proxy backend injects proxy environment and satisfies proxy requirement" {
@@ -4572,9 +4572,9 @@ test "run proxy backend injects proxy environment and satisfies proxy requiremen
     try std.testing.expect(std.mem.indexOf(u8, written, "HTTP_PROXY=http://127.0.0.1:") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "HTTPS_PROXY=http://127.0.0.1:") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "ALL_PROXY=http://127.0.0.1:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_NETWORK_ENFORCEMENT=proxy-mediated") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_PROXY_ROUTE_FORCED=false") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_PROXY_HTTPS_VISIBILITY=host-port-only") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_NETWORK_ENFORCEMENT=proxy-mediated") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_PROXY_ROUTE_FORCED=false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_PROXY_HTTPS_VISIBILITY=host-port-only") != null);
 
     const events = try readLastEvents(std.testing.allocator, root);
     defer std.testing.allocator.free(events);
@@ -5272,7 +5272,7 @@ test "run daemon protocol mismatch denies shell command" {
 }
 
 fn readLastSessionId(allocator: std.mem.Allocator, root: []const u8) ![]u8 {
-    const last_path = try std.fs.path.join(allocator, &.{ root, ".orca", "last" });
+    const last_path = try std.fs.path.join(allocator, &.{ root, ".ryk", "last" });
     defer allocator.free(last_path);
     const text = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, last_path, allocator, .limited(core.limits.max_session_id_len + 2));
     defer allocator.free(text);
@@ -5282,7 +5282,7 @@ fn readLastSessionId(allocator: std.mem.Allocator, root: []const u8) ![]u8 {
 fn readLastEvents(allocator: std.mem.Allocator, root: []const u8) ![]u8 {
     const session_id = try readLastSessionId(allocator, root);
     defer allocator.free(session_id);
-    const events_path = try std.fs.path.join(allocator, &.{ root, ".orca", "sessions", session_id, "events.jsonl" });
+    const events_path = try std.fs.path.join(allocator, &.{ root, ".ryk", "sessions", session_id, "events.jsonl" });
     defer allocator.free(events_path);
     return try std.Io.Dir.cwd().readFileAlloc(std.testing.io, events_path, allocator, .limited(64 * 1024));
 }
@@ -5290,7 +5290,7 @@ fn readLastEvents(allocator: std.mem.Allocator, root: []const u8) ![]u8 {
 fn writeLastPointerNoMakePath(allocator: std.mem.Allocator, workspace_root: []const u8, session_id: []const u8) !void {
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();
-    const last_path = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "last" });
+    const last_path = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "last" });
     defer allocator.free(last_path);
     const file = try std.Io.Dir.cwd().createFile(io, last_path, .{ .truncate = true });
     defer file.close(io);
@@ -5313,7 +5313,7 @@ test "first successful run prints celebration" {
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
 
-    // Fresh workspace: no .orca/sessions yet → should be first
+    // Fresh workspace: no .ryk/sessions yet → should be first
     var stdout_buf: [4096]u8 = undefined;
     var stderr_buf: [512]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
@@ -5635,9 +5635,9 @@ test "parse --seatbelt-profile accepts grades; invalid fails usage" {
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 
-// M-2: invalid ORCA_SEATBELT_PROFILE warns and stays hardened (PR test plan A13).
-test "invalid ORCA_SEATBELT_PROFILE warns and keeps hardened default" {
-    const previous = std.c.getenv("ORCA_SEATBELT_PROFILE");
+// M-2: invalid RYK_SEATBELT_PROFILE warns and stays hardened (PR test plan A13).
+test "invalid RYK_SEATBELT_PROFILE warns and keeps hardened default" {
+    const previous = std.c.getenv("RYK_SEATBELT_PROFILE");
     const prev_owned: ?[:0]const u8 = if (previous) |p|
         try std.testing.allocator.dupeZ(u8, std.mem.span(p))
     else
@@ -5645,13 +5645,13 @@ test "invalid ORCA_SEATBELT_PROFILE warns and keeps hardened default" {
     defer if (prev_owned) |o| std.testing.allocator.free(o);
     defer {
         if (prev_owned) |o| {
-            _ = setenv("ORCA_SEATBELT_PROFILE", o.ptr, 1);
+            _ = setenv("RYK_SEATBELT_PROFILE", o.ptr, 1);
         } else {
-            _ = unsetenv("ORCA_SEATBELT_PROFILE");
+            _ = unsetenv("RYK_SEATBELT_PROFILE");
         }
     }
 
-    try std.testing.expectEqual(@as(c_int, 0), setenv("ORCA_SEATBELT_PROFILE", "paranoid", 1));
+    try std.testing.expectEqual(@as(c_int, 0), setenv("RYK_SEATBELT_PROFILE", "paranoid", 1));
 
     var stdout_buf: [512]u8 = undefined;
     var stderr_buf: [1024]u8 = undefined;
@@ -5665,7 +5665,7 @@ test "invalid ORCA_SEATBELT_PROFILE warns and keeps hardened default" {
     );
     try std.testing.expectEqual(exit_codes.success, code);
     const err = stderr_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, err, "WARNING: ignoring invalid ORCA_SEATBELT_PROFILE=paranoid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "WARNING: ignoring invalid RYK_SEATBELT_PROFILE=paranoid") != null);
     try std.testing.expect(std.mem.indexOf(u8, err, "defaulting to hardened") != null);
 }
 
@@ -5752,7 +5752,7 @@ test "ryk run --os-sandbox on attaches and banners active when backend available
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "neighbor.txt", .data = "ok" });
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
@@ -5793,7 +5793,7 @@ test "ryk run --seatbelt-profile strict surfaces grade on banner and audit when 
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "neighbor.txt", .data = "ok" });
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
@@ -5829,7 +5829,7 @@ test "ryk run --os-sandbox on active audit has posture=active and 64-hex profile
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "neighbor.txt", .data = "ok" });
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
@@ -5872,7 +5872,7 @@ test "ryk run notes attach-ok residual when agent exits non-zero after active at
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
 
@@ -5906,7 +5906,7 @@ test "ryk run --os-sandbox on fail-closed when child handshake fails" {
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     // Non-executable payload: parent resolve allows absolute paths; child preflight
     // (R_OK|X_OK) fails before status_ok → ApplyFailed → fail-closed attach path.
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "no-exec-agent", .data = "#!/bin/sh\necho should-not-run\n" });
@@ -5943,7 +5943,7 @@ test "ryk run --os-sandbox auto fail-closed when child handshake fails (no unbox
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "no-exec-agent", .data = "#!/bin/sh\necho should-not-run\n" });
     try tmp.dir.setFilePermissions(std.testing.io, "no-exec-agent", std.Io.File.Permissions.fromMode(0o644), .{});
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
@@ -5977,7 +5977,7 @@ test "ryk run default auto attaches when backend available" {
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "neighbor.txt", .data = "ok" });
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);

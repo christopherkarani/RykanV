@@ -781,7 +781,7 @@ private func printUsage(to stream: UnsafeMutablePointer<FILE> = stdout) {
       --live             Force LiveBackend (Apple SystemLanguageModel)
       --no-warm          Skip session.warm() / model prewarm
       --few-shot MODE    Residual-only RAG: auto (default) | off | wax
-      --wax-store <path> Path to .wax store (default: Application Support/Orca/fm-steward/ambig.wax)
+      --wax-store <path> Path to .wax store (default: Application Support/ryk/fm-steward/ambig.wax)
       --seed <path>      Explicit residual seed JSON (else App Support seed.json, else package Fixtures)
       --json             Print classify-response-v1 JSON (default)
       --human            Print compact verdict / why / explain lines

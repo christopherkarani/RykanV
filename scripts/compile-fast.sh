@@ -10,8 +10,8 @@
 #
 # Usage:
 #   ./scripts/compile-fast.sh              # default: check (CLI only)
-#   ./scripts/compile-fast.sh check        # compile orca executable
-#   ./scripts/compile-fast.sh test-lib     # compile orca lib test binary (largest test-fast piece)
+#   ./scripts/compile-fast.sh check        # compile ryk executable
+#   ./scripts/compile-fast.sh test-lib     # compile ryk lib test binary (largest test-fast piece)
 #   ./scripts/compile-fast.sh test-fast    # compile all test-fast artifacts (matches test-fast set)
 #   ./scripts/compile-fast.sh test-lib-run # compile + run lib tests (serial)
 #   ./scripts/compile-fast.sh test-fast-run
@@ -33,11 +33,11 @@ start_ts=$(date +%s)
 
 case "${mode}" in
   check)
-    echo "[compile-fast] check (orca CLI only)"
+    echo "[compile-fast] check (ryk CLI only)"
     "${ZIG_BUILD_COMPILE[@]}" check
     ;;
   test-lib)
-    echo "[compile-fast] compile-test-lib (orca lib tests, no run)"
+    echo "[compile-fast] compile-test-lib (ryk lib tests, no run)"
     "${ZIG_BUILD_COMPILE[@]}" compile-test-lib
     ;;
   test-fast)

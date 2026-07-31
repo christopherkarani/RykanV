@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
-DIST_DIR="${ORCA_DIST_DIR:-dist-dry-run}"
-SIZE_BASELINE_FILE="${ORCA_BINARY_SIZE_BASELINE:-docs/dev/binary-size-baseline.tsv}"
+DIST_DIR="${RYK_DIST_DIR:-dist-dry-run}"
+SIZE_BASELINE_FILE="${RYK_BINARY_SIZE_BASELINE:-docs/dev/binary-size-baseline.tsv}"
 
 file_size_bytes() {
   if stat -f%z "$1" >/dev/null 2>&1; then
@@ -18,14 +18,14 @@ baseline_size_for() {
 }
 
 report_binary_sizes() {
-  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/orca-size.XXXXXX")"
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/ryk-size.XXXXXX")"
   trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
   current_baseline="${DIST_DIR}/binary-size-baseline.tsv"
   : >"$current_baseline"
 
   printf 'release dry-run: binary size report\n'
   found=0
-  for artifact in "$DIST_DIR"/orca-v*.tar.gz "$DIST_DIR"/orca-v*.zip; do
+  for artifact in "$DIST_DIR"/ryk-v*.tar.gz "$DIST_DIR"/ryk-v*.zip; do
     [ -f "$artifact" ] || continue
     found=1
     artifact_name="$(basename "$artifact")"
@@ -35,7 +35,7 @@ report_binary_sizes() {
     *.tar.gz) tar -xzf "$artifact" -C "$extract_dir" ;;
     *.zip) unzip -q "$artifact" -d "$extract_dir" ;;
     esac
-    for binary in orca orca.exe; do
+    for binary in ryk.exe; do
       path="$(find "$extract_dir" -path "*/bin/$binary" -type f | head -n 1)"
       [ -n "$path" ] || continue
       size="$(file_size_bytes "$path")"
@@ -57,12 +57,12 @@ report_binary_sizes() {
 
 # Verifies release archive checksums through scripts/verify-release.sh.
 printf 'release dry-run: building artifacts into %s\n' "$DIST_DIR"
-ORCA_RELEASE_PRODUCT=host ORCA_DIST_DIR="$DIST_DIR" ./scripts/build-release.sh
-ORCA_RELEASE_PRODUCT=host ./scripts/verify-release.sh "$DIST_DIR"
-ORCA_DIST_DIR="$DIST_DIR" ./scripts/install-layout-smoke-test.sh
+RYK_RELEASE_PRODUCT=host RYK_DIST_DIR="$DIST_DIR" ./scripts/build-release.sh
+RYK_RELEASE_PRODUCT=host ./scripts/verify-release.sh "$DIST_DIR"
+RYK_DIST_DIR="$DIST_DIR" ./scripts/install-layout-smoke-test.sh
 report_binary_sizes
 if [ "$(uname -s)" = "Linux" ] && command -v docker >/dev/null 2>&1; then
-  ORCA_DIST_DIR="$DIST_DIR" ./scripts/docker-install-layout-smoke-test.sh
+  RYK_DIST_DIR="$DIST_DIR" ./scripts/docker-install-layout-smoke-test.sh
 fi
 
 printf 'release dry-run: passed\n'

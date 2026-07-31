@@ -11,7 +11,7 @@ pub const ReplayOptions = struct {
     session: []const u8 = "last",
     only_denied: bool = false,
     verify: bool = false,
-    audit_dir_name: []const u8 = ".orca",
+    audit_dir_name: []const u8 = ".ryk",
 };
 
 pub const ReplayEvent = struct {
@@ -617,7 +617,7 @@ fn eventTime(timestamp: []const u8) []const u8 {
 fn testSummaryJsonAlloc(allocator: std.mem.Allocator, event_count: usize, final_event_hash: []const u8, command_json: []const u8) ![]u8 {
     const canonical = try std.fmt.allocPrint(
         allocator,
-        "{{\"version\":1,\"session_id\":\"s\",\"started_at\":\"2026-05-05T12:12:10Z\",\"ended_at\":\"2026-05-05T12:12:11Z\",\"workspace_root\":\"/tmp/orca\",\"mode\":\"strict\",\"policy\":\"policy.yaml\",\"command\":{s},\"status\":{{\"kind\":\"exit\",\"code\":0}},\"event_count\":{d},\"final_event_hash\":\"{s}\"}}",
+        "{{\"version\":1,\"session_id\":\"s\",\"started_at\":\"2026-05-05T12:12:10Z\",\"ended_at\":\"2026-05-05T12:12:11Z\",\"workspace_root\":\"/tmp/ryk\",\"mode\":\"strict\",\"policy\":\"policy.yaml\",\"command\":{s},\"status\":{{\"kind\":\"exit\",\"code\":0}},\"event_count\":{d},\"final_event_hash\":\"{s}\"}}",
         .{ command_json, event_count, final_event_hash },
     );
     defer allocator.free(canonical);
@@ -641,7 +641,7 @@ test "verification detects modified event fields" {
 
     const ts = core.time.Timestamp.fromUnixSeconds(1_777_983_130);
     const session_id = try core.session.generateSessionId(ts);
-    const session_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", "sessions", session_id.slice() });
+    const session_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", "sessions", session_id.slice() });
     defer std.testing.allocator.free(session_dir);
     try std.Io.Dir.cwd().makePath(std.testing.io, session_dir);
 
@@ -709,7 +709,7 @@ test "verification accepts rust shell metadata in audit events" {
         .event_id = eid,
         .timestamp = ts,
         .event_type = .command_denied,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .command, .value = "shell command (redacted)" },
         .decision = .{
             .result = .deny,
@@ -719,7 +719,7 @@ test "verification accepts rust shell metadata in audit events" {
         .metadata = metadata,
     };
 
-    const session_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", "sessions", sid.slice() });
+    const session_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", "sessions", sid.slice() });
     defer std.testing.allocator.free(session_dir);
     try std.Io.Dir.cwd().makePath(std.testing.io, session_dir);
 
@@ -753,7 +753,7 @@ test "verification rejects event records with unauthenticated extra keys" {
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
 
-    const session_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", "sessions", "extra-key" });
+    const session_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", "sessions", "extra-key" });
     defer std.testing.allocator.free(session_dir);
     try std.Io.Dir.cwd().makePath(std.testing.io, session_dir);
 
@@ -791,7 +791,7 @@ test "verification rejects tampered summary display fields" {
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
 
-    const session_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", "sessions", "summary-tamper" });
+    const session_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", "sessions", "summary-tamper" });
     defer std.testing.allocator.free(session_dir);
     try std.Io.Dir.cwd().makePath(std.testing.io, session_dir);
 
@@ -846,7 +846,7 @@ test "verification reports malformed events instead of panicking" {
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
 
-    const session_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", "sessions", "malformed" });
+    const session_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", "sessions", "malformed" });
     defer std.testing.allocator.free(session_dir);
     try std.Io.Dir.cwd().makePath(std.testing.io, session_dir);
 
@@ -874,7 +874,7 @@ test "verification detects summary event count mismatch" {
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    const session_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", "sessions", "count-mismatch" });
+    const session_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", "sessions", "count-mismatch" });
     defer std.testing.allocator.free(session_dir);
     try std.Io.Dir.cwd().makePath(std.testing.io, session_dir);
 
@@ -926,7 +926,7 @@ test "replay rejects session ids with path traversal" {
     try std.testing.expectError(error.InvalidSessionId, load(std.testing.io, std.testing.allocator, root, .{ .session = "." }));
     try std.testing.expectError(error.InvalidSessionId, load(std.testing.io, std.testing.allocator, root, .{ .session = ".." }));
 
-    const audit_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca" });
+    const audit_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk" });
     defer std.testing.allocator.free(audit_dir);
     try std.Io.Dir.cwd().makePath(std.testing.io, audit_dir);
     const last_path = try std.fs.path.join(std.testing.allocator, &.{ audit_dir, "last" });
@@ -952,7 +952,7 @@ fn loadReplayAllocationFailureProbe(allocator: std.mem.Allocator, root: []const 
 }
 
 fn writeValidReplayFixture(root: []const u8, session_id: []const u8) !void {
-    const session_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", "sessions", session_id });
+    const session_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", "sessions", session_id });
     defer std.testing.allocator.free(session_dir);
     try std.Io.Dir.cwd().makePath(std.testing.io, session_dir);
 

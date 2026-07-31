@@ -1,0 +1,58 @@
+{
+  "name": "@rykan/pi-ryk",
+  "version": "1.2.9",
+  "description": "Official ryk Pi integration for fail-closed bash and file protection.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "ryk",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "ryk",
+    "security",
+    "guardrails",
+    "bash",
+    "tool-call"
+  ],
+  "files": [
+    "extensions/**/*.ts",
+    "!extensions/**/*.test.ts",
+    "skills/**/SKILL.md",
+    "README.md",
+    "scripts/smoke.sh"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/ryk.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "scripts": {
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "pack:dry": "npm pack --dry-run",
+    "smoke": "bash scripts/smoke.sh"
+  },
+  "dependencies": {
+    "@rykan/ryk": "1.2.9"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.79.0"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": false
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

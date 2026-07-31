@@ -11,7 +11,7 @@
 #   ./scripts/test-fast.sh full
 #   ./scripts/test-fast.sh units
 #   ./scripts/test-fast.sh compile
-#   ORCA_TEST_FAST=units ./scripts/test-fast.sh
+#   RYK_TEST_FAST=units ./scripts/test-fast.sh
 #
 # Prefer ./scripts/compile-fast.sh check for pure compile iteration.
 # Prefer ./scripts/agent-gate.sh to pick a gate from dirty paths.
@@ -31,12 +31,12 @@ cd "${REPO_ROOT}"
 # Incremental compile; -j1 keeps test binary runs serial (parallel hangs on some hosts).
 ZIG_BUILD=(./scripts/zig build -fincremental -j1 -Dincremental=true)
 
-mode="${1:-${ORCA_TEST_FAST:-full}}"
+mode="${1:-${RYK_TEST_FAST:-full}}"
 case "${mode}" in
   full|units|compile) ;;
   *)
     echo "usage: $0 [compile|units|full]" >&2
-    echo "  or: ORCA_TEST_FAST=compile|units|full $0" >&2
+    echo "  or: RYK_TEST_FAST=compile|units|full $0" >&2
     exit 2
     ;;
 esac
@@ -59,7 +59,7 @@ step_begin "Toolchain check (want 0.16.0 from .zigversion)"
 ./scripts/ensure-zig-toolchain.sh --check
 step_end "toolchain"
 
-step_begin "Build orca CLI"
+step_begin "Build ryk CLI"
 "${ZIG_BUILD[@]}"
 step_end "build"
 

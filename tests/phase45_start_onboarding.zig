@@ -1,9 +1,9 @@
 const std = @import("std");
 
-const onboarding = @import("orca").cli.onboarding;
-const start = @import("orca").cli.start;
-const exit_codes = @import("orca").cli.exit_codes;
-const shell_eval = @import("orca").cli.shell_eval;
+const onboarding = @import("ryk").cli.onboarding;
+const start = @import("ryk").cli.start;
+const exit_codes = @import("ryk").cli.exit_codes;
+const shell_eval = @import("ryk").cli.shell_eval;
 
 test "phase45 start idempotent second run preserves policy" {
     var tmp = std.testing.tmpDir(.{});
@@ -54,9 +54,9 @@ test "phase45 maximum protection verifies shell path with mock evaluator" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer file.close(std.testing.io);
         try file.writeStreamingAll(std.testing.io, "version: 1\nmode: strict\n");
     }

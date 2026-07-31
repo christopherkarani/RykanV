@@ -3,8 +3,8 @@ set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VERSION="${ORCA_PLUGIN_VERSION:-${ORCA_VERSION:-$(tr -d '[:space:]' < "${REPO_ROOT}/VERSION" 2>/dev/null || printf '1.2.0')}}"
-DIST_DIR="${ORCA_DIST_DIR:-dist/plugins}"
+VERSION="${RYK_PLUGIN_VERSION:-${RYK_VERSION:-$(tr -d '[:space:]' < "${REPO_ROOT}/VERSION" 2>/dev/null || printf '1.2.0')}}"
+DIST_DIR="${RYK_DIST_DIR:-dist/plugins}"
 case "${DIST_DIR}" in
   /*) DIST_DIR_ABS="${DIST_DIR}" ;;
   *) DIST_DIR_ABS="${REPO_ROOT}/${DIST_DIR}" ;;
@@ -18,7 +18,7 @@ mkdir -p "${DIST_DIR_ABS}"
 # Package Codex plugin
 echo "Packaging Codex plugin..."
 CODEX_PLUGIN_DIR="${REPO_ROOT}/integrations/codex-plugin"
-CODEX_ZIP="${DIST_DIR_ABS}/orca-codex-plugin-v${VERSION}.zip"
+CODEX_ZIP="${DIST_DIR_ABS}/ryk-codex-plugin-v${VERSION}.zip"
 
 if [ -d "${CODEX_PLUGIN_DIR}" ]; then
   (cd "${CODEX_PLUGIN_DIR}" && zip -qr "${CODEX_ZIP}" \
@@ -41,7 +41,7 @@ fi
 # Package Claude Code plugin
 echo "Packaging Claude Code plugin..."
 CLAUDE_PLUGIN_DIR="${REPO_ROOT}/integrations/claude-code-plugin"
-CLAUDE_ZIP="${DIST_DIR_ABS}/orca-claude-code-plugin-v${VERSION}.zip"
+CLAUDE_ZIP="${DIST_DIR_ABS}/ryk-claude-code-plugin-v${VERSION}.zip"
 
 if [ -d "${CLAUDE_PLUGIN_DIR}" ]; then
   (cd "${CLAUDE_PLUGIN_DIR}" && zip -qr "${CLAUDE_ZIP}" \
@@ -64,7 +64,7 @@ fi
 # Package OpenCode plugin
 echo "Packaging OpenCode plugin..."
 OPENCODE_PLUGIN_DIR="${REPO_ROOT}/integrations/opencode-plugin"
-OPENCODE_ZIP="${DIST_DIR_ABS}/orca-opencode-plugin-v${VERSION}.zip"
+OPENCODE_ZIP="${DIST_DIR_ABS}/ryk-opencode-plugin-v${VERSION}.zip"
 
 if [ -d "${OPENCODE_PLUGIN_DIR}" ]; then
   (cd "${OPENCODE_PLUGIN_DIR}" && zip -qr "${OPENCODE_ZIP}" \
@@ -86,7 +86,7 @@ fi
 # Package Claude marketplace catalog
 echo "Packaging Claude marketplace catalog..."
 MARKETPLACE_DIR="${REPO_ROOT}/integrations/claude-marketplace"
-MARKETPLACE_ZIP="${DIST_DIR_ABS}/orca-claude-marketplace-v${VERSION}.zip"
+MARKETPLACE_ZIP="${DIST_DIR_ABS}/ryk-claude-marketplace-v${VERSION}.zip"
 
 if [ -d "${MARKETPLACE_DIR}" ]; then
   (cd "${MARKETPLACE_DIR}" && zip -qr "${MARKETPLACE_ZIP}" \
@@ -105,7 +105,7 @@ fi
 
 # Generate checksums
 echo "Generating checksums..."
-CHECKSUMS_FILE="${DIST_DIR_ABS}/orca-plugin-checksums.txt"
+CHECKSUMS_FILE="${DIST_DIR_ABS}/ryk-plugin-checksums.txt"
 
 tmp="${CHECKSUMS_FILE}.tmp"
 : > "$tmp"

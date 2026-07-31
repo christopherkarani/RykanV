@@ -1,20 +1,20 @@
 const std = @import("std");
 
-const exit_codes = @import("orca").cli.exit_codes;
+const exit_codes = @import("ryk").cli.exit_codes;
 
 // ---------------------------------------------------------------------------
 // P05 — Plugin Security and Compatibility Tests
 // ---------------------------------------------------------------------------
 // These tests validate:
 //   - Hook behavior with fake payloads (via built binary)
-//   - orca decide behavior
+//   - ryk decide behavior
 //   - Invalid and oversized input handling
 //   - Secret safety across plugin artifacts
 //   - Documentation overclaim checks
 //   - Separate workstream (drone) non-regression
 // ---------------------------------------------------------------------------
 
-const orca_bin = "./zig-out/bin/orca";
+const ryk_bin = "./zig-out/bin/ryk";
 const codex_deny_exit_code: u8 = 2;
 const codex_fixture_dir = "tests/plugin-fixtures/codex";
 const claude_fixture_dir = "tests/plugin-fixtures/claude";
@@ -80,7 +80,7 @@ fn runOrca(allocator: std.mem.Allocator, args: []const []const u8, stdin_data: ?
 }
 
 fn binaryExists() bool {
-    return fileExists(orca_bin);
+    return fileExists(ryk_bin);
 }
 
 fn expectJsonStringInEnum(items: []const std.json.Value, expected: []const u8) !void {
@@ -149,7 +149,7 @@ test "codex SessionStart hook returns valid JSON" {
     const fixture = try readFile(allocator, fixture_path);
     defer allocator.free(fixture);
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "codex", "SessionStart" }, fixture);
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "codex", "SessionStart" }, fixture);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -170,7 +170,7 @@ test "codex UserPromptSubmit with fake secret returns warn" {
     const fixture = try readFile(allocator, fixture_path);
     defer allocator.free(fixture);
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "codex", "UserPromptSubmit" }, fixture);
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "codex", "UserPromptSubmit" }, fixture);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -197,7 +197,7 @@ test "codex PreToolUse safe command returns allow" {
     const fixture = try readFile(allocator, fixture_path);
     defer allocator.free(fixture);
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "codex", "PreToolUse" }, fixture);
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "codex", "PreToolUse" }, fixture);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -219,7 +219,7 @@ test "codex PreToolUse dangerous command returns block or warn" {
     const fixture = try readFile(allocator, fixture_path);
     defer allocator.free(fixture);
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "codex", "PreToolUse" }, fixture);
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "codex", "PreToolUse" }, fixture);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -244,7 +244,7 @@ test "codex PreToolUse protected file write returns block or ask" {
     const fixture = try readFile(allocator, fixture_path);
     defer allocator.free(fixture);
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "codex", "PreToolUse" }, fixture);
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "codex", "PreToolUse" }, fixture);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -273,7 +273,7 @@ test "claude SessionStart hook returns valid JSON" {
     const fixture = try readFile(allocator, fixture_path);
     defer allocator.free(fixture);
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "claude", "SessionStart" }, fixture);
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "claude", "SessionStart" }, fixture);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -294,7 +294,7 @@ test "claude UserPromptSubmit with fake secret returns warn" {
     const fixture = try readFile(allocator, fixture_path);
     defer allocator.free(fixture);
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "claude", "UserPromptSubmit" }, fixture);
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "claude", "UserPromptSubmit" }, fixture);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -320,7 +320,7 @@ test "claude PreToolUse safe command returns allow" {
     const fixture = try readFile(allocator, fixture_path);
     defer allocator.free(fixture);
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "claude", "PreToolUse" }, fixture);
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "claude", "PreToolUse" }, fixture);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -342,7 +342,7 @@ test "claude PreToolUse dangerous command returns block or warn" {
     const fixture = try readFile(allocator, fixture_path);
     defer allocator.free(fixture);
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "claude", "PreToolUse" }, fixture);
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "claude", "PreToolUse" }, fixture);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -364,7 +364,7 @@ test "claude PreToolUse protected file write returns block or ask" {
     const fixture = try readFile(allocator, fixture_path);
     defer allocator.free(fixture);
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "claude", "PreToolUse" }, fixture);
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "claude", "PreToolUse" }, fixture);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -391,7 +391,7 @@ test "codex hook CI mode turns ask into block" {
     const fixture = try readFile(allocator, fixture_path);
     defer allocator.free(fixture);
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "codex", "PermissionRequest", "--ci" }, fixture);
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "codex", "PermissionRequest", "--ci" }, fixture);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -416,7 +416,7 @@ test "claude hook CI mode never returns ask" {
     const fixture = try readFile(allocator, fixture_path);
     defer allocator.free(fixture);
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "claude", "PermissionRequest", "--ci" }, fixture);
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "claude", "PermissionRequest", "--ci" }, fixture);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -430,7 +430,7 @@ test "claude hook CI mode never returns ask" {
 }
 
 // ---------------------------------------------------------------------------
-// 5. orca decide tests
+// 5. ryk decide tests
 // ---------------------------------------------------------------------------
 
 test "decide command safe returns allow JSON" {
@@ -438,7 +438,7 @@ test "decide command safe returns allow JSON" {
     const allocator = std.testing.allocator;
 
     const result = try runOrca(allocator, &.{
-        orca_bin,                                                                            "decide", "command", "--json",
+        ryk_bin,                                                                            "decide", "command", "--json",
         "{\"version\":1,\"host\":\"codex\",\"command\":\"git status\",\"mode\":\"strict\"}",
     }, null);
     defer allocator.free(result.stdout);
@@ -458,7 +458,7 @@ test "decide command dangerous returns block JSON" {
     const allocator = std.testing.allocator;
 
     const result = try runOrca(allocator, &.{
-        orca_bin,                                                                          "decide", "command", "--json",
+        ryk_bin,                                                                          "decide", "command", "--json",
         "{\"version\":1,\"host\":\"codex\",\"command\":\"rm -rf /\",\"mode\":\"strict\"}",
     }, null);
     defer allocator.free(result.stdout);
@@ -478,7 +478,7 @@ test "decide file write protected path returns block or ask" {
     const allocator = std.testing.allocator;
 
     const result = try runOrca(allocator, &.{
-        orca_bin,                                                                                                   "decide", "file", "--json",
+        ryk_bin,                                                                                                   "decide", "file", "--json",
         "{\"version\":1,\"host\":\"claude\",\"operation\":\"write\",\"path\":\".git/config\",\"mode\":\"strict\"}",
     }, null);
     defer allocator.free(result.stdout);
@@ -504,7 +504,7 @@ test "decide prompt with fake secret redacts" {
     const allocator = std.testing.allocator;
 
     const result = try runOrca(allocator, &.{
-        orca_bin,                                                                                      "decide", "prompt", "--json",
+        ryk_bin,                                                                                      "decide", "prompt", "--json",
         "{\"version\":1,\"host\":\"codex\",\"prompt\":\"fake_p05_secret_value\",\"mode\":\"strict\"}",
     }, null);
     defer allocator.free(result.stdout);
@@ -528,7 +528,7 @@ test "decide tool returns valid JSON" {
     const allocator = std.testing.allocator;
 
     const result = try runOrca(allocator, &.{
-        orca_bin,                                                                                                                         "decide", "tool", "--json",
+        ryk_bin,                                                                                                                         "decide", "tool", "--json",
         "{\"version\":1,\"host\":\"claude\",\"tool\":{\"name\":\"ExampleTool\",\"input\":{\"action\":\"example\"}},\"mode\":\"strict\"}",
     }, null);
     defer allocator.free(result.stdout);
@@ -560,7 +560,7 @@ test "decide rejects invalid JSON" {
     const allocator = std.testing.allocator;
 
     const result = try runOrca(allocator, &.{
-        orca_bin, "decide", "command", "--json", "{not json",
+        ryk_bin, "decide", "command", "--json", "{not json",
     }, null);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
@@ -573,21 +573,21 @@ test "hook codex rejects invalid JSON" {
     if (!binaryExists()) return;
     const allocator = std.testing.allocator;
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "codex", "PreToolUse" }, "{not json");
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "codex", "PreToolUse" }, "{not json");
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
     // PreToolUse pre-eval failures fail closed: Codex deny contract is exit 2 + sentinel.
     try std.testing.expectEqual(codex_deny_exit_code, result.code);
     try std.testing.expectEqual(@as(usize, 0), result.stdout.len);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "[[ORCA-GUARD]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "[[RYK-GUARD]]") != null);
 }
 
 test "hook claude rejects invalid JSON" {
     if (!binaryExists()) return;
     const allocator = std.testing.allocator;
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "claude", "PreToolUse" }, "{not json");
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "claude", "PreToolUse" }, "{not json");
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -602,21 +602,21 @@ test "hook codex rejects unknown host in payload" {
     if (!binaryExists()) return;
     const allocator = std.testing.allocator;
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "codex", "SessionStart" }, "{\"version\":1,\"host\":\"unknown\",\"event\":\"SessionStart\",\"payload\":{}}");
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "codex", "SessionStart" }, "{\"version\":1,\"host\":\"unknown\",\"event\":\"SessionStart\",\"payload\":{}}");
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
     // Codex pre-eval failures fail closed (exit 2 + sentinel), including SessionStart.
     try std.testing.expectEqual(codex_deny_exit_code, result.code);
     try std.testing.expectEqual(@as(usize, 0), result.stdout.len);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "[[ORCA-GUARD]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "[[RYK-GUARD]]") != null);
 }
 
 test "hook claude rejects unknown event in payload" {
     if (!binaryExists()) return;
     const allocator = std.testing.allocator;
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "claude", "SessionStart" }, "{\"version\":1,\"host\":\"claude\",\"event\":\"UnknownEvent\",\"payload\":{}}");
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "claude", "SessionStart" }, "{\"version\":1,\"host\":\"claude\",\"event\":\"UnknownEvent\",\"payload\":{}}");
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -629,14 +629,14 @@ test "decide rejects unknown decision kind" {
     const allocator = std.testing.allocator;
 
     const result = try runOrca(allocator, &.{
-        orca_bin, "decide", "unknown_kind", "--json", "{}",
+        ryk_bin, "decide", "unknown_kind", "--json", "{}",
     }, null);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
     try std.testing.expect(result.code != 0);
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "unknown subcommand") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "orca help decide") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "ryk help decide") != null);
 }
 
 // ---------------------------------------------------------------------------
@@ -659,13 +659,13 @@ test "hook codex fail-closes oversized PreToolUse payload" {
     }
     try oversized.appendSlice(allocator, "\"}}");
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "codex", "PreToolUse" }, oversized.items);
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "codex", "PreToolUse" }, oversized.items);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
     try std.testing.expectEqual(@as(u8, 2), result.code);
     try std.testing.expectEqual(@as(usize, 0), result.stdout.len);
-    try std.testing.expect(std.mem.startsWith(u8, result.stderr, "[[ORCA-GUARD]] blocked."));
+    try std.testing.expect(std.mem.startsWith(u8, result.stderr, "[[RYK-GUARD]] blocked."));
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "payload exceeds maximum size") != null);
 }
 
@@ -683,7 +683,7 @@ test "hook claude rejects oversized payload safely" {
     }
     try oversized.appendSlice(allocator, "\"}}");
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "claude", "SessionStart" }, oversized.items);
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "claude", "SessionStart" }, oversized.items);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -720,7 +720,7 @@ test "no fake secret leaks into generated hook responses" {
     const fixture = try readFile(allocator, fixture_path);
     defer allocator.free(fixture);
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "codex", "UserPromptSubmit" }, fixture);
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "codex", "UserPromptSubmit" }, fixture);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -792,9 +792,9 @@ test "docs include strongest protection warning" {
         if (!fileExists(path)) continue;
         const content = try readFile(std.testing.allocator, path);
         defer std.testing.allocator.free(content);
-        // Docs should mention "strongest protection" and "orca run --"
+        // Docs should mention "strongest protection" and "ryk run --"
         try std.testing.expect(std.mem.indexOf(u8, content, "strongest protection") != null);
-        try std.testing.expect(std.mem.indexOf(u8, content, "orca run --") != null);
+        try std.testing.expect(std.mem.indexOf(u8, content, "ryk run --") != null);
     }
 }
 
@@ -870,7 +870,7 @@ test "plugin docs do not include drone demos" {
     }
 }
 
-test "common plugin schemas match current Orca host and output surfaces" {
+test "common plugin schemas match current ryk host and output surfaces" {
     const hook_request = try readFile(std.testing.allocator, "integrations/common/schemas/hook-request-v1.json");
     defer std.testing.allocator.free(hook_request);
     var parsed_hook_request = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, hook_request, .{});
@@ -897,7 +897,7 @@ test "common plugin schemas match current Orca host and output surfaces" {
     try expectJsonStringInEnum(category_enum, "env");
     try std.testing.expect(std.mem.indexOf(u8, hook_response, "Aegis") == null);
 
-    const plugin_request = try readFile(std.testing.allocator, "integrations/common/schemas/orca-plugin-request-v1.json");
+    const plugin_request = try readFile(std.testing.allocator, "integrations/common/schemas/ryk-plugin-request-v1.json");
     defer std.testing.allocator.free(plugin_request);
     var parsed_plugin_request = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, plugin_request, .{});
     defer parsed_plugin_request.deinit();
@@ -912,7 +912,7 @@ test "common plugin schemas match current Orca host and output surfaces" {
     try expectJsonStringNotInEnum(request_type_enum, "drone_safety_status");
     try std.testing.expect(std.mem.indexOf(u8, plugin_request, "Aegis") == null);
 
-    const plugin_response = try readFile(std.testing.allocator, "integrations/common/schemas/orca-plugin-response-v1.json");
+    const plugin_response = try readFile(std.testing.allocator, "integrations/common/schemas/ryk-plugin-response-v1.json");
     defer std.testing.allocator.free(plugin_response);
     var parsed_plugin_response = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, plugin_response, .{});
     defer parsed_plugin_response.deinit();
@@ -979,7 +979,7 @@ test "hook codex rejects missing version field" {
     if (!binaryExists()) return;
     const allocator = std.testing.allocator;
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "codex", "SessionStart" }, "{\"host\":\"codex\",\"event\":\"SessionStart\",\"payload\":{}}");
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "codex", "SessionStart" }, "{\"host\":\"codex\",\"event\":\"SessionStart\",\"payload\":{}}");
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -990,7 +990,7 @@ test "hook claude rejects missing host field" {
     if (!binaryExists()) return;
     const allocator = std.testing.allocator;
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "claude", "SessionStart" }, "{\"version\":1,\"event\":\"SessionStart\",\"payload\":{}}");
+    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "claude", "SessionStart" }, "{\"version\":1,\"event\":\"SessionStart\",\"payload\":{}}");
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -1001,7 +1001,7 @@ test "decide rejects missing JSON payload" {
     if (!binaryExists()) return;
     const allocator = std.testing.allocator;
 
-    const result = try runOrca(allocator, &.{ orca_bin, "decide", "command" }, null);
+    const result = try runOrca(allocator, &.{ ryk_bin, "decide", "command" }, null);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -1060,7 +1060,7 @@ test "all codex hook responses are valid JSON" {
         else
             continue;
 
-        const result = try runOrca(allocator, &.{ orca_bin, "hook", "codex", event }, fixture);
+        const result = try runOrca(allocator, &.{ ryk_bin, "hook", "codex", event }, fixture);
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
         if (result.code == 2) {
@@ -1134,7 +1134,7 @@ test "all claude hook responses are valid JSON" {
         else
             continue;
 
-        const result = try runOrca(allocator, &.{ orca_bin, "hook", "claude", event }, fixture);
+        const result = try runOrca(allocator, &.{ ryk_bin, "hook", "claude", event }, fixture);
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 

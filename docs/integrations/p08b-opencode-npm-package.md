@@ -2,9 +2,9 @@
 
 ## Summary
 
-Packaged the existing Orca OpenCode plugin for npm distribution as `orca-opencode-plugin`.
+Packaged the existing ryk OpenCode plugin for npm distribution as `ryk-opencode-plugin`.
 
-The plugin remains a thin wrapper around the Orca CLI. It does not duplicate policy logic, bundle the Zig CLI, or add MCP/drone behavior.
+The plugin remains a thin wrapper around the ryk CLI. It does not duplicate policy logic, bundle the Zig CLI, or add MCP/drone behavior.
 
 ## Package Path
 
@@ -17,16 +17,16 @@ Source was kept in the existing location to minimize churn. The package is now n
 ## Package Name
 
 ```text
-orca-opencode-plugin
+ryk-opencode-plugin
 ```
 
 ## Package Metadata
 
 ```json
 {
-  "name": "orca-opencode-plugin",
+  "name": "ryk-opencode-plugin",
   "version": "1.1.0",
-  "description": "OpenCode plugin wrapper for Orca runtime guardrails.",
+  "description": "OpenCode plugin wrapper for ryk runtime guardrails.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -68,8 +68,8 @@ scripts/package-npm-plugins.sh
 
 Produces:
 ```text
-dist/npm/orca-opencode-plugin-v1.1.0.tgz
-dist/npm/orca-npm-plugin-checksums.txt
+dist/npm/ryk-opencode-plugin-v1.1.0.tgz
+dist/npm/ryk-npm-plugin-checksums.txt
 ```
 
 Secret scan: **passed**
@@ -112,12 +112,12 @@ Both docs include:
 
 All 14 checks passed:
 1. package.json is valid JSON
-2. Package name is `orca-opencode-plugin`
+2. Package name is `ryk-opencode-plugin`
 3. No unsafe install scripts
 4. `dist/index.js` exists
 5. `dist/index.d.ts` exists
-6. README documents `opencode.json` and `orca-opencode-plugin`
-7. Plugin source calls `orca hook opencode`
+6. README documents `opencode.json` and `ryk-opencode-plugin`
+7. Plugin source calls `ryk hook opencode`
 8. No obvious secrets in plugin source
 9. No MCP behavior in plugin source
 10. No drone behavior in plugin source
@@ -126,12 +126,12 @@ All 14 checks passed:
 13. Package excludes source TypeScript files
 14. README contains required wording
 
-### Orca CLI Tests
+### ryk CLI Tests
 
 ```bash
 zig build test          # PASS
-orca plugin doctor opencode           # PASS
-orca plugin install opencode --dry-run # PASS
+ryk plugin doctor opencode           # PASS
+ryk plugin install opencode --dry-run # PASS
 ```
 
 ### Hook Fixture Tests
@@ -139,19 +139,19 @@ orca plugin install opencode --dry-run # PASS
 ```bash
 # OpenCode dangerous command — BLOCKED
 cat tests/plugin-fixtures/opencode/tool_execute_before_command_dangerous.json \
-  | orca hook opencode tool.execute.before
+  | ryk hook opencode tool.execute.before
 
 # OpenCode safe command — ALLOWED
 cat tests/plugin-fixtures/opencode/tool_execute_before_command_safe.json \
-  | orca hook opencode tool.execute.before
+  | ryk hook opencode tool.execute.before
 
 # Codex dangerous command — BLOCKED
 cat tests/plugin-fixtures/codex/pre_tool_use_command_dangerous.json \
-  | orca hook codex PreToolUse
+  | ryk hook codex PreToolUse
 
 # Claude dangerous command — BLOCKED
 cat tests/plugin-fixtures/claude/pre_tool_use_command_dangerous.json \
-  | orca hook claude PreToolUse
+  | ryk hook claude PreToolUse
 ```
 
 All hooks returned expected decisions.
@@ -159,7 +159,7 @@ All hooks returned expected decisions.
 ### Redteam
 
 ```bash
-orca redteam --ci
+ryk redteam --ci
 ```
 
 Result: **10/10 fixtures passed (100%)**
@@ -176,8 +176,8 @@ Result: **10/10 fixtures passed (100%)**
 - The package is not yet published to the npm registry. Publish when ready with `npm publish` from `integrations/opencode-plugin/`.
 - The `@opencode-ai/plugin` peer dependency was removed because the exact OpenCode plugin types package name is uncertain.
 - Hooks are advisory; enforcement depends on OpenCode host support.
-- The strongest protection remains `orca opencode`.
-- Plugin requires `orca` to be installed separately and available on PATH.
+- The strongest protection remains `ryk opencode`.
+- Plugin requires `ryk` to be installed separately and available on PATH.
 
 ## Security Invariants Verified
 
@@ -190,17 +190,17 @@ Result: **10/10 fixtures passed (100%)**
 - [x] No secrets in package files
 - [x] No telemetry
 - [x] No SaaS, hosted dashboards, or monetization
-- [x] Plugin does not duplicate Orca policy logic
+- [x] Plugin does not duplicate ryk policy logic
 
-## Is `orca-opencode-plugin` Ready to Publish?
+## Is `ryk-opencode-plugin` Ready to Publish?
 
 **Yes — PUBLISHED.**
 
-`orca-opencode-plugin@1.1.0` is now live on the npm registry:
+`ryk-opencode-plugin@1.1.0` is now live on the npm registry:
 
-- **Registry:** https://registry.npmjs.org/orca-opencode-plugin
-- **Tarball:** https://registry.npmjs.org/orca-opencode-plugin/-/orca-opencode-plugin-1.1.0.tgz
-- **Install:** `npm install orca-opencode-plugin`
+- **Registry:** https://registry.npmjs.org/ryk-opencode-plugin
+- **Tarball:** https://registry.npmjs.org/ryk-opencode-plugin/-/ryk-opencode-plugin-1.1.0.tgz
+- **Install:** `npm install ryk-opencode-plugin`
 
 ## Files Changed
 
@@ -212,7 +212,7 @@ Result: **10/10 fixtures passed (100%)**
 - `docs/integrations/p08b-opencode-npm-package.md` — this deliverable
 
 ### Modified
-- `integrations/opencode-plugin/package.json` — updated for `orca-opencode-plugin`
+- `integrations/opencode-plugin/package.json` — updated for `ryk-opencode-plugin`
 - `integrations/opencode-plugin/README.md` — added npm install docs, required wording
 - `docs/integrations/opencode.md` — added npm install section, required wording
 
@@ -220,5 +220,5 @@ Result: **10/10 fixtures passed (100%)**
 - `integrations/opencode-plugin/dist/index.js`
 - `integrations/opencode-plugin/dist/index.d.ts`
 - `integrations/opencode-plugin/dist/index.d.ts.map`
-- `dist/npm/orca-opencode-plugin-v1.1.0.tgz`
-- `dist/npm/orca-npm-plugin-checksums.txt`
+- `dist/npm/ryk-opencode-plugin-v1.1.0.tgz`
+- `dist/npm/ryk-npm-plugin-checksums.txt`

@@ -27,17 +27,17 @@ class Ryk < Formula
   def install
     bin.install "bin/ryk"
     # Compat alias for one major (Phase 5a dual-name).
-    if (buildpath/"bin/orca").exist?
-      bin.install "bin/orca"
+    if (buildpath/"bin/ryk").exist?
+      bin.install "bin/ryk"
     else
       bin.install_symlink "ryk" => "orca"
     end
-    (share/"orca/current").install "orca-dashboard-ui"
+    (share/"orca/current").install "ryk-dashboard-ui"
     (share/"orca/current").install "integrations"
     (share/"orca/current").install "fixtures"
     (share/"orca/current").install "schemas"
     (share/"orca/current").install "policies"
-    (share/"orca/current").install "orca-pi"
+    (share/"orca/current").install "ryk-pi"
   end
 
   def post_install
@@ -52,7 +52,7 @@ class Ryk < Formula
     ].map { |path| File.join(Dir.home, path) }
     onboard_env = {
       "RYK_RESOURCE_ROOT" => (share/"orca/current").to_s,
-      "ORCA_RESOURCE_ROOT" => (share/"orca/current").to_s,
+      "RYK_RESOURCE_ROOT" => (share/"orca/current").to_s,
       "PATH" => ([bin.to_s] + user_bins + [ENV.fetch("PATH", "")]).join(File::PATH_SEPARATOR),
     }
     success = Dir.chdir(Dir.home) do

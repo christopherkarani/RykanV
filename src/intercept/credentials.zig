@@ -1,8 +1,8 @@
 const std = @import("std");
 
 const env_util = @import("../env_util.zig");
-const audit = @import("orca_core").audit.redact_bridge;
-const policy_schema = @import("orca_core").policy.schema;
+const audit = @import("ryk_core").audit.redact_bridge;
+const policy_schema = @import("ryk_core").policy.schema;
 
 pub const BrokerKind = policy_schema.CredentialBrokerKind;
 
@@ -73,7 +73,7 @@ pub const Broker = struct {
     pub fn envReference(self: Broker, allocator: std.mem.Allocator, name: []const u8, raw_value: []const u8) !CredentialRef {
         const fingerprint = audit.fingerprint8(raw_value);
         return .{
-            .value = try std.fmt.allocPrint(allocator, "orca-secret://{s}/env/{s}/{s}", .{ self.kind.toString(), name, &fingerprint }),
+            .value = try std.fmt.allocPrint(allocator, "ryk-secret://{s}/env/{s}/{s}", .{ self.kind.toString(), name, &fingerprint }),
         };
     }
 };
@@ -345,7 +345,7 @@ fn envFilePath(allocator: std.mem.Allocator, workspace_root: []const u8, broker:
     const relative = broker.path orelse return error.InvalidBrokerConfig;
     if (std.fs.path.isAbsolute(relative)) return error.InvalidBrokerConfig;
     if (std.mem.indexOf(u8, relative, "..") != null) return error.InvalidBrokerConfig;
-    if (!(std.mem.startsWith(u8, relative, ".orca/") or std.mem.startsWith(u8, relative, ".orca\\"))) return error.InvalidBrokerConfig;
+    if (!(std.mem.startsWith(u8, relative, ".ryk/") or std.mem.startsWith(u8, relative, ".ryk\\"))) return error.InvalidBrokerConfig;
     return std.fs.path.join(allocator, &.{ workspace_root, relative });
 }
 
@@ -466,19 +466,19 @@ test "local dummy broker creates raw-secret-free env references" {
     const ref = try broker.envReference(std.testing.allocator, "GITHUB_TOKEN", "ghp_fakeSyntheticTokenValue1234567890");
     defer ref.deinit(std.testing.allocator);
 
-    try std.testing.expect(std.mem.startsWith(u8, ref.value, "orca-secret://local-dummy/env/GITHUB_TOKEN/"));
+    try std.testing.expect(std.mem.startsWith(u8, ref.value, "ryk-secret://local-dummy/env/GITHUB_TOKEN/"));
     try std.testing.expect(std.mem.indexOf(u8, ref.value, "ghp_fakeSyntheticTokenValue") == null);
 }
 
 test "env-file dev broker resolves and redacts check output" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = ".orca/dev-secrets.env", .data = "GITHUB_PAT=ghp_fakeSyntheticTokenValue1234567890\n" });
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = ".ryk/dev-secrets.env", .data = "GITHUB_PAT=ghp_fakeSyntheticTokenValue1234567890\n" });
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
 
-    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
+    var loaded = try @import("ryk_core").policy.load.parseFromSlice(std.testing.allocator,
         \\version: 1
         \\mode: strict
         \\credentials:
@@ -486,7 +486,7 @@ test "env-file dev broker resolves and redacts check output" {
         \\  brokers:
         \\    env_dev:
         \\      type: env-file-dev
-        \\      path: .orca/dev-secrets.env
+        \\      path: .ryk/dev-secrets.env
         \\  refs:
         \\    github_pat:
         \\      broker: env_dev

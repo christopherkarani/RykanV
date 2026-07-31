@@ -1,12 +1,12 @@
-# Orca UDS IPC Protocol v1
+# ryk UDS IPC Protocol v1
 
-> Phase 0.5 — NDJSON over Unix Domain Sockets between the Zig `orca` CLI and the Rust `orca-daemon`.
+> Phase 0.5 — NDJSON over Unix Domain Sockets between the Zig `ryk` CLI and the Rust `ryk-daemon`.
 
 ## Socket Path
 
-- **Default:** `$HOME/.orca/daemon.sock`
-- **PID file:** `$HOME/.orca/daemon.pid` (written by the daemon on startup)
-- The daemon creates the parent directory `$HOME/.orca/` if it does not exist.
+- **Default:** `$HOME/.ryk/daemon.sock`
+- **PID file:** `$HOME/.ryk/daemon.pid` (written by the daemon on startup)
+- The daemon creates the parent directory `$HOME/.ryk/` if it does not exist.
 - On graceful shutdown the daemon removes both the socket and the PID file.
 
 ## Wire Format
@@ -85,7 +85,7 @@ No parameters. Signals the daemon to initiate graceful shutdown.
 
 When the daemon receives `Shutdown` (or `SIGTERM` / `SIGINT`):
 1. Stop accepting new connections.
-2. Remove `$HOME/.orca/daemon.sock` and `$HOME/.orca/daemon.pid`.
+2. Remove `$HOME/.ryk/daemon.sock` and `$HOME/.ryk/daemon.pid`.
 3. Exit with code `0`.
 
 > **Phase 0.5 note:** In-flight requests are not drained with a timeout; the runtime shuts down immediately after closing the accept loop. Full graceful draining is planned for a later phase.

@@ -2,8 +2,8 @@
 set -eu
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DIST_DIR="${1:-${RYK_DIST_DIR:-${ORCA_DIST_DIR:-dist}}}"
-RELEASE_PRODUCT="${RYK_RELEASE_PRODUCT:-${ORCA_RELEASE_PRODUCT:-all}}"
+DIST_DIR="${1:-${RYK_DIST_DIR:-${RYK_DIST_DIR:-dist}}}"
+RELEASE_PRODUCT="${RYK_RELEASE_PRODUCT:-${RYK_RELEASE_PRODUCT:-all}}"
 
 fail() {
   printf 'release verify: %s\n' "$1" >&2
@@ -222,11 +222,11 @@ forbid_archive_binary() {
 }
 
 require_cli_pair() {
-  # Primary ryk + orca compat alias both required in primary archives.
+  # Primary ryk + ryk compat alias both required in primary archives.
   pattern="$1"
   require_archive_binary "$pattern" "ryk"
   require_archive_binary "$pattern" "orca"
-  forbid_archive_binary "$pattern" "orca-daemon"
+  forbid_archive_binary "$pattern" "ryk-daemon"
   require_archive_excludes "$pattern"
 }
 
@@ -263,8 +263,8 @@ require_release_artifacts() {
         windows-amd64)
           require_artifact "$DIST_DIR/ryk-v*-windows-amd64.zip"
           require_archive_binary "$DIST_DIR/ryk-v*-windows-amd64.zip" "ryk.exe"
-          require_archive_binary "$DIST_DIR/ryk-v*-windows-amd64.zip" "orca.exe"
-          forbid_archive_binary "$DIST_DIR/ryk-v*-windows-amd64.zip" "orca-daemon.exe"
+          require_archive_binary "$DIST_DIR/ryk-v*-windows-amd64.zip" "ryk.exe"
+          forbid_archive_binary "$DIST_DIR/ryk-v*-windows-amd64.zip" "ryk-daemon.exe"
           require_archive_excludes "$DIST_DIR/ryk-v*-windows-amd64.zip"
           ;;
         *)
@@ -289,20 +289,20 @@ if [ "$RELEASE_PRODUCT" != "host" ]; then
   fi
   [ -s "$DIST_DIR/package-manifests/npm/package.json" ] || fail "missing rendered npm package manifest"
   if [ ! -s "$DIST_DIR/package-manifests/npm/bin/ryk.js" ] && \
-     [ ! -s "$DIST_DIR/package-manifests/npm/bin/orca.js" ]; then
+     [ ! -s "$DIST_DIR/package-manifests/npm/bin/ryk.js" ]; then
     fail "missing rendered npm launcher (ryk.js or orca.js)"
   fi
 fi
 grep -q '"products_included"' "$DIST_DIR/release-manifest.json" || fail "release-manifest.json missing products_included"
 grep -q '"ryk"' "$DIST_DIR/release-manifest.json" || fail "release-manifest.json missing ryk product"
 # Daemon product was removed; packaging is CLI + core only (Zig shell_engine in-process).
-if grep -q '"orca-daemon"' "$DIST_DIR/release-manifest.json"; then
-  fail "release-manifest.json still lists orca-daemon product (removed from packaging)"
+if grep -q '"ryk-daemon"' "$DIST_DIR/release-manifest.json"; then
+  fail "release-manifest.json still lists ryk-daemon product (removed from packaging)"
 fi
-if grep -q '"orca-daemon"' "$DIST_DIR/sbom.json"; then
-  fail "sbom.json still lists orca-daemon component (removed from packaging)"
+if grep -q '"ryk-daemon"' "$DIST_DIR/sbom.json"; then
+  fail "sbom.json still lists ryk-daemon component (removed from packaging)"
 fi
-# SBOM may still list orca (compat) or ryk (primary).
+# SBOM may still list ryk (compat) or ryk (primary).
 if ! grep -qE '"ryk"|"orca"' "$DIST_DIR/sbom.json"; then
   fail "sbom.json missing ryk/orca component"
 fi
@@ -334,8 +334,8 @@ OPENCLAW_VERSION=$(grep '"version"' "${REPO_ROOT}/integrations/openclaw-plugin/p
 CODEX_VERSION=$(grep '"version"' "${REPO_ROOT}/integrations/codex-plugin/.codex-plugin/plugin.json" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
 CLAUDE_VERSION=$(grep '"version"' "${REPO_ROOT}/integrations/claude-code-plugin/.claude-plugin/plugin.json" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
 OPENCODE_VERSION=$(grep '"version"' "${REPO_ROOT}/integrations/opencode-plugin/package.json" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
-# Pi runtime dependency may be @orca-sec/ryk (primary) or legacy @orca-sec/orca.
-PI_RUNTIME_VERSION=$(grep -E '"@orca-sec/(ryk|orca)"' "${REPO_ROOT}/orca-pi/package.json" | head -1 | sed 's/.*"@orca-sec\/[^"]*": *"\([^"]*\)".*/\1/')
+# Pi runtime dependency may be @rykan/ryk (primary) or legacy @rykan/ryk.
+PI_RUNTIME_VERSION=$(grep -E '"@rykan/(ryk|orca)"' "${REPO_ROOT}/ryk-pi/package.json" | head -1 | sed 's/.*"@rykan\/[^"]*": *"\([^"]*\)".*/\1/')
 for plugin_version in "${HERMES_VERSION}" "${OPENCLAW_VERSION}" "${CODEX_VERSION}" "${CLAUDE_VERSION}" "${OPENCODE_VERSION}" "${PI_RUNTIME_VERSION}"; do
   if [ "${plugin_version}" != "${CLI_VERSION}" ]; then
     echo "ERROR: plugin version mismatch (expected ${CLI_VERSION}, got ${plugin_version})" >&2
@@ -344,4 +344,4 @@ for plugin_version in "${HERMES_VERSION}" "${OPENCLAW_VERSION}" "${CODEX_VERSION
 done
 
 printf 'release verify: passed\n'
-printf 'Limitations: ryk release assets cover local CLI/runtime guardrails only; no hosted telemetry or cloud enforcement is included. orca is a PATH/package compat alias for one major.\n'
+printf 'Limitations: ryk release assets cover local CLI/runtime guardrails only; no hosted telemetry or cloud enforcement is included. ryk is a PATH/package compat alias for one major.\n'

@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# Manual/staged smoke for `orca start` using an isolated HOME.
+# Manual/staged smoke for `ryk start` using an isolated HOME.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-SMOKE_HOME="$(mktemp -d "${TMPDIR:-/tmp}/orca-start-smoke.XXXXXX")"
+SMOKE_HOME="$(mktemp -d "${TMPDIR:-/tmp}/ryk-start-smoke.XXXXXX")"
 cleanup() {
     rm -rf "$SMOKE_HOME"
 }
 trap cleanup EXIT
 
 export HOME="$SMOKE_HOME"
-export ORCA_RESOURCE_ROOT="${ORCA_RESOURCE_ROOT:-$ROOT}"
+export RYK_RESOURCE_ROOT="${RYK_RESOURCE_ROOT:-$ROOT}"
 
 "$ROOT/scripts/zig" build
-ORCA="$ROOT/zig-out/bin/orca"
+ORCA="$ROOT/zig-out/bin/ryk"
 
-echo "== Fresh environment: orca start (firewall) =="
+echo "== Fresh environment: ryk start (firewall) =="
 "$ORCA" start --auto --protection firewall --skip-verify
 
 echo "== Idempotent second run =="
@@ -29,4 +29,4 @@ echo "== doctor =="
 echo "== version =="
 "$ORCA" version
 
-echo "orca start smoke completed in $SMOKE_HOME"
+echo "ryk start smoke completed in $SMOKE_HOME"

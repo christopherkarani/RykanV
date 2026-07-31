@@ -1,7 +1,7 @@
 const std = @import("std");
-const plugin = @import("orca").cli.plugin;
-const init = @import("orca").cli.init;
-const exit_codes = @import("orca").cli.exit_codes;
+const plugin = @import("ryk").cli.plugin;
+const init = @import("ryk").cli.init;
+const exit_codes = @import("ryk").cli.exit_codes;
 
 test "host detection finds a known binary in PATH" {
     const allocator = std.testing.allocator;
@@ -22,7 +22,7 @@ test "policy init creates file when missing" {
     const code = try init.command(std.testing.io, tmp.dir, &.{ "--preset", "generic-agent", "--force", "--quiet" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, code);
 
-    tmp.dir.access(std.testing.io, ".orca/policy.yaml", .{}) catch {
+    tmp.dir.access(std.testing.io, ".ryk/policy.yaml", .{}) catch {
         std.debug.panic("policy file was not created", .{});
     };
 }

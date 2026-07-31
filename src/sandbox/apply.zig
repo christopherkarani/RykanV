@@ -14,7 +14,7 @@
 //! - retains child-apply materials (`ChildMaterials` union) so spawn can box the *agent* process
 //!
 //! Landlock restrict_self and Seatbelt sandbox_init run only in a **forked child**
-//! so the parent Orca process stays free. Production agent exec must use
+//! so the parent ryk process stays free. Production agent exec must use
 //! `apply_posix.forkApplyLandlockAndExec` / `forkApplySeatbeltAndExec` (FD scrub
 //! runs in that child before exec).
 //!
@@ -476,7 +476,7 @@ fn applyIsolatedGitConfig(env_map: *std.process.Environ.Map) error{OutOfMemory}!
 /// Prepare temp, tool-cache, and Git environment for the attach path.
 ///
 /// Host macOS TMPDIR under `/var/folders` is intentionally not granted (canary breadth).
-/// Prefer a fresh child of `{workspace}/.orca-tmp` so package-manager caches
+/// Prefer a fresh child of `{workspace}/.ryk-tmp` so package-manager caches
 /// cannot consume state planted by an earlier agent launch.
 ///
 /// Production defaults keep `include_tmp=false` (no classic `/tmp` RW grant). Do **not**
@@ -1452,7 +1452,7 @@ fn isRegularFile(io: std.Io, path: []const u8) bool {
 /// - `on` / `auto` + incomplete denylist scrub (OOM) → `error.RequireFailed` (fail closed; reason env_scrub_failed)
 /// - allowlist / TMPDIR rewrite OOM → `error.OutOfMemory` (hard; not RequireFailed)
 /// - launch allowlist runs only when prepare yields child-apply materials
-/// - attach path rewrites TMPDIR/TMP/TEMP into workspace session temp (`.orca-tmp`)
+/// - attach path rewrites TMPDIR/TMP/TEMP into workspace session temp (`.ryk-tmp`)
 /// - session-tmp prepare failure under materials → `session_tmp_prepare_failed`
 ///   (`on` → RequireFailed; `auto` → failed receipt; never silent classic `/tmp`)
 /// - `on` + unavailable/failed (no child plan) → `error.RequireFailed` (fail closed)
@@ -1567,7 +1567,7 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
     var attach_tmp: ?AttachSessionTmp = null;
     defer if (attach_tmp) |*owned| owned.deinit();
     if (platform.status == .prepared_child) {
-        // Create `{workspace}/.orca-tmp` before Landlock expand enumerates children,
+        // Create `{workspace}/.ryk-tmp` before Landlock expand enumerates children,
         // even when env_map is null (prepareAttachEnvironment also ensures when env present).
         // Fail closed when materials require session tmp (M-8): never lie with classic /tmp.
         if (!ensureWorkspaceSessionTmp(boundary.workspace_root)) {
@@ -1839,14 +1839,14 @@ test "mode auto without Landlock returns unavailable and scrubs env" {
     defer env_map.deinit();
     try env_map.put("LD_PRELOAD", "evil.so");
     try env_map.put("PATH", "/usr/bin");
-    try env_map.put("ORCA_SESSION_ID", "s1");
+    try env_map.put("RYK_SESSION_ID", "s1");
 
     // Parent prepare is ABI/backend probe only — missing path is not a parent failure.
     // Denylist scrub must still run; session stays non-active until agent-child apply + promote.
     var result = try applyBeforeExec(.{
         .allocator = std.testing.allocator,
         .mode = .auto,
-        .workspace_root = "/tmp/orca-apply-ws-nonexistent-u05",
+        .workspace_root = "/tmp/ryk-apply-ws-nonexistent-u05",
         .env_map = &env_map,
     });
     defer result.deinit();
@@ -1858,7 +1858,7 @@ test "mode auto without Landlock returns unavailable and scrubs env" {
     try std.testing.expect(result.profile_hash_hex != null);
     try std.testing.expect(env_map.get("LD_PRELOAD") == null);
     try std.testing.expectEqualStrings("/usr/bin", env_map.get("PATH").?);
-    try std.testing.expectEqualStrings("s1", env_map.get("ORCA_SESSION_ID").?);
+    try std.testing.expectEqualStrings("s1", env_map.get("RYK_SESSION_ID").?);
     // Non-Linux: backend_not_implemented / macos_version_unsupported / prepared;
     // Linux without ABI: landlock_unavailable;
     // Linux with ABI: prepared (landlock_child_apply_required) — attach is spawn path.
@@ -1883,7 +1883,7 @@ test "auto grade-drop retains provider keys; attach path allowlists" {
     var result = try applyBeforeExec(.{
         .allocator = std.testing.allocator,
         .mode = .auto,
-        .workspace_root = "/tmp/orca-apply-ws-m2-allowlist",
+        .workspace_root = "/tmp/ryk-apply-ws-m2-allowlist",
         .env_map = &env_map,
     });
     defer result.deinit();
@@ -1920,7 +1920,7 @@ test "mode on without usable Landlock fails closed with RequireFailed" {
     var result = applyBeforeExec(.{
         .allocator = std.testing.allocator,
         .mode = .on,
-        .workspace_root = "/tmp/orca-apply-ws-nonexistent-u05",
+        .workspace_root = "/tmp/ryk-apply-ws-nonexistent-u05",
         .env_map = &env_map,
         .fail_reason_out = &fail_reason,
     });
@@ -1979,7 +1979,7 @@ test "mode on and auto fail closed when env scrub is incomplete" {
         const err = applyBeforeExec(.{
             .allocator = std.testing.allocator,
             .mode = mode,
-            .workspace_root = "/tmp/orca-apply-ws-scrub-fail",
+            .workspace_root = "/tmp/ryk-apply-ws-scrub-fail",
             .env_map = &env_map,
             .fail_reason_out = &fail_reason,
         });
@@ -2009,7 +2009,7 @@ test "profile compile OutOfMemory propagates (never soft unavailable)" {
         const err = applyBeforeExec(.{
             .allocator = failing.allocator(),
             .mode = mode,
-            .workspace_root = "/tmp/orca-apply-ws-compile-oom",
+            .workspace_root = "/tmp/ryk-apply-ws-compile-oom",
             .env_map = null,
         });
         try std.testing.expectError(error.OutOfMemory, err);
@@ -2083,7 +2083,7 @@ test "non-Linux never yields active receipt from apply seam without child spawn"
         var result = try applyBeforeExec(.{
             .allocator = std.testing.allocator,
             .mode = mode,
-            .workspace_root = "/tmp/orca-apply-ws",
+            .workspace_root = "/tmp/ryk-apply-ws",
             .env_map = null,
         });
         defer result.deinit();
@@ -2267,7 +2267,7 @@ test "activateAfterHandshake sets seatbelt loopback route-forced network_scope" 
     try std.testing.expect(result.receipt.isActive());
     try std.testing.expectEqual(macos_profile.SeatbeltProfileGrade.hardened, result.receipt.seatbelt_profile.?);
     try std.testing.expectEqualStrings(
-        "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind unrestricted)",
+        "proxy route-forced (outbound TCP to ryk loopback proxy only; inbound/bind unrestricted)",
         result.receipt.network_scope,
     );
     var banner_buf: [posture.session_banner_buf_len]u8 = undefined;
@@ -2316,7 +2316,7 @@ test "activateAfterHandshake strict route-forced denies inbound/bind in network_
     _ = try result.activateAfterHandshake();
     try std.testing.expectEqual(macos_profile.SeatbeltProfileGrade.strict, result.receipt.seatbelt_profile.?);
     try std.testing.expectEqualStrings(
-        "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind denied)",
+        "proxy route-forced (outbound TCP to ryk loopback proxy only; inbound/bind denied)",
         result.receipt.network_scope,
     );
     var banner_buf: [posture.session_banner_buf_len]u8 = undefined;
@@ -2330,7 +2330,7 @@ test "require_network_route_forcing without proxy port fails closed" {
     const err = applyBeforeExec(.{
         .allocator = std.testing.allocator,
         .mode = .on,
-        .workspace_root = "/tmp/orca-apply-ws-route-force-req",
+        .workspace_root = "/tmp/ryk-apply-ws-route-force-req",
         .env_map = null,
         .network_proxy_port = null,
         .require_network_route_forcing = true,
@@ -2426,7 +2426,7 @@ test "spawnAgent promotes with typed proof on macOS Seatbelt" {
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "neighbor.txt", .data = "ok" });
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
@@ -2471,7 +2471,7 @@ test "spawnAgent attaches when launch binary is outside workspace with exec gran
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(std.testing.io, ".orca");
+    try ws_tmp.dir.createDirPath(std.testing.io, ".ryk");
     const root = try ws_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
 
@@ -3163,7 +3163,7 @@ test "spawnAgent attaches when shebang script and interpreter are outside worksp
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     const root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(root);
 
@@ -3241,7 +3241,7 @@ test "mode on surfaces real reason_code via fail_reason_out on this host" {
     var result = applyBeforeExec(.{
         .allocator = std.testing.allocator,
         .mode = .on,
-        .workspace_root = "/tmp/orca-apply-ws-u07-reason",
+        .workspace_root = "/tmp/ryk-apply-ws-u07-reason",
         .env_map = null,
         .fail_reason_out = &fail_reason,
     });
@@ -3276,7 +3276,7 @@ test "isUngrantedHostTmpdir detects macOS var/folders shapes" {
     try std.testing.expect(isUngrantedHostTmpdir("/private/var/folders/xx/yy/T"));
     try std.testing.expect(!isUngrantedHostTmpdir("/tmp"));
     try std.testing.expect(!isUngrantedHostTmpdir("/private/tmp"));
-    try std.testing.expect(!isUngrantedHostTmpdir("/workspace/.orca-tmp"));
+    try std.testing.expect(!isUngrantedHostTmpdir("/workspace/.ryk-tmp"));
 }
 
 test "prepareAttachEnvironment points TMPDIR at fresh workspace session temp" {
@@ -3444,7 +3444,7 @@ test "attach path rewrites host TMPDIR out of var/folders (R2-2)" {
     // Only meaningful when prepare yields child-apply materials (macOS Seatbelt / Linux Landlock).
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
 
@@ -3495,7 +3495,7 @@ test "attach path rewrites host TMPDIR out of var/folders (R2-2)" {
 
 test "protect_workspace_secrets compiles into profile hash material" {
     var compiled = try profile.compileProfile(std.testing.allocator, .{
-        .workspace_root = "/tmp/orca-ws-protect",
+        .workspace_root = "/tmp/ryk-ws-protect",
         .include_tmp = false,
         .protect_workspace_secrets = true,
     });

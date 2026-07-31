@@ -313,10 +313,10 @@ pub fn resolveWorkspaceRoot(
     while (true) {
         const git_path = try std.fs.path.join(allocator, &.{ current, ".git" });
         defer allocator.free(git_path);
-        const orca_policy_path = try std.fs.path.join(allocator, &.{ current, ".orca", "policy.yaml" });
-        defer allocator.free(orca_policy_path);
+        const ryk_policy_path = try std.fs.path.join(allocator, &.{ current, ".ryk", "policy.yaml" });
+        defer allocator.free(ryk_policy_path);
 
-        if (hasGitMarker(io, git_path) or hasWorkspaceMarker(io, orca_policy_path)) {
+        if (hasGitMarker(io, git_path) or hasWorkspaceMarker(io, ryk_policy_path)) {
             allocator.free(fallback);
             return current;
         }
@@ -367,7 +367,7 @@ fn makeEvent(
         .event_id = try event.generateEventId(timestamp),
         .timestamp = timestamp,
         .event_type = event_type,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = target_kind, .value = target_value },
     };
 }
@@ -451,8 +451,8 @@ test "workspace detection finds nearest ryk policy parent" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = ".orca/policy.yaml", .data = "mode: observe\n" });
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = ".ryk/policy.yaml", .data = "mode: observe\n" });
     try tmp.dir.createDirPath(std.testing.io, "child/grandchild");
 
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);

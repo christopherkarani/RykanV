@@ -53,12 +53,12 @@
 ## 1.2.1 — Pi `/orca-start` non-interactive fix
 
 ### Fixed
-- **Pi extension** (`orca-pi/` → `@orca-sec/pi-orca@1.2.1`) — `/orca-start` now runs `orca start --auto` so onboarding works when Pi spawns Orca without a TTY (fixes exit code 2 in non-interactive terminals).
+- **Pi extension** (`ryk-pi/` → `@orca-sec/pi-orca@1.2.1`) — `/orca-start` now runs `orca start --auto` so onboarding works when Pi spawns Orca without a TTY (fixes exit code 2 in non-interactive terminals).
 
 ## 1.2.0 — Daemon Integration and Pi Extension
 
 ### Added
-- **Pi extension** (`orca-pi/` → `@orca-guard/pi-orca@1.2.0`) — Intercepts Pi `bash` tool calls via `orca evaluate --json --stdin`. First public npm publish.
+- **Pi extension** (`ryk-pi/` → `@orca-guard/pi-orca@1.2.0`) — Intercepts Pi `bash` tool calls via `orca evaluate --json --stdin`. First public npm publish.
 - Slash commands `/orca-start`, `/orca-doctor`, `/orca-mode` for Pi sessions.
 
 ### Changed

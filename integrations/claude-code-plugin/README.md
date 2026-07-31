@@ -56,7 +56,7 @@ Expected output sections:
 | `redteam` | Run deterministic red-team fixtures |
 | `replay` | Show and explain the latest ryk session replay |
 
-Skills are invoked as `/orca:doctor`, `/orca:init`, `/orca:protect`, `/orca:redteam`, `/orca:replay` depending on the Claude Code plugin namespace configuration.
+Skills are invoked as `/ryk:doctor`, `/ryk:init`, `/ryk:protect`, `/ryk:redteam`, `/ryk:replay` depending on the Claude Code plugin namespace configuration.
 
 ## Hooks included
 

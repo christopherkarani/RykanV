@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const terminal_text = @import("terminal_text.zig");
 
-/// Orca CLI design system: palette, color-capability detection, and theme tokens.
+/// ryk CLI design system: palette, color-capability detection, and theme tokens.
 ///
 /// This module is the single source of truth for visual styling. It degrades
 /// gracefully: truecolor → 256 → 16-color → plain text. It always honours

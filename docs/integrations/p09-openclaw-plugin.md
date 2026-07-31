@@ -2,7 +2,7 @@
 
 ## Summary
 
-This phase built a native OpenClaw plugin wrapper for Orca. The plugin follows the same thin-wrapper architecture as the existing Codex, Claude Code, and OpenCode plugins: it calls the Orca CLI for policy decisions and does not duplicate policy logic.
+This phase built a native OpenClaw plugin wrapper for ryk. The plugin follows the same thin-wrapper architecture as the existing Codex, Claude Code, and OpenCode plugins: it calls the ryk CLI for policy decisions and does not duplicate policy logic.
 
 ## Plugin files added
 
@@ -23,7 +23,7 @@ integrations/openclaw-plugin/
 ## Manifest status
 
 - `openclaw.plugin.json` exists and validates as JSON.
-- Contains `id: "orca"`, `name: "Orca"`, `version: "1.0.0"`.
+- Contains `id: "orca"`, `name: "ryk"`, `version: "1.0.0"`.
 - Contains `configSchema` (empty object, `additionalProperties: false`).
 
 ## Package metadata status
@@ -41,28 +41,28 @@ integrations/openclaw-plugin/
 
 ## CLI commands added
 
-The Orca Zig CLI now supports:
+The ryk Zig CLI now supports:
 
 ```bash
-orca plugin doctor openclaw
-orca plugin doctor openclaw --json
-orca plugin manifest openclaw
-orca plugin manifest openclaw --json
-orca plugin install openclaw --dry-run
-orca hook openclaw session.start
-orca hook openclaw tool.before
-orca hook openclaw tool.after
-orca hook openclaw session.end
+ryk plugin doctor openclaw
+ryk plugin doctor openclaw --json
+ryk plugin manifest openclaw
+ryk plugin manifest openclaw --json
+ryk plugin install openclaw --dry-run
+ryk hook openclaw session.start
+ryk hook openclaw tool.before
+ryk hook openclaw tool.after
+ryk hook openclaw session.end
 ```
 
 ## Hook adapter status
 
-- `orca hook openclaw <event>` reads JSON from stdin.
+- `ryk hook openclaw <event>` reads JSON from stdin.
 - Enforces 256 KiB max payload size.
 - Validates JSON, host, and event fields.
-- Maps OpenClaw dot-separated events to internal Orca events.
+- Maps OpenClaw dot-separated events to internal ryk events.
 - Handles informational events (`session.end`) with `allow` responses.
-- Evaluates `tool.before` through Orca policy.
+- Evaluates `tool.before` through ryk policy.
 - OpenClaw does not expose dedicated permission hooks; blocking is handled via `before_tool_call`.
 - Emits valid JSON output.
 - Debug logs go to stderr only.
@@ -84,8 +84,8 @@ Not performed — OpenClaw was not installed in the test environment. The plugin
 ## Known limitations
 
 - OpenClaw host binary detection reports "not found" if OpenClaw is not installed.
-- npm package `orca-openclaw-plugin@1.1.3` is published.
-- ClawHub package `orca-openclaw-plugin@1.1.3` is published.
+- npm package `ryk-openclaw-plugin@1.1.3` is published.
+- ClawHub package `ryk-openclaw-plugin@1.1.3` is published.
 - The OpenClaw plugin does not add MCP server behavior or drone-specific plugin features.
 
 ## Secret-safety result

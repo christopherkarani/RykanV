@@ -14,13 +14,13 @@ This example shows how to install the ryk plugin globally so it applies to all O
 
    ```bash
    # Adjust the source path to point to the ryk repository
-   cp /path/to/orca-repo/integrations/opencode-plugin/orca.ts ~/.config/opencode/plugins/orca.ts
+   cp /path/to/ryk-repo/integrations/opencode-plugin/orca.ts ~/.config/opencode/plugins/ryk.ts
    ```
 
    Or create a symlink:
 
    ```bash
-   ln -s /path/to/orca-repo/integrations/opencode-plugin/orca.ts ~/.config/opencode/plugins/orca.ts
+   ln -s /path/to/ryk-repo/integrations/opencode-plugin/orca.ts ~/.config/opencode/plugins/ryk.ts
    ```
 
 3. OpenCode will discover plugins in `~/.config/opencode/plugins/` for every session.

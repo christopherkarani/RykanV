@@ -1,9 +1,9 @@
 const std = @import("std");
 const build_options = @import("build_options");
 
-const core = @import("orca_core").core;
-const core_api = @import("orca_core").api;
-const policy = @import("orca_core").policy;
+const core = @import("ryk_core").core;
+const core_api = @import("ryk_core").api;
+const policy = @import("ryk_core").policy;
 const daemon = @import("daemon.zig");
 const shell_eval = @import("shell_eval.zig");
 const fm_steward_client = @import("fm_steward_client.zig");
@@ -104,7 +104,7 @@ const Remediation = struct {
 const MachineResponse = struct {
     schema_version: i64 = api_schema_version,
     request_id: ?[]const u8 = null,
-    orca_version: []const u8 = build_options.version,
+    ryk_version: []const u8 = build_options.version,
     daemon_protocol_version: ?i64 = daemon_protocol_version,
     decision: []const u8,
     reason: []const u8,
@@ -239,7 +239,7 @@ fn moreRestrictiveMode(a: policy.schema.Mode, b: policy.schema.Mode) policy.sche
 }
 
 /// Resolve evaluate mode like product hooks: discovered policy mode, with
-/// `RYK_MODE`/`ORCA_MODE` only allowed to raise strictness (never ambient soften).
+/// `RYK_MODE`/`RYK_MODE` only allowed to raise strictness (never ambient soften).
 fn resolveEvaluateMode(base: policy.schema.Mode) policy.schema.Mode {
     const env_util = @import("../env_util.zig");
     if (env_util.getenvBrand("MODE")) |raw_c| {
@@ -789,8 +789,8 @@ fn writeResponseJson(stdout: anytype, response: MachineResponse) !void {
     try stdout.writeAll("  \"request_id\": ");
     try writeNullableJsonString(stdout, response.request_id);
     try stdout.writeAll(",\n");
-    try stdout.writeAll("  \"orca_version\": ");
-    try writeJsonString(stdout, response.orca_version);
+    try stdout.writeAll("  \"ryk_version\": ");
+    try writeJsonString(stdout, response.ryk_version);
     try stdout.writeAll(",\n");
     try stdout.writeAll("  \"daemon_protocol_version\": ");
     if (response.daemon_protocol_version) |version| try stdout.print("{d}", .{version}) else try stdout.writeAll("null");
@@ -1020,7 +1020,7 @@ test "evaluate request validation errors are structured" {
     try std.testing.expectError(error.EmptyCommand, parseRequest(std.testing.io, allocator, "{\"schema_version\":1,\"kind\":\"shell_command\",\"command\":\"   \",\"cwd\":\"/tmp\"}"));
     try std.testing.expectError(error.MissingCwd, parseRequest(std.testing.io, allocator, "{\"schema_version\":1,\"kind\":\"shell_command\",\"command\":\"git status\"}"));
     try std.testing.expectError(error.RelativeCwd, parseRequest(std.testing.io, allocator, "{\"schema_version\":1,\"kind\":\"shell_command\",\"command\":\"git status\",\"cwd\":\".\"}"));
-    try std.testing.expectError(error.NonexistentCwd, parseRequest(std.testing.io, allocator, "{\"schema_version\":1,\"kind\":\"shell_command\",\"command\":\"git status\",\"cwd\":\"/definitely/not/orca/evaluate/cwd\"}"));
+    try std.testing.expectError(error.NonexistentCwd, parseRequest(std.testing.io, allocator, "{\"schema_version\":1,\"kind\":\"shell_command\",\"command\":\"git status\",\"cwd\":\"/definitely/not/ryk/evaluate/cwd\"}"));
 }
 
 test "evaluate allow response is stable JSON and exit 0" {
@@ -1067,7 +1067,7 @@ test "evaluate records Pi decisions in workspace and global feeds" {
     try tmp.dir.createDir(std.testing.io, ".git", .default_dir);
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    const dashboard_root = try std.fs.path.join(std.testing.allocator, &.{ root, "home", ".orca", "dashboard" });
+    const dashboard_root = try std.fs.path.join(std.testing.allocator, &.{ root, "home", ".ryk", "dashboard" });
     defer std.testing.allocator.free(dashboard_root);
     const payload = try validPayload(std.testing.allocator, "rm -rf tmp", root);
     defer std.testing.allocator.free(payload);
@@ -1116,7 +1116,7 @@ test "evaluate feed records product ask after FM upgrades engine allow" {
 
     // Explicit dashboard disabled — workspace feed only via process path; use explicit
     // destination so we do not depend on $HOME.
-    const dashboard_root = try std.fs.path.join(std.testing.allocator, &.{ root, "home", ".orca", "dashboard" });
+    const dashboard_root = try std.fs.path.join(std.testing.allocator, &.{ root, "home", ".ryk", "dashboard" });
     defer std.testing.allocator.free(dashboard_root);
 
     const code = try evaluatePayload(std.testing.io, std.testing.allocator, payload, &stdout, mockAllow, .{ .explicit = dashboard_root }, .{

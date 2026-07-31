@@ -4,9 +4,9 @@ const build_options = @import("build_options");
 const aggregate = @import("aggregate.zig");
 const blocked_actions = @import("blocked_actions.zig");
 const presentation = @import("../presentation/mod.zig");
-const core_api = @import("orca_core").api;
-const core = @import("orca_core").core;
-const policy_mod = @import("orca_core").policy;
+const core_api = @import("ryk_core").api;
+const core = @import("ryk_core").core;
+const policy_mod = @import("ryk_core").policy;
 const credentials_runtime = @import("../intercept/credentials.zig");
 const supervisor = core.supervisor;
 const license_mod = @import("../license.zig");
@@ -34,7 +34,7 @@ pub fn writeStatusJson(io: std.Io, allocator: std.mem.Allocator, writer: anytype
     try writer.writeByte('{');
     try writer.writeAll("\"mode\":\"workspace\",\"workspace_count\":1,\"workspaces\":[{\"root\":");
     try core.util.writeJsonString(writer, workspace_root);
-    try writer.writeAll("}],\"orca\":{");
+    try writer.writeAll("}],\"ryk\":{");
     try writer.writeAll("\"installed\":true,\"version\":");
     try core.util.writeJsonString(writer, build_options.version);
     try writer.writeAll(",\"workspace_root\":");
@@ -48,9 +48,9 @@ pub fn writeStatusJson(io: std.Io, allocator: std.mem.Allocator, writer: anytype
     try writer.writeAll(",\"ci_readiness\":");
     try writeCiReadinessJson(io, allocator, writer, workspace_root);
     try writer.writeAll(",\"plugins\":[");
-    try writePluginCardJson(io, allocator, writer, workspace_root, "openclaw", "OpenClaw", "openclaw", "integrations/openclaw-plugin", "orca plugin doctor openclaw");
+    try writePluginCardJson(io, allocator, writer, workspace_root, "openclaw", "OpenClaw", "openclaw", "integrations/openclaw-plugin", "ryk plugin doctor openclaw");
     try writer.writeByte(',');
-    try writePluginCardJson(io, allocator, writer, workspace_root, "hermes", "Hermes", "hermes", "integrations/hermes-plugin", "orca plugin doctor hermes");
+    try writePluginCardJson(io, allocator, writer, workspace_root, "hermes", "Hermes", "hermes", "integrations/hermes-plugin", "ryk plugin doctor hermes");
     try writer.writeAll("],\"sessions\":");
     const session_health = try writeSessionsArrayJson(io, allocator, writer, workspace_root, 6);
     try writer.writeAll(",\"session_health\":");
@@ -66,29 +66,29 @@ pub fn writeStatusJson(io: std.Io, allocator: std.mem.Allocator, writer: anytype
     try writer.writeAll(",\"quick_actions\":[");
     try writeQuickAction(writer, "doctor", "ryk doctor");
     try writer.writeByte(',');
-    try writeQuickAction(writer, "policy-check", "ryk policy check .orca/policy.yaml");
+    try writeQuickAction(writer, "policy-check", "ryk policy check .ryk/policy.yaml");
     try writer.writeByte(',');
-    try writeQuickAction(writer, "credentials-check", "orca credentials check");
+    try writeQuickAction(writer, "credentials-check", "ryk credentials check");
     try writer.writeByte(',');
-    try writeQuickAction(writer, "credentials-check-github", "orca credentials check github_pat");
+    try writeQuickAction(writer, "credentials-check-github", "ryk credentials check github_pat");
     try writer.writeByte(',');
     try writeQuickAction(writer, "proxy-smoke", "ryk run --secretless --network-backend proxy -- /usr/bin/env");
     try writer.writeByte(',');
     try writeQuickAction(writer, "policy-explain-github", "ryk policy explain network https://api.github.com/repos/acme/app/issues --method POST");
     try writer.writeByte(',');
-    try writeQuickAction(writer, "replay-last", "orca replay --session last --verify");
+    try writeQuickAction(writer, "replay-last", "ryk replay --session last --verify");
     try writer.writeByte(',');
-    try writeQuickAction(writer, "openclaw-doctor", "orca plugin doctor openclaw");
+    try writeQuickAction(writer, "openclaw-doctor", "ryk plugin doctor openclaw");
     try writer.writeByte(',');
-    try writeQuickAction(writer, "hermes-doctor", "orca plugin doctor hermes");
+    try writeQuickAction(writer, "hermes-doctor", "ryk plugin doctor hermes");
     try writer.writeByte(',');
-    try writeQuickAction(writer, "replay-denied", "orca replay --session last --only denied --verify");
+    try writeQuickAction(writer, "replay-denied", "ryk replay --session last --only denied --verify");
     try writer.writeByte(',');
-    try writeQuickAction(writer, "report-last", "orca report --session last --format markdown");
+    try writeQuickAction(writer, "report-last", "ryk report --session last --format markdown");
     try writer.writeByte(',');
-    try writeQuickAction(writer, "ci-check", "orca ci check --format markdown");
+    try writeQuickAction(writer, "ci-check", "ryk ci check --format markdown");
     try writer.writeByte(',');
-    try writeQuickAction(writer, "suggest-allowlist", "orca suggest-allowlist --confidence high");
+    try writeQuickAction(writer, "suggest-allowlist", "ryk suggest-allowlist --confidence high");
     try writer.writeByte(',');
     try writeQuickAction(writer, "allowlist-list", "ryk allowlist list");
     try writer.writeAll("]}");
@@ -118,7 +118,7 @@ pub fn writeMachineStatusJson(
     try writer.print("{d}", .{workspaces.len});
     try writer.writeAll(",\"workspaces\":");
     try aggregate.writeWorkspacesJson(writer, workspaces);
-    try writer.writeAll(",\"orca\":{\"installed\":true,\"version\":");
+    try writer.writeAll(",\"ryk\":{\"installed\":true,\"version\":");
     try core.util.writeJsonString(writer, build_options.version);
     try writer.writeAll(",\"workspace_root\":null},\"policy\":null,\"secretless_runtime\":null,\"license\":");
     try writeLicenseJson(io, allocator, writer);
@@ -168,7 +168,7 @@ fn writeSecretlessRuntimeJson(io: std.Io, allocator: std.mem.Allocator, writer: 
         \\      account: my-team
         \\    env_dev:
         \\      type: env-file-dev
-        \\      path: .orca/dev-secrets.env
+        \\      path: .ryk/dev-secrets.env
         \\  refs:
         \\    github_pat:
         \\      broker: onepassword
@@ -217,7 +217,7 @@ fn writeSecretlessRuntimeJson(io: std.Io, allocator: std.mem.Allocator, writer: 
     try core.util.writeJsonString(writer, if (proxy_backend == .proxy) "127.0.0.1:<allocated-per-run>" else "");
     try writer.writeAll(",\"https_visibility\":\"host-port-only\",\"method_path_visibility\":\"http-and-cooperative-hooks\",\"backend\":");
     try core.util.writeJsonString(writer, proxy_backend.toString());
-    try writer.writeAll("},\"supported_brokers\":[{\"id\":\"local-dummy\",\"label\":\"Local dummy broker\",\"status\":\"available\",\"stores_raw_secrets\":false,\"notes\":\"Built in. Reference-only; not used by the empty-backpack provider path.\"},{\"id\":\"env-file-dev\",\"label\":\"Env-file dev broker\",\"status\":\"available\",\"stores_raw_secrets\":false,\"notes\":\"Local development only. Reads .orca/dev-secrets.env at runtime and never writes raw values to audit.\"},{\"id\":\"1password-cli\",\"label\":\"1Password CLI\",\"status\":\"available-when-op-installed\",\"stores_raw_secrets\":false,\"notes\":\"Runs op read without shell interpolation and discards resolved values after checks.\"},{\"id\":\"macos-keychain\",\"label\":\"macOS Keychain\",\"status\":\"available-on-macos\",\"stores_raw_secrets\":false,\"notes\":\"Uses /usr/bin/security find-generic-password for configured refs.\"},{\"id\":\"infisical-agent-vault\",\"label\":\"Infisical / Agent Vault\",\"status\":\"status-boundary\",\"stores_raw_secrets\":false,\"notes\":\"Configured as an extension boundary; resolution remains disabled until exact local API or CLI behavior is verified.\"}],\"capabilities\":[{\"label\":\"Empty backpack env\",\"state\":\"active\",\"detail\":\"ryk run --secretless constructs a public-only child env (no raw secret-like host values) plus exact session phantoms for granted Anthropic/OpenAI keys — not broker-reference substitution.\"},{\"label\":\"Provider gateway\",\"state\":\"active\",\"detail\":\"Loopback provider gateway swaps exact session phantoms for raw bytes only on fixed Anthropic/OpenAI upstream hosts.\"},{\"label\":\"Workspace secret OS deny\",\"state\":\"active\",\"detail\":\"When OS sandbox attach succeeds, workspace .env / .env.* forms are denied at the OS layer (safe templates remain readable; macOS uses basename regex + prepare-time multi-nlink path denies).\"},{\"label\":\"Broker checks\",\"state\":\"active\",\"detail\":\"orca credentials check verifies broker config and refs without printing raw secret values.\"},{\"label\":\"Service policy\",\"state\":\"active\",\"detail\":\"services: rules support hosts, methods, allow/deny paths, credential references, unmatched behavior, and port-scoped hosts.\"},{\"label\":\"Proxy backend\",\"state\":\"limited\",\"detail\":\"ryk run --network-backend proxy injects a loopback proxy. HTTPS CONNECT enforcement is host/port only without MITM.\"},{\"label\":\"Transparent OS interception\",\"state\":\"unavailable\",\"detail\":\"Orca does not claim OS-level transparent network interception.\"}],\"guarantees\":[\"Empty-backpack children do not receive raw secret-like host environment values that Orca detects.\",\"Granted model keys reach the child only as session-minted phantoms; the provider gateway swaps exact mints on fixed upstreams.\",\"Broker checks never print or persist raw resolved secret values.\",\"Orca remains the runtime policy and audit layer; external brokers own secret storage when used.\"],\"limitations\":[\"Empty backpack protects processes launched through agent-primary aliases or ryk run --secretless (not arbitrary host processes).\",\"macOS protect-on hardlink discovery is prepare-time only (no runtime inode taint); multi-writer post-prepare plants are an accepted residual under the single-writer model.\",\"HTTPS path and method enforcement is unavailable in proxy mode without MITM or cooperative metadata.\",\"Infisical/Agent Vault resolution is not enabled until its local contract is verified.\"],\"run_command\":\"ryk run --secretless --network-backend proxy -- <agent-command>\",\"verify_commands\":[\"orca credentials check\",\"orca credentials check github_pat\",\"ryk policy check .orca/policy.yaml\",\"ryk policy explain network https://api.github.com/repos/acme/app/issues --method POST\",\"ryk run --secretless --network-backend proxy -- /usr/bin/env\",\"orca replay --session last --verify\"],\"service_policy_template\":");
+    try writer.writeAll("},\"supported_brokers\":[{\"id\":\"local-dummy\",\"label\":\"Local dummy broker\",\"status\":\"available\",\"stores_raw_secrets\":false,\"notes\":\"Built in. Reference-only; not used by the empty-backpack provider path.\"},{\"id\":\"env-file-dev\",\"label\":\"Env-file dev broker\",\"status\":\"available\",\"stores_raw_secrets\":false,\"notes\":\"Local development only. Reads .ryk/dev-secrets.env at runtime and never writes raw values to audit.\"},{\"id\":\"1password-cli\",\"label\":\"1Password CLI\",\"status\":\"available-when-op-installed\",\"stores_raw_secrets\":false,\"notes\":\"Runs op read without shell interpolation and discards resolved values after checks.\"},{\"id\":\"macos-keychain\",\"label\":\"macOS Keychain\",\"status\":\"available-on-macos\",\"stores_raw_secrets\":false,\"notes\":\"Uses /usr/bin/security find-generic-password for configured refs.\"},{\"id\":\"infisical-agent-vault\",\"label\":\"Infisical / Agent Vault\",\"status\":\"status-boundary\",\"stores_raw_secrets\":false,\"notes\":\"Configured as an extension boundary; resolution remains disabled until exact local API or CLI behavior is verified.\"}],\"capabilities\":[{\"label\":\"Empty backpack env\",\"state\":\"active\",\"detail\":\"ryk run --secretless constructs a public-only child env (no raw secret-like host values) plus exact session phantoms for granted Anthropic/OpenAI keys — not broker-reference substitution.\"},{\"label\":\"Provider gateway\",\"state\":\"active\",\"detail\":\"Loopback provider gateway swaps exact session phantoms for raw bytes only on fixed Anthropic/OpenAI upstream hosts.\"},{\"label\":\"Workspace secret OS deny\",\"state\":\"active\",\"detail\":\"When OS sandbox attach succeeds, workspace .env / .env.* forms are denied at the OS layer (safe templates remain readable; macOS uses basename regex + prepare-time multi-nlink path denies).\"},{\"label\":\"Broker checks\",\"state\":\"active\",\"detail\":\"ryk credentials check verifies broker config and refs without printing raw secret values.\"},{\"label\":\"Service policy\",\"state\":\"active\",\"detail\":\"services: rules support hosts, methods, allow/deny paths, credential references, unmatched behavior, and port-scoped hosts.\"},{\"label\":\"Proxy backend\",\"state\":\"limited\",\"detail\":\"ryk run --network-backend proxy injects a loopback proxy. HTTPS CONNECT enforcement is host/port only without MITM.\"},{\"label\":\"Transparent OS interception\",\"state\":\"unavailable\",\"detail\":\"ryk does not claim OS-level transparent network interception.\"}],\"guarantees\":[\"Empty-backpack children do not receive raw secret-like host environment values that ryk detects.\",\"Granted model keys reach the child only as session-minted phantoms; the provider gateway swaps exact mints on fixed upstreams.\",\"Broker checks never print or persist raw resolved secret values.\",\"ryk remains the runtime policy and audit layer; external brokers own secret storage when used.\"],\"limitations\":[\"Empty backpack protects processes launched through agent-primary aliases or ryk run --secretless (not arbitrary host processes).\",\"macOS protect-on hardlink discovery is prepare-time only (no runtime inode taint); multi-writer post-prepare plants are an accepted residual under the single-writer model.\",\"HTTPS path and method enforcement is unavailable in proxy mode without MITM or cooperative metadata.\",\"Infisical/Agent Vault resolution is not enabled until its local contract is verified.\"],\"run_command\":\"ryk run --secretless --network-backend proxy -- <agent-command>\",\"verify_commands\":[\"ryk credentials check\",\"ryk credentials check github_pat\",\"ryk policy check .ryk/policy.yaml\",\"ryk policy explain network https://api.github.com/repos/acme/app/issues --method POST\",\"ryk run --secretless --network-backend proxy -- /usr/bin/env\",\"ryk replay --session last --verify\"],\"service_policy_template\":");
     try core.util.writeJsonString(writer, service_policy_template);
     try writer.writeByte('}');
 }
@@ -302,7 +302,7 @@ pub fn writePolicyJson(io: std.Io, allocator: std.mem.Allocator, writer: anytype
 
 pub fn savePolicyText(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8, text: []const u8) !PolicySaveResult {
     if (text.len > core.limits.max_policy_file_len) return .{ .ok = false, .error_name = "PolicyFileTooLarge" };
-    var parsed = core_api.parsePolicyFromSlice(allocator, text, ".orca/policy.yaml") catch |err| {
+    var parsed = core_api.parsePolicyFromSlice(allocator, text, ".ryk/policy.yaml") catch |err| {
         return .{ .ok = false, .error_name = @errorName(err) };
     };
     defer parsed.deinit();
@@ -310,9 +310,9 @@ pub fn savePolicyText(io: std.Io, allocator: std.mem.Allocator, workspace_root: 
         return .{ .ok = false, .error_name = @errorName(err) };
     };
 
-    const orca_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".orca" });
-    defer allocator.free(orca_dir);
-    try std.Io.Dir.cwd().createDirPath(io, orca_dir);
+    const ryk_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk" });
+    defer allocator.free(ryk_dir);
+    try std.Io.Dir.cwd().createDirPath(io, ryk_dir);
     const path = try policyPath(allocator, workspace_root);
     defer allocator.free(path);
     const file = try std.Io.Dir.createFileAbsolute(io, path, .{});
@@ -362,7 +362,7 @@ fn writePolicySummaryJson(io: std.Io, allocator: std.mem.Allocator, writer: anyt
     const path = try policyPath(allocator, workspace_root);
     defer allocator.free(path);
     try writer.writeByte('{');
-    try writer.writeAll("\"path\":\".orca/policy.yaml\",");
+    try writer.writeAll("\"path\":\".ryk/policy.yaml\",");
     if (!fileExistsAbsolute(io, path)) {
         try writer.writeAll("\"exists\":false,\"valid\":false,\"mode\":null,\"error\":null");
         try writer.writeByte('}');
@@ -460,17 +460,17 @@ fn writePluginCardJson(
     if (std.mem.eql(u8, id, "openclaw")) {
         try writeStringArray(writer, &.{
             "ryk start",
-            "openclaw plugins install clawhub:orca-openclaw-plugin",
-            "orca plugin doctor openclaw",
-            "orca openclaw",
-            "orca status",
+            "openclaw plugins install clawhub:ryk-openclaw-plugin",
+            "ryk plugin doctor openclaw",
+            "ryk openclaw",
+            "ryk status",
         });
     } else {
         try writeStringArray(writer, &.{
             "ryk start",
-            "orca plugin doctor hermes",
-            "orca hermes",
-            "orca status",
+            "ryk plugin doctor hermes",
+            "ryk hermes",
+            "ryk status",
         });
     }
     try writer.writeAll("]}");
@@ -577,7 +577,7 @@ fn writeBlockedActionsArrayJson(io: std.Io, allocator: std.mem.Allocator, writer
         written += 1;
     }
 
-    const sessions_root = std.fs.path.join(allocator, &.{ workspace_root, ".orca", "sessions" }) catch {
+    const sessions_root = std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "sessions" }) catch {
         try writer.writeByte(']');
         return;
     };
@@ -606,7 +606,7 @@ fn writeBlockedActionsArrayJson(io: std.Io, allocator: std.mem.Allocator, writer
 }
 
 fn writeRecentSecretlessAuditEventsJson(io: std.Io, allocator: std.mem.Allocator, writer: anytype, workspace_root: []const u8, max_count: usize) !void {
-    const sessions_root = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "sessions" });
+    const sessions_root = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "sessions" });
     defer allocator.free(sessions_root);
     var dir = std.Io.Dir.cwd().openDir(io, sessions_root, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => {
@@ -667,7 +667,7 @@ fn writeStringArray(writer: anytype, values: []const []const u8) !void {
 }
 
 fn policyPath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
-    return std.fs.path.join(allocator, &.{ workspace_root, ".orca", "policy.yaml" });
+    return std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "policy.yaml" });
 }
 
 fn fileExistsAbsolute(io: std.Io, path: []const u8) bool {
@@ -710,11 +710,11 @@ test "policy save validates before writing" {
     const bad = try savePolicyText(io, std.testing.allocator, root, "version: 1\nmode: strict\ncommands: allow\n");
     try std.testing.expect(!bad.ok);
     try std.testing.expectEqualStrings("InvalidPolicy", bad.error_name.?);
-    try std.testing.expectError(error.FileNotFound, tmp.dir.access(io, ".orca/policy.yaml", .{}));
+    try std.testing.expectError(error.FileNotFound, tmp.dir.access(io, ".ryk/policy.yaml", .{}));
 
     const ok = try savePolicyText(io, std.testing.allocator, root, policy_mod.presets.agentPresetText(.generic_agent));
     try std.testing.expect(ok.ok);
-    try tmp.dir.access(io, ".orca/policy.yaml", .{});
+    try tmp.dir.access(io, ".ryk/policy.yaml", .{});
 }
 
 test "init policy refuses overwrite unless forced" {
@@ -766,10 +766,10 @@ test "status json includes policy and protected agent cards" {
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"openclaw\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"hermes\"") != null);
     // Phase 7 Safe Launch: plugin setup_commands must not re-teach demoted doors.
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "orca setup") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "ryk setup") == null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "ryk start") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "orca openclaw") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "orca hermes") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "ryk openclaw") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "ryk hermes") != null);
 }
 
 test "dashboard assets expose dedicated secretless view" {
@@ -831,7 +831,7 @@ test "workspace status lists remediation quick actions" {
     defer out.deinit(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"id\":\"suggest-allowlist\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"id\":\"allowlist-list\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "orca suggest-allowlist --confidence high") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "ryk suggest-allowlist --confidence high") != null);
 }
 
 test "workspace status always includes feed health required by the activity UI" {
@@ -1012,7 +1012,7 @@ fn writeDeniedReplayFixture(allocator: std.mem.Allocator, root: []const u8) !voi
         .id = try core.session.generateSessionId(timestamp),
         .started_at = timestamp,
         .ended_at = timestamp,
-        .command = "orca",
+        .command = "ryk",
         .args = &.{ "run", "--", "rm", "-rf", "tmp" },
         .workspace_root = root,
         .mode = .strict,
@@ -1025,7 +1025,7 @@ fn writeDeniedReplayFixture(allocator: std.mem.Allocator, root: []const u8) !voi
         .event_id = try core.event.generateEventId(timestamp),
         .timestamp = timestamp,
         .event_type = .command_denied,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .command, .value = "rm -rf tmp" },
         .decision = core_api.makeDecision(.{ .result = .deny, .reason = "blocked by test policy" }),
     });
@@ -1036,7 +1036,7 @@ fn writeDeniedReplayFixture(allocator: std.mem.Allocator, root: []const u8) !voi
         .status = .{ .exited = 1 },
         .event_count = writer.event_count,
         .final_event_hash = writer.finalHash().?,
-        .policy = ".orca/policy.yaml",
+        .policy = ".ryk/policy.yaml",
         .product_label = brand.product_display,
     });
     _ = &session;
@@ -1048,7 +1048,7 @@ fn writeSecretlessEvidenceFixture(allocator: std.mem.Allocator, root: []const u8
         .id = try core.session.generateSessionId(timestamp),
         .started_at = timestamp,
         .ended_at = timestamp,
-        .command = "orca",
+        .command = "ryk",
         .args = &.{ "run", "--secretless", "--network-backend", "proxy", "--", "agent" },
         .workspace_root = root,
         .mode = .observe,
@@ -1065,7 +1065,7 @@ fn writeSecretlessEvidenceFixture(allocator: std.mem.Allocator, root: []const u8
         .status = .{ .exited = 0 },
         .event_count = writer.event_count,
         .final_event_hash = writer.finalHash().?,
-        .policy = ".orca/policy.yaml",
+        .policy = ".ryk/policy.yaml",
         .product_label = brand.product_display,
     });
     _ = &session;
@@ -1084,7 +1084,7 @@ fn appendFixtureEvent(
         .event_id = try core.event.generateEventId(timestamp),
         .timestamp = timestamp,
         .event_type = core_api.fromCoreEventType(event_type),
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .network_endpoint, .value = target },
         .decision = core_api.makeDecision(.{ .result = result, .reason = "fixture evidence" }),
     });
@@ -1142,7 +1142,7 @@ test "machine status aggregates registered workspaces and exposes only global ac
     try std.Io.Dir.cwd().createDirPath(std.testing.io, workspace_b);
     try writeDeniedReplayFixture(std.testing.allocator, workspace_a);
     try writeDeniedReplayFixture(std.testing.allocator, workspace_b);
-    const dashboard_root = try std.fs.path.join(std.testing.allocator, &.{ root, "home", ".orca", "dashboard" });
+    const dashboard_root = try std.fs.path.join(std.testing.allocator, &.{ root, "home", ".ryk", "dashboard" });
     defer std.testing.allocator.free(dashboard_root);
 
     for ([_][]const u8{ workspace_a, workspace_b }) |workspace| {
@@ -1184,7 +1184,7 @@ test "machine status includes feed-backed Pi sessions" {
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    const dashboard_root = try std.fs.path.join(std.testing.allocator, &.{ root, "home", ".orca", "dashboard" });
+    const dashboard_root = try std.fs.path.join(std.testing.allocator, &.{ root, "home", ".ryk", "dashboard" });
     defer std.testing.allocator.free(dashboard_root);
 
     for ([_][]const u8{ "deny", "allow" }) |decision| {
@@ -1221,7 +1221,7 @@ test "machine status aggregates Hermes approval blocks into sessions and blocked
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    const dashboard_root = try std.fs.path.join(std.testing.allocator, &.{ root, "home", ".orca", "dashboard" });
+    const dashboard_root = try std.fs.path.join(std.testing.allocator, &.{ root, "home", ".ryk", "dashboard" });
     defer std.testing.allocator.free(dashboard_root);
 
     var record = try rust_visibility.buildFeedRecordFromHookActivity(

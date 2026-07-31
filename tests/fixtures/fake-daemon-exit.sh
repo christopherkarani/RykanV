@@ -1,3 +1,3 @@
 #!/bin/sh
-# Test fixture: executable path for ORCA_DAEMON that cannot become a daemon.
+# Test fixture: executable path for RYK_DAEMON that cannot become a daemon.
 exit 1

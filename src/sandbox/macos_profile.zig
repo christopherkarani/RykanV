@@ -84,8 +84,8 @@ pub fn networkScopeSummary(grade: SeatbeltProfileGrade, route_forced: bool) []co
         };
     }
     return switch (grade) {
-        .compatible, .hardened => "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind unrestricted)",
-        .strict => "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind denied)",
+        .compatible, .hardened => "proxy route-forced (outbound TCP to ryk loopback proxy only; inbound/bind unrestricted)",
+        .strict => "proxy route-forced (outbound TCP to ryk loopback proxy only; inbound/bind denied)",
     };
 }
 
@@ -321,10 +321,10 @@ fn appendNetworkBaseline(
     if (options.network_route_forcing) |route| {
         switch (options.profile_grade) {
             .compatible, .hardened => {
-                // Outbound: only the Orca loopback proxy. Inbound/bind stay open —
+                // Outbound: only the ryk loopback proxy. Inbound/bind stay open —
                 // connect mediation, not a listener lockdown (Landlock parity).
                 const line = try std.fmt.allocPrint(allocator,
-                    \\;; network route forcing: outbound TCP only to Orca loopback proxy;
+                    \\;; network route forcing: outbound TCP only to ryk loopback proxy;
                     \\;; inbound/bind unrestricted (dev servers, ephemeral listeners)
                     \\(allow network-inbound)
                     \\(allow network-bind)
@@ -336,7 +336,7 @@ fn appendNetworkBaseline(
             },
             .strict => {
                 const line = try std.fmt.allocPrint(allocator,
-                    \\;; network route forcing (strict): outbound TCP only to Orca loopback proxy;
+                    \\;; network route forcing (strict): outbound TCP only to ryk loopback proxy;
                     \\;; inbound/bind omitted (listener lockdown — breaks Landlock parity intentionally)
                     \\(allow network-outbound (remote tcp "localhost:{d}"))
                     \\
@@ -915,7 +915,7 @@ fn appendEscaped(out: *std.ArrayList(u8), allocator: std.mem.Allocator, path: []
     }
 }
 
-/// True if SBPL text grants a broad home directory (should always be false for Orca profiles).
+/// True if SBPL text grants a broad home directory (should always be false for ryk profiles).
 pub fn sbplGrantsHome(sbpl: []const u8, home: []const u8) bool {
     if (home.len == 0) return false;
     // Match exact subpath "HOME" grant forms only (not workspace under home).
@@ -930,7 +930,7 @@ pub fn sbplGrantsHome(sbpl: []const u8, home: []const u8) bool {
 test "SBPL denies default and grants workspace RW" {
     const allocator = std.testing.allocator;
     var compiled = try profile.compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-sbpl-ws",
+        .workspace_root = "/tmp/ryk-sbpl-ws",
         .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
     });
     defer compiled.deinit();
@@ -940,7 +940,7 @@ test "SBPL denies default and grants workspace RW" {
 
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny default)") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(version 1)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(subpath \"/tmp/orca-sbpl-ws\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(subpath \"/tmp/ryk-sbpl-ws\")") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "file-write*") != null);
 }
 
@@ -973,8 +973,8 @@ test "SBPL control roots deny write under workspace" {
     const sbpl = try renderSbpl(allocator, &compiled);
     defer allocator.free(sbpl);
 
-    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(require-not (subpath \"/workspace/proj/.orca\"))") != null);
-    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-write* (subpath \"/workspace/proj/.orca\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(require-not (subpath \"/workspace/proj/.ryk\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-write* (subpath \"/workspace/proj/.ryk\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(require-not (subpath \"/workspace/proj/.git\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-write* (subpath \"/workspace/proj/.git\"))") != null);
 }
@@ -1040,14 +1040,14 @@ test "SBPL escapes quotes and backslashes in paths" {
 
     const escaped_grant = "(subpath \"/tmp/x\\\"y\\\\z\")";
     try std.testing.expect(std.mem.indexOf(u8, sbpl, escaped_grant) != null);
-    const escaped_control = "(deny file-write* (subpath \"/tmp/x\\\"y\\\\z/.orca\"))";
+    const escaped_control = "(deny file-write* (subpath \"/tmp/x\\\"y\\\\z/.ryk\"))";
     try std.testing.expect(std.mem.indexOf(u8, sbpl, escaped_control) != null);
 }
 
 test "SBPL never emits bare unrestricted file-read-metadata" {
     const allocator = std.testing.allocator;
     var compiled = try profile.compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-sbpl-meta",
+        .workspace_root = "/tmp/ryk-sbpl-meta",
         .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
     });
     defer compiled.deinit();
@@ -1058,7 +1058,7 @@ test "SBPL never emits bare unrestricted file-read-metadata" {
     // Bare form must not appear; only path-filtered metadata allows.
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata)\n") == null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/\")") != null);
-    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (subpath \"/tmp/orca-sbpl-meta\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (subpath \"/tmp/ryk-sbpl-meta\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (subpath \"/usr\"))") != null);
 }
 
@@ -1308,7 +1308,7 @@ test "SBPL codex system ro_paths emit narrow /etc/codex without bare /etc" {
 test "SBPL narrows /dev writes to null and urandom only" {
     const allocator = std.testing.allocator;
     var compiled = try profile.compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-sbpl-dev",
+        .workspace_root = "/tmp/ryk-sbpl-dev",
         .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
     });
     defer compiled.deinit();
@@ -1332,7 +1332,7 @@ test "SBPL narrows /dev writes to null and urandom only" {
 test "SBPL hardened default narrows process* and broad /private/var" {
     const allocator = std.testing.allocator;
     var compiled = try profile.compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-sbpl-hardened",
+        .workspace_root = "/tmp/ryk-sbpl-hardened",
         .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
     });
     defer compiled.deinit();
@@ -1359,7 +1359,7 @@ test "SBPL hardened default narrows process* and broad /private/var" {
 test "SBPL compatible retains process* and broad /private/var" {
     const allocator = std.testing.allocator;
     var compiled = try profile.compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-sbpl-compat",
+        .workspace_root = "/tmp/ryk-sbpl-compat",
         .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
     });
     defer compiled.deinit();
@@ -1375,7 +1375,7 @@ test "SBPL compatible retains process* and broad /private/var" {
 test "SBPL route forcing removes broad network and allows only proxy TCP port" {
     const allocator = std.testing.allocator;
     var compiled = try profile.compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-sbpl-route",
+        .workspace_root = "/tmp/ryk-sbpl-route",
         .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
     });
     defer compiled.deinit();
@@ -1400,7 +1400,7 @@ test "SBPL route forcing removes broad network and allows only proxy TCP port" {
 test "SBPL strict route forcing denies inbound/bind" {
     const allocator = std.testing.allocator;
     var compiled = try profile.compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-sbpl-strict-route",
+        .workspace_root = "/tmp/ryk-sbpl-strict-route",
         .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
     });
     defer compiled.deinit();
@@ -1417,7 +1417,7 @@ test "SBPL strict route forcing denies inbound/bind" {
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow network-outbound (remote tcp \"localhost:43123\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow process*)") == null);
     try std.testing.expectEqualStrings(
-        "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind denied)",
+        "proxy route-forced (outbound TCP to ryk loopback proxy only; inbound/bind denied)",
         networkScopeSummary(.strict, true),
     );
 }
@@ -1425,7 +1425,7 @@ test "SBPL strict route forcing denies inbound/bind" {
 test "SBPL strict without route force omits network*" {
     const allocator = std.testing.allocator;
     var compiled = try profile.compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-sbpl-strict-no-route",
+        .workspace_root = "/tmp/ryk-sbpl-strict-no-route",
         .system_ro_prefixes = &[_][]const u8{"/usr"},
     });
     defer compiled.deinit();
@@ -1443,7 +1443,7 @@ test "SBPL strict without route force omits network*" {
 test "SBPL default remains explicit unrestricted network under hardened" {
     const allocator = std.testing.allocator;
     var compiled = try profile.compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-sbpl-network-default",
+        .workspace_root = "/tmp/ryk-sbpl-network-default",
         .system_ro_prefixes = &[_][]const u8{"/usr"},
     });
     defer compiled.deinit();
@@ -1460,7 +1460,7 @@ test "SBPL default remains explicit unrestricted network under hardened" {
 test "grade residual matrix: SBPL tokens match networkScopeSummary invariants" {
     const allocator = std.testing.allocator;
     var compiled = try profile.compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-sbpl-grade-matrix",
+        .workspace_root = "/tmp/ryk-sbpl-grade-matrix",
         .system_ro_prefixes = &[_][]const u8{"/usr"},
     });
     defer compiled.deinit();
@@ -1509,14 +1509,14 @@ test "grade residual matrix: SBPL tokens match networkScopeSummary invariants" {
                 .compatible, .hardened => {
                     try std.testing.expect(has_inbound and has_bind);
                     try std.testing.expectEqualStrings(
-                        "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind unrestricted)",
+                        "proxy route-forced (outbound TCP to ryk loopback proxy only; inbound/bind unrestricted)",
                         summary,
                     );
                 },
                 .strict => {
                     try std.testing.expect(!has_inbound and !has_bind);
                     try std.testing.expectEqualStrings(
-                        "proxy route-forced (outbound TCP to Orca loopback proxy only; inbound/bind denied)",
+                        "proxy route-forced (outbound TCP to ryk loopback proxy only; inbound/bind denied)",
                         summary,
                     );
                 },
@@ -1528,7 +1528,7 @@ test "grade residual matrix: SBPL tokens match networkScopeSummary invariants" {
 test "SBPL denies /System/Volumes/Data even if bare /System is granted" {
     const allocator = std.testing.allocator;
     var compiled = try profile.compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-sbpl-sys",
+        .workspace_root = "/tmp/ryk-sbpl-sys",
         // Adversarial: custom bare /System must still not open Data volume homes.
         .system_ro_prefixes = &[_][]const u8{ "/usr", "/System" },
     });
@@ -1569,9 +1569,9 @@ test "SBPL emits Users-form for Data-volume realpath workspace (M-28 / R2-1)" {
     const allow_ws_users = "(allow file-read* (subpath \"/Users/dev/projects/app\"))";
     try std.testing.expect(std.mem.indexOf(u8, sbpl, allow_ws_users) != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(subpath \"/System/Volumes/Data/Users/dev/projects/app\")") == null);
-    // Control carve-outs also Users-form (.orca + .git).
-    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(require-not (subpath \"/Users/dev/projects/app/.orca\"))") != null);
-    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-write* (subpath \"/Users/dev/projects/app/.orca\"))") != null);
+    // Control carve-outs also Users-form (.ryk + .git).
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(require-not (subpath \"/Users/dev/projects/app/.ryk\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-write* (subpath \"/Users/dev/projects/app/.ryk\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(require-not (subpath \"/Users/dev/projects/app/.git\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-write* (subpath \"/Users/dev/projects/app/.git\"))") != null);
     // Data deny still present (blocks Data-form sibling opens).
@@ -1610,7 +1610,7 @@ test "SBPL production defaults omit bare /System and /Library grants" {
 
     const allocator = std.testing.allocator;
     var compiled = try profile.compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-sbpl-defaults",
+        .workspace_root = "/tmp/ryk-sbpl-defaults",
     });
     defer compiled.deinit();
 
@@ -1919,7 +1919,7 @@ test "collectSecretHardlinkAliasPaths missing workspace is empty not ScanOpenFai
     const aliases = try collectSecretHardlinkAliasPaths(
         allocator,
         io,
-        "/tmp/orca-hardlink-scan-missing-ws-does-not-exist",
+        "/tmp/ryk-hardlink-scan-missing-ws-does-not-exist",
     );
     defer freeHardlinkAliasPaths(allocator, aliases);
     try std.testing.expectEqual(@as(usize, 0), aliases.len);

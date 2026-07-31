@@ -16,7 +16,7 @@ Coding agents and humans should use the **narrowest** gate. Full details and pat
 | Default local product gate | `./scripts/test-fast.sh` (or `full`) |
 | Compile-only product gate | `./scripts/test-fast.sh compile` |
 | Local fast-PR mirror | `./scripts/ci-local-fast.sh` |
-| Policy / init DX matrix only | `./scripts/quick-install-dx-verify.sh` (needs built `zig-out/bin/orca`) |
+| Policy / init DX matrix only | `./scripts/quick-install-dx-verify.sh` (needs built `zig-out/bin/ryk`) |
 | Full Zig suite | `./scripts/zig build test` |
 | Pre-merge kitchen sink | `./scripts/verify-pre-merge.sh` |
 | Shell engine + MVP corpus | `./scripts/zig build test-shell-engine` or `./scripts/agent-gate.sh shell-engine` |
@@ -25,7 +25,7 @@ Coding agents and humans should use the **narrowest** gate. Full details and pat
 ### Modes and flags
 
 - **`compile-fast.sh`**: compile-only modes use incremental + default `-j`; run modes use `-j1` (serial tests; avoids host hangs).
-- **`test-fast.sh`**: `compile` | `units` | `full` (default). Env override: `ORCA_TEST_FAST=units`. Uses incremental + `-j1`.
+- **`test-fast.sh`**: `compile` | `units` | `full` (default). Env override: `RYK_TEST_FAST=units`. Uses incremental + `-j1`.
 - **`agent-gate.sh`**: `auto` (default from git dirty paths) or forced `check|compile|units|full|core|sandbox|policy|intercept|shell-engine|dx|dashboard|plugin` (`rust` is a deprecated alias for `shell-engine`).
 - **`test-slice.sh`**: domain gates + `--filter` → `-Dtest-filter` (Zig 0.16 compile-time; not runtime `-- --test-filter`).
 - **`compile-test-fast`** (build.zig) matches **`test-fast`** membership (not the full suite).
@@ -49,10 +49,10 @@ Coding agents and humans should use the **narrowest** gate. Full details and pat
 
 ## Phase 19 release helpers
 
-- `install.sh`: macOS/Linux installer with OS/arch detection, checksum verification, PATH/resource profile wiring, and a step-based TTY UI (banner, phases, activation hero). Set `ORCA_INSTALL_QUIET=1` for non-error silence; honors `NO_COLOR`.
+- `install.sh`: macOS/Linux installer with OS/arch detection, checksum verification, PATH/resource profile wiring, and a step-based TTY UI (banner, phases, activation hero). Set `RYK_INSTALL_QUIET=1` for non-error silence; honors `NO_COLOR`.
 - `install.ps1`: Windows installer with the shared core contracts (checksum, binaries, runtime assets, quiet mode, activation handoff). Subset of the Unix surface — no PATH management or dashboard soft-warn.
-- `install-orca-plugin.sh`: one-command bootstrap for `orca` + plugin install + plugin doctor (`opencode`, `openclaw`, or `hermes`).
-- `install-orca-plugin.ps1`: Windows one-command bootstrap for `orca` + plugin install + plugin doctor (`opencode`, `openclaw`, or `hermes`).
+- `install-ryk-plugin.sh`: one-command bootstrap for `ryk` + plugin install + plugin doctor (`opencode`, `openclaw`, or `hermes`).
+- `install-ryk-plugin.ps1`: Windows one-command bootstrap for `ryk` + plugin install + plugin doctor (`opencode`, `openclaw`, or `hermes`).
 - `update-homebrew-formula.sh`: updates `packaging/homebrew/Formula/orca.rb` from `dist/checksums.txt`.
 - `render-package-manifests.sh`: renders publishable Homebrew, npm, Scoop, and WinGet manifests under `dist/package-manifests/` from `dist/checksums.txt`.
 - `build-release.sh`: builds cross-platform release archives into `dist/`.
@@ -60,4 +60,4 @@ Coding agents and humans should use the **narrowest** gate. Full details and pat
 - `generate-checksums.sh`: writes `dist/checksums.txt`.
 - `generate-sbom.sh`: writes the Phase 19 `dist/sbom.json` hook output.
 
-Signing is optional and controlled by `ORCA_SIGNING_ENABLED=1` plus `ORCA_SIGNING_COMMAND`.
+Signing is optional and controlled by `RYK_SIGNING_ENABLED=1` plus `RYK_SIGNING_COMMAND`.

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The Orca repository may contain other workstreams, including drone-related work under `packages/edge/`.
+The ryk repository may contain other workstreams, including drone-related work under `packages/edge/`.
 
 The plugin plan must not break, expose, or expand those workstreams.
 
@@ -23,7 +23,7 @@ Plugin work must not:
 
 A separate drone workstream exists in this repository under `packages/edge/`.
 
-The Orca plugins do not expose or modify drone functionality.
+The ryk plugins do not expose or modify drone functionality.
 
 Plugin packages do not include drone skills or drone demos.
 
@@ -33,7 +33,7 @@ Existing drone tests should continue to pass or have safe skip reasons documente
 
 ## Plugin Package Contents
 
-Plugin artifacts (`orca-codex-plugin-vX.Y.Z.zip` and `orca-claude-code-plugin-vX.Y.Z.zip`) contain only:
+Plugin artifacts (`ryk-codex-plugin-vX.Y.Z.zip` and `orca-claude-code-plugin-vX.Y.Z.zip`) contain only:
 
 - Plugin manifest (`plugin.json`)
 - Skills (doctor, init, protect, redteam, replay)
@@ -52,8 +52,8 @@ Plugin artifacts explicitly exclude:
 To verify that plugin packages do not contain drone files:
 
 ```bash
-unzip -l dist/plugins/orca-codex-plugin-v*.zip | grep -i drone || echo "No drone files found"
-unzip -l dist/plugins/orca-claude-code-plugin-v*.zip | grep -i drone || echo "No drone files found"
+unzip -l dist/plugins/ryk-codex-plugin-v*.zip | grep -i drone || echo "No drone files found"
+unzip -l dist/plugins/ryk-claude-code-plugin-v*.zip | grep -i drone || echo "No drone files found"
 ```
 
 ## Documentation Policy
@@ -61,7 +61,7 @@ unzip -l dist/plugins/orca-claude-code-plugin-v*.zip | grep -i drone || echo "No
 Plugin documentation may reference the separate drone workstream only to state:
 
 ```text
-A separate drone workstream exists in this repository. The Orca plugins do not expose or modify drone functionality.
+A separate drone workstream exists in this repository. The ryk plugins do not expose or modify drone functionality.
 ```
 
 Plugin documentation must not include:

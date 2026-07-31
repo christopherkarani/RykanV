@@ -1,14 +1,14 @@
 const std = @import("std");
 const posix = std.posix;
-const plugin = @import("orca").cli.plugin;
-const plugin_install = @import("orca").cli.plugin_install;
+const plugin = @import("ryk").cli.plugin;
+const plugin_install = @import("ryk").cli.plugin_install;
 
 test "phase 44 install from subdirectory writes plugins under workspace root" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = ".orca/policy.yaml", .data = "mode: generic-agent\n" });
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = ".ryk/policy.yaml", .data = "mode: generic-agent\n" });
     try tmp.dir.createDirPath(std.testing.io, "nested/work");
 
     const plugin_dir = try plugin.resolveBundledPath(std.testing.io, std.testing.allocator, "integrations/codex-plugin");
@@ -40,7 +40,7 @@ test "phase 44 install from subdirectory writes plugins under workspace root" {
         std.testing.allocator,
         template_abs,
         "./integrations/codex-plugin",
-        "./orca",
+        "./ryk",
     );
     defer std.testing.allocator.free(marketplace_json);
 
@@ -50,7 +50,7 @@ test "phase 44 install from subdirectory writes plugins under workspace root" {
 
     const user_plugin_path = try std.fs.path.join(
         std.testing.allocator,
-        &.{ workspace_root, ".agents", "plugins", "orca", ".codex-plugin", "plugin.json" },
+        &.{ workspace_root, ".agents", "plugins", "ryk", ".codex-plugin", "plugin.json" },
     );
     defer std.testing.allocator.free(user_plugin_path);
     try std.testing.expect(plugin.fileExistsAbsolute(std.testing.io, user_plugin_path));
@@ -61,13 +61,13 @@ test "phase 44 install from subdirectory writes plugins under workspace root" {
     try std.testing.expectEqualStrings(tmp_root, report.workspace_root);
 }
 
-test "phase 44 openClaw plugin list JSON ignores decoy orca substring" {
+test "phase 44 openClaw plugin list JSON ignores decoy ryk substring" {
     const decoy_json =
         \\[
         \\  {
         \\    "id": "other",
         \\    "name": "not-orca",
-        \\    "description": "mentions orca in prose only"
+        \\    "description": "mentions ryk in prose only"
         \\  }
         \\]
     ;
@@ -76,8 +76,8 @@ test "phase 44 openClaw plugin list JSON ignores decoy orca substring" {
     const installed_json =
         \\[
         \\  {
-        \\    "id": "orca",
-        \\    "name": "Orca"
+        \\    "id": "ryk",
+        \\    "name": "ryk"
         \\  }
         \\]
     ;

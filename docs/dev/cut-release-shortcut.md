@@ -12,12 +12,12 @@ GitHub Actions `release.yml` remains a **manual backup** (`workflow_dispatch`). 
 | Docker Desktop | `docker info` |
 | GitHub CLI | `gh auth status` (repo write + release) |
 | npm | Interactive: if not logged in, `--live` runs `npm login` (Press ENTER → browser). Needs a **TTY** — use Terminal for first login / live cuts. |
-| Homebrew tap clone | `~/code/homebrew-orca` **or** `RYK_HOMEBREW_TAP_DIR` |
+| Homebrew tap clone | `~/code/homebrew-ryk` **or** `RYK_HOMEBREW_TAP_DIR` |
 | Clean `main` | equal to `origin/main`, no dirty files |
 
 ```sh
-git clone https://github.com/christopherkarani/homebrew-orca.git ~/code/homebrew-orca
-# or: export RYK_HOMEBREW_TAP_DIR=/path/to/homebrew-orca
+git clone https://github.com/christopherkarani/homebrew-ryk.git ~/code/homebrew-ryk
+# or: export RYK_HOMEBREW_TAP_DIR=/path/to/homebrew-ryk
 ```
 
 ## CLI (source of truth)
@@ -49,7 +49,7 @@ git clone https://github.com/christopherkarani/homebrew-orca.git ~/code/homebrew
 | `gate` | `./scripts/verify-pre-merge.sh` |
 | `build` | Dashboard UI, Linux via Docker, `build-release.sh`, plugin packs |
 | `publish-git` | Push branch; `gh release create` **with assets** (tag + checksums) |
-| `publish-npm` | Rendered `@orca-sec/ryk`, then opencode/openclaw plugins, then `orca-pi` (skipped with `--skip-npm`) |
+| `publish-npm` | Rendered `@rykan/ryk`, then opencode/openclaw plugins, then `ryk-pi` (skipped with `--skip-npm`) |
 | `publish-homebrew` | Update tap `Formula/ryk.rb` (+ `orca.rb`), push |
 
 Logs: `dist/cut-release-vX.Y.Z.log`  
@@ -59,11 +59,11 @@ State: `.release-cut/state.env` (gitignored)
 
 | Variable | Default / meaning |
 |----------|-------------------|
-| `RYK_HOMEBREW_TAP_DIR` | `~/code/homebrew-orca` |
+| `RYK_HOMEBREW_TAP_DIR` | `~/code/homebrew-ryk` |
 | `RYK_RELEASE_BRANCHES` | `main master` |
 | `RYK_DIST_DIR` | `dist` |
 | `RYK_CLI_ARTIFACT_DIR` | `.release-cli-bins` (outside `dist/` — build-release wipes `dist/`) |
-| `ORCA_SIGNING_ENABLED` | `0` (optional signing hook; not required for v1) |
+| `RYK_SIGNING_ENABLED` | `0` (optional signing hook; not required for v1) |
 
 ## Build the Shortcuts.app shortcut
 
@@ -128,7 +128,7 @@ PY
 1. `./scripts/cut-release.sh --bump patch --plan-only` on a clean `main`.
 2. Optional dry-run (long): `./scripts/cut-release.sh --bump patch` — runs full gate + build; **creates a local version commit** without pushing. Prefer doing dry-run on a throwaway clone/worktree if you do not want that commit.
 3. Live: Shortcut or `./scripts/cut-release.sh --bump patch --live`.
-4. Verify: GitHub Release assets include `checksums.txt` + `ryk-v*`; `npm view @orca-sec/ryk version`; `brew update && brew upgrade ryk` from the tap.
+4. Verify: GitHub Release assets include `checksums.txt` + `ryk-v*`; `npm view @rykan/ryk version`; `brew update && brew upgrade ryk` from the tap.
 
 ## Failure recovery
 

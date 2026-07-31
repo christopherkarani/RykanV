@@ -20,11 +20,11 @@ test "hermes plugin manifest exists and names orca" {
     const content = try readFile(std.testing.allocator, manifest_path);
     defer std.testing.allocator.free(content);
 
-    try std.testing.expect(std.mem.indexOf(u8, content, "name: orca") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "name: ryk") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "entrypoint: __init__.py") != null);
 }
 
-test "hermes plugin source exists and calls orca hook hermes" {
+test "hermes plugin source exists and calls ryk hook hermes" {
     try std.testing.expect(fileExists(source_path));
     const content = try readFile(std.testing.allocator, source_path);
     defer std.testing.allocator.free(content);
@@ -46,14 +46,14 @@ test "hermes plugin source does not duplicate policy logic or store secrets" {
     try std.testing.expect(std.mem.indexOf(u8, content, "password123") == null);
 }
 
-test "hermes plugin source detects stale Orca binaries and version mismatch" {
+test "hermes plugin source detects stale ryk binaries and version mismatch" {
     const content = try readFile(std.testing.allocator, source_path);
     defer std.testing.allocator.free(content);
 
     try std.testing.expect(std.mem.indexOf(u8, content, "unknown host 'hermes'") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "_supports_hermes_host") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "_handle_hook_error") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "ORCA_HERMES_FAIL_OPEN") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "RYK_HERMES_FAIL_OPEN") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "_orca_executable") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "Allowing tool call WITHOUT ryk guardrails") != null);
 }
@@ -63,9 +63,9 @@ test "hermes plugin readme documents degraded mode and discovery order" {
     defer std.testing.allocator.free(content);
 
     try std.testing.expect(std.mem.indexOf(u8, content, "fail-open") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "ORCA_HERMES_FAIL_OPEN") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "RYK_HERMES_FAIL_OPEN") != null);
     // Discovery: trusted home installs before cwd zig-out (F10/F4).
-    try std.testing.expect(std.mem.indexOf(u8, content, "~/.local/bin/ryk") != null or std.mem.indexOf(u8, content, "~/.orca/bin") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "~/.local/bin/ryk") != null or std.mem.indexOf(u8, content, "~/.ryk/bin") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "zig-out") != null);
 }
 
@@ -76,7 +76,7 @@ test "hermes plugin readme documents install and limits" {
 
     try std.testing.expect(std.mem.indexOf(u8, content, "plugin install hermes") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "pre_gateway_dispatch") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "ryk run -- hermes") != null or std.mem.indexOf(u8, content, "orca run -- hermes") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "ryk run -- hermes") != null or std.mem.indexOf(u8, content, "ryk run -- hermes") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "context-only") != null or std.mem.indexOf(u8, content, "Context-only") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "Telegram and Discord") != null);
     // Native approve-and-resume for tool ask (not block-without-resume).

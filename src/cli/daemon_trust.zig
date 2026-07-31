@@ -1,4 +1,4 @@
-//! Path trust checks for `ORCA_DAEMON` overrides.
+//! Path trust checks for `RYK_DAEMON` overrides.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -11,7 +11,7 @@ pub const EnvOverrideTrust = enum {
     untrusted_stat_unavailable,
 };
 
-/// Assess whether an `ORCA_DAEMON` path is safe to execute.
+/// Assess whether an `RYK_DAEMON` path is safe to execute.
 /// Stat failures are treated as untrusted (fail-closed for env overrides).
 ///
 /// Trust rules (POSIX):
@@ -116,17 +116,17 @@ test "assessEnvOverridePath detects world-writable binary path" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = try tmp.dir.createFile(std.testing.io, "orca-daemon", .{});
+    const file = try tmp.dir.createFile(std.testing.io, "ryk-daemon", .{});
     defer file.close(std.testing.io);
     try file.writeStreamingAll(std.testing.io, "#!/bin/sh\nexit 0\n");
 
-    const path = try tmp.dir.realPathFileAlloc(std.testing.io, "orca-daemon", std.testing.allocator);
+    const path = try tmp.dir.realPathFileAlloc(std.testing.io, "ryk-daemon", std.testing.allocator);
     defer std.testing.allocator.free(path);
 
-    try tmp.dir.setFilePermissions(std.testing.io, "orca-daemon", std.Io.File.Permissions.fromMode(0o755), .{});
+    try tmp.dir.setFilePermissions(std.testing.io, "ryk-daemon", std.Io.File.Permissions.fromMode(0o755), .{});
     try std.testing.expectEqual(.trusted, assessEnvOverridePath(std.testing.io, std.testing.allocator, path));
 
-    try tmp.dir.setFilePermissions(std.testing.io, "orca-daemon", std.Io.File.Permissions.fromMode(0o777), .{});
+    try tmp.dir.setFilePermissions(std.testing.io, "ryk-daemon", std.Io.File.Permissions.fromMode(0o777), .{});
     try std.testing.expectEqual(.untrusted_world_writable, assessEnvOverridePath(std.testing.io, std.testing.allocator, path));
 }
 
@@ -136,12 +136,12 @@ test "assessEnvOverridePath rejects group-writable binary" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = try tmp.dir.createFile(std.testing.io, "orca-daemon", .{});
+    const file = try tmp.dir.createFile(std.testing.io, "ryk-daemon", .{});
     defer file.close(std.testing.io);
     try file.writeStreamingAll(std.testing.io, "#!/bin/sh\nexit 0\n");
-    try tmp.dir.setFilePermissions(std.testing.io, "orca-daemon", std.Io.File.Permissions.fromMode(0o775), .{});
+    try tmp.dir.setFilePermissions(std.testing.io, "ryk-daemon", std.Io.File.Permissions.fromMode(0o775), .{});
 
-    const path = try tmp.dir.realPathFileAlloc(std.testing.io, "orca-daemon", std.testing.allocator);
+    const path = try tmp.dir.realPathFileAlloc(std.testing.io, "ryk-daemon", std.testing.allocator);
     defer std.testing.allocator.free(path);
     try std.testing.expectEqual(.untrusted_world_writable, assessEnvOverridePath(std.testing.io, std.testing.allocator, path));
 }
@@ -154,12 +154,12 @@ test "assessEnvOverridePath rejects a binary beneath a world-writable directory"
     try tmp.dir.createDirPath(std.testing.io, "unsafe");
     try tmp.dir.setFilePermissions(std.testing.io, "unsafe", std.Io.File.Permissions.fromMode(0o777), .{});
 
-    const file = try tmp.dir.createFile(std.testing.io, "unsafe/orca-daemon", .{});
+    const file = try tmp.dir.createFile(std.testing.io, "unsafe/ryk-daemon", .{});
     defer file.close(std.testing.io);
     try file.writeStreamingAll(std.testing.io, "#!/bin/sh\nexit 0\n");
-    try tmp.dir.setFilePermissions(std.testing.io, "unsafe/orca-daemon", std.Io.File.Permissions.fromMode(0o755), .{});
+    try tmp.dir.setFilePermissions(std.testing.io, "unsafe/ryk-daemon", std.Io.File.Permissions.fromMode(0o755), .{});
 
-    const path = try tmp.dir.realPathFileAlloc(std.testing.io, "unsafe/orca-daemon", std.testing.allocator);
+    const path = try tmp.dir.realPathFileAlloc(std.testing.io, "unsafe/ryk-daemon", std.testing.allocator);
     defer std.testing.allocator.free(path);
     try std.testing.expectEqual(.untrusted_world_writable, assessEnvOverridePath(std.testing.io, std.testing.allocator, path));
 }
@@ -173,16 +173,16 @@ test "assessEnvOverridePath rejects a safe-path symlink to an unsafe target" {
     try tmp.dir.createDirPath(std.testing.io, "unsafe");
     try tmp.dir.setFilePermissions(std.testing.io, "unsafe", std.Io.File.Permissions.fromMode(0o777), .{});
 
-    const target = try tmp.dir.createFile(std.testing.io, "unsafe/orca-daemon", .{});
+    const target = try tmp.dir.createFile(std.testing.io, "unsafe/ryk-daemon", .{});
     defer target.close(std.testing.io);
     try target.writeStreamingAll(std.testing.io, "#!/bin/sh\nexit 0\n");
-    try tmp.dir.setFilePermissions(std.testing.io, "unsafe/orca-daemon", std.Io.File.Permissions.fromMode(0o755), .{});
+    try tmp.dir.setFilePermissions(std.testing.io, "unsafe/ryk-daemon", std.Io.File.Permissions.fromMode(0o755), .{});
 
-    const unsafe_target = try tmp.dir.realPathFileAlloc(std.testing.io, "unsafe/orca-daemon", std.testing.allocator);
+    const unsafe_target = try tmp.dir.realPathFileAlloc(std.testing.io, "unsafe/ryk-daemon", std.testing.allocator);
     defer std.testing.allocator.free(unsafe_target);
     const safe_link = try tmp.dir.realPathFileAlloc(std.testing.io, "safe", std.testing.allocator);
     defer std.testing.allocator.free(safe_link);
-    const link_path = try std.fs.path.join(std.testing.allocator, &.{ safe_link, "orca-daemon" });
+    const link_path = try std.fs.path.join(std.testing.allocator, &.{ safe_link, "ryk-daemon" });
     defer std.testing.allocator.free(link_path);
     try std.Io.Dir.cwd().symLink(std.testing.io, unsafe_target, link_path, .{});
 
@@ -199,16 +199,16 @@ test "assessEnvOverridePath trusts a safe symlink to a safe target" {
     try tmp.dir.createDirPath(std.testing.io, "cellar");
     try tmp.dir.createDirPath(std.testing.io, "bin");
 
-    const target = try tmp.dir.createFile(std.testing.io, "cellar/orca-daemon", .{});
+    const target = try tmp.dir.createFile(std.testing.io, "cellar/ryk-daemon", .{});
     defer target.close(std.testing.io);
     try target.writeStreamingAll(std.testing.io, "#!/bin/sh\nexit 0\n");
-    try tmp.dir.setFilePermissions(std.testing.io, "cellar/orca-daemon", std.Io.File.Permissions.fromMode(0o755), .{});
+    try tmp.dir.setFilePermissions(std.testing.io, "cellar/ryk-daemon", std.Io.File.Permissions.fromMode(0o755), .{});
 
-    const cellar_target = try tmp.dir.realPathFileAlloc(std.testing.io, "cellar/orca-daemon", std.testing.allocator);
+    const cellar_target = try tmp.dir.realPathFileAlloc(std.testing.io, "cellar/ryk-daemon", std.testing.allocator);
     defer std.testing.allocator.free(cellar_target);
     const bin_dir = try tmp.dir.realPathFileAlloc(std.testing.io, "bin", std.testing.allocator);
     defer std.testing.allocator.free(bin_dir);
-    const link_path = try std.fs.path.join(std.testing.allocator, &.{ bin_dir, "orca-daemon" });
+    const link_path = try std.fs.path.join(std.testing.allocator, &.{ bin_dir, "ryk-daemon" });
     defer std.testing.allocator.free(link_path);
     try std.Io.Dir.cwd().symLink(std.testing.io, cellar_target, link_path, .{});
 
@@ -224,7 +224,7 @@ test "assessEnvOverridePath treats missing path as stat-unavailable" {
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    const missing = try std.fs.path.join(std.testing.allocator, &.{ root, "orca-daemon-trust-missing-deadbeef" });
+    const missing = try std.fs.path.join(std.testing.allocator, &.{ root, "ryk-daemon-trust-missing-deadbeef" });
     defer std.testing.allocator.free(missing);
     try std.testing.expectEqual(.untrusted_stat_unavailable, assessEnvOverridePath(std.testing.io, std.testing.allocator, missing));
 }

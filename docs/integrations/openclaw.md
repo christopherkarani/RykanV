@@ -1,33 +1,33 @@
-# Orca OpenClaw Plugin Integration
+# ryk OpenClaw Plugin Integration
 
-This document describes the Orca OpenClaw plugin, how to install it, and how to use it.
+This document describes the ryk OpenClaw plugin, how to install it, and how to use it.
 
 ## Overview
 
-The Orca OpenClaw plugin is a local integration package that adds Orca runtime guardrails to OpenClaw. It lives under `integrations/openclaw-plugin/` in the Orca repository.
+The ryk OpenClaw plugin is a local integration package that adds ryk runtime guardrails to OpenClaw. It lives under `integrations/openclaw-plugin/` in the ryk repository.
 
-The plugin is a thin layer. All policy decisions are made by the Orca CLI. The plugin does not duplicate policy logic.
+The plugin is a thin layer. All policy decisions are made by the ryk CLI. The plugin does not duplicate policy logic.
 
-The plugin provides native hooks and guardrails inside OpenClaw, routing lifecycle events through Orca policy for evaluation and logging.
+The plugin provides native hooks and guardrails inside OpenClaw, routing lifecycle events through ryk policy for evaluation and logging.
 
 ## Strongest protection
 
-The strongest protection for OpenClaw sessions is running the host through Orca:
+The strongest protection for OpenClaw sessions is running the host through ryk:
 
 ```bash
-orca openclaw
+ryk openclaw
 ```
 
-The plugin adds native hooks and guardrails inside OpenClaw, but `orca openclaw` is the strongest protection because the agent session itself is launched as an Orca-managed child process with filtered environment variables and full policy enforcement.
+The plugin adds native hooks and guardrails inside OpenClaw, but `ryk openclaw` is the strongest protection because the agent session itself is launched as a ryk-managed child process with filtered environment variables and full policy enforcement.
 
-The strongest local protection remains running OpenClaw through `orca openclaw`; the OpenClaw plugin provides native guardrails where OpenClaw plugin hooks support them.
+The strongest local protection remains running OpenClaw through `ryk openclaw`; the OpenClaw plugin provides native guardrails where OpenClaw plugin hooks support them.
 
 ## Prerequisites
 
-- Orca CLI built and available in PATH (run `orca doctor` to verify)
+- ryk CLI built and available in PATH (run `ryk doctor` to verify)
 - OpenClaw host installed
 
-Orca must be installed separately. The plugin does not bundle the Orca CLI.
+ryk must be installed separately. The plugin does not bundle the ryk CLI.
 
 ## Install instructions
 
@@ -41,17 +41,17 @@ openclaw plugins install ./integrations/openclaw-plugin
 
 ### npm install — unprotected
 
-npm install of this plugin is **`unprotected`**: OpenClaw currently loads npm plugins in CLI-metadata mode where `api.on` is a no-op, so hooks do not fire and cannot block tools. Prefer `orca openclaw` (grade **`wrapper`**).
+npm install of this plugin is **`unprotected`**: OpenClaw currently loads npm plugins in CLI-metadata mode where `api.on` is a no-op, so hooks do not fire and cannot block tools. Prefer `ryk openclaw` (grade **`wrapper`**).
 
 ```bash
 # distribution only — not an enforcement install
-openclaw plugins install npm:orca-openclaw-plugin
+openclaw plugins install npm:ryk-openclaw-plugin
 ```
 
 If OpenClaw supports bare npm package installs:
 
 ```bash
-openclaw plugins install orca-openclaw-plugin
+openclaw plugins install ryk-openclaw-plugin
 ```
 
 For local validation before publication, use `npm pack --dry-run`.
@@ -59,26 +59,26 @@ For local validation before publication, use `npm pack --dry-run`.
 Verify with honesty (installed ≠ protected):
 
 ```bash
-orca plugin doctor openclaw
+ryk plugin doctor openclaw
 openclaw plugins list --json
 openclaw plugins doctor
 ```
 
 ### ClawHub install — unprotected
 
-ClawHub install has the same limitation as npm: **`unprotected`** (hooks no-op in current CLI-metadata mode). Prefer `orca openclaw`.
+ClawHub install has the same limitation as npm: **`unprotected`** (hooks no-op in current CLI-metadata mode). Prefer `ryk openclaw`.
 
 ```bash
-openclaw plugins install clawhub:orca-openclaw-plugin
+openclaw plugins install clawhub:ryk-openclaw-plugin
 ```
 
 **Note:** The `clawhub:` install protocol requires a recent OpenClaw version. If your version does not support it, use the local path install or the wrapper path above.
 
 For submission details, see [openclaw-clawhub.md](openclaw-clawhub.md). For the readiness checklist, see [openclaw-clawhub-checklist.md](openclaw-clawhub-checklist.md).
 
-### Build Orca
+### Build ryk
 
-If you are installing from the Orca repository:
+If you are installing from the ryk repository:
 
 ```bash
 zig build
@@ -89,17 +89,17 @@ zig build
 ### Plugin doctor
 
 ```bash
-orca plugin doctor openclaw
+ryk plugin doctor openclaw
 ```
 
 With JSON output:
 
 ```bash
-orca plugin doctor openclaw --json
+ryk plugin doctor openclaw --json
 ```
 
 Expected output sections:
-- Orca version
+- ryk version
 - Policy status (present/valid)
 - Plugin directories (openclaw: found)
 - Host binaries (openclaw: detected or not detected)
@@ -107,7 +107,7 @@ Expected output sections:
 ### Plugin manifest
 
 ```bash
-orca plugin manifest openclaw
+ryk plugin manifest openclaw
 ```
 
 This reports the expected manifest path and existence status.
@@ -115,14 +115,14 @@ This reports the expected manifest path and existence status.
 ### Dry-run install
 
 ```bash
-orca plugin install openclaw --dry-run
+ryk plugin install openclaw --dry-run
 ```
 
 ### Hook smoke test
 
 ```bash
 cat tests/plugin-fixtures/openclaw/tool_command_safe.json \
-  | orca hook openclaw tool.before
+  | ryk hook openclaw tool.before
 ```
 
 Expected: `allow` decision in valid JSON.
@@ -130,26 +130,26 @@ Expected: `allow` decision in valid JSON.
 ### Example decision command
 
 ```bash
-orca decide command --json '{"version":1,"host":"openclaw","command":"git status","mode":"strict"}'
+ryk decide command --json '{"version":1,"host":"openclaw","command":"git status","mode":"strict"}'
 ```
 
 ### Run redteam
 
 ```bash
-orca redteam --ci
+ryk redteam --ci
 ```
 
 ### Replay last session
 
 ```bash
-orca replay --session last --verify
+ryk replay --session last --verify
 ```
 
 ## Hooks supported
 
-Hooks call `orca hook openclaw <event>` with a JSON payload on stdin. The following OpenClaw events are supported:
+Hooks call `ryk hook openclaw <event>` with a JSON payload on stdin. The following OpenClaw events are supported:
 
-| OpenClaw Hook | Orca CLI Event | Description | Timeout |
+| OpenClaw Hook | ryk CLI Event | Description | Timeout |
 |---------------|----------------|-------------|---------|
 | `session_start` | `session.start` | Session initialization check | 10s |
 | `before_tool_call` | `tool.before` | Tool use policy evaluation before execution | 15s |
@@ -158,20 +158,20 @@ Hooks call `orca hook openclaw <event>` with a JSON payload on stdin. The follow
 
 **Note:** OpenClaw does not expose dedicated permission hooks. Permission-like blocking is handled through `before_tool_call`.
 
-### How hooks call Orca
+### How hooks call ryk
 
 Each hook sends a JSON payload to stdin and expects a JSON decision on stdout:
 
 ```bash
 echo '{"version":1,"host":"openclaw","event":"tool.before","payload":{"tool":"shell","command":"git status","cwd":"/path/to/project"}}' \
-  | orca hook openclaw tool.before
+  | ryk hook openclaw tool.before
 ```
 
 Example with a fixture file:
 
 ```bash
 cat tests/plugin-fixtures/openclaw/tool_command_safe.json \
-  | orca hook openclaw tool.before
+  | ryk hook openclaw tool.before
 ```
 
 ## Uninstall
@@ -188,19 +188,19 @@ This plugin does not mutate host configuration beyond the plugin file itself, so
 
 ### Plugin directory not found
 
-Ensure you run `orca plugin doctor openclaw` from the repository root or a project directory that contains the plugin. The doctor looks for `integrations/openclaw-plugin/`.
+Ensure you run `ryk plugin doctor openclaw` from the repository root or a project directory that contains the plugin. The doctor looks for `integrations/openclaw-plugin/`.
 
 ### Hooks timeout
 
-If hooks exceed their timeout, OpenClaw may skip them. Check that `orca` is in PATH and that `.orca/policy.yaml` loads quickly.
+If hooks exceed their timeout, OpenClaw may skip them. Check that `ryk` is in PATH and that `.ryk/policy.yaml` loads quickly.
 
 ### Policy not found
 
-Run `orca init --preset generic-agent` to create a default policy, then validate with `orca policy check .orca/policy.yaml`.
+Run `ryk init --preset generic-agent` to create a default policy, then validate with `ryk policy check .ryk/policy.yaml`.
 
-### Orca binary not found
+### ryk binary not found
 
-Build Orca with `zig build` or ensure `./zig-out/bin/orca` is in your PATH.
+Build ryk with `zig build` or ensure `./zig-out/bin/ryk` is in your PATH.
 
 ### Fake secret redaction questions
 
@@ -209,17 +209,17 @@ The plugin uses synthetic test secrets in fixtures only. If you see redaction wa
 ## Limitations
 
 - Hooks are advisory; enforcement depends on OpenClaw host support.
-- The strongest protection is `orca openclaw`.
+- The strongest protection is `ryk openclaw`.
 - Plugin installation is a preview/dry-run by default.
 - No telemetry is collected.
-- npm package `orca-openclaw-plugin@1.1.3` is published.
-- ClawHub package `orca-openclaw-plugin@1.1.3` is published.
+- npm package `ryk-openclaw-plugin@1.1.3` is published.
+- ClawHub package `ryk-openclaw-plugin@1.1.3` is published.
 - The OpenClaw plugin does not add MCP server behavior or drone-specific plugin features.
-- **Plugin ID mismatch warning:** OpenClaw may warn that the plugin manifest id (`orca`) differs from the npm package name (`orca-openclaw-plugin`). This is intentional: the manifest id must remain `orca` so that `openclaw plugins install clawhub:orca` resolves correctly. The warning is harmless and does not affect functionality.
+- **Plugin ID mismatch warning:** OpenClaw may warn that the plugin manifest id (`ryk`) differs from the npm package name (`ryk-openclaw-plugin`). This is intentional: the manifest id must remain `ryk` so that `openclaw plugins install clawhub:orca` resolves correctly. The warning is harmless and does not affect functionality.
 
 ## Security model
 
-- The Orca CLI is the source of truth.
+- The ryk CLI is the source of truth.
 - The plugin does not reimplement policy logic.
 - No secrets are stored in plugin files.
 - Hook stdout is host-valid JSON.
@@ -236,4 +236,4 @@ This plugin does not add MCP server behavior.
 
 ## No drone features
 
-This plugin does not add drone-specific plugin features. The Orca OpenClaw plugin does not expose or modify drone functionality.
+This plugin does not add drone-specific plugin features. The ryk OpenClaw plugin does not expose or modify drone functionality.

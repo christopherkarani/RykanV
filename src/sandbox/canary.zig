@@ -2,9 +2,9 @@
 //! Never store live canary bodies in tracked fixtures or evidence.
 
 const std = @import("std");
-const util = @import("orca_core").core.util;
+const util = @import("ryk_core").core.util;
 
-pub const prefix = "ORCA_CANARY_v1_";
+pub const prefix = "RYK_CANARY_v1_";
 
 pub const Canary = struct {
     /// Full body placed on disk for CTRL-BASELINE / TEST-DENY.

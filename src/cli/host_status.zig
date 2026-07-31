@@ -296,7 +296,7 @@ fn resolveSmokeBinary(io: std.Io, allocator: std.mem.Allocator) !?[]u8 {
     var env_map = env_util.createProcessMap(allocator) catch null;
     defer if (env_map) |*m| m.deinit();
     if (env_map) |*m| {
-        // Prefer RYK_BIN, fall back to ORCA_BIN (Phase 5a dual-read).
+        // Prefer RYK_BIN, fall back to RYK_BIN (Phase 5a dual-read).
         if (try env_util.getOwnedBrand(m, allocator, "BIN")) |configured| {
             if (std.Io.Dir.accessAbsolute(io, configured, .{})) |_| {
                 return configured;
@@ -308,9 +308,9 @@ fn resolveSmokeBinary(io: std.Io, allocator: std.mem.Allocator) !?[]u8 {
 
     const self_exe = try std.process.executablePathAlloc(io, allocator);
     const base = std.fs.path.basename(self_exe);
-    // Real CLI binaries are named `ryk` or legacy `orca` (or `.exe`). The zig test harness is not.
+    // Real CLI binaries are named `ryk` (or `ryk.exe`). The zig test harness is not.
     const brand = @import("brand.zig");
-    if (brand.isPrimaryInvocation(base) or brand.isLegacyInvocation(base)) {
+    if (brand.isPrimaryInvocation(base)) {
         const owned = try allocator.dupe(u8, self_exe);
         allocator.free(self_exe);
         return owned;
@@ -437,11 +437,11 @@ const PiSettings = struct {
 };
 
 fn legacyPiExtensionInstalledAtHome(io: std.Io, allocator: std.mem.Allocator, home: []const u8) bool {
-    const package_root = std.fs.path.join(allocator, &.{ home, ".pi/agent/npm/node_modules/@orca-sec/pi-orca" }) catch return false;
+    const package_root = std.fs.path.join(allocator, &.{ home, ".pi/agent/npm/node_modules/@rykan/pi-ryk" }) catch return false;
     defer allocator.free(package_root);
     const manifest_path = std.fs.path.join(allocator, &.{ package_root, "package.json" }) catch return false;
     defer allocator.free(manifest_path);
-    const extension_path = std.fs.path.join(allocator, &.{ package_root, "extensions/orca.ts" }) catch return false;
+    const extension_path = std.fs.path.join(allocator, &.{ package_root, "extensions/ryk.ts" }) catch return false;
     defer allocator.free(extension_path);
     const settings_path = std.fs.path.join(allocator, &.{ home, ".pi/agent/settings.json" }) catch return false;
     defer allocator.free(settings_path);
@@ -451,14 +451,14 @@ fn legacyPiExtensionInstalledAtHome(io: std.Io, allocator: std.mem.Allocator, ho
     defer allocator.free(manifest_text);
     var parsed = std.json.parseFromSlice(PiPackageManifest, allocator, manifest_text, .{ .ignore_unknown_fields = true }) catch return false;
     defer parsed.deinit();
-    if (!std.mem.eql(u8, parsed.value.name, "@orca-sec/pi-orca") or parsed.value.version.len == 0) return false;
+    if (!std.mem.eql(u8, parsed.value.name, "@rykan/pi-ryk") or parsed.value.version.len == 0) return false;
 
     const settings_text = std.Io.Dir.cwd().readFileAlloc(io, settings_path, allocator, .limited(1024 * 1024)) catch return false;
     defer allocator.free(settings_text);
     var settings = std.json.parseFromSlice(PiSettings, allocator, settings_text, .{ .ignore_unknown_fields = true }) catch return false;
     defer settings.deinit();
     for (settings.value.packages) |package| {
-        if (std.mem.eql(u8, package, "npm:@orca-sec/pi-orca")) return true;
+        if (std.mem.eql(u8, package, "npm:@rykan/pi-ryk")) return true;
     }
     return false;
 }
@@ -481,7 +481,7 @@ fn binaryInPath(io: std.Io, allocator: std.mem.Allocator, name: []const u8) bool
 }
 
 /// Stance file written next to installed Hermes plugin for *new* installs (fail-closed).
-pub const hermes_fail_stance_filename = ".orca_fail_stance";
+pub const hermes_fail_stance_filename = ".ryk_fail_stance";
 
 /// Effective Hermes fail-open from an env value only (null/empty → fail-open product default).
 pub fn hermesFailOpenFromEnvValue(value: ?[]const u8) bool {
@@ -537,7 +537,7 @@ fn readHermesStanceFile(allocator: std.mem.Allocator) ?[]u8 {
     const home_owned = env_util.getOwned(&env_map, allocator, "HOME") catch return null;
     const home = home_owned orelse return null;
     defer allocator.free(home);
-    const path = std.fs.path.join(allocator, &.{ home, ".hermes", "plugins", "orca", hermes_fail_stance_filename }) catch return null;
+    const path = std.fs.path.join(allocator, &.{ home, ".hermes", "plugins", "ryk", hermes_fail_stance_filename }) catch return null;
     defer allocator.free(path);
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();
@@ -556,7 +556,7 @@ pub fn hermesFailOpenFromEnv() bool {
         if (trimmed.len > 0) return hermesFailOpenFromEnvValue(trimmed);
     }
 
-    // New installs write .orca_fail_stance under the user plugin dir.
+    // New installs write .ryk_fail_stance under the user plugin dir.
     if (readHermesStanceFile(std.heap.page_allocator)) |stance| {
         defer std.heap.page_allocator.free(stance);
         if (hermesFailOpenFromStanceText(stance)) |open| return open;
@@ -601,7 +601,7 @@ test "Grok host status uses raw PreToolUse fixtures and exit-two deny" {
 }
 
 test "interpretSmokeOutcome codex deny uses exit code 2" {
-    try std.testing.expect(interpretSmokeOutcome("codex", "block", 2, "", "[[ORCA-GUARD]] blocked."));
+    try std.testing.expect(interpretSmokeOutcome("codex", "block", 2, "", "[[RYK-GUARD]] blocked."));
     try std.testing.expect(!interpretSmokeOutcome("codex", "block", 0, "", "error"));
     try std.testing.expect(interpretSmokeOutcome("codex", "block", 0, "{\"decision\":\"block\"}", ""));
 }
@@ -694,22 +694,22 @@ test "Pi extension installation requires registration and official package marke
     const home = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(home);
 
-    try tmp.dir.createDirPath(std.testing.io, ".pi/agent/npm/node_modules/@orca-sec/pi-orca/extensions");
+    try tmp.dir.createDirPath(std.testing.io, ".pi/agent/npm/node_modules/@rykan/pi-ryk/extensions");
     try tmp.dir.writeFile(std.testing.io, .{
-        .sub_path = ".pi/agent/npm/node_modules/@orca-sec/pi-orca/package.json",
-        .data = "{\"name\":\"@orca-sec/pi-orca\",\"version\":\"1.2.8\"}",
+        .sub_path = ".pi/agent/npm/node_modules/@rykan/pi-ryk/package.json",
+        .data = "{\"name\":\"@rykan/pi-ryk\",\"version\":\"1.2.8\"}",
     });
     try std.testing.expect(!legacyPiExtensionInstalledAtHome(std.testing.io, std.testing.allocator, home));
 
     try tmp.dir.writeFile(std.testing.io, .{
-        .sub_path = ".pi/agent/npm/node_modules/@orca-sec/pi-orca/extensions/orca.ts",
+        .sub_path = ".pi/agent/npm/node_modules/@rykan/pi-ryk/extensions/ryk.ts",
         .data = "export default function orca() {}",
     });
     try std.testing.expect(!legacyPiExtensionInstalledAtHome(std.testing.io, std.testing.allocator, home));
 
     try tmp.dir.writeFile(std.testing.io, .{
         .sub_path = ".pi/agent/settings.json",
-        .data = "{\"packages\":[\"npm:@orca-sec/pi-orca\"]}",
+        .data = "{\"packages\":[\"npm:@rykan/pi-ryk\"]}",
     });
     try std.testing.expect(legacyPiExtensionInstalledAtHome(std.testing.io, std.testing.allocator, home));
 }

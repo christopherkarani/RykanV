@@ -7,7 +7,7 @@ const pack_config = @import("pack_config.zig");
 const onboarding = @import("onboarding.zig");
 const danger_confirmation = @import("danger_confirmation.zig");
 const packs_tui = @import("packs_tui.zig");
-const util = @import("orca_core").core.util;
+const util = @import("ryk_core").core.util;
 
 // Zig 0.16 monopath: nested module tests need an explicit test-block reference
 // (same pattern as tui.mod → browse) so `packs browse` filters discover them.
@@ -293,7 +293,7 @@ fn idsIncludeBaseline(ids: []const []const u8) bool {
     return false;
 }
 
-/// Require `ORCA_OPERATOR=1` or interactive TTY confirm before disabling baseline packs.
+/// Require `RYK_OPERATOR=1` or interactive TTY confirm before disabling baseline packs.
 fn confirmBaselineDisable(io: std.Io, stdout: anytype, stderr: anytype) !bool {
     if (pack_config.isOperatorBreakGlass()) return true;
 
@@ -302,8 +302,8 @@ fn confirmBaselineDisable(io: std.Io, stdout: anytype, stderr: anytype) !bool {
     if (!is_tty) {
         try stderr.writeAll(
             \\ryk packs disable: refusing to disable baseline packs (core, core.*, system.disk)
-            \\without break-glass. Set ORCA_OPERATOR=1 or re-run in an interactive TTY to confirm.
-            \\Baseline opt-outs are written to user config; project .orca.toml cannot drop them.
+            \\without break-glass. Set RYK_OPERATOR=1 or re-run in an interactive TTY to confirm.
+            \\Baseline opt-outs are written to user config; project .ryk.toml cannot drop them.
             \\
         );
         return false;
@@ -960,13 +960,13 @@ const SPacksXdg = struct {
 
     fn deinit(self: *@This()) void {
         sPacksRestoreEnv("XDG_CONFIG_HOME", self.prev_xdg);
-        sPacksRestoreEnv("ORCA_OPERATOR", self.prev_operator);
+        sPacksRestoreEnv("RYK_OPERATOR", self.prev_operator);
         std.testing.allocator.free(self.root);
         self.tmp.cleanup();
     }
 };
 
-/// Isolate user pack config + grant ORCA_OPERATOR break-glass for baseline disable tests.
+/// Isolate user pack config + grant RYK_OPERATOR break-glass for baseline disable tests.
 fn sPacksIsolateXdgWithOperator() !SPacksXdg {
     var tmp = std.testing.tmpDir(.{});
     errdefer tmp.cleanup();
@@ -977,13 +977,13 @@ fn sPacksIsolateXdgWithOperator() !SPacksXdg {
 
     const prev_xdg = try sPacksDupEnvZ("XDG_CONFIG_HOME");
     errdefer if (prev_xdg) |p| std.testing.allocator.free(p);
-    const prev_operator = try sPacksDupEnvZ("ORCA_OPERATOR");
+    const prev_operator = try sPacksDupEnvZ("RYK_OPERATOR");
     errdefer if (prev_operator) |p| std.testing.allocator.free(p);
 
     const root_z0 = try std.testing.allocator.dupeZ(u8, root);
     defer std.testing.allocator.free(root_z0);
     try std.testing.expectEqual(@as(c_int, 0), setenv("XDG_CONFIG_HOME", root_z0.ptr, 1));
-    try std.testing.expectEqual(@as(c_int, 0), setenv("ORCA_OPERATOR", "1", 1));
+    try std.testing.expectEqual(@as(c_int, 0), setenv("RYK_OPERATOR", "1", 1));
 
     return .{
         .tmp = tmp,
@@ -1231,7 +1231,7 @@ test "s-packs: disable core.git uses shipped pack_config semantics without hard-
                 &stdout_writer,
                 &stderr_writer,
             );
-            // With ORCA_OPERATOR break-glass: baseline opt-out succeeds (user config); no hard-fail.
+            // With RYK_OPERATOR break-glass: baseline opt-out succeeds (user config); no hard-fail.
             try std.testing.expectEqual(exit_codes.success, code);
             const combined = try std.fmt.allocPrint(std.testing.allocator, "{s}{s}", .{ stdout_writer.buffered(), stderr_writer.buffered() });
             defer std.testing.allocator.free(combined);
@@ -1248,12 +1248,12 @@ test "s-packs: disable core.git uses shipped pack_config semantics without hard-
     }.body);
 }
 
-test "s-packs: disable baseline without ORCA_OPERATOR refuses non-interactively" {
+test "s-packs: disable baseline without RYK_OPERATOR refuses non-interactively" {
     try withGitWorkspace(struct {
         fn body(_: []const u8) !void {
-            const prev = try sPacksDupEnvZ("ORCA_OPERATOR");
-            defer sPacksRestoreEnv("ORCA_OPERATOR", prev);
-            _ = unsetenv("ORCA_OPERATOR");
+            const prev = try sPacksDupEnvZ("RYK_OPERATOR");
+            defer sPacksRestoreEnv("RYK_OPERATOR", prev);
+            _ = unsetenv("RYK_OPERATOR");
 
             var stdout_buf: [4096]u8 = undefined;
             var stderr_buf: [2048]u8 = undefined;
@@ -1269,7 +1269,7 @@ test "s-packs: disable baseline without ORCA_OPERATOR refuses non-interactively"
             );
             try std.testing.expect(code != exit_codes.success);
             const err = stderr_writer.buffered();
-            try std.testing.expect(std.mem.indexOf(u8, err, "ORCA_OPERATOR") != null or
+            try std.testing.expect(std.mem.indexOf(u8, err, "RYK_OPERATOR") != null or
                 std.mem.indexOf(u8, err, "baseline") != null);
         }
     }.body);

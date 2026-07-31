@@ -793,10 +793,10 @@ const Reader = struct {
 };
 
 test "request frame round trips every bootstrap field" {
-    const control_roots = [_][]const u8{ "/work/.orca", "/run/ryk-control" };
+    const control_roots = [_][]const u8{ "/work/.ryk", "/run/ryk-control" };
     const exec_paths = [_][]const u8{ "/home/user/.local/bin/agent", "/home/user/.local/bin/agent-real" };
     const argv = [_][]const u8{ "/usr/bin/agent", "--mode", "safe" };
-    const environ = [_][]const u8{ "PATH=/usr/bin:/bin", "ORCA_SESSION_ID=session-test" };
+    const environ = [_][]const u8{ "PATH=/usr/bin:/bin", "RYK_SESSION_ID=session-test" };
     const request: BootstrapRequest = .{
         .cookie = [_]u8{0xA5} ** cookie_len,
         .expected_profile_hash = [_]u8{0x5A} ** profile_hash_len,
@@ -1038,7 +1038,7 @@ test "request decoder applies local limits to otherwise valid frame" {
 }
 
 test "request allocation failures propagate and clean up partial decode" {
-    const roots = [_][]const u8{"/work/.orca"};
+    const roots = [_][]const u8{"/work/.ryk"};
     const exec_paths = [_][]const u8{"/usr/bin/agent"};
     const argv = [_][]const u8{"/usr/bin/agent"};
     const environ = [_][]const u8{"PATH=/usr/bin"};

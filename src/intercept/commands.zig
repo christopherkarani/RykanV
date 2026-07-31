@@ -1,9 +1,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const core = @import("orca_core").core;
-const policy = @import("orca_core").policy;
-const core_api = @import("orca_core").api;
+const core = @import("ryk_core").core;
+const policy = @import("ryk_core").policy;
+const core_api = @import("ryk_core").api;
 
 pub const implemented = true;
 
@@ -46,7 +46,7 @@ pub const CommandDecision = struct {
     /// parent approval or mode×severity — only pack Deny / SoftBlock may be approved.
     fail_closed: bool = false,
     /// FM `ask_sticky_candidate` hints (allocator-owned when set). Free via `deinit`.
-    /// Consumed by `orca run` sticky record after host ask→allow.
+    /// Consumed by `ryk run` sticky record after host ask→allow.
     suggested_sticky_scope: ?[]const u8 = null,
     suggested_effect_class: ?[]const u8 = null,
 
@@ -250,17 +250,17 @@ pub const shim_names = [_][]const u8{
     "dd",
 };
 
-pub const approved_once_env = "ORCA_APPROVED_COMMAND_ONCE";
-pub const approved_session_env = "ORCA_APPROVED_COMMAND_SESSION";
+pub const approved_once_env = "RYK_APPROVED_COMMAND_ONCE";
+pub const approved_session_env = "RYK_APPROVED_COMMAND_SESSION";
 
 pub fn createShimDirectory(
     io: std.Io,
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
     session_id: []const u8,
-    orca_executable: []const u8,
+    ryk_executable: []const u8,
 ) ![]u8 {
-    const shim_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "sessions", session_id, "shims" });
+    const shim_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "sessions", session_id, "shims" });
     errdefer allocator.free(shim_dir);
     try std.Io.Dir.cwd().createDirPath(io, shim_dir);
     // RT-08 residual: parent path segments may remain umask-default; only the leaf
@@ -271,9 +271,9 @@ pub fn createShimDirectory(
     }
     inline for (shim_names) |name| {
         if (builtin.os.tag == .windows) {
-            try writeWindowsExecutableShim(allocator, shim_dir, name, orca_executable);
+            try writeWindowsExecutableShim(allocator, shim_dir, name, ryk_executable);
         } else {
-            try writePosixShim(io, allocator, shim_dir, name, orca_executable);
+            try writePosixShim(io, allocator, shim_dir, name, ryk_executable);
         }
     }
     return shim_dir;
@@ -287,7 +287,7 @@ pub fn prependShimPath(allocator: std.mem.Allocator, env_map: *std.process.Envir
         try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ shim_dir, pathDelimiter(), old_path });
     defer allocator.free(joined);
     try env_map.put("PATH", joined);
-    try env_map.put("ORCA_SHIM_DIR", shim_dir);
+    try env_map.put("RYK_SHIM_DIR", shim_dir);
 }
 
 pub fn pathWithoutShimAlloc(allocator: std.mem.Allocator, path_value: []const u8, shim_dir: []const u8) ![]u8 {
@@ -408,7 +408,7 @@ fn approvalHashListRemoveAlloc(allocator: std.mem.Allocator, list: []const u8, h
     return try out.toOwnedSlice(allocator);
 }
 
-fn writePosixShim(io: std.Io, allocator: std.mem.Allocator, shim_dir: []const u8, name: []const u8, orca_executable: []const u8) !void {
+fn writePosixShim(io: std.Io, allocator: std.mem.Allocator, shim_dir: []const u8, name: []const u8, ryk_executable: []const u8) !void {
     const path = try std.fs.path.join(allocator, &.{ shim_dir, name });
     defer allocator.free(path);
     // Zig 0.16 Permissions.executable_file maps to default_dir (0o777). Lock 0o755
@@ -421,18 +421,18 @@ fn writePosixShim(io: std.Io, allocator: std.mem.Allocator, shim_dir: []const u8
         \\#!/bin/sh
         \\exec "{s}" shim exec -- "{s}" "$@"
         \\
-    , .{ orca_executable, name });
+    , .{ ryk_executable, name });
     defer allocator.free(script);
     try file.writeStreamingAll(io, script);
     if (builtin.os.tag != .windows) try file.setPermissions(io, shim_mode);
 }
 
-fn writeWindowsExecutableShim(allocator: std.mem.Allocator, shim_dir: []const u8, name: []const u8, orca_executable: []const u8) !void {
+fn writeWindowsExecutableShim(allocator: std.mem.Allocator, shim_dir: []const u8, name: []const u8, ryk_executable: []const u8) !void {
     const filename = try std.fmt.allocPrint(allocator, "{s}.exe", .{name});
     defer allocator.free(filename);
     const path = try std.fs.path.join(allocator, &.{ shim_dir, filename });
     defer allocator.free(path);
-    try std.fs.copyFileAbsolute(orca_executable, path, .{});
+    try std.fs.copyFileAbsolute(ryk_executable, path, .{});
 }
 
 pub fn shimAliasFromExecutablePath(executable_path: []const u8) ?[]const u8 {
@@ -1087,7 +1087,7 @@ test "command classifier catches Windows risky patterns" {
     try std.testing.expectEqual(RiskClass.destructive_filesystem, classifyArgv(&.{ "cmd", "/c", "rmdir /s /q C:\\temp\\x" }).risk_class);
     try std.testing.expectEqual(RiskClass.privilege_escalation, classifyArgv(&.{ "powershell", "-Command", "Start-Process cmd -Verb RunAs" }).risk_class);
     try std.testing.expectEqual(RiskClass.privilege_escalation, classifyArgv(&.{ "runas", "/user:Administrator", "cmd" }).risk_class);
-    try std.testing.expectEqual(RiskClass.privilege_escalation, classifyArgv(&.{ "reg", "add", "HKCU\\Software\\Orca" }).risk_class);
+    try std.testing.expectEqual(RiskClass.privilege_escalation, classifyArgv(&.{ "reg", "add", "HKCU\\Software\\ryk" }).risk_class);
     try std.testing.expectEqual(RiskClass.credential_inspection, classifyArgv(&.{ "type", "%USERPROFILE%\\.ssh\\id_ed25519" }).risk_class);
     try std.testing.expectEqual(RiskClass.obfuscated, classifyArgv(&.{ "certutil", "-decode", "in.txt", "out.exe" }).risk_class);
 }
@@ -1234,7 +1234,7 @@ test "generic agent preset keeps installs remote writes and dangerous commands g
     defer cat_env.deinit(std.testing.allocator);
     try std.testing.expectEqual(core.decision.DecisionResult.deny, cat_env.decision.result);
 
-    var mkdir_tmp = try evaluate(std.testing.allocator, &selected, .ask, &.{ "mkdir", "-p", "./tmp/orca" });
+    var mkdir_tmp = try evaluate(std.testing.allocator, &selected, .ask, &.{ "mkdir", "-p", "./tmp/ryk" });
     defer mkdir_tmp.deinit(std.testing.allocator);
     try std.testing.expectEqual(core.decision.DecisionResult.ask, mkdir_tmp.decision.result);
 
@@ -1366,11 +1366,11 @@ test "Windows shim directory includes executable cmd PowerShell and PATH shims" 
 }
 
 test "Windows executable shim aliases route extension-qualified invocations" {
-    try std.testing.expectEqualStrings("cmd", shimAliasFromExecutablePath("C:\\repo\\.orca\\sessions\\id\\shims\\cmd.exe").?);
+    try std.testing.expectEqualStrings("cmd", shimAliasFromExecutablePath("C:\\repo\\.ryk\\sessions\\id\\shims\\cmd.exe").?);
     try std.testing.expectEqualStrings("powershell", shimAliasFromExecutablePath("powershell.exe").?);
     try std.testing.expectEqualStrings("pwsh", shimAliasFromExecutablePath("pwsh.exe").?);
     try std.testing.expectEqualStrings("git", shimAliasFromExecutablePath("git.exe").?);
-    try std.testing.expect(shimAliasFromExecutablePath("orca.exe") == null);
+    try std.testing.expect(shimAliasFromExecutablePath("ryk.exe") == null);
 }
 
 test "approval hashes are bounded and consumable without raw command persistence" {

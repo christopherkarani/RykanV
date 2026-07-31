@@ -32,7 +32,7 @@ const Asset = struct {
 };
 
 const assets = [_]Asset{
-    .{ .source_name = "orca.ts", .destination_name = "runtime.ts" },
+    .{ .source_name = "ryk.ts", .destination_name = "runtime.ts" },
     .{ .source_name = "secret_capture.ts", .destination_name = "secret_capture.ts" },
 };
 
@@ -173,7 +173,7 @@ fn resolveAssetDir(io: std.Io, allocator: std.mem.Allocator, options: InstallOpt
     return resource_root.resolveResourcePath(io, allocator, .{
         .workspace_root = ".",
         .resource_root_override = options.resource_root_override,
-    }, "orca-pi/extensions");
+    }, "ryk-pi/extensions");
 }
 
 fn ensureDestinationDirectory(io: std.Io, allocator: std.mem.Allocator, home: []const u8) !void {
@@ -264,7 +264,7 @@ fn syncParentDirectory(io: std.Io, destination_path: []const u8) !void {
 fn writeFixtureAssets(io: std.Io, dir: std.Io.Dir) !void {
     try dir.createDirPath(io, "assets");
     try dir.writeFile(io, .{
-        .sub_path = "assets/orca.ts",
+        .sub_path = "assets/ryk.ts",
         .data =
         \\import { handleSecretCaptureInput } from "./secret_capture.ts";
         \\export function installOrcaExtension() {}
@@ -297,7 +297,7 @@ test "Pi install creates a complete extension and is idempotent" {
     }));
     const wrapper = try tmp.dir.readFileAlloc(std.testing.io, relative_install_dir ++ "/index.ts", std.testing.allocator, .limited(4096));
     defer std.testing.allocator.free(wrapper);
-    try std.testing.expect(std.mem.indexOf(u8, wrapper, "orca.ts") == null);
+    try std.testing.expect(std.mem.indexOf(u8, wrapper, "ryk.ts") == null);
     try std.testing.expect(std.mem.indexOf(u8, wrapper, "../package.json") == null);
     try std.testing.expect(std.mem.indexOf(u8, wrapper, "\"/opt/ryk/bin/ryk\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, wrapper, "./runtime.ts") != null);

@@ -38,16 +38,15 @@
 ## Unreleased
 
 ### Breaking
-- **Phase 5a brand cut — product identity is `ryk`** (absorbs draft “ryz”; one brand only).
-  - **CLI binary:** primary `ryk`; `orca` PATH alias / second install of same product (≥1 major).
-  - **Display:** help, TUI, status, plugins, dashboard say **ryk** (legacy “Orca” only in history).
-  - **Environment:** prefer `RYK_*`, fall back `ORCA_*`.
-  - **Release artifacts:** primary `ryk-v{version}-*`; dual-publish `orca-v*` when cheap.
-  - **npm:** `@orca-sec/ryk` (scope kept); `@orca-sec/orca` deprecated/shim; bin `orca` still installed.
-  - **Pi:** `@orca-sec/pi-ryk` (+ dual); keep `@orca-sec/pi-orca` and `/orca-*` aliases during window.
-  - **FM App Support (macOS):** prefer `…/ryk/fm-steward/`; first-run copy/fallback from `…/Orca/fm-steward/`.
-  - **Workspace policy paths:** still `.orca/` — **not** hard-cut in 5a (Phase 5b).
-  - **Audit stored `kind`:** still `"orca"` (display-only rename optional later).
+- **Brand hard cut — Rykan V / `ryk` only (no Orca dual-compat).**
+  - **Product:** full name **Rykan V**; CLI **`ryk`** only (no `orca` binary alias).
+  - **Environment:** `RYK_*` only (no `ORCA_*` dual-read/write).
+  - **Paths:** workspace `.ryk/`, config `~/.config/ryk/`, resources `share/ryk/` (no `.orca` / `share/orca`).
+  - **Zig modules:** `ryk`, `ryk_core`, `ryk_cli` (was `orca*`).
+  - **npm scope:** `@rykan/ryk`, `@rykan/pi-ryk` (was `@orca-sec/*`).
+  - **Audit actor kind:** `"ryk"` (was `"orca"`).
+  - **Dirs:** `ryk-pi/`, `ryk-dashboard-ui/` (was `orca-pi/`, `orca-dashboard-ui/`).
+  - Historical CHANGELOG / denylist tokens may still mention Orca/Aegis as past brands or attack surface.
   - **Codex guard emit:** still `[[ORCA-GUARD]]`; dual-read `[[RYK-GUARD]]` if present.
   - **Share install path:** still `~/.local/share/orca` (path migrate deferred to 5b).
   - **Git remote / Zig package graph:** unchanged (`build.zig.zon` `.name = .orca` stays).

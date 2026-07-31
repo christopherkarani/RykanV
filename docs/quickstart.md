@@ -14,7 +14,7 @@ From a clean checkout:
 
 The repository is pinned to Zig `0.16.0` (use `./scripts/zig` or `direnv allow` if system `zig` differs). After policy or CLI changes, run `./scripts/test-fast.sh`; run `./scripts/zig build test` before opening a PR. Release installs are covered in [install.md](install.md).
 
-For a package install (Homebrew, install script), see [install.md](install.md), then continue from step 2 with `ryk` (or `orca` alias) on your `PATH`.
+For a package install (Homebrew, install script), see [install.md](install.md), then continue from step 2 with `ryk` (or `ryk` alias) on your `PATH`.
 
 ## 2. Get Protected
 
@@ -24,7 +24,7 @@ For a package install (Homebrew, install script), see [install.md](install.md), 
 
 `ryk start` is the **only** onboarding door:
 
-- creates `.orca/policy.yaml` when missing (Ask on risk / `generic-agent` preset)
+- creates `.ryk/policy.yaml` when missing (Ask on risk / `generic-agent` preset)
 - wires host integrations
 - verifies core readiness (daemon + policy)
 - prints next steps: run an agent, then `doctor` / `scan` / `replay`
@@ -36,7 +36,7 @@ Non-interactive / CI-friendly:
 ./zig-out/bin/ryk start --auto --hosts claude,codex
 ```
 
-Public peers `ryk setup` / `orca setup` and quickstart are removed — use `ryk start`. Power/CI scaffolding may still use advanced commands via `ryk help --all`.
+Public peers `ryk setup` / `ryk setup` and quickstart are removed — use `ryk start`. Power/CI scaffolding may still use advanced commands via `ryk help --all`.
 
 ## 3. Diagnose readiness
 
@@ -55,7 +55,7 @@ Host aliases are the taught launch path (OS filesystem sandbox attaches automati
 # or: codex | pi | opencode | openclaw | hermes
 ```
 
-When a risky action needs approval, interactive sessions offer **Once** / **Always** / **Never** (no rule ids required). Session artifacts land under `.orca/sessions/<session-id>/`. On a successful macOS Seatbelt attach the session banner includes `seatbelt_profile=hardened` (or the grade you chose). Verify host capability with `ryk doctor` (capability ≠ live session).
+When a risky action needs approval, interactive sessions offer **Once** / **Always** / **Never** (no rule ids required). Session artifacts land under `.ryk/sessions/<session-id>/`. On a successful macOS Seatbelt attach the session banner includes `seatbelt_profile=hardened` (or the grade you chose). Verify host capability with `ryk doctor` (capability ≠ live session).
 
 Custom commands and CI automation still use the advanced run engine (not the day-1 agent launch path):
 
@@ -72,7 +72,7 @@ ryk is graded mediation, not a universal sandbox. Absolute paths, non-shimmed bi
 ./zig-out/bin/ryk replay
 ```
 
-Bare `orca replay` loads the **last** session and highlights denied actions. Useful flags:
+Bare `ryk replay` loads the **last** session and highlights denied actions. Useful flags:
 
 ```sh
 ./zig-out/bin/ryk replay --only denied
@@ -80,7 +80,7 @@ Bare `orca replay` loads the **last** session and highlights denied actions. Use
 ./zig-out/bin/ryk replay --list
 ```
 
-`--verify` checks the tamper-evident hash chain. If there are no sessions yet, replay points you back to `orca start` then `orca <agent>`.
+`--verify` checks the tamper-evident hash chain. If there are no sessions yet, replay points you back to `ryk start` then `ryk <agent>`.
 
 ## 6. Stop Protection
 
@@ -88,7 +88,7 @@ Bare `orca replay` loads the **last** session and highlights denied actions. Use
 ./zig-out/bin/ryk stop
 ```
 
-Removes host plugin registrations; binary and policy stay. Restart later with `orca start`.
+Removes host plugin registrations; binary and policy stay. Restart later with `ryk start`.
 
 ## 7. Optional: Explain, Dashboard, CI, Red-team
 
@@ -124,7 +124,7 @@ Safety reports are free (`ryk report`; export with `--format markdown|json`). Se
 
 ## Next Steps
 
-- Full CLI surface: `orca help --all`
+- Full CLI surface: `ryk help --all`
 - Policies: [policy.md](policy.md)
 - Dashboard: [dashboard.md](dashboard.md)
 - [Leaky-agent demo](../examples/leaky-agent-demo/README.md)

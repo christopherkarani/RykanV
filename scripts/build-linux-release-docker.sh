@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build Linux ryk CLI binaries (amd64 + arm64) via Docker buildx and stage them
-# for scripts/build-release.sh (ORCA_CLI_ARTIFACT_DIR / RYK_CLI_ARTIFACT_DIR).
+# for scripts/build-release.sh (RYK_CLI_ARTIFACT_DIR / RYK_CLI_ARTIFACT_DIR).
 #
 # Layout written:
 #   $OUT_DIR/linux-amd64/ryk
@@ -14,10 +14,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-OUT_DIR="${1:-${ORCA_LINUX_ARTIFACT_DIR:-${RYK_LINUX_ARTIFACT_DIR:-${REPO_ROOT}/.release-cli-bins}}}"
-VERSION="${RYK_VERSION:-${ORCA_VERSION:-$(tr -d '[:space:]' <"${REPO_ROOT}/VERSION")}}"
-COMMIT="${RYK_COMMIT:-${ORCA_COMMIT:-$(git -C "${REPO_ROOT}" rev-parse --short=12 HEAD)}}"
-BUILD_DATE="${RYK_BUILD_DATE:-${ORCA_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}}"
+OUT_DIR="${1:-${RYK_LINUX_ARTIFACT_DIR:-${RYK_LINUX_ARTIFACT_DIR:-${REPO_ROOT}/.release-cli-bins}}}"
+VERSION="${RYK_VERSION:-${RYK_VERSION:-$(tr -d '[:space:]' <"${REPO_ROOT}/VERSION")}}"
+COMMIT="${RYK_COMMIT:-${RYK_COMMIT:-$(git -C "${REPO_ROOT}" rev-parse --short=12 HEAD)}}"
+BUILD_DATE="${RYK_BUILD_DATE:-${RYK_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}}"
 
 command -v docker >/dev/null 2>&1 || {
   echo "build-linux-release-docker: docker is required" >&2
@@ -43,9 +43,9 @@ for arch in amd64 arm64; do
   mkdir -p "${arch_out}"
   docker buildx build \
     --platform "linux/${arch}" \
-    --build-arg "ORCA_VERSION=${VERSION}" \
-    --build-arg "ORCA_COMMIT=${COMMIT}" \
-    --build-arg "ORCA_BUILD_DATE=${BUILD_DATE}" \
+    --build-arg "RYK_VERSION=${VERSION}" \
+    --build-arg "RYK_COMMIT=${COMMIT}" \
+    --build-arg "RYK_BUILD_DATE=${BUILD_DATE}" \
     --build-arg "RYK_VERSION=${VERSION}" \
     --build-arg "RYK_COMMIT=${COMMIT}" \
     --build-arg "RYK_BUILD_DATE=${BUILD_DATE}" \
@@ -83,8 +83,8 @@ for arch in amd64 arm64; do
   fi
   chmod 0755 "${OUT_DIR}/linux-${arch}/ryk" "${OUT_DIR}/linux-${arch}/orca"
 
-  if [[ -e "${OUT_DIR}/linux-${arch}/orca-daemon" ]]; then
-    echo "build-linux-release-docker: unexpected orca-daemon under ${OUT_DIR}/linux-${arch}" >&2
+  if [[ -e "${OUT_DIR}/linux-${arch}/ryk-daemon" ]]; then
+    echo "build-linux-release-docker: unexpected ryk-daemon under ${OUT_DIR}/linux-${arch}" >&2
     exit 1
   fi
   file "${OUT_DIR}/linux-${arch}/ryk"

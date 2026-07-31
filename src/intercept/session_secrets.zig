@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const policy_schema = @import("orca_core").policy.schema;
+const policy_schema = @import("ryk_core").policy.schema;
 
 pub const Provider = policy_schema.CredentialProvider;
 
@@ -208,7 +208,7 @@ const Entry = struct {
 
         const phantom = try std.fmt.allocPrint(
             allocator,
-            "orca-secret://session/{s}/{s}/{s}",
+            "ryk-secret://session/{s}/{s}/{s}",
             .{ session_hex, spec.env_var, nonce_hex },
         );
         errdefer wipeAndFree(allocator, phantom);
@@ -493,7 +493,7 @@ test "session store injects and retains only exact minted name-value pairs" {
     try std.testing.expect(!store.isMintedEnv("OPENAI_API_KEY", phantom));
     try std.testing.expect(!store.isMintedEnv(
         "ANTHROPIC_API_KEY",
-        "orca-secret://session/evil/ANTHROPIC_API_KEY/0000000000000000",
+        "ryk-secret://session/evil/ANTHROPIC_API_KEY/0000000000000000",
     ));
 
     try std.testing.expectError(
@@ -521,7 +521,7 @@ fn captureAllocationFailureProbe(allocator: std.mem.Allocator) !void {
 }
 
 fn expectPhantomShape(phantom: []const u8, env_var: []const u8) !void {
-    const prefix = "orca-secret://session/";
+    const prefix = "ryk-secret://session/";
     try std.testing.expect(std.mem.startsWith(u8, phantom, prefix));
     const after_prefix = phantom[prefix.len..];
     const session_end = std.mem.indexOfScalar(u8, after_prefix, '/') orelse return error.TestUnexpectedResult;

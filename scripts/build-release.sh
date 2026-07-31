@@ -1,16 +1,16 @@
 #!/usr/bin/env sh
 set -eu
 
-# Phase 5a: primary product brand is ryk; dual-name env RYK_* then ORCA_*.
-VERSION="${RYK_VERSION:-${ORCA_VERSION:-$(tr -d '[:space:]' <"$(dirname "$0")/../VERSION" 2>/dev/null || printf '1.2.0')}}"
-COMMIT="${RYK_COMMIT:-${ORCA_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || printf unknown)}}"
-BUILD_DATE="${RYK_BUILD_DATE:-${ORCA_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}}"
-DIST_DIR="${RYK_DIST_DIR:-${ORCA_DIST_DIR:-dist}}"
-ZIG_OPTIMIZE="${RYK_ZIG_OPTIMIZE:-${ORCA_ZIG_OPTIMIZE:-ReleaseSafe}}"
-RELEASE_PRODUCT="${RYK_RELEASE_PRODUCT:-${ORCA_RELEASE_PRODUCT:-all}}"
-CLI_ARTIFACT_DIR="${RYK_CLI_ARTIFACT_DIR:-${ORCA_CLI_ARTIFACT_DIR:-}}"
+# Phase 5a: primary product brand is ryk; dual-name env RYK_* then RYK_*.
+VERSION="${RYK_VERSION:-${RYK_VERSION:-$(tr -d '[:space:]' <"$(dirname "$0")/../VERSION" 2>/dev/null || printf '1.2.0')}}"
+COMMIT="${RYK_COMMIT:-${RYK_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || printf unknown)}}"
+BUILD_DATE="${RYK_BUILD_DATE:-${RYK_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}}"
+DIST_DIR="${RYK_DIST_DIR:-${RYK_DIST_DIR:-dist}}"
+ZIG_OPTIMIZE="${RYK_ZIG_OPTIMIZE:-${RYK_ZIG_OPTIMIZE:-ReleaseSafe}}"
+RELEASE_PRODUCT="${RYK_RELEASE_PRODUCT:-${RYK_RELEASE_PRODUCT:-all}}"
+CLI_ARTIFACT_DIR="${RYK_CLI_ARTIFACT_DIR:-${RYK_CLI_ARTIFACT_DIR:-}}"
 # Dual-publish orca-v* alias archives (same bytes as ryk-v*) for one major.
-DUAL_PUBLISH_ORCA="${RYK_DUAL_PUBLISH_ORCA:-${ORCA_DUAL_PUBLISH_ORCA:-1}}"
+DUAL_PUBLISH_ORCA="${RYK_DUAL_PUBLISH_ORCA:-${RYK_DUAL_PUBLISH_ORCA:-1}}"
 SIGNING_STATUS="not_configured"
 
 HOST_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -67,12 +67,12 @@ target_platforms_json() {
 
 copy_cli_payload() {
   root="$1"
-  [ -f "orca-pi/extensions/orca.ts" ] || {
-    printf 'error: bundled Pi extension is missing orca-pi/extensions/orca.ts\n' >&2
+  [ -f "ryk-pi/extensions/ryk.ts" ] || {
+    printf 'error: bundled Pi extension is missing ryk-pi/extensions/ryk.ts\n' >&2
     exit 1
   }
-  [ -f "orca-pi/extensions/secret_capture.ts" ] || {
-    printf 'error: bundled Pi extension is missing orca-pi/extensions/secret_capture.ts\n' >&2
+  [ -f "ryk-pi/extensions/secret_capture.ts" ] || {
+    printf 'error: bundled Pi extension is missing ryk-pi/extensions/secret_capture.ts\n' >&2
     exit 1
   }
   mkdir -p "$root"
@@ -80,13 +80,13 @@ copy_cli_payload() {
   cp -R docs policies schemas fixtures examples packages packaging scripts integrations "$root/"
   # Runtime onboarding copies these TypeScript files directly into Pi. Keep the
   # package source in the archive so curl and Homebrew never need npm.
-  cp -R orca-pi "$root/"
-  if [ -d "orca-dashboard-ui/dist" ]; then
-    mkdir -p "$root/orca-dashboard-ui"
-    cp -R orca-dashboard-ui/dist "$root/orca-dashboard-ui/dist"
+  cp -R ryk-pi "$root/"
+  if [ -d "ryk-dashboard-ui/dist" ]; then
+    mkdir -p "$root/ryk-dashboard-ui"
+    cp -R ryk-dashboard-ui/dist "$root/ryk-dashboard-ui/dist"
   elif [ -f "src/dashboard/assets/index.html" ]; then
-    printf 'error: orca-dashboard-ui/dist/ missing but legacy src/dashboard/assets/ exists.\n' >&2
-    printf 'error: Run "npm ci && npm run build" in orca-dashboard-ui/ before creating a release.\n' >&2
+    printf 'error: ryk-dashboard-ui/dist/ missing but legacy src/dashboard/assets/ exists.\n' >&2
+    printf 'error: Run "npm ci && npm run build" in ryk-dashboard-ui/ before creating a release.\n' >&2
     printf 'error: The legacy fallback has been intentionally removed to prevent shipping the wrong dashboard.\n' >&2
     exit 1
   else
@@ -110,13 +110,13 @@ copy_cli_payload() {
     "$root/docs/.DS_Store" \
     "$root/packages/.DS_Store" \
     "$root/examples/.DS_Store" \
-    "$root/orca-dashboard-ui/node_modules" 2>/dev/null || true
+    "$root/ryk-dashboard-ui/node_modules" 2>/dev/null || true
 }
 
 write_release_readme() {
   root="$1"
   title="ryk ${VERSION} Release Artifact"
-  boundary="This archive contains the ryk CLI (primary binary) plus an orca compat alias, the bundled Pi extension, and Core policy, audit, replay, redaction, schema, integration, and packaging resources. Edge runtime, drone, SITL, and customer-pilot materials are intentionally excluded."
+  boundary="This archive contains the ryk CLI (primary binary) plus an ryk compat alias, the bundled Pi extension, and Core policy, audit, replay, redaction, schema, integration, and packaging resources. Edge runtime, drone, SITL, and customer-pilot materials are intentionally excluded."
   cat >"$root/README-release.md" <<EOF
 # ${title}
 
@@ -134,10 +134,10 @@ ${boundary}
 EOF
 }
 
-# CLI-only archives: Zig shell_engine evaluates in-process (no orca-daemon product binary).
+# CLI-only archives: Zig shell_engine evaluates in-process (no ryk-daemon product binary).
 
 install_primary_and_alias() {
-  # Copy primary ryk binary into root/bin and ensure orca alias exists.
+  # Copy primary ryk binary into root/bin and ensure ryk alias exists.
   os="$1"
   prefix="$2"
   root="$3"
@@ -150,11 +150,11 @@ install_primary_and_alias() {
       primary_src="$prefix/bin/ryk.exe"
     elif [ -f "$prefix/bin/$bin_name" ]; then
       primary_src="$prefix/bin/$bin_name"
-    elif [ -f "$prefix/bin/orca.exe" ]; then
-      primary_src="$prefix/bin/orca.exe"
+    elif [ -f "$prefix/bin/ryk.exe" ]; then
+      primary_src="$prefix/bin/ryk.exe"
     fi
-    if [ -f "$prefix/bin/orca.exe" ]; then
-      alias_src="$prefix/bin/orca.exe"
+    if [ -f "$prefix/bin/ryk.exe" ]; then
+      alias_src="$prefix/bin/ryk.exe"
     fi
     [ -n "$primary_src" ] || {
       printf 'missing ryk/orca binary in %s\n' "$prefix/bin" >&2
@@ -162,20 +162,20 @@ install_primary_and_alias() {
     }
     cp "$primary_src" "$root/bin/ryk.exe"
     if [ -n "$alias_src" ]; then
-      cp "$alias_src" "$root/bin/orca.exe"
+      cp "$alias_src" "$root/bin/ryk.exe"
     else
-      cp "$primary_src" "$root/bin/orca.exe"
+      cp "$primary_src" "$root/bin/ryk.exe"
     fi
   else
     if [ -f "$prefix/bin/ryk" ]; then
       primary_src="$prefix/bin/ryk"
     elif [ -f "$prefix/bin/$bin_name" ]; then
       primary_src="$prefix/bin/$bin_name"
-    elif [ -f "$prefix/bin/orca" ]; then
-      primary_src="$prefix/bin/orca"
+    elif [ -f "$prefix/bin/ryk" ]; then
+      primary_src="$prefix/bin/ryk"
     fi
-    if [ -f "$prefix/bin/orca" ]; then
-      alias_src="$prefix/bin/orca"
+    if [ -f "$prefix/bin/ryk" ]; then
+      alias_src="$prefix/bin/ryk"
     fi
     [ -n "$primary_src" ] || {
       printf 'missing ryk/orca binary in %s\n' "$prefix/bin" >&2
@@ -184,11 +184,11 @@ install_primary_and_alias() {
     cp "$primary_src" "$root/bin/ryk"
     chmod 0755 "$root/bin/ryk"
     if [ -n "$alias_src" ]; then
-      cp "$alias_src" "$root/bin/orca"
+      cp "$alias_src" "$root/bin/ryk"
     else
-      cp "$primary_src" "$root/bin/orca"
+      cp "$primary_src" "$root/bin/ryk"
     fi
-    chmod 0755 "$root/bin/orca"
+    chmod 0755 "$root/bin/ryk"
   fi
 }
 
@@ -225,7 +225,7 @@ build_cli_target() {
   copy_cli_payload "$root"
   write_release_readme "$root"
   install_primary_and_alias "$os" "$prefix" "$root" "$bin_name"
-  # orca-daemon removed: Zig shell_engine evaluates in-process.
+  # ryk-daemon removed: Zig shell_engine evaluates in-process.
   find "$root" -name .DS_Store -delete
 
   if [ "$ext" = "zip" ]; then
@@ -241,7 +241,7 @@ build_cli_target() {
 
   # Cheap dual-publish: identical orca-v* alias for one major (installers / old taps).
   if [ "$DUAL_PUBLISH_ORCA" = "1" ]; then
-    alias_artifact="orca-v${VERSION}-${os}-${arch}.${ext}"
+    alias_artifact="ryk-v${VERSION}-${os}-${arch}.${ext}"
     cp -p "${DIST_DIR}/$artifact" "${DIST_DIR}/$alias_artifact"
     printf 'Built %s (compat dual-publish of ryk archive)\n' "${DIST_DIR}/$alias_artifact"
   fi
@@ -251,7 +251,7 @@ write_release_manifest() {
   output="${DIST_DIR}/release-manifest.json"
   artifact_entries=""
   first=1
-  for file in "${DIST_DIR}"/ryk-v* "${DIST_DIR}"/orca-v*; do
+  for file in "${DIST_DIR}"/ryk-v* "${DIST_DIR}"/ryk-v*; do
     [ -f "$file" ] || continue
     name="$(basename "$file")"
     hash="$(awk -v name="$name" '$2 == name {print $1}' "${DIST_DIR}/checksums.txt")"
@@ -269,7 +269,7 @@ write_release_manifest() {
   done
 
   products_json="[\"ryk\", \"orca\", \"core\"]"
-  runtime_assets_json="[\"schemas\", \"policies\", \"fixtures\", \"examples\", \"integrations\", \"packaging\", \"orca-pi/extensions\"]"
+  runtime_assets_json="[\"schemas\", \"policies\", \"fixtures\", \"examples\", \"integrations\", \"packaging\", \"ryk-pi/extensions\"]"
   schemas_json="[\"schemas/policy-v1.json\", \"schemas/event-v1.json\", \"schemas/mcp-manifest-v1.json\"]"
   fixtures_json="[\"fixtures/shell-abuse/curl-pipe-sh\", \"examples/mcp\", \"examples/network\", \"examples/policies\"]"
   docs_json="[\"README.md\", \"docs/install.md\", \"README-release.md\"]"
@@ -321,24 +321,24 @@ printf '%s\n' "$(selected_targets)" | while read -r os arch zig_target ext bin_n
   build_cli_target "$os" "$arch" "$zig_target" "$ext" "$bin_name"
 done
 
-if [ "${RYK_SIGNING_ENABLED:-${ORCA_SIGNING_ENABLED:-0}}" = "1" ]; then
-  if [ -n "${RYK_SIGNING_COMMAND:-${ORCA_SIGNING_COMMAND:-}}" ]; then
+if [ "${RYK_SIGNING_ENABLED:-${RYK_SIGNING_ENABLED:-0}}" = "1" ]; then
+  if [ -n "${RYK_SIGNING_COMMAND:-${RYK_SIGNING_COMMAND:-}}" ]; then
     SIGNING_STATUS="signed"
-    sh -c "${RYK_SIGNING_COMMAND:-$ORCA_SIGNING_COMMAND}" sh "$DIST_DIR"
+    sh -c "${RYK_SIGNING_COMMAND:-$RYK_SIGNING_COMMAND}" sh "$DIST_DIR"
   else
-    printf 'Signing requested but RYK_SIGNING_COMMAND/ORCA_SIGNING_COMMAND is not set.\n' >&2
+    printf 'Signing requested but RYK_SIGNING_COMMAND/RYK_SIGNING_COMMAND is not set.\n' >&2
     exit 1
   fi
 else
   SIGNING_STATUS="signing hook available; not configured"
-  printf 'Signing skipped; set RYK_SIGNING_ENABLED=1 (or ORCA_SIGNING_ENABLED) and signing command in release environments.\n'
+  printf 'Signing skipped; set RYK_SIGNING_ENABLED=1 (or RYK_SIGNING_ENABLED) and signing command in release environments.\n'
 fi
 
 ./scripts/generate-checksums.sh "$DIST_DIR"
 if [ "$RELEASE_PRODUCT" != "host" ]; then
-  RYK_DIST_DIR="$DIST_DIR" ORCA_DIST_DIR="$DIST_DIR" ./scripts/render-package-manifests.sh
+  RYK_DIST_DIR="$DIST_DIR" RYK_DIST_DIR="$DIST_DIR" ./scripts/render-package-manifests.sh
 fi
-ORCA_RELEASE_PRODUCT="$RELEASE_PRODUCT" RYK_RELEASE_PRODUCT="$RELEASE_PRODUCT" ./scripts/generate-sbom.sh "$DIST_DIR"
+RYK_RELEASE_PRODUCT="$RELEASE_PRODUCT" RYK_RELEASE_PRODUCT="$RELEASE_PRODUCT" ./scripts/generate-sbom.sh "$DIST_DIR"
 
 write_release_manifest
 rm -rf "$DIST_DIR/work"
