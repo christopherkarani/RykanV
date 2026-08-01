@@ -58,6 +58,20 @@ Use:
 
 Run `orca doctor`. If a feature is `limited`, `wrapper-only`, `observe-only`, or `unavailable`, docs and policies must treat it as weaker than active enforcement.
 
+## Tool not found vs EPERM under OS sandbox
+
+Under attached sessions (`ryk pi`, `ryk claude`, `ryk run --os-sandbox on`, …):
+
+| Symptom | Likely cause | What to do |
+|---|---|---|
+| `command not found` for `rg` / `fd` / `jq` | Tool not on host, or PATH honesty dropped an ungranted package dir | Install the tool, or use a system path; pack only grants files that exist. Set `ORCA_TOOL_PACK=essentials` (default under attach). |
+| `command not found` but tool lives under Homebrew | PATH denylist removed `/opt/homebrew/bin` so the agent does not see a lie | Either install into a kept prefix, rely on essentials pack file grant (pack re-adds the parent of a granted file), or accept absence |
+| EPERM on absolute `/opt/homebrew/bin/...` | Absolute path bypasses shims; OS did not grant that file | Expected — no broad brew tree grants. Use essentials pack or do not invoke absolute brew paths |
+| EPERM on `~/.ssh` / bare `$HOME` | Empty-backpack FS fence | Expected; do not request bare home grants |
+| Shim name works but absolute path differs | Shims are **wrapper-only** | Absolute paths skip PATH shims; OS still enforces FS/network |
+
+Inspect child labels when debugging: `ORCA_PATH_FILTER=denylist`, `ORCA_TOOL_PACK=essentials|none`.
+
 ## MCP Protocol Issues
 
 Ensure server stdout is only newline-delimited JSON-RPC. Send human logs to stderr.
