@@ -446,6 +446,14 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         try filtered_env.env_map.put("ORCA_TRANSPARENT_NETWORK_ENFORCEMENT", "tcp-port-route-forced");
         try filtered_env.env_map.put("ORCA_BACKEND_NETWORK_ENFORCEMENT", "tcp-port-route-forced");
     }
+    // Phase 5: effective session sandbox grade for operators/agents (env + banner).
+    // Escape (--network open / legacy) never reports strong-mediated.
+    const session_grade = computeSessionSandboxGrade(.{
+        .os_attach_planned = apply_result.requiresChildApply(),
+        .network_route_forced = apply_result.network_route_forced,
+        .unrestricted_escape = isUnrestrictedNetworkEscape(options, agent_net_default),
+    });
+    try filtered_env.env_map.put("ORCA_SESSION_SANDBOX_GRADE", session_grade.toString());
     try run_os_sandbox.warnAutoDegrade(effective_os_sandbox, &apply_result, stderr);
 
     // Empty backpack + known agent host: require usable login material or a
@@ -573,6 +581,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         openai_gateway: bool,
         apply_result: *const sandbox.apply.ApplyResult,
         audit_context: *AuditContext,
+        session_grade: SessionSandboxGrade,
 
         pub fn print(context: *anyopaque, session: core.session.Session) !void {
             const self: *@This() = @ptrCast(@alignCast(context));
@@ -591,6 +600,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 self.anthropic_gateway,
                 self.openai_gateway,
                 self.apply_result.receipt,
+                self.session_grade,
             );
             // Flush before the shield dwell so the card is on-screen, not buffered.
             try flushIfSupported(self.writer);
@@ -628,6 +638,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         .openai_gateway = openai_gateway != null,
         .apply_result = &apply_result,
         .audit_context = &audit_context,
+        .session_grade = session_grade,
     };
 
     var session_approvals = intercept.approvals.SessionApprovals.init(allocator);
@@ -1529,6 +1540,49 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
 /// `mediated` (default): proxy + route-force. `legacy`: pre-change labels-only path.
 const AgentNetworkDefault = enum { mediated, legacy };
 
+/// Effective session sandbox grade (Phase 5 honesty). Advertised via
+/// `ORCA_SESSION_SANDBOX_GRADE` and the session banner. Distinct from doctor
+/// capability probes (probe ≠ session).
+const SessionSandboxGrade = enum {
+    strong_mediated,
+    fs_attached,
+    wrapper_only,
+    unrestricted_escape,
+
+    pub fn toString(self: SessionSandboxGrade) []const u8 {
+        return switch (self) {
+            .strong_mediated => "strong-mediated",
+            .fs_attached => "fs-attached",
+            .wrapper_only => "wrapper-only",
+            .unrestricted_escape => "unrestricted-escape",
+        };
+    }
+};
+
+const SessionGradeInputs = struct {
+    os_attach_planned: bool,
+    network_route_forced: bool,
+    unrestricted_escape: bool,
+};
+
+/// Compute truthful grade for this spawn. Escape always wins over attach labels.
+fn computeSessionSandboxGrade(inputs: SessionGradeInputs) SessionSandboxGrade {
+    if (inputs.unrestricted_escape) return .unrestricted_escape;
+    if (inputs.os_attach_planned and inputs.network_route_forced) return .strong_mediated;
+    if (inputs.os_attach_planned) return .fs_attached;
+    return .wrapper_only;
+}
+
+/// True when the user chose unrestricted egress (`--network open`) or the
+/// legacy agent-network kill switch. Those sessions must not claim mediation.
+fn isUnrestrictedNetworkEscape(options: RunOptions, agent_net_default: AgentNetworkDefault) bool {
+    if (options.network_mode) |mode| {
+        if (mode == .open) return true;
+    }
+    if (agent_net_default == .legacy and isAgentHostCommand(options)) return true;
+    return false;
+}
+
 fn parseAgentNetworkDefault(value: ?[]const u8) AgentNetworkDefault {
     if (value) |raw| {
         if (std.mem.eql(u8, raw, "legacy")) return .legacy;
@@ -1765,6 +1819,7 @@ fn printSessionStart(
     anthropic_gateway: bool,
     openai_gateway: bool,
     os_receipt: sandbox.posture.AttachReceipt,
+    session_grade: SessionSandboxGrade,
 ) !void {
     // Compact brand banner + Session / Workspace / Mode / Name grid. Celebration stays in printSessionEnd.
     try tui.render.banner(io, stdout, build_options.version, "watching this session");
@@ -1800,6 +1855,12 @@ fn printSessionStart(
         anthropic_gateway,
         openai_gateway,
     );
+    var grade_line_buf: [96]u8 = undefined;
+    const grade_line = try std.fmt.bufPrint(
+        &grade_line_buf,
+        "Session grade: {s} (env ORCA_SESSION_SANDBOX_GRADE)\n",
+        .{session_grade.toString()},
+    );
 
     // Memorable shield card when the OS box is live (or trying). Quiet receipt
     // lines otherwise so disabled sessions stay compact for humans and tests.
@@ -1818,9 +1879,14 @@ fn printSessionStart(
             .machine_posture_line = posture_line,
             .machine_os_line = os_line,
         });
+        try stdout.writeAll(grade_line);
+        try stdout.writeAll("\n");
     } else {
         try stdout.writeAll(posture_line);
-        try stdout.print("{s}\n\n", .{os_line});
+        try stdout.writeAll(os_line);
+        try stdout.writeAll("\n");
+        try stdout.writeAll(grade_line);
+        try stdout.writeAll("\n");
     }
 }
 
@@ -3238,11 +3304,15 @@ test "run host-alias path mediates network with proxy and route-force or fails c
         try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_NETWORK_MODE=allowlist") != null);
         try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND_NETWORK_ENFORCEMENT=tcp-port-route-forced") != null or
             std.mem.indexOf(u8, written, "ORCA_TRANSPARENT_NETWORK_ENFORCEMENT=tcp-port-route-forced") != null);
+        // Phase 5 honesty: mediated host-alias reports strong-mediated, never open escape.
+        try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_SESSION_SANDBOX_GRADE=strong-mediated") != null);
+        try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_SESSION_SANDBOX_GRADE=unrestricted-escape") == null);
         // Honesty: not labels-only unavailable with a populated allowlist.
         try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND_NETWORK_ENFORCEMENT=unavailable") == null);
         const out = stdout_writer.buffered();
         try std.testing.expect(std.mem.indexOf(u8, out, "route-forced") != null or
             std.mem.indexOf(u8, out, "proxy route-forced") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "Session grade: strong-mediated") != null);
     } else {
         try std.testing.expectEqual(exit_codes.unsupported, code);
         const err = stderr_writer.buffered();
@@ -3340,6 +3410,11 @@ test "run host-alias --network open does not require route-force and warns loudl
     try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_NETWORK_MODE=open") != null);
     // Open escape: must not require route-forced proxy.
     try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_PROXY_ROUTE_FORCED=true") == null);
+    // Phase 5: open escape grade must not look like strong-mediated.
+    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_SESSION_SANDBOX_GRADE=unrestricted-escape") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_SESSION_SANDBOX_GRADE=strong-mediated") == null);
+    const open_out = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, open_out, "Session grade: unrestricted-escape") != null);
 
     const events = try readLastEvents(std.testing.allocator, root);
     defer std.testing.allocator.free(events);
@@ -4586,9 +4661,10 @@ test "session start banner is mechanism-neutral for disabled OS sandbox" {
         .mode = .observe,
         .platform = core.platform.detectOs(),
     };
-    try printSessionStart(std.testing.io, &writer, session, .ask, false, false, false, false, sandbox.posture.disabledReceipt());
+    try printSessionStart(std.testing.io, &writer, session, .ask, false, false, false, false, sandbox.posture.disabledReceipt(), .wrapper_only);
     const out = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "OS sandbox: disabled") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "Session grade: wrapper-only") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Seatbelt") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Landlock") == null);
 
@@ -4608,6 +4684,7 @@ test "session start banner is mechanism-neutral for disabled OS sandbox" {
             active_hash,
             "workspace RW, system RO, platform tmp RW, no home",
         ),
+        .strong_mediated,
     );
     const active_out = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, active_out, "SHIELD UP") != null);
@@ -4615,6 +4692,45 @@ test "session start banner is mechanism-neutral for disabled OS sandbox" {
     try std.testing.expect(std.mem.indexOf(u8, active_out, "sandbox=active") != null);
     try std.testing.expect(std.mem.indexOf(u8, active_out, "gateway=anthropic") != null);
     try std.testing.expect(std.mem.indexOf(u8, active_out, "OS sandbox: active") != null);
+    try std.testing.expect(std.mem.indexOf(u8, active_out, "Session grade: strong-mediated") != null);
     try std.testing.expect(std.mem.indexOf(u8, active_out, "Seatbelt") == null);
     try std.testing.expect(std.mem.indexOf(u8, active_out, "network: unrestricted") != null);
+}
+
+test "computeSessionSandboxGrade: mediated attach vs open escape" {
+    try std.testing.expectEqual(
+        SessionSandboxGrade.strong_mediated,
+        computeSessionSandboxGrade(.{
+            .os_attach_planned = true,
+            .network_route_forced = true,
+            .unrestricted_escape = false,
+        }),
+    );
+    try std.testing.expectEqual(
+        SessionSandboxGrade.fs_attached,
+        computeSessionSandboxGrade(.{
+            .os_attach_planned = true,
+            .network_route_forced = false,
+            .unrestricted_escape = false,
+        }),
+    );
+    try std.testing.expectEqual(
+        SessionSandboxGrade.wrapper_only,
+        computeSessionSandboxGrade(.{
+            .os_attach_planned = false,
+            .network_route_forced = false,
+            .unrestricted_escape = false,
+        }),
+    );
+    // Escape wins even when attach + route-force would otherwise look strong.
+    try std.testing.expectEqual(
+        SessionSandboxGrade.unrestricted_escape,
+        computeSessionSandboxGrade(.{
+            .os_attach_planned = true,
+            .network_route_forced = true,
+            .unrestricted_escape = true,
+        }),
+    );
+    try std.testing.expectEqualStrings("strong-mediated", SessionSandboxGrade.strong_mediated.toString());
+    try std.testing.expectEqualStrings("unrestricted-escape", SessionSandboxGrade.unrestricted_escape.toString());
 }

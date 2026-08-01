@@ -413,6 +413,14 @@ fn writeDefaultPanels(
         }
     }
     try tui.render.panel(io, stdout, "Capabilities", &capability_lines);
+    try stdout.writeAll(
+        \\
+        \\  Note: Doctor = host capability (probe ≠ live session).
+        \\  Session grade = this run's env ORCA_SESSION_SANDBOX_GRADE
+        \\  (strong-mediated | fs-attached | wrapper-only | unrestricted-escape).
+        \\  Labels: network route-force, ORCA_TOOL_PACK, ORCA_PATH_FILTER, control roots (.orca + .git).
+        \\
+    );
 }
 
 fn writeIntegrationReport(io: std.Io, stdout: anytype, context: IntegrationContext) !void {
