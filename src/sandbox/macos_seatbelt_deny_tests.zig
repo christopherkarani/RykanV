@@ -1369,6 +1369,122 @@ test "real FS: host config authority write denied; sibling session file still wr
     }
 }
 
+// F-03: host-config RW must not allow hardlink plant into workspace after attach.
+// Synthetic host_rw (not basename spoof). Exit: 0=ok, 2=apply fail, 3=host→ws
+// link succeeded (leak), 4=workspace-only link failed, 5=workspace write failed,
+// 6=ws→host reverse plant succeeded (leak), 7=control-root (.git) hardlink plant leak.
+test "real FS: F-03 host-config hardlink into workspace denied; workspace-only link ok" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    if (!sandboxInitAvailable()) return error.SkipZigTest;
+    const ver = try detectProductVersion();
+    try std.testing.expect(isMatrixMajor(ver.major));
+    try std.testing.expectEqual(SupportStatus.supported, evaluateSupport());
+
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    const home_root = try home_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home_root);
+    try home_tmp.dir.createDirPath(io, ".codex");
+    try home_tmp.dir.writeFile(io, .{ .sub_path = ".codex/auth.json", .data = "AUTH_CANARY\n" });
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".git");
+    const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(ws_root);
+
+    const codex_cfg = try std.fs.path.join(allocator, &.{ home_root, ".codex" });
+    defer allocator.free(codex_cfg);
+    const auth = try std.fs.path.join(allocator, &.{ home_root, ".codex", "auth.json" });
+    defer allocator.free(auth);
+    const smuggle = try std.fs.path.join(allocator, &.{ ws_root, "smuggle.env" });
+    defer allocator.free(smuggle);
+    const reverse = try std.fs.path.join(allocator, &.{ home_root, ".codex", "ws_plant.txt" });
+    defer allocator.free(reverse);
+    const ws_a = try std.fs.path.join(allocator, &.{ ws_root, "a.txt" });
+    defer allocator.free(ws_a);
+    const ws_b = try std.fs.path.join(allocator, &.{ ws_root, "b.txt" });
+    defer allocator.free(ws_b);
+    const git_plant = try std.fs.path.join(allocator, &.{ ws_root, ".git", "hooks_plant" });
+    defer allocator.free(git_plant);
+
+    const auth_z = try allocator.dupeZ(u8, auth);
+    defer allocator.free(auth_z);
+    const smuggle_z = try allocator.dupeZ(u8, smuggle);
+    defer allocator.free(smuggle_z);
+    const reverse_z = try allocator.dupeZ(u8, reverse);
+    defer allocator.free(reverse_z);
+    const ws_a_z = try allocator.dupeZ(u8, ws_a);
+    defer allocator.free(ws_a_z);
+    const ws_b_z = try allocator.dupeZ(u8, ws_b);
+    defer allocator.free(ws_b_z);
+    const git_plant_z = try allocator.dupeZ(u8, git_plant);
+    defer allocator.free(git_plant_z);
+
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = ws_root,
+        .include_tmp = false,
+        .host_rw_paths = &.{codex_cfg},
+    });
+    defer compiled.deinit();
+    try std.testing.expect(compiled.hasGrant(codex_cfg, .rw));
+
+    const prepared = prepareForChildApply(allocator, &compiled);
+    defer if (prepared.sbpl_z) |p| allocator.free(p);
+    try std.testing.expectEqual(.prepared, prepared.status);
+    const sbpl_z = prepared.sbpl_z.?;
+    // SBPL must carry the fence tokens (regression if emit drops).
+    try std.testing.expect(std.mem.indexOf(u8, sbpl_z, "(deny file-link)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl_z, "(allow file-link (require-all (subpath \"") != null);
+
+    const pid = std.c.fork();
+    if (pid < 0) return error.SkipZigTest;
+    if (pid == 0) {
+        applyInChild(sbpl_z.ptr) catch std.c._exit(2);
+
+        // Cross-root hardlink must fail (F-03).
+        if (std.c.link(auth_z.ptr, smuggle_z.ptr) == 0) std.c._exit(3);
+
+        // Workspace write + workspace-only hardlink must still work.
+        const wfd = std.c.open(
+            ws_a_z.ptr,
+            .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true },
+            @as(std.c.mode_t, 0o600),
+        );
+        if (wfd < 0) std.c._exit(5);
+        const wrote = std.c.write(wfd, "x", 1);
+        _ = std.c.close(wfd);
+        if (wrote != 1) std.c._exit(5);
+        if (std.c.link(ws_a_z.ptr, ws_b_z.ptr) != 0) std.c._exit(4);
+
+        // Reverse plant (workspace → host-config name) denied by global file-link
+        // fence (workspace-only re-allow; no host_rw file-link allow).
+        if (std.c.link(ws_a_z.ptr, reverse_z.ptr) == 0) std.c._exit(6);
+
+        // Control-root plant: workspace file-link re-allow must not cover .git
+        // (require-not carve; same class as file-write* control isolation).
+        if (std.c.link(ws_a_z.ptr, git_plant_z.ptr) == 0) std.c._exit(7);
+
+        std.c._exit(0);
+    }
+
+    const exit_code = try waitExitCode(pid);
+    switch (exit_code) {
+        0 => {},
+        2 => return error.SeatbeltApplyFailedOnHost,
+        3 => return error.HostConfigHardlinkIntoWorkspaceSucceeded,
+        4 => return error.WorkspaceOnlyHardlinkFailed,
+        5 => return error.WorkspaceWriteFailed,
+        6 => return error.WorkspaceHardlinkIntoHostConfigSucceeded,
+        7 => return error.ControlRootHardlinkPlantSucceeded,
+        else => return error.UnexpectedSandboxChildExit,
+    }
+}
+
 // Path-walk residual canary: after Seatbelt attach, lstat each intermediate path
 // component of the workspace grant must succeed (Node realpath / resolveMainPath).
 // Sibling content outside the grant must still be denied (no over-grant).
