@@ -525,7 +525,8 @@ fn appendInstallRoForLaunchFile(
     if (!isRegularFile(io, path)) return;
 
     const root = (try findPackageRootForFile(io, allocator, path, env_map)) orelse return;
-    errdefer allocator.free(root);
+    // Own `root` until transfer into `list`. Do not leave a bare errdefer after
+    // appendUniqueInstallRo — that helper takes ownership (or frees on dedup).
 
     if (envHome(env_map)) |home| {
         if (std.mem.eql(u8, root, home)) {
@@ -538,17 +539,33 @@ fn appendInstallRoForLaunchFile(
         return;
     }
 
-    try appendUniqueInstallRo(allocator, list, root);
-
     // npm optional deps often live as *siblings* under the same scope dir
     // (`node_modules/@openai/codex` + `node_modules/@openai/codex-darwin-arm64`).
     // Nested `package/node_modules/...` is already covered by package-root RO;
     // grant the scoped parent (`…/node_modules/@scope`) when the layout matches.
-    if (try scopedNpmParentRo(allocator, root, env_map)) |scope_parent| {
-        try appendUniqueInstallRo(allocator, list, scope_parent);
+    // Resolve while we still own `root` (before transfer).
+    const scope_parent = scopedNpmParentRo(allocator, root, env_map) catch |err| {
+        allocator.free(root);
+        return err;
+    };
+
+    var root_live = true;
+    errdefer if (root_live) allocator.free(root);
+    var scope_live = scope_parent != null;
+    errdefer if (scope_live) if (scope_parent) |sp| allocator.free(sp);
+
+    // Transfer ownership *before* the call: appendUniqueInstallRo frees on
+    // OOM and on dedup, so caller must not also free after the call starts.
+    root_live = false;
+    try appendUniqueInstallRo(allocator, list, root);
+
+    if (scope_parent) |sp| {
+        scope_live = false;
+        try appendUniqueInstallRo(allocator, list, sp);
     }
 }
 
+/// Takes ownership of `path`: appends if unique, frees if duplicate or on OOM.
 fn appendUniqueInstallRo(
     allocator: std.mem.Allocator,
     list: *std.ArrayList([]const u8),
@@ -1898,11 +1915,11 @@ test "collectLaunchExecPaths resolves regular file and rejects HOME" {
 }
 
 test "collectLaunchInstallRoPaths grants package root for node shebang agent" {
-    // Simulated npm global layout:
+    // Simulated npm global layout (scoped + sibling optional dep hoist):
     //   $tmp/home/.local/lib/node_modules/@scope/agent/bin/cli.js  (shebang)
     //   $tmp/home/.local/lib/node_modules/@scope/agent/package.json
-    //   $tmp/home/.local/lib/node_modules/@scope/agent/node_modules/@scope/agent-native/package.json
-    // Install RO must be the agent package root (includes nested native), never HOME.
+    //   $tmp/home/.local/lib/node_modules/@scope/agent-native/package.json  (sibling hoist)
+    // Install RO must be package root + scoped parent (covers sibling), never HOME.
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -1912,11 +1929,12 @@ test "collectLaunchInstallRoPaths grants package root for node shebang agent" {
     defer allocator.free(home);
 
     const pkg_rel = ".local/lib/node_modules/@scope/agent";
+    const sibling_rel = ".local/lib/node_modules/@scope/agent-native";
     try tmp.dir.createDirPath(io, pkg_rel ++ "/bin");
-    try tmp.dir.createDirPath(io, pkg_rel ++ "/node_modules/@scope/agent-native/vendor/bin");
+    try tmp.dir.createDirPath(io, sibling_rel ++ "/vendor/bin");
     try tmp.dir.writeFile(io, .{ .sub_path = pkg_rel ++ "/package.json", .data = "{\"name\":\"@scope/agent\"}\n" });
     try tmp.dir.writeFile(io, .{
-        .sub_path = pkg_rel ++ "/node_modules/@scope/agent-native/package.json",
+        .sub_path = sibling_rel ++ "/package.json",
         .data = "{\"name\":\"@scope/agent-native\"}\n",
     });
     try tmp.dir.writeFile(io, .{
@@ -1938,12 +1956,24 @@ test "collectLaunchInstallRoPaths grants package root for node shebang agent" {
     defer freeLaunchInstallRoPaths(allocator, ro);
 
     // Package root + scoped parent (`…/node_modules/@scope`) for sibling optional deps.
-    try std.testing.expect(ro.len >= 1);
+    try std.testing.expect(ro.len >= 2);
     try std.testing.expect(pathsContain(ro, pkg_root));
     const scope_parent = try std.fs.path.join(allocator, &.{ home, ".local/lib/node_modules/@scope" });
     defer allocator.free(scope_parent);
     try std.testing.expect(pathsContain(ro, scope_parent));
+    // Sibling package sits under scope parent; package-root RO alone would miss it
+    // (path-prefix must use a boundary — `agent` is not a prefix of `agent-native` as dirs).
+    const sibling_root = try std.fs.path.join(allocator, &.{ home, sibling_rel });
+    defer allocator.free(sibling_root);
+    try std.testing.expect(std.mem.startsWith(u8, sibling_root, scope_parent));
+    try std.testing.expect(sibling_root.len > scope_parent.len and sibling_root[scope_parent.len] == '/');
+    try std.testing.expect(!std.mem.eql(u8, sibling_root, pkg_root));
+    try std.testing.expect(!pathsContain(ro, sibling_root)); // grant is scope parent, not leaf sibling alone
     try std.testing.expect(!pathsContainHomeOrDir(ro, home));
+    // Whole node_modules must not be granted.
+    const nm_root = try std.fs.path.join(allocator, &.{ home, ".local/lib/node_modules" });
+    defer allocator.free(nm_root);
+    try std.testing.expect(!pathsContain(ro, nm_root));
 
     // Plain system binary: no package root → empty RO list.
     const true_src: []const u8 = blk: {
@@ -1953,6 +1983,44 @@ test "collectLaunchInstallRoPaths grants package root for node shebang agent" {
     const plain = try collectLaunchInstallRoPaths(io, allocator, true_src, &env_map);
     defer freeLaunchInstallRoPaths(allocator, plain);
     try std.testing.expectEqual(@as(usize, 0), plain.len);
+}
+
+test "collectLaunchInstallRoPaths unscoped package root only (no parent RO)" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+
+    const pkg_rel = ".local/lib/node_modules/plain-agent";
+    try tmp.dir.createDirPath(io, pkg_rel ++ "/bin");
+    try tmp.dir.writeFile(io, .{ .sub_path = pkg_rel ++ "/package.json", .data = "{\"name\":\"plain-agent\"}\n" });
+    try tmp.dir.writeFile(io, .{
+        .sub_path = pkg_rel ++ "/bin/cli.js",
+        .data = "#!/usr/bin/env node\n",
+    });
+    try tmp.dir.setFilePermissions(io, pkg_rel ++ "/bin/cli.js", std.Io.File.Permissions.fromMode(0o755), .{});
+
+    const script = try std.fs.path.join(allocator, &.{ home, pkg_rel, "bin", "cli.js" });
+    defer allocator.free(script);
+    const pkg_root = try std.fs.path.join(allocator, &.{ home, pkg_rel });
+    defer allocator.free(pkg_root);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+
+    const ro = try collectLaunchInstallRoPaths(io, allocator, script, &env_map);
+    defer freeLaunchInstallRoPaths(allocator, ro);
+
+    try std.testing.expectEqual(@as(usize, 1), ro.len);
+    try std.testing.expect(pathsContain(ro, pkg_root));
+    const nm_root = try std.fs.path.join(allocator, &.{ home, ".local/lib/node_modules" });
+    defer allocator.free(nm_root);
+    try std.testing.expect(!pathsContain(ro, nm_root));
+    try std.testing.expect(!pathsContainHomeOrDir(ro, home));
 }
 
 test "collectLaunchInstallRoPaths rejects package.json planted at HOME" {
