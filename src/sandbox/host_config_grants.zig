@@ -256,9 +256,11 @@ pub fn isForbiddenHostConfigPath(path: []const u8, home: []const u8) bool {
     return false;
 }
 
-/// Collect owned absolute host-config grant paths for a host launch binary.
+/// Collect owned absolute host-config grant paths for a **trusted** table host key.
 ///
-/// - Empty when argv0 is not a known host, HOME is empty, or no listed roots exist.
+/// - `host` must already be a trusted `host_config_table` key (from
+///   `host_identity.resolveHostIdentity`). Do not pass raw argv0 / basename.
+/// - Empty when host is unknown, HOME is empty, or no listed roots exist.
 /// - Skips missing paths (caller may fail closed when a known host has zero grants
 ///   and no provider gateway).
 /// - Never returns bare HOME or `.ssh`.
@@ -268,10 +270,9 @@ pub fn isForbiddenHostConfigPath(path: []const u8, home: []const u8) bool {
 pub fn collectHostConfigPaths(
     io: std.Io,
     allocator: std.mem.Allocator,
-    argv0: []const u8,
+    host: []const u8,
     home: []const u8,
 ) error{OutOfMemory}![]const []const u8 {
-    const host = hostBasename(argv0);
     const spec = specForHost(host) orelse {
         return try allocator.alloc([]const u8, 0);
     };
@@ -346,7 +347,7 @@ pub fn isForbiddenSystemRoPath(path: []const u8) bool {
     return false;
 }
 
-/// Collect owned absolute **system RO** grant paths for a host launch binary.
+/// Collect owned absolute **system RO** grant paths for a **trusted** table host key.
 ///
 /// Unlike home-config RW, paths are granted **even when missing** so open under
 /// Seatbelt returns ENOENT (agent soft-skip) instead of EPERM (fatal for Codex
@@ -355,9 +356,8 @@ pub fn isForbiddenSystemRoPath(path: []const u8) bool {
 /// Caller frees with `freeHostSystemRoPaths` (same shape as host-config paths).
 pub fn collectHostSystemRoPaths(
     allocator: std.mem.Allocator,
-    argv0: []const u8,
+    host: []const u8,
 ) error{OutOfMemory}![]const []const u8 {
-    const host = hostBasename(argv0);
     const spec = specForHost(host) orelse {
         return try allocator.alloc([]const u8, 0);
     };
@@ -400,6 +400,8 @@ pub fn freeHostSystemRoPaths(allocator: std.mem.Allocator, paths: []const []cons
 /// Collect absolute authority config paths that must remain write-denied under
 /// host RW grants (MCP / config authority files).
 ///
+/// `host` must already be a trusted table key (from `host_identity.resolveHostIdentity`).
+///
 /// Cross-platform: used as Seatbelt `launch_write_deny_literals` on macOS and as
 /// extra `control_roots` on all platforms so Landlock control-expand keeps these
 /// paths RO under host RW trees. Missing paths are still listed so create-via-RW
@@ -409,11 +411,10 @@ pub fn freeHostSystemRoPaths(allocator: std.mem.Allocator, paths: []const []cons
 pub fn collectHostConfigWriteDenies(
     io: std.Io,
     allocator: std.mem.Allocator,
-    argv0: []const u8,
+    host: []const u8,
     workspace_root: []const u8,
     env_map: *const std.process.Environ.Map,
 ) error{ OutOfMemory, UnsafeHostConfigHardlink }![]const []const u8 {
-    const host = hostBasename(argv0);
     const spec = specForHost(host) orelse return try allocator.alloc([]const u8, 0);
 
     var paths: std.ArrayList([]const u8) = .empty;
@@ -817,12 +818,12 @@ fn appendMacosDeveloperToolchainIfOk(
 }
 
 /// True when a known host has at least one listed config root present under home.
+/// `host` is a trusted table key (not raw argv0).
 pub fn hostConfigPresent(
     io: std.Io,
-    argv0: []const u8,
+    host: []const u8,
     home: []const u8,
 ) bool {
-    const host = hostBasename(argv0);
     const spec = specForHost(host) orelse return false;
     if (home.len == 0 or !std.fs.path.isAbsolute(home)) return false;
     for (spec.home_rel_dirs) |rel| {
@@ -837,15 +838,15 @@ pub fn hostConfigPresent(
 
 /// True when a non-empty login marker file is readable, or (if the host has no
 /// markers) when a config root exists. Config dir alone is not enough for Claude.
+/// `host` is a trusted table key (not raw argv0).
 pub fn hostLoginMaterialPresent(
     io: std.Io,
-    argv0: []const u8,
+    host: []const u8,
     home: []const u8,
 ) bool {
-    const host = hostBasename(argv0);
     const spec = specForHost(host) orelse return false;
     if (home.len == 0 or !std.fs.path.isAbsolute(home)) return false;
-    if (spec.login_markers.len == 0) return hostConfigPresent(io, argv0, home);
+    if (spec.login_markers.len == 0) return hostConfigPresent(io, host, home);
     for (spec.login_markers) |rel| {
         if (rel.len == 0 or relHasUnsafeComponents(rel)) continue;
         var buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -913,12 +914,13 @@ pub fn claudeLoginFreshness(io: std.Io, home: []const u8) LoginFreshness {
 /// Usable auth markers present (non-empty login files / config roots). Does **not**
 /// reject expired OAuth — use `claudeLoginFreshness` + `isAgentHelpOrVersionOnly`
 /// so `--help` still works under empty backpack with stale credentials.
+/// `host` is a trusted table key (not raw argv0).
 pub fn hostUsableAuthPresent(
     io: std.Io,
-    argv0: []const u8,
+    host: []const u8,
     home: []const u8,
 ) bool {
-    return hostLoginMaterialPresent(io, argv0, home);
+    return hostLoginMaterialPresent(io, host, home);
 }
 
 /// True when argv after the binary is only help/version flags (no prompt / -p).
@@ -942,16 +944,17 @@ pub fn isAgentHelpOrVersionOnly(command_argv: []const []const u8) bool {
 }
 
 /// True when Claude OAuth is known-expired and the launch is not help/version-only.
-/// Call only after marker presence has already passed.
+/// Call only after marker presence has already passed for a **trusted** claude host.
 pub fn shouldFailClosedStaleClaudeLogin(
     io: std.Io,
+    host: []const u8,
     command_argv: []const []const u8,
     home: []const u8,
     has_anthropic_gateway: bool,
 ) bool {
     if (has_anthropic_gateway) return false;
+    if (!std.mem.eql(u8, host, "claude")) return false;
     if (command_argv.len == 0) return false;
-    if (!std.mem.eql(u8, hostBasename(command_argv[0]), "claude")) return false;
     if (isAgentHelpOrVersionOnly(command_argv)) return false;
     return claudeLoginFreshness(io, home) == .expired;
 }
@@ -1123,14 +1126,14 @@ pub fn selectEmptyBackpackAgentExitTip(input: EmptyBackpackExitTipInput) []const
 }
 
 /// Choose the fail-closed stderr blob for a known host with unusable auth.
+/// `host` is a trusted table key (not raw argv0).
 pub fn failClosedMessageFor(
     io: std.Io,
-    argv0: []const u8,
+    host: []const u8,
     home: []const u8,
 ) []const u8 {
-    const host = hostBasename(argv0);
     if (std.mem.eql(u8, host, "claude") and
-        hostLoginMaterialPresent(io, argv0, home) and
+        hostLoginMaterialPresent(io, host, home) and
         claudeLoginFreshness(io, home) == .expired)
     {
         return stale_login_fail_closed_message;
@@ -1383,9 +1386,9 @@ test "hostLoginMaterialPresent requires credentials not only config dir for clau
     try std.testing.expect(hostLoginMaterialPresent(io, "claude", home));
     try std.testing.expect(hostUsableAuthPresent(io, "claude", home));
     try std.testing.expect(claudeLoginFreshness(io, home) == .expired);
-    try std.testing.expect(shouldFailClosedStaleClaudeLogin(io, &.{ "claude", "-p", "hi" }, home, false));
-    try std.testing.expect(!shouldFailClosedStaleClaudeLogin(io, &.{ "claude", "--help" }, home, false));
-    try std.testing.expect(!shouldFailClosedStaleClaudeLogin(io, &.{ "claude", "-p", "hi" }, home, true)); // gateway
+    try std.testing.expect(shouldFailClosedStaleClaudeLogin(io, "claude", &.{ "claude", "-p", "hi" }, home, false));
+    try std.testing.expect(!shouldFailClosedStaleClaudeLogin(io, "claude", &.{ "claude", "--help" }, home, false));
+    try std.testing.expect(!shouldFailClosedStaleClaudeLogin(io, "claude", &.{ "claude", "-p", "hi" }, home, true)); // gateway
 
     // Far-future expiry remains fresh.
     try home_tmp.dir.writeFile(io, .{
@@ -1393,7 +1396,7 @@ test "hostLoginMaterialPresent requires credentials not only config dir for clau
         .data = "{\"claudeAiOauth\":{\"expiresAt\":9999999999999}}\n",
     });
     try std.testing.expect(claudeLoginFreshness(io, home) == .fresh);
-    try std.testing.expect(!shouldFailClosedStaleClaudeLogin(io, &.{"claude"}, home, false));
+    try std.testing.expect(!shouldFailClosedStaleClaudeLogin(io, "claude", &.{"claude"}, home, false));
 
     try std.testing.expect(isAgentHelpOrVersionOnly(&.{ "claude", "--help" }));
     try std.testing.expect(isAgentHelpOrVersionOnly(&.{ "claude", "--version" }));
@@ -1602,17 +1605,17 @@ test "collectHostSystemRoPaths grants codex etc trees even when missing" {
         try std.testing.expect(found_private);
     }
 
-    // Path form of argv0 still matches host basename.
+    // Collectors take trusted host keys only — path-form argv0 is not a table key.
     const via_path = try collectHostSystemRoPaths(allocator, "/usr/local/bin/codex");
     defer freeHostSystemRoPaths(allocator, via_path);
-    try std.testing.expectEqual(codex_paths.len, via_path.len);
+    try std.testing.expectEqual(@as(usize, 0), via_path.len);
 
     // Non-codex hosts get empty system RO.
     const claude = try collectHostSystemRoPaths(allocator, "claude");
     defer freeHostSystemRoPaths(allocator, claude);
     try std.testing.expectEqual(@as(usize, 0), claude.len);
 
-    const echo = try collectHostSystemRoPaths(allocator, "/bin/echo");
+    const echo = try collectHostSystemRoPaths(allocator, "echo");
     defer freeHostSystemRoPaths(allocator, echo);
     try std.testing.expectEqual(@as(usize, 0), echo.len);
 }

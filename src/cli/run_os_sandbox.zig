@@ -195,11 +195,11 @@ fn containsPath(paths: []const []const u8, candidate: []const u8) bool {
 fn collectCustomCodexHome(
     io: std.Io,
     allocator: std.mem.Allocator,
-    argv0: []const u8,
+    host: []const u8,
     home: []const u8,
     env_map: *const std.process.Environ.Map,
 ) error{OutOfMemory}![]const []const u8 {
-    if (!std.mem.eql(u8, sandbox.host_config_grants.hostBasename(argv0), "codex")) {
+    if (!std.mem.eql(u8, host, "codex")) {
         return allocator.alloc([]const u8, 0);
     }
     const custom = env_map.get("CODEX_HOME") orelse return allocator.alloc([]const u8, 0);
@@ -309,11 +309,10 @@ fn customConfigEnvKeys(host: []const u8) []const []const u8 {
 fn collectCustomHostConfigPaths(
     io: std.Io,
     allocator: std.mem.Allocator,
-    argv0: []const u8,
+    host: []const u8,
     home: []const u8,
     env_map: *std.process.Environ.Map,
 ) error{OutOfMemory}![]const []const u8 {
-    const host = sandbox.host_config_grants.hostBasename(argv0);
     if (home.len == 0 or !std.fs.path.isAbsolute(home)) return allocator.alloc([]const u8, 0);
 
     var paths: std.ArrayList([]const u8) = .empty;
@@ -365,12 +364,16 @@ fn normalizeMacosUsersPath(path: []const u8) []const u8 {
 /// `launch_argv0` is the agent command (first argv of `ryk run -- <cmd>`). When set,
 /// resolved absolute file paths are granted as narrow `.exec` profile entries so
 /// agents installed outside workspace/system prefixes (typical `~/.local/...`) can
-/// pass child preflight after Seatbelt/Landlock attach. Known host basenames also
-/// collect host-config RW subpaths (e.g. `$HOME/.claude`) so empty backpack can
-/// still use host login without granting bare `$HOME`. Host-scoped system RO trees
-/// (e.g. codex `/etc/codex`) and macOS Apple developer toolchains (CLT / Xcode
-/// `Contents/Developer` for `/usr/bin/git` libxcselect) merge into the same launch
-/// RO list as install package roots.
+/// pass child preflight after Seatbelt/Landlock attach.
+///
+/// `trusted_host_key` is the **already-bound** host_config_table key from
+/// `host_identity.resolveHostIdentity` in `run.zig` (empty when generic). Host-config
+/// RW / system RO / write-denies / custom cfg use this key only — do not re-resolve
+/// under the filtered child env (empty-backpack strips `ORCA_TRUSTED_HOST_PREFIXES`
+/// and would split-brain empty backpack vs grants). Basename-only spoofs pass empty.
+/// Host-scoped system RO trees (e.g. codex `/etc/codex`) and macOS Apple developer
+/// toolchains (CLT / Xcode `Contents/Developer` for `/usr/bin/git` libxcselect) merge
+/// into the same launch RO list as install package roots.
 pub fn applyForRun(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -386,6 +389,8 @@ pub fn applyForRun(
     progress: anytype,
     stderr: anytype,
     launch_argv0: ?[]const u8,
+    /// Table host key from a single pre-apply `resolveHostIdentity` (or empty).
+    trusted_host_key: []const u8,
     extra_exec_paths: []const []const u8,
     extra_ro_paths: []const []const u8,
 ) !ApplyForRunOutcome {
@@ -408,13 +413,18 @@ pub fn applyForRun(
     var io_rt: std.Io.Threaded = .init_single_threaded;
     const launch_io = io_rt.io();
     const home_for_config: []const u8 = if (env_map.get("HOME")) |h| h else "";
+    // Single bind in run.zig — empty key means generic (no host-config grants).
+    const trusted_host = if (sandbox.host_config_grants.specForHost(trusted_host_key) != null)
+        trusted_host_key
+    else
+        "";
     // Authority write-deny paths (cross-platform): Seatbelt literal write-deny on
     // macOS + Landlock control_roots expand (RO leaf under host RW) on Linux.
-    const config_write_denies = if (mode != .off and launch_argv0 != null)
+    const config_write_denies = if (mode != .off and trusted_host.len > 0)
         sandbox.host_config_grants.collectHostConfigWriteDenies(
             launch_io,
             allocator,
-            launch_argv0.?,
+            trusted_host,
             workspace_root,
             env_map,
         ) catch |err| switch (err) {
@@ -470,24 +480,28 @@ pub fn applyForRun(
     // macOS: Apple developer toolchains (CLT / Xcode Developer) so /usr/bin/git
     // libxcselect stubs work for every agent (opencode, hermes, …) without a
     // false “install developer tools” dialog — never bare /Applications.
+    // Nested scopes so mergeOwnedPathLists consume + errdefer pairs end before
+    // later fallible work (otherwise OOM after consume double-frees inputs).
     const base_launch_ro_paths: []const []const u8 = blk: {
-        const install_system: []const []const u8 = if (launch_argv0) |argv0| inner: {
-            const install_ro = try sandbox.apply.collectLaunchInstallRoPaths(launch_io, allocator, argv0, env_map);
-            errdefer sandbox.apply.freeLaunchInstallRoPaths(allocator, install_ro);
-            const system_ro = try sandbox.host_config_grants.collectHostSystemRoPaths(allocator, argv0);
-            errdefer sandbox.host_config_grants.freeHostSystemRoPaths(allocator, system_ro);
-            break :inner try mergeOwnedPathLists(allocator, install_ro, system_ro);
-        } else try allocator.alloc([]const u8, 0);
-        errdefer freeMergedPathList(allocator, install_system);
+        const install_system_toolchain: []const []const u8 = merge_ist: {
+            const install_system: []const []const u8 = if (launch_argv0) |argv0| inner: {
+                const install_ro = try sandbox.apply.collectLaunchInstallRoPaths(launch_io, allocator, argv0, env_map);
+                errdefer sandbox.apply.freeLaunchInstallRoPaths(allocator, install_ro);
+                const system_ro = try sandbox.host_config_grants.collectHostSystemRoPaths(allocator, trusted_host);
+                errdefer sandbox.host_config_grants.freeHostSystemRoPaths(allocator, system_ro);
+                break :inner try mergeOwnedPathLists(allocator, install_ro, system_ro);
+            } else try allocator.alloc([]const u8, 0);
+            errdefer freeMergedPathList(allocator, install_system);
 
-        const toolchain_ro = try sandbox.host_config_grants.collectMacosDeveloperToolchainRoPaths(
-            launch_io,
-            allocator,
-            env_map,
-        );
-        errdefer sandbox.host_config_grants.freeHostSystemRoPaths(allocator, toolchain_ro);
-        // mergeOwnedPathLists consumes both inputs on success.
-        const install_system_toolchain = try mergeOwnedPathLists(allocator, install_system, toolchain_ro);
+            const toolchain_ro = try sandbox.host_config_grants.collectMacosDeveloperToolchainRoPaths(
+                launch_io,
+                allocator,
+                env_map,
+            );
+            errdefer sandbox.host_config_grants.freeHostSystemRoPaths(allocator, toolchain_ro);
+            // Consumes both inputs on success; errdefers above only run if this fails.
+            break :merge_ist try mergeOwnedPathLists(allocator, install_system, toolchain_ro);
+        };
         errdefer freeMergedPathList(allocator, install_system_toolchain);
 
         // Parent-of-workspace AGENTS.md / CLAUDE.md (file RO only). Pi and peers
@@ -533,13 +547,13 @@ pub fn applyForRun(
         // toolchain here could change a bare MCP command after approval.
     }
 
-    const base_host_rw_paths_unfiltered: []const []const u8 = if (launch_argv0) |argv0|
-        try sandbox.host_config_grants.collectHostConfigPaths(launch_io, allocator, argv0, home_for_config)
+    const base_host_rw_paths_unfiltered: []const []const u8 = if (trusted_host.len > 0)
+        try sandbox.host_config_grants.collectHostConfigPaths(launch_io, allocator, trusted_host, home_for_config)
     else
         try allocator.alloc([]const u8, 0);
     defer sandbox.host_config_grants.freeHostConfigPaths(allocator, base_host_rw_paths_unfiltered);
-    const custom_codex_home = if (launch_argv0) |argv0|
-        try collectCustomCodexHome(launch_io, allocator, argv0, home_for_config, env_map)
+    const custom_codex_home = if (trusted_host.len > 0)
+        try collectCustomCodexHome(launch_io, allocator, trusted_host, home_for_config, env_map)
     else
         try allocator.alloc([]const u8, 0);
     defer freeMergedPathList(allocator, custom_codex_home);
@@ -556,8 +570,8 @@ pub fn applyForRun(
         custom_codex_home,
     );
     defer freeMergedPathList(allocator, base_and_codex_rw_paths);
-    const custom_host_config = if (launch_argv0) |argv0|
-        try collectCustomHostConfigPaths(launch_io, allocator, argv0, home_for_config, env_map)
+    const custom_host_config = if (trusted_host.len > 0)
+        try collectCustomHostConfigPaths(launch_io, allocator, trusted_host, home_for_config, env_map)
     else
         try allocator.alloc([]const u8, 0);
     defer freeMergedPathList(allocator, custom_host_config);
@@ -778,6 +792,21 @@ pub fn formatOsSandboxBannerLine(
         .failed => "OS sandbox: failed",
         .disabled => "OS sandbox: disabled",
     };
+}
+
+// Ownership contract: mergeOwnedPathLists frees both inputs on success. Callers
+// must end errdefer of those inputs before later fallible work (see applyForRun
+// base_launch_ro_paths nested merge_ist scope).
+test "mergeOwnedPathLists consumes inputs on success" {
+    const a = try std.testing.allocator.alloc([]const u8, 1);
+    a[0] = try std.testing.allocator.dupe(u8, "/install");
+    const b = try std.testing.allocator.alloc([]const u8, 1);
+    b[0] = try std.testing.allocator.dupe(u8, "/toolchain");
+    const merged = try mergeOwnedPathLists(std.testing.allocator, a, b);
+    defer freeMergedPathList(std.testing.allocator, merged);
+    try std.testing.expectEqual(@as(usize, 2), merged.len);
+    try std.testing.expectEqualStrings("/install", merged[0]);
+    try std.testing.expectEqualStrings("/toolchain", merged[1]);
 }
 
 test "PrepareActivity start/clear is idempotent without residual success glyph" {

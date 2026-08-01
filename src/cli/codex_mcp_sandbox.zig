@@ -57,9 +57,18 @@ pub fn prepare(
     mode: []const u8,
     env_map: *const std.process.Environ.Map,
 ) !?Plan {
-    if (builtin.os.tag != .macos or original_argv.len == 0 or
-        !std.mem.eql(u8, sandbox.host_config_grants.hostBasename(original_argv[0]), "codex"))
-    {
+    if (builtin.os.tag != .macos or original_argv.len == 0) return null;
+    // Require trusted codex launch identity — do not grant inventory host-config
+    // from a basename spoof or bare string (F-02 / S1A).
+    var identity = try sandbox.host_identity.resolveHostIdentity(
+        io,
+        allocator,
+        original_argv[0],
+        env_map,
+        .{ .workspace_root = workspace_root },
+    );
+    defer identity.deinit(allocator);
+    if (!identity.isTrusted() or !std.mem.eql(u8, identity.hostKey(), "codex")) {
         return null;
     }
 
@@ -76,6 +85,7 @@ pub fn prepare(
         try std.fs.path.join(allocator, &.{ workspace_root, selected_cwd });
     defer if (owned_inventory_cwd) |path| allocator.free(path);
     const effective_inventory_cwd = owned_inventory_cwd orelse selected_cwd;
+    // Single bind: reuse prepare()'s trusted host key; do not re-resolve argv0.
     const result = runCanonicalInventorySandboxed(
         io,
         allocator,
@@ -83,6 +93,7 @@ pub fn prepare(
         effective_inventory_cwd,
         workspace_root,
         env_map,
+        identity.hostKey(),
     ) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.SessionTmpPrepareFailed => return error.SessionTmpPrepareFailed,
@@ -124,6 +135,8 @@ fn runCanonicalInventorySandboxed(
     inventory_cwd: []const u8,
     workspace_root: []const u8,
     env_map: *const std.process.Environ.Map,
+    /// Already-bound trusted host_config_table key from prepare() (empty → no host grants).
+    trusted_host_key: []const u8,
 ) !std.process.RunResult {
     if (builtin.os.tag != .macos or inventory_argv.len == 0) return error.InventoryCommandFailed;
     std.Io.Dir.cwd().access(io, "/usr/bin/sandbox-exec", .{}) catch return error.InventoryCommandFailed;
@@ -137,12 +150,12 @@ fn runCanonicalInventorySandboxed(
     }
 
     const home = env_map.get("HOME") orelse "";
-    const host_ro = try sandbox.host_config_grants.collectHostConfigPaths(
-        io,
-        allocator,
-        "codex",
-        home,
-    );
+    // Grants use the single-bound table key from prepare() only — never re-resolve
+    // argv0 or hardcode a host string here (M-7 / F-02 single-bind).
+    const host_ro = if (trusted_host_key.len > 0)
+        try sandbox.host_config_grants.collectHostConfigPaths(io, allocator, trusted_host_key, home)
+    else
+        try allocator.alloc([]const u8, 0);
     defer sandbox.host_config_grants.freeHostConfigPaths(allocator, host_ro);
     var ro_paths: std.ArrayList([]const u8) = .empty;
     defer ro_paths.deinit(allocator);
