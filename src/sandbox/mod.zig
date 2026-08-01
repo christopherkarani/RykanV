@@ -13,6 +13,7 @@ pub const session_tmp = @import("session_tmp.zig");
 pub const apply = @import("apply.zig");
 pub const host_config_grants = @import("host_config_grants.zig");
 pub const mcp_runtime_grants = @import("mcp_runtime_grants.zig");
+pub const tool_pack = @import("tool_pack.zig");
 pub const landlock = @import("landlock.zig");
 pub const apply_posix = @import("apply_posix.zig");
 pub const macos_profile = @import("macos_profile.zig");
@@ -43,6 +44,7 @@ test {
     _ = apply;
     _ = host_config_grants;
     _ = mcp_runtime_grants;
+    _ = tool_pack;
     _ = landlock;
     _ = apply_posix;
     _ = macos_profile;

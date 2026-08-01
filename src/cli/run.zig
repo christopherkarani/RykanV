@@ -655,6 +655,8 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         // Null on the fail-closed / user-denial paths (graceful degrade).
         last_denied_rule_id: ?[]const u8 = null,
         last_denied_remediation: ?[]const u8 = null,
+        /// When true, filter child PATH for sandbox honesty after shim prepend.
+        os_attach_planned: bool = false,
 
         pub fn beforeProcessLaunch(context: *anyopaque, session: core.session.Session) !void {
             const self: *@This() = @ptrCast(@alignCast(context));
@@ -788,6 +790,30 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
             const shim_dir = try intercept.commands.createShimDirectory(self.audit_context.io, self.allocator, session.workspace_root, session.id.slice(), self_exe);
             defer self.allocator.free(shim_dir);
             try intercept.commands.prependShimPath(self.allocator, self.env_map, shim_dir);
+            // Phase 4 PATH honesty: after shim prepend, drop ungranted host package
+            // trees from PATH when OS attach is planned. Pack parents stay for grant.
+            if (self.os_attach_planned) {
+                const pack = sandbox.tool_pack.resolveToolPack(self.env_map, true);
+                const pack_paths = try sandbox.tool_pack.collectPackExecPaths(
+                    self.audit_context.io,
+                    self.allocator,
+                    pack,
+                    session.workspace_root,
+                    self.env_map,
+                );
+                defer sandbox.tool_pack.freePackExecPaths(self.allocator, pack_paths);
+                try sandbox.tool_pack.applyPathFilterToEnv(
+                    self.allocator,
+                    self.env_map,
+                    true,
+                    pack,
+                    .{
+                        .shim_dir = shim_dir,
+                        .workspace_root = session.workspace_root,
+                        .pack_exec_paths = pack_paths,
+                    },
+                );
+            }
             try self.env_map.put("ORCA_SESSION_ID", session.id.slice());
             try self.env_map.put("ORCA_WORKSPACE_ROOT", session.workspace_root);
             if (self.selected_policy.source_path) |path| try self.env_map.put("ORCA_POLICY_PATH", path);
@@ -977,6 +1003,8 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         .stderr = stderr,
         .workspace_root = workspace_root_for_policy,
         .shell_evaluator = shell_evaluator,
+        // PATH honesty only when child will actually OS-attach (not soft-degraded unboxed).
+        .os_attach_planned = apply_result.requiresChildApply(),
     };
     // Fail closed if proxy dies when policy/backend requires it, session is
     // route-forced onto the proxy port (M-7), or host-alias mediation is active.
@@ -3372,12 +3400,12 @@ test "run host-alias with host-secrets and os-sandbox off fails closed under med
 
     const code = try commandForTestWithEnvAndShellEvaluator(
         &.{
-            "--workspace",        root,
-            "--policy",           policy_path,
-            "--mode",             "observe",
-            "--with-host-secrets",
-            "--os-sandbox",       "off",
-            "--",                 pi_path,
+            "--workspace",         root,
+            "--policy",            policy_path,
+            "--mode",              "observe",
+            "--with-host-secrets", "--os-sandbox",
+            "off",                 "--",
+            pi_path,
         },
         &stdout_writer,
         &stderr_writer,

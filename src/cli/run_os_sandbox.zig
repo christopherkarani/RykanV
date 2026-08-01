@@ -562,9 +562,31 @@ pub fn applyForRun(
     else
         try allocator.alloc([]const u8, 0);
     defer sandbox.apply.freeLaunchExecPaths(allocator, agent_exec_paths);
+    // Phase 4: essentials tool pack → file-only .exec grants (rg/fd/jq/zig/git).
+    // Default essentials when OS attach is planned; ORCA_TOOL_PACK=none kills the pack.
+    const os_attach_planned = mode != .off;
+    const tool_pack = sandbox.tool_pack.resolveToolPack(env_map, os_attach_planned);
+    const pack_exec_paths = try sandbox.tool_pack.collectPackExecPaths(
+        launch_io,
+        allocator,
+        tool_pack,
+        workspace_root,
+        env_map,
+    );
+    defer sandbox.tool_pack.freePackExecPaths(allocator, pack_exec_paths);
+    const pack_ro_paths = try sandbox.tool_pack.collectPackRoPaths(
+        launch_io,
+        allocator,
+        pack_exec_paths,
+    );
+    defer sandbox.tool_pack.freePackExecPaths(allocator, pack_ro_paths);
+    // Honesty labels for the child (even when pack resolves empty).
+    try env_map.put(sandbox.tool_pack.tool_pack_env, tool_pack.toString());
+    const agent_and_pack = try copyMergedPathLists(allocator, agent_exec_paths, pack_exec_paths);
+    defer freeMergedPathList(allocator, agent_and_pack);
     const launch_exec_paths = try copyMergedPathLists(
         allocator,
-        agent_exec_paths,
+        agent_and_pack,
         extra_exec_paths,
     );
     defer freeMergedPathList(allocator, launch_exec_paths);
@@ -595,9 +617,12 @@ pub fn applyForRun(
         break :blk try mergeOwnedPathLists(allocator, install_system, toolchain_ro);
     };
     defer freeMergedPathList(allocator, base_launch_ro_paths);
+    // Pack dylib/formula RO (Homebrew linked libs) + MCP/extra RO.
+    const base_and_pack_ro = try copyMergedPathLists(allocator, base_launch_ro_paths, pack_ro_paths);
+    defer freeMergedPathList(allocator, base_and_pack_ro);
     const launch_ro_paths = try copyMergedPathLists(
         allocator,
-        base_launch_ro_paths,
+        base_and_pack_ro,
         extra_ro_paths,
     );
     defer freeMergedPathList(allocator, launch_ro_paths);
