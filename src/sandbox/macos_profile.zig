@@ -42,6 +42,20 @@ pub const SeatbeltProfileGrade = posture.SeatbeltProfileGrade;
 pub const secret_hardlink_scan_max_depth: u32 = 48;
 pub const secret_hardlink_scan_max_entries: u32 = 1_000_000;
 
+/// Outside residual (`nlink - seen_in_workspace`) is treated as hostile only
+/// when residual is small and secret-plausible. Planted outside secrets are
+/// typically `nlink=2` (residual 1). Content-addressed package stores
+/// (pnpm/yarn) often have huge `nlink` with `seen=1`; those must not mass-deny
+/// every store leaf into SBPL (re-blooms profile → `sandbox_init` failure).
+pub const secret_hardlink_max_outside_residual_links: u64 = 8;
+
+/// Cap on explicit `hardlink_alias_denies` paths after filtering. Walk capacity
+/// is separate (`ScanCapacity`). Exceeding this fail-closes with
+/// `HardlinkAliasDenyCapacity` → prepare reason
+/// `seatbelt_hardlink_alias_deny_capacity`. After residual narrowing this is
+/// rare; the cap is a fail-closed backstop against unbounded SBPL growth.
+pub const secret_hardlink_alias_deny_max: u32 = 4096;
+
 pub const NetworkRouteForcing = struct {
     proxy_port: u16,
 };
@@ -51,9 +65,9 @@ pub const RenderOptions = struct {
     /// Residual grade. Default is hardened.
     profile_grade: SeatbeltProfileGrade = SeatbeltProfileGrade.default_grade,
     /// Absolute paths of multi-nlink non-secret basenames that need explicit
-    /// last-match denies (secret-sharing inodes and outside-link residual).
-    /// Internal-only hardlink groups (e.g. cargo `target/` object graphs) are
-    /// not included. Caller owns the slices.
+    /// last-match denies (secret-sharing inodes and *small* outside-link
+    /// residual). Internal-only hardlink groups and large package-store
+    /// residuals are not included. Caller owns the slices.
     hardlink_alias_denies: []const []const u8 = &.{},
     /// Exact host-owned configuration files that stay readable under a wider
     /// host-config RW grant but must not be changed by the sandboxed agent.
@@ -134,25 +148,7 @@ pub fn renderSbplWithOptions(
 
     try out.appendSlice(allocator, ";; compiled path grants\n");
     for (compiled.grants) |g| {
-        // Metadata only under granted trees.
-        switch (g.mode) {
-            .exec => {
-                try appendAllowLiteral(&out, allocator, "file-read-metadata", g.path);
-                try appendAllowLiteral(&out, allocator, "file-read*", g.path);
-                try appendAllowLiteral(&out, allocator, "process-exec", g.path);
-            },
-            .ro => {
-                try appendAllowSubpath(&out, allocator, "file-read-metadata", g.path);
-                try appendAllowSubpath(&out, allocator, "file-read*", g.path);
-                try appendAllowSubpath(&out, allocator, "process-exec", g.path);
-            },
-            .rw => {
-                try appendAllowSubpath(&out, allocator, "file-read-metadata", g.path);
-                try appendAllowSubpath(&out, allocator, "file-read*", g.path);
-                // RW with control-root write denies (require-not).
-                try appendAllowWriteMinusControls(&out, allocator, g.path, compiled.control_roots);
-            },
-        }
+        try appendGrantAllows(&out, allocator, g, compiled.control_roots);
     }
 
     // Explicit control write denies (defense in depth if a broader allow slips in).
@@ -191,23 +187,7 @@ pub fn renderSbplWithOptions(
             try out.appendSlice(allocator, ";; re-allow non-Users grants under /System/Volumes/Data (last-match after Data deny)\n");
             reallowed = true;
         }
-        switch (g.mode) {
-            .exec => {
-                try appendAllowLiteral(&out, allocator, "file-read-metadata", g.path);
-                try appendAllowLiteral(&out, allocator, "file-read*", g.path);
-                try appendAllowLiteral(&out, allocator, "process-exec", g.path);
-            },
-            .ro => {
-                try appendAllowSubpath(&out, allocator, "file-read-metadata", g.path);
-                try appendAllowSubpath(&out, allocator, "file-read*", g.path);
-                try appendAllowSubpath(&out, allocator, "process-exec", g.path);
-            },
-            .rw => {
-                try appendAllowSubpath(&out, allocator, "file-read-metadata", g.path);
-                try appendAllowSubpath(&out, allocator, "file-read*", g.path);
-                try appendAllowWriteMinusControls(&out, allocator, g.path, compiled.control_roots);
-            },
-        }
+        try appendGrantAllows(&out, allocator, g, compiled.control_roots);
     }
 
     // Path-walk firmlink residual: vnode for `/Users` is often under
@@ -402,9 +382,12 @@ const InodeAgg = struct {
 /// - Non-secret basenames are denied by path only when their inode is hostile:
 ///   1. any scanned path on that inode is secret-form (workspace `.env` hardlinked
 ///      as `notes.txt`), or
-///   2. `nlink` exceeds the number of workspace paths found for that inode
-///      (outside residual: host `.env` hardlinked into the workspace as
-///      `config.txt` while the secret basename lives outside the walk).
+///   2. **small** outside residual: `nlink > seen` and
+///      `(nlink - seen) <= secret_hardlink_max_outside_residual_links`
+///      (host `.env` hardlinked into the workspace as `config.txt` while the
+///      secret basename lives outside the walk; planted secrets ≈ residual 1).
+/// - **Large** outside residual (package-manager content-addressed stores with
+///   huge `nlink` and few workspace paths) is **accepted** — not mass-denied.
 /// - Multi-nlink groups that are entirely non-secret and fully contained in the
 ///   workspace (cargo/incremental hardlink graphs, APFS shared build artifacts)
 ///   are **not** denied — denying them bloated SBPL until `sandbox_init` failed
@@ -423,9 +406,12 @@ const InodeAgg = struct {
 ///   may be regular files fail closed.
 /// - Scan capacity/depth exceeded → `error.ScanCapacity` /
 ///   `error.ScanDepthExceeded`.
+/// - Filtered alias denylist exceeds `secret_hardlink_alias_deny_max` →
+///   `error.HardlinkAliasDenyCapacity`.
 ///
-/// Prepare maps `OutOfMemory` to `seatbelt_profile_oom` and other scan errors
-/// to distinct `seatbelt_secret_hardlink_scan_*` reason codes.
+/// Prepare maps `OutOfMemory` to `seatbelt_profile_oom`, alias-deny capacity to
+/// `seatbelt_hardlink_alias_deny_capacity`, and other scan errors to distinct
+/// `seatbelt_secret_hardlink_scan_*` reason codes.
 ///
 /// Caller frees each path and the outer slice via `freeHardlinkAliasPaths`.
 pub fn collectSecretHardlinkAliasPaths(
@@ -491,8 +477,8 @@ pub fn collectSecretHardlinkAliasPaths(
         // Secret basenames: path-regex deny (no per-path entry needed).
         if (e.secret_name) continue;
         const agg = aggs.get(.{ .dev = e.dev, .ino = e.ino }) orelse continue;
-        const outside_residual = agg.nlink > @as(u64, agg.seen);
-        if (!agg.has_secret and !outside_residual) continue;
+        if (!inodeNeedsHardlinkAliasDeny(agg)) continue;
+        if (aliases.items.len >= secret_hardlink_alias_deny_max) return error.HardlinkAliasDenyCapacity;
         // dupe before append: free on append failure (partial-success path).
         const owned = try allocator.dupe(u8, e.path);
         errdefer allocator.free(owned);
@@ -500,6 +486,22 @@ pub fn collectSecretHardlinkAliasPaths(
     }
 
     return try aliases.toOwnedSlice(allocator);
+}
+
+/// True when a non-secret basename on this inode needs an explicit path deny.
+fn inodeNeedsHardlinkAliasDeny(agg: InodeAgg) bool {
+    if (agg.has_secret) return true;
+    return outsideResidualIsHostile(agg.nlink, agg.seen);
+}
+
+/// Outside residual is hostile only when residual link count is in
+/// `(0, secret_hardlink_max_outside_residual_links]`. Equal nlink (fully
+/// contained) and large package-store residuals are not hostile.
+/// Pure helper for unit tests of the residual threshold.
+pub fn outsideResidualIsHostile(nlink: u64, seen: u32) bool {
+    if (nlink <= @as(u64, seen)) return false;
+    const residual = nlink - @as(u64, seen);
+    return residual <= secret_hardlink_max_outside_residual_links;
 }
 
 pub fn freeHardlinkAliasPaths(allocator: std.mem.Allocator, paths: []const []const u8) void {
@@ -608,7 +610,8 @@ fn regularFileMetaForPath(io: std.Io, path: []const u8) error{ScanOpenFailed}!?R
         .follow_symlinks = false,
     }) catch return error.ScanOpenFailed;
     defer file.close(io);
-    // Zig 0.16 File.Stat omits nlink/ino; use libc fstat for multi-link detection.
+    // Zig 0.16 File.Stat has nlink/inode but not st_dev; fstat supplies the
+    // (dev, ino) pair used as hardlink-group key plus nlink in one syscall.
     var st: std.posix.Stat = undefined;
     if (std.c.fstat(file.handle, &st) != 0) return error.ScanOpenFailed;
     if (!std.posix.S.ISREG(st.mode)) return null;
@@ -661,6 +664,33 @@ fn sbplEmitPath(path: []const u8) []const u8 {
         return path[data_volume_prefix.len..]; // "/Users/…"
     }
     return path;
+}
+
+/// Emit allow rules for one compiled grant (primary path grants and Data re-allow).
+fn appendGrantAllows(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    g: profile.PathGrant,
+    control_roots: []const []const u8,
+) !void {
+    switch (g.mode) {
+        .exec => {
+            try appendAllowLiteral(out, allocator, "file-read-metadata", g.path);
+            try appendAllowLiteral(out, allocator, "file-read*", g.path);
+            try appendAllowLiteral(out, allocator, "process-exec", g.path);
+        },
+        .ro => {
+            try appendAllowSubpath(out, allocator, "file-read-metadata", g.path);
+            try appendAllowSubpath(out, allocator, "file-read*", g.path);
+            try appendAllowSubpath(out, allocator, "process-exec", g.path);
+        },
+        .rw => {
+            try appendAllowSubpath(out, allocator, "file-read-metadata", g.path);
+            try appendAllowSubpath(out, allocator, "file-read*", g.path);
+            // RW with control-root write denies (require-not).
+            try appendAllowWriteMinusControls(out, allocator, g.path, control_roots);
+        },
+    }
 }
 
 fn appendAllowSubpath(
@@ -1086,12 +1116,18 @@ test "SBPL host config host_rw_paths emit subpath RW without bare HOME" {
 }
 
 test "SBPL protected host config file is readable but write denied after RW grant" {
+    const config_path = "/Users/dev/.codex/config.toml";
+    // Dual path: authority file as control root (require-not + subpath deny) and
+    // write_deny_literals (exact literal deny after RW allow). Production apply
+    // passes the same list both ways.
     var compiled = try profile.compileProfile(std.testing.allocator, .{
         .workspace_root = "/Users/dev/work",
         .host_rw_paths = &.{"/Users/dev/.codex"},
+        .control_roots = &.{config_path},
     });
     defer compiled.deinit();
-    const config_path = "/Users/dev/.codex/config.toml";
+    try std.testing.expect(compiled.isControlPath(config_path));
+    try std.testing.expect(!compiled.isAgentWritable(config_path));
     const sbpl = try renderSbplWithOptions(std.testing.allocator, &compiled, .{
         .write_deny_literals = &.{config_path},
     });
@@ -1102,12 +1138,16 @@ test "SBPL protected host config file is readable but write denied after RW gran
         sbpl,
         "(allow file-write* (require-all (subpath \"/Users/dev/.codex\")",
     ) orelse return error.TestUnexpectedResult;
+    // Control-root require-not on the authority path.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl[allow..], "(require-not (subpath \"/Users/dev/.codex/config.toml\"))") != null);
     const deny = std.mem.indexOf(
         u8,
         sbpl,
         "(deny file-write* (literal \"/Users/dev/.codex/config.toml\"))",
     ) orelse return error.TestUnexpectedResult;
     try std.testing.expect(deny > allow);
+    // Defense-in-depth subpath deny for control roots.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-write* (subpath \"/Users/dev/.codex/config.toml\"))") != null);
 }
 
 test "SBPL codex system ro_paths emit narrow /etc/codex without bare /etc" {
@@ -1616,6 +1656,7 @@ test "collectSecretHardlinkAliasPaths ignores internal non-secret hardlink group
 test "collectSecretHardlinkAliasPaths denies outside secret hardlinked under non-secret name" {
     // Outside `.env` hardlinked into the workspace as config.txt must be denied
     // even though no secret-form basename exists inside the workspace walk.
+    // Small residual (nlink=2, seen=1) remains hostile under residual threshold.
     if (builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
@@ -1638,6 +1679,57 @@ test "collectSecretHardlinkAliasPaths denies outside secret hardlinked under non
     try std.testing.expectEqual(@as(usize, 1), aliases.len);
     try std.testing.expect(std.mem.endsWith(u8, aliases[0], "config.txt"));
     try std.testing.expect(!std.mem.endsWith(u8, aliases[0], "ordinary.txt"));
+}
+
+test "collectSecretHardlinkAliasPaths ignores package-store high-nlink outside residual" {
+    // pnpm/yarn content-addressed stores: one workspace leaf with huge nlink
+    // (many store hardlinks outside the walk). Large residual must not produce
+    // mass hardlink_alias_denies (SBPL re-bloom → sandbox_init failure).
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var outside = std.testing.tmpDir(.{});
+    defer outside.cleanup();
+    var workspace = std.testing.tmpDir(.{});
+    defer workspace.cleanup();
+
+    try outside.dir.writeFile(io, .{ .sub_path = "blob", .data = "content-addressed-body" });
+    // residual = nlink - seen; seen=1 in workspace. Build residual well above
+    // secret_hardlink_max_outside_residual_links (8) to model a package store.
+    const extra_links: u32 = 20;
+    var i: u32 = 0;
+    while (i < extra_links) : (i += 1) {
+        var name_buf: [32]u8 = undefined;
+        const name = try std.fmt.bufPrint(&name_buf, "hl-{d}", .{i});
+        outside.dir.hardLink("blob", outside.dir, name, io, .{}) catch return error.SkipZigTest;
+    }
+    outside.dir.hardLink("blob", workspace.dir, "pkg-file.js", io, .{}) catch return error.SkipZigTest;
+    try workspace.dir.writeFile(io, .{ .sub_path = "readme.txt", .data = "plain" });
+
+    const root = try workspace.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+
+    const aliases = try collectSecretHardlinkAliasPaths(allocator, io, root);
+    defer freeHardlinkAliasPaths(allocator, aliases);
+
+    try std.testing.expectEqual(@as(usize, 0), aliases.len);
+}
+
+test "outsideResidualIsHostile threshold: small residual yes, large no" {
+    // Pure residual law (no FS): residual in (0, max] hostile; 0 and max+1 not.
+    try std.testing.expect(!outsideResidualIsHostile(1, 1)); // fully contained
+    try std.testing.expect(!outsideResidualIsHostile(2, 2));
+    try std.testing.expect(outsideResidualIsHostile(2, 1)); // planted secret shape
+    try std.testing.expect(outsideResidualIsHostile(
+        secret_hardlink_max_outside_residual_links + 1,
+        1,
+    )); // residual == max
+    try std.testing.expect(!outsideResidualIsHostile(
+        secret_hardlink_max_outside_residual_links + 2,
+        1,
+    )); // residual == max+1 (package-store shape)
+    try std.testing.expect(!outsideResidualIsHostile(5000, 1));
 }
 
 test "collectSecretHardlinkAliasPaths skips workspace symlinks without ScanOpenFailed" {
@@ -1710,6 +1802,11 @@ test "secret hardlink scan capacity matches Linux monorepo floor" {
     // vendor checkouts, SPM .build) and blocked protect-on Seatbelt prepare.
     try std.testing.expect(secret_hardlink_scan_max_entries >= 1_000_000);
     try std.testing.expect(secret_hardlink_scan_max_depth >= 48);
+    // Residual filter + alias-deny cap: small planted residual still hostile;
+    // package-store residual must not re-bloom; denylist cap is a backstop.
+    try std.testing.expect(secret_hardlink_max_outside_residual_links >= 4);
+    try std.testing.expect(secret_hardlink_max_outside_residual_links <= 8);
+    try std.testing.expect(secret_hardlink_alias_deny_max >= 1024);
 }
 
 test "secret policy: SBPL emit embeds profile-owned fragments; path == basename law" {

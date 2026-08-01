@@ -83,7 +83,11 @@ pub fn prepare(
         effective_inventory_cwd,
         workspace_root,
         env_map,
-    ) catch return error.InventoryCommandFailed;
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.SessionTmpPrepareFailed => return error.SessionTmpPrepareFailed,
+        else => return error.InventoryCommandFailed,
+    };
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
     switch (result.term) {
@@ -635,10 +639,7 @@ fn writeShellQuoted(writer: *std.Io.Writer, value: []const u8) !void {
     try writer.writeByte('\'');
 }
 
-fn isPathWithin(path: []const u8, root: []const u8) bool {
-    if (std.mem.eql(u8, path, root)) return true;
-    return path.len > root.len and std.mem.startsWith(u8, path, root) and path[root.len] == '/';
-}
+const isPathWithin = sandbox.profile.isPathWithin;
 
 fn equalStrings(a: []const []const u8, b: []const []const u8) bool {
     if (a.len != b.len) return false;

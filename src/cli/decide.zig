@@ -1096,12 +1096,14 @@ test "decide rejects missing required command and file fields" {
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
+    // Typed fail-closed JSON on stdout for machine consumers; human detail on stderr.
     const missing_command = try decideCommand(std.testing.io, .command, &.{
         "--json", "{}",
     }, &stdout_writer, &stderr_writer);
     try std.testing.expect(missing_command != exit_codes.success);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "MissingRequiredField") != null);
-    try std.testing.expectEqualStrings("", stdout_writer.buffered());
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "\"decision\": \"error\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "\"category\": \"protocol\"") != null);
 
     stdout_writer = .fixed(&stdout_buf);
     stderr_writer = .fixed(&stderr_buf);
@@ -1110,7 +1112,7 @@ test "decide rejects missing required command and file fields" {
     }, &stdout_writer, &stderr_writer);
     try std.testing.expect(missing_file_path != exit_codes.success);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "MissingRequiredField") != null);
-    try std.testing.expectEqualStrings("", stdout_writer.buffered());
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "\"decision\": \"error\"") != null);
 
     stdout_writer = .fixed(&stdout_buf);
     stderr_writer = .fixed(&stderr_buf);
@@ -1119,7 +1121,7 @@ test "decide rejects missing required command and file fields" {
     }, &stdout_writer, &stderr_writer);
     try std.testing.expect(missing_tool_name != exit_codes.success);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "MissingRequiredField") != null);
-    try std.testing.expectEqualStrings("", stdout_writer.buffered());
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "\"decision\": \"error\"") != null);
 }
 
 test "decide prompt with fake secret returns warn" {

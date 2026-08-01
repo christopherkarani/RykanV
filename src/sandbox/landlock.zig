@@ -825,6 +825,49 @@ test "probeAbi is null on non-Linux; applySelf unsupported off Linux" {
 }
 
 // Parent-side expand helper builds child path lists from a temp dir layout.
+test "buildControlExpandSurfaces treats authority file under host RW as RO leaf" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    // Simulate host RW tree ($HOME/.codex) with authority file control root.
+    var host_tmp = std.testing.tmpDir(.{});
+    defer host_tmp.cleanup();
+    try host_tmp.dir.writeFile(io, .{ .sub_path = "config.toml", .data = "[mcp_servers]\n" });
+    try host_tmp.dir.writeFile(io, .{ .sub_path = "history.jsonl", .data = "{}\n" });
+    try host_tmp.dir.createDirPath(io, "sessions");
+    const host_rw = try host_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(host_rw);
+    const authority = try std.fs.path.join(allocator, &.{ host_rw, "config.toml" });
+    defer allocator.free(authority);
+
+    var surfaces = try buildControlExpandSurfaces(allocator, host_rw, &[_][]const u8{authority});
+    defer surfaces.deinit();
+
+    var control_ro_found = false;
+    for (surfaces.control_ro_paths) |p| {
+        if (std.mem.eql(u8, p, authority)) control_ro_found = true;
+    }
+    try std.testing.expect(control_ro_found);
+
+    const history = try std.fmt.allocPrint(allocator, "{s}/history.jsonl", .{host_rw});
+    defer allocator.free(history);
+    const sessions = try std.fmt.allocPrint(allocator, "{s}/sessions", .{host_rw});
+    defer allocator.free(sessions);
+
+    var saw_history = false;
+    var saw_sessions = false;
+    for (surfaces.rw_paths) |p| {
+        if (std.mem.eql(u8, p, history)) saw_history = true;
+        if (std.mem.eql(u8, p, sessions)) saw_sessions = true;
+        try std.testing.expect(!std.mem.eql(u8, p, authority));
+    }
+    try std.testing.expect(saw_history);
+    try std.testing.expect(saw_sessions);
+    try std.testing.expect(rwGrantNeedsControlExpand(host_rw, &[_][]const u8{authority}));
+}
+
 test "buildControlExpandSurfaces enumerates RW children and skips control + symlinks" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 

@@ -68,6 +68,21 @@ const default_session_grants = [_]intercept.session_secrets.GrantSpec{
     },
 };
 
+/// Shared remount for agent-network mediation fail-closed paths (proxy bind, OS route-force).
+const agent_mediation_network_open_help =
+    \\  ryk run --network open -- <agent>
+    \\(or set ORCA_AGENT_NETWORK_DEFAULT=legacy for one-release pre-change defaults).
+    \\
+;
+
+const agent_mediation_route_force_help =
+    \\Agent host network mediation requires OS route-force onto the loopback proxy.
+    \\Fix sandbox attach / proxy, or re-run with:
+    \\  ryk run --network open -- <agent>
+    \\(or set ORCA_AGENT_NETWORK_DEFAULT=legacy for one-release pre-change defaults).
+    \\
+;
+
 fn captureSessionGrants(
     allocator: std.mem.Allocator,
     store: *intercept.session_secrets.Store,
@@ -337,8 +352,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 if (mediate_agent_network) {
                     try stderr.writeAll(
                         "Agent host network mediation requires the proxy. Fix proxy bind, or re-run with:\n" ++
-                            "  ryk run --network open -- <agent>\n" ++
-                            "(or set ORCA_AGENT_NETWORK_DEFAULT=legacy for one-release pre-change defaults).\n",
+                            agent_mediation_network_open_help,
                     );
                 }
                 return exit_codes.unsupported;
@@ -394,7 +408,12 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         .context = store,
         .containsFn = intercept.session_secrets.Store.mintedEnvContains,
     } else null;
-    const require_network_route_forcing = requiresBackend(options, .network_enforce) or mediate_agent_network;
+    // Route-force can only apply when OS attach is planned. With `--os-sandbox off`,
+    // leave require_network_route_forcing false so apply does not short-circuit with
+    // network_route_forcing_unavailable before the backend capability gate can report
+    // BackendRequirementUnavailable for --require-backend network_enforce.
+    const require_network_route_forcing = effective_os_sandbox != .off and
+        (requiresBackend(options, .network_enforce) or mediate_agent_network);
     var apply_result = switch (try run_os_sandbox.applyForRun(
         io,
         allocator,
@@ -415,12 +434,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     )) {
         .require_failed => |code| {
             if (mediate_agent_network) {
-                try stderr.writeAll(
-                    "Agent host network mediation requires OS route-force onto the loopback proxy.\n" ++
-                        "Fix sandbox attach / proxy, or re-run with:\n" ++
-                        "  ryk run --network open -- <agent>\n" ++
-                        "(or set ORCA_AGENT_NETWORK_DEFAULT=legacy for one-release pre-change defaults).\n",
-                );
+                try stderr.writeAll(agent_mediation_route_force_help);
             }
             return code;
         },
@@ -430,12 +444,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     // Belt-and-suspenders: mediation must achieve real route-force before spawn
     // (covers apply soft-degrade paths that return .ok without route-force).
     if (mediate_agent_network and !apply_result.network_route_forced) {
-        try stderr.writeAll(
-            "Agent host network mediation requires OS route-force onto the loopback proxy.\n" ++
-                "Fix sandbox attach / proxy, or re-run with:\n" ++
-                "  ryk run --network open -- <agent>\n" ++
-                "(or set ORCA_AGENT_NETWORK_DEFAULT=legacy for one-release pre-change defaults).\n",
-        );
+        try stderr.writeAll(agent_mediation_route_force_help);
         return exit_codes.unsupported;
     }
     if (proxy_runtime != null and apply_result.network_route_forced) {
@@ -1556,6 +1565,12 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
 
 /// Kill switch for host-alias network defaults (`ORCA_AGENT_NETWORK_DEFAULT`).
 /// `mediated` (default): proxy + route-force. `legacy`: pre-change labels-only path.
+///
+/// **Sunset:** one-release escape only. Track removal after mediation is the
+/// default GA path — prefer deleting `legacy` once operators have a stable
+/// `--network open` / policy escape. Emits WARNING on use (see parse path).
+/// Target: remove no later than the release after 2026-09 (or earlier if
+/// usage is zero). Do not treat as a permanent product surface.
 const AgentNetworkDefault = enum { mediated, legacy };
 
 /// Effective session sandbox grade (Phase 5 honesty). Advertised via
@@ -1880,8 +1895,6 @@ fn printSessionStart(
         .{session_grade.toString()},
     );
 
-    // Memorable shield card when the OS box is live (or trying). Quiet receipt
-    // lines otherwise so disabled sessions stay compact for humans and tests.
     const card_posture = tui.sandbox_card.PostureKind.parse(@tagName(os_receipt.posture));
     if (card_posture.isDramatic()) {
         const grade_str: ?[]const u8 = if (os_receipt.seatbelt_profile) |g| g.toString() else null;
@@ -2455,7 +2468,6 @@ test "run secretless injects a minted provider phantom and keeps raw secrets out
     try current.put("RANDOM_HOST_VALUE", "must-not-survive");
     try current.put("TOKEN_ghp_fakeSyntheticNameCanary1234567890", "ordinary");
 
-    // Active secret-boundary path renders the multi-line SHIELD UP card + receipt.
     var stdout_buf: [8192]u8 = undefined;
     var stderr_buf: [2048]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
@@ -2568,7 +2580,6 @@ test "run secretless resolves broker grant in parent and injects phantom only" {
     defer current.deinit();
     const path_env = if (std.c.getenv("PATH")) |path| std.mem.span(path) else "/usr/bin:/bin:/usr/sbin:/sbin";
     try current.put("PATH", path_env);
-    // Active secret-boundary path renders the multi-line SHIELD UP card + receipt.
     var stdout_buffer: [8192]u8 = undefined;
     var stderr_buffer: [2048]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buffer);

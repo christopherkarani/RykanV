@@ -13,6 +13,7 @@ const detectProductVersion = macos_seatbelt.detectProductVersion;
 const isMatrixMajor = macos_seatbelt.isMatrixMajor;
 const evaluateSupport = macos_seatbelt.evaluateSupport;
 const prepareForChildApply = macos_seatbelt.prepareForChildApply;
+const prepareForChildApplyWithOptions = macos_seatbelt.prepareForChildApplyWithOptions;
 const applyInChild = macos_seatbelt.applyInChild;
 const SupportStatus = macos_seatbelt.SupportStatus;
 
@@ -1260,6 +1261,110 @@ test "real FS: host config RW grant allows .claude and still denies .ssh" {
         4 => return error.SshReadableUnderHostConfigGrant,
         5 => return error.WorkspaceNeighborUnreadable,
         6 => return error.HostConfigClaudeWriteFailed,
+        else => return error.UnexpectedSandboxChildExit,
+    }
+}
+
+// m1: live attach proof for host-config authority write-deny (not SBPL-string only).
+// Authority file (settings.json) must EPERM on open(O_WRONLY|O_TRUNC); sibling under
+// the same host RW tree may still write; authority remains readable.
+// Exit: 0=ok, 2=apply fail, 3=authority unreadable, 4=authority writable (leak),
+// 5=sibling session write failed.
+test "real FS: host config authority write denied; sibling session file still writable" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    if (!sandboxInitAvailable()) return error.SkipZigTest;
+    const ver = try detectProductVersion();
+    try std.testing.expect(isMatrixMajor(ver.major));
+    try std.testing.expectEqual(SupportStatus.supported, evaluateSupport());
+
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    const home_root = try home_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home_root);
+
+    try home_tmp.dir.createDirPath(io, ".claude");
+    try home_tmp.dir.writeFile(io, .{ .sub_path = ".claude/settings.json", .data = "AUTHORITY_OK\n" });
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(io, ".orca");
+    const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(ws_root);
+
+    const claude_cfg = try std.fs.path.join(allocator, &.{ home_root, ".claude" });
+    defer allocator.free(claude_cfg);
+    const authority = try std.fs.path.join(allocator, &.{ home_root, ".claude", "settings.json" });
+    defer allocator.free(authority);
+    const session_write = try std.fs.path.join(allocator, &.{ home_root, ".claude", "session_probe.txt" });
+    defer allocator.free(session_write);
+
+    const authority_z = try allocator.dupeZ(u8, authority);
+    defer allocator.free(authority_z);
+    const session_write_z = try allocator.dupeZ(u8, session_write);
+    defer allocator.free(session_write_z);
+
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = ws_root,
+        .include_tmp = false,
+        .host_rw_paths = &.{claude_cfg},
+        .control_roots = &.{authority},
+    });
+    defer compiled.deinit();
+    try std.testing.expect(compiled.isControlPath(authority));
+    try std.testing.expect(!compiled.isAgentWritable(authority));
+
+    const prepared = prepareForChildApplyWithOptions(allocator, &compiled, evaluateSupport(), .{
+        .write_deny_literals = &.{authority},
+    });
+    defer if (prepared.sbpl_z) |p| allocator.free(p);
+    try std.testing.expectEqual(.prepared, prepared.status);
+    const sbpl_z = prepared.sbpl_z.?;
+
+    const pid = std.c.fork();
+    if (pid < 0) return error.SkipZigTest;
+    if (pid == 0) {
+        applyInChild(sbpl_z.ptr) catch std.c._exit(2);
+
+        // Authority remains readable under host RW + write-deny.
+        const rfd = std.c.open(authority_z.ptr, .{ .ACCMODE = .RDONLY });
+        if (rfd < 0) std.c._exit(3);
+        _ = std.c.close(rfd);
+
+        // Authority write must fail (literal deny + control-root carve-out).
+        const wfd = std.c.open(
+            authority_z.ptr,
+            .{ .ACCMODE = .WRONLY, .TRUNC = true },
+            @as(std.c.mode_t, 0o600),
+        );
+        if (wfd >= 0) {
+            _ = std.c.close(wfd);
+            std.c._exit(4);
+        }
+
+        // Sibling session file under same RW tree may still write.
+        const sfd = std.c.open(
+            session_write_z.ptr,
+            .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true },
+            @as(std.c.mode_t, 0o600),
+        );
+        if (sfd < 0) std.c._exit(5);
+        const wrote = std.c.write(sfd, "ok", 2);
+        _ = std.c.close(sfd);
+        if (wrote != 2) std.c._exit(5);
+
+        std.c._exit(0);
+    }
+
+    const exit_code = try waitExitCode(pid);
+    switch (exit_code) {
+        0 => {},
+        2 => return error.SeatbeltApplyFailedOnHost,
+        3 => return error.HostConfigAuthorityUnreadable,
+        4 => return error.HostConfigAuthorityWritableUnderDeny,
+        5 => return error.HostConfigSiblingSessionWriteFailed,
         else => return error.UnexpectedSandboxChildExit,
     }
 }

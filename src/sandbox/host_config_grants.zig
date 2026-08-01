@@ -11,10 +11,37 @@
 //!   roots — still never bare `$HOME`, bare `~/Library`, or `~/.ssh`.
 //! - Optional **system RO** trees (e.g. `/etc/codex`) are host-scoped, never bare
 //!   `/etc`, and may be granted even when missing so open fails as ENOENT not EPERM.
+//! - Optional **ancestor instruction RO** files (`AGENTS.md` / `CLAUDE.md` name
+//!   spellings) on parents of the workspace up through `$HOME` — file paths only,
+//!   never parent directory trees or bare `$HOME`.
+//! - **Authority write-deny** paths (MCP/config.toml/settings.json templates in
+//!   `HostConfigSpec`) collected cross-platform for Seatbelt literal write-deny
+//!   and Landlock control-root expand (RO leaf under host RW trees).
 //! - Non-host `ryk run -- /bin/echo` collects an empty list (no fail-closed).
 
 const std = @import("std");
 const builtin = @import("builtin");
+
+/// Env-relative authority write-deny path template.
+///
+/// - `rels` empty → the absolute env value is itself the authority file path
+///   (e.g. `OPENCODE_CONFIG=/path/to/company.jsonc`).
+/// - `rels` non-empty → join each relative segment under the env root
+///   (e.g. `CODEX_HOME` + `config.toml`).
+pub const AuthorityEnvFile = struct {
+    env_key: []const u8,
+    rels: []const []const u8 = &.{},
+};
+
+/// Authority file under either a custom env root or a default home-relative dir.
+/// Mutually exclusive: when `env_key` is set and absolute, use that root; else
+/// `$HOME/{default_home_rel_dir}`. File is always `{root}/{file_name}`.
+/// Used for hermes/pi single-root patterns (not accumulate-with-home).
+pub const AuthorityEnvOrHome = struct {
+    env_key: []const u8,
+    default_home_rel_dir: []const u8,
+    file_name: []const u8,
+};
 
 /// Home-relative config roots for a launch host basename (exact match).
 pub const HostConfigSpec = struct {
@@ -28,6 +55,17 @@ pub const HostConfigSpec = struct {
     /// `/etc` or `/private/etc`. Granted even when missing so Seatbelt open is
     /// ENOENT rather than EPERM (Codex requirements residual).
     system_ro_dirs: []const []const u8 = &.{},
+    /// Home-relative authority files that must stay write-denied under host RW
+    /// grants (MCP/config authority). Always collected when `$HOME` is absolute.
+    /// Missing paths are still listed (deny invents no files but blocks create).
+    authority_home_rel_files: []const []const u8 = &.{},
+    /// Env-relative authority files (accumulate with home paths).
+    authority_env_files: []const AuthorityEnvFile = &.{},
+    /// Env-or-default-home authority files (single root, not both).
+    authority_env_or_home: []const AuthorityEnvOrHome = &.{},
+    /// Workspace-and-ancestor walk candidates (relative multi-component paths).
+    /// Collected for every directory from workspace root up to `/`.
+    authority_workspace_walk_rel: []const []const u8 = &.{},
 };
 
 /// Authoritative grant table for host-launch aliases that need host login stores.
@@ -52,6 +90,19 @@ pub const host_config_table = [_]HostConfigSpec{
         // OAuth / CLI login blob. Expired tokens are still "present" — hang residual
         // is host auth/network, not missing config (see empty-backpack tip on agent exit).
         .login_markers = &.{".claude/.credentials.json"},
+        .authority_home_rel_files = &.{
+            ".claude.json",
+            ".claude/settings.json",
+            ".claude/settings.local.json",
+        },
+        .authority_env_files = &.{
+            .{ .env_key = "CLAUDE_CONFIG_DIR", .rels = &.{ "settings.json", "settings.local.json" } },
+        },
+        .authority_workspace_walk_rel = &.{
+            ".mcp.json",
+            ".claude/settings.json",
+            ".claude/settings.local.json",
+        },
     },
     .{
         .host = "codex",
@@ -67,6 +118,11 @@ pub const host_config_table = [_]HostConfigSpec{
             &.{ "/etc/codex", "/private/etc/codex" }
         else
             &.{"/etc/codex"},
+        .authority_home_rel_files = &.{".codex/config.toml"},
+        .authority_env_files = &.{
+            .{ .env_key = "CODEX_HOME", .rels = &.{"config.toml"} },
+        },
+        .authority_workspace_walk_rel = &.{".codex/config.toml"},
     },
     .{
         .host = "pi",
@@ -79,6 +135,14 @@ pub const host_config_table = [_]HostConfigSpec{
             // Optional MCP OAuth/cache store used by some pi extensions.
             ".mcp-auth",
         },
+        .authority_env_or_home = &.{
+            .{
+                .env_key = "PI_CODING_AGENT_DIR",
+                .default_home_rel_dir = ".pi/agent",
+                .file_name = "settings.json",
+            },
+        },
+        .authority_workspace_walk_rel = &.{".pi/settings.json"},
     },
     .{
         .host = "opencode",
@@ -92,6 +156,20 @@ pub const host_config_table = [_]HostConfigSpec{
             // only config/share are granted and write/stat on siblings is denied).
             ".cache/opencode",
             ".local/state/opencode",
+        },
+        .authority_home_rel_files = &.{
+            ".config/opencode/opencode.json",
+            ".config/opencode/opencode.jsonc",
+        },
+        .authority_env_files = &.{
+            .{ .env_key = "OPENCODE_CONFIG", .rels = &.{} },
+            .{ .env_key = "OPENCODE_CONFIG_DIR", .rels = &.{ "opencode.json", "opencode.jsonc" } },
+        },
+        .authority_workspace_walk_rel = &.{
+            "opencode.json",
+            "opencode.jsonc",
+            ".opencode/opencode.json",
+            ".opencode/opencode.jsonc",
         },
     },
     .{
@@ -107,12 +185,20 @@ pub const host_config_table = [_]HostConfigSpec{
             &.{ "/etc/hermes", "/private/etc/hermes" }
         else
             &.{"/etc/hermes"},
+        .authority_env_or_home = &.{
+            .{
+                .env_key = "HERMES_HOME",
+                .default_home_rel_dir = ".hermes",
+                .file_name = "config.yaml",
+            },
+        },
     },
     .{
         .host = "grok",
         // Grok Build loads hooks, skills, and session state from this root;
         // its canonical user settings path is installed by grok_install.zig.
         .home_rel_dirs = &.{".grok"},
+        .authority_home_rel_files = &.{".grok/user-settings.json"},
     },
 };
 
@@ -210,6 +296,8 @@ pub fn collectHostConfigPaths(
         if (isForbiddenHostConfigPath(joined, home)) continue;
 
         // Only grant paths that exist (dir or file). Missing → skip.
+        // Open with no-follow first for existence of the named node when possible;
+        // fall back to follow-open for plain files/dirs that pathExists already covers.
         if (!pathExists(io, joined)) continue;
 
         // Dedup exact strings.
@@ -227,6 +315,11 @@ pub fn collectHostConfigPaths(
             allocator.free(owned);
             return err;
         };
+        // macOS firmlink dual-form residual: lexical HOME+rel is not dual-emitted with
+        // realpath Data-form here (system_ro /etc dual is separate). Seatbelt grants
+        // match the open path used at collect time; open-follow existence check already
+        // validated the node. Full dual emission is follow-up if live /var vs /private
+        // host-config open residual is observed under firmlinks.
     }
 
     return try list.toOwnedSlice(allocator);
@@ -302,6 +395,276 @@ pub fn collectHostSystemRoPaths(
 
 pub fn freeHostSystemRoPaths(allocator: std.mem.Allocator, paths: []const []const u8) void {
     freeHostConfigPaths(allocator, paths);
+}
+
+/// Collect absolute authority config paths that must remain write-denied under
+/// host RW grants (MCP / config authority files).
+///
+/// Cross-platform: used as Seatbelt `launch_write_deny_literals` on macOS and as
+/// extra `control_roots` on all platforms so Landlock control-expand keeps these
+/// paths RO under host RW trees. Missing paths are still listed so create-via-RW
+/// is blocked. Hardlinked existing files fail closed (`UnsafeHostConfigHardlink`).
+///
+/// Caller frees with `freeHostConfigPaths`.
+pub fn collectHostConfigWriteDenies(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    argv0: []const u8,
+    workspace_root: []const u8,
+    env_map: *const std.process.Environ.Map,
+) error{ OutOfMemory, UnsafeHostConfigHardlink }![]const []const u8 {
+    const host = hostBasename(argv0);
+    const spec = specForHost(host) orelse return try allocator.alloc([]const u8, 0);
+
+    var paths: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (paths.items) |path| allocator.free(path);
+        paths.deinit(allocator);
+    }
+
+    const home = env_map.get("HOME") orelse "";
+
+    // Home-relative authority files (always when home is absolute).
+    if (std.fs.path.isAbsolute(home)) {
+        for (spec.authority_home_rel_files) |rel| {
+            if (rel.len == 0 or relHasUnsafeComponents(rel)) continue;
+            try appendAuthorityPath(allocator, &paths, &.{ home, rel });
+        }
+    }
+
+    // Env-relative authority files (accumulate).
+    for (spec.authority_env_files) |entry| {
+        const configured = env_map.get(entry.env_key) orelse continue;
+        if (!std.fs.path.isAbsolute(configured)) continue;
+        if (entry.rels.len == 0) {
+            try appendAuthorityPath(allocator, &paths, &.{configured});
+            continue;
+        }
+        for (entry.rels) |rel| {
+            if (rel.len == 0 or relHasUnsafeComponents(rel)) continue;
+            try appendAuthorityPath(allocator, &paths, &.{ configured, rel });
+        }
+    }
+
+    // Env-or-default-home (hermes/pi): one root only.
+    for (spec.authority_env_or_home) |entry| {
+        if (entry.file_name.len == 0 or relHasUnsafeComponents(entry.file_name)) continue;
+        if (entry.default_home_rel_dir.len == 0 or relHasUnsafeComponents(entry.default_home_rel_dir)) continue;
+        const env_root = env_map.get(entry.env_key);
+        if (env_root) |root| {
+            if (std.fs.path.isAbsolute(root)) {
+                try appendAuthorityPath(allocator, &paths, &.{ root, entry.file_name });
+            }
+            continue;
+        }
+        if (std.fs.path.isAbsolute(home)) {
+            try appendAuthorityPath(allocator, &paths, &.{ home, entry.default_home_rel_dir, entry.file_name });
+        }
+    }
+
+    // Project configuration is writable through the workspace grant. Protect
+    // every candidate authority file, including missing files, so a running
+    // agent cannot add a direct MCP launch path for this or the next session.
+    if (std.fs.path.isAbsolute(workspace_root) and spec.authority_workspace_walk_rel.len > 0) {
+        var current = workspace_root;
+        while (true) {
+            for (spec.authority_workspace_walk_rel) |rel| {
+                if (rel.len == 0 or relHasUnsafeComponents(rel)) continue;
+                try appendAuthorityPath(allocator, &paths, &.{ current, rel });
+            }
+            const parent = std.fs.path.dirname(current) orelse break;
+            if (std.mem.eql(u8, parent, current)) break;
+            current = parent;
+        }
+    }
+
+    // Also deny an existing symlink target so lexical aliases cannot retain
+    // configuration-write authority through the broader host RW grant.
+    // Hardlinked authority files fail closed — incomplete write boundary.
+    const original_count = paths.items.len;
+    for (paths.items[0..original_count]) |path| {
+        const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch continue;
+        const stat = file.stat(io) catch {
+            file.close(io);
+            continue;
+        };
+        file.close(io);
+        if (stat.nlink > 1) return error.UnsafeHostConfigHardlink;
+        const canonical_z = std.Io.Dir.cwd().realPathFileAlloc(io, path, allocator) catch continue;
+        defer allocator.free(canonical_z);
+        if (!containsAuthorityPath(paths.items, canonical_z)) {
+            try appendAuthorityPath(allocator, &paths, &.{canonical_z});
+        }
+    }
+    return try paths.toOwnedSlice(allocator);
+}
+
+pub fn freeHostConfigWriteDenies(allocator: std.mem.Allocator, paths: []const []const u8) void {
+    freeHostConfigPaths(allocator, paths);
+}
+
+fn appendAuthorityPath(
+    allocator: std.mem.Allocator,
+    paths: *std.ArrayList([]const u8),
+    components: []const []const u8,
+) error{OutOfMemory}!void {
+    const path = try std.fs.path.join(allocator, components);
+    if (containsAuthorityPath(paths.items, path)) {
+        allocator.free(path);
+        return;
+    }
+    paths.append(allocator, path) catch |err| {
+        allocator.free(path);
+        return err;
+    };
+}
+
+fn containsAuthorityPath(paths: []const []const u8, candidate: []const u8) bool {
+    for (paths) |path| if (std.mem.eql(u8, path, candidate)) return true;
+    return false;
+}
+
+/// Basenames coding agents walk up for project/user instruction files.
+/// Matches pi (`AGENTS.md` / `AGENTS.MD` / `CLAUDE.md` / `CLAUDE.MD`) and common
+/// Claude Code / Codex discovery. Both case spellings are listed so case-sensitive
+/// Seatbelt literals cover case-insensitive volumes where agents stat both names.
+pub const ancestor_instruction_basenames = [_][]const u8{
+    "AGENTS.md",
+    "AGENTS.MD",
+    "CLAUDE.md",
+    "CLAUDE.MD",
+};
+
+/// Cap ancestor walk depth (workspace parent → home). Defends runaway paths.
+pub const max_ancestor_instruction_depth: usize = 48;
+
+/// Cap owned RO paths returned (basename × depth upper bound is small).
+pub const max_ancestor_instruction_paths: usize = 32;
+
+/// Collect existing ancestor instruction files as narrow **RO** grant paths.
+///
+/// Agents (pi, Claude, …) walk from cwd toward `/` looking for `AGENTS.md` /
+/// `CLAUDE.md`. Empty backpack grants workspace RW only, so a parent multi-repo
+/// file (e.g. `~/CodingProjects/AGENTS.md` when workspace is `…/CodingProjects/ryk`)
+/// would otherwise EPERM and print noisy warnings.
+///
+/// Contract:
+/// - Starts at `dirname(workspace_root)` (workspace itself is already RW).
+/// - Walks toward `/`, stopping after processing `$HOME` when home is absolute
+///   and an ancestor of the workspace; otherwise stops at FS root / depth cap.
+/// - Grants **regular files only** for `ancestor_instruction_basenames`.
+/// - Never returns bare `$HOME`, parent directories, or secret trees.
+/// - Missing files are skipped (no invent). Symlinks to regular files are OK
+///   when open+stat succeeds as `.file`.
+///
+/// Caller frees with `freeHostSystemRoPaths` (same ownership as other RO lists).
+pub fn collectAncestorInstructionRoPaths(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    home: []const u8,
+) error{OutOfMemory}![]const []const u8 {
+    if (workspace_root.len == 0 or !std.fs.path.isAbsolute(workspace_root)) {
+        return try allocator.alloc([]const u8, 0);
+    }
+
+    var list: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (list.items) |p| allocator.free(p);
+        list.deinit(allocator);
+    }
+
+    // Lexically clean workspace (no `..`) so dirname walk is stable.
+    const ws = try std.fs.path.resolve(allocator, &.{workspace_root});
+    defer allocator.free(ws);
+    if (ws.len <= 1) return try list.toOwnedSlice(allocator);
+
+    const home_abs: []const u8 = blk: {
+        if (home.len == 0 or !std.fs.path.isAbsolute(home)) break :blk "";
+        const cleaned = std.fs.path.resolve(allocator, &.{home}) catch break :blk "";
+        break :blk cleaned;
+    };
+    defer if (home_abs.len > 0) allocator.free(home_abs);
+
+    var current = std.fs.path.dirname(ws) orelse return try list.toOwnedSlice(allocator);
+    var depth: usize = 0;
+    while (depth < max_ancestor_instruction_depth) : (depth += 1) {
+        if (current.len == 0) break;
+        // Never grant under classic secret segments even if a basename matches.
+        if (pathContainsMacosSecretSegment(current) or pathContainsUnixSecretSegment(current)) {
+            if (shouldStopAncestorWalk(current, home_abs)) break;
+            current = std.fs.path.dirname(current) orelse break;
+            continue;
+        }
+
+        for (ancestor_instruction_basenames) |base| {
+            if (list.items.len >= max_ancestor_instruction_paths) break;
+            const candidate = try std.fs.path.join(allocator, &.{ current, base });
+            defer allocator.free(candidate);
+            if (home_abs.len > 0 and isForbiddenHostConfigPath(candidate, home_abs)) continue;
+            if (!regularFileExists(io, candidate)) continue;
+
+            var exists = false;
+            for (list.items) |existing| {
+                if (std.mem.eql(u8, existing, candidate)) {
+                    exists = true;
+                    break;
+                }
+            }
+            if (exists) continue;
+
+            const owned = try allocator.dupe(u8, candidate);
+            list.append(allocator, owned) catch |err| {
+                allocator.free(owned);
+                return err;
+            };
+        }
+
+        if (shouldStopAncestorWalk(current, home_abs)) break;
+        if (current.len == 1 and current[0] == '/') break;
+        current = std.fs.path.dirname(current) orelse break;
+    }
+
+    return try list.toOwnedSlice(allocator);
+}
+
+fn shouldStopAncestorWalk(current: []const u8, home_abs: []const u8) bool {
+    if (current.len == 1 and current[0] == '/') return true;
+    if (home_abs.len == 0) return false;
+    // Stop after processing home itself (include ~/AGENTS.md, not parents of home).
+    if (std.mem.eql(u8, current, home_abs)) return true;
+    // If workspace is outside home, do not walk unbounded — stop at home boundary
+    // only when current is still under home; otherwise continue until root/depth.
+    return false;
+}
+
+fn pathContainsUnixSecretSegment(path: []const u8) bool {
+    const banned = [_][]const u8{
+        "/.ssh/",
+        "/.gnupg/",
+        "/.aws/",
+        "/.ssh",
+        "/.gnupg",
+        "/.aws",
+    };
+    for (banned) |b| {
+        if (std.mem.indexOf(u8, path, b) != null) {
+            // Require segment boundary: "/.ssh" at end or followed by '/'.
+            if (b[b.len - 1] == '/') return true;
+            const at = std.mem.indexOf(u8, path, b).?;
+            const end = at + b.len;
+            if (end == path.len or path[end] == '/') return true;
+        }
+    }
+    return false;
+}
+
+fn regularFileExists(io: std.Io, path: []const u8) bool {
+    if (path.len == 0) return false;
+    const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return false;
+    defer file.close(io);
+    const st = file.stat(io) catch return false;
+    return st.kind == .file;
 }
 
 /// True when `path` is a safe Apple developer-toolchain root to grant RO under Seatbelt.
@@ -1334,6 +1697,97 @@ test "collectMacosDeveloperToolchainRoPaths grants existing allowlisted roots on
     }
 }
 
+test "collectAncestorInstructionRoPaths grants parent AGENTS.md not parent dir or home" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    const home = try home_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+
+    try home_tmp.dir.createDirPath(io, "CodingProjects/ryk");
+    try home_tmp.dir.createDirPath(io, "CodingProjects/other");
+    try home_tmp.dir.writeFile(io, .{
+        .sub_path = "CodingProjects/AGENTS.md",
+        .data = "# parent instructions\n",
+    });
+    try home_tmp.dir.writeFile(io, .{
+        .sub_path = "AGENTS.md",
+        .data = "# home instructions\n",
+    });
+    // Sibling project file must not be granted (not on ancestor chain).
+    try home_tmp.dir.writeFile(io, .{
+        .sub_path = "CodingProjects/other/secrets.env",
+        .data = "SECRET=1\n",
+    });
+
+    const workspace = try std.fs.path.join(allocator, &.{ home, "CodingProjects", "ryk" });
+    defer allocator.free(workspace);
+    const parent_agents = try std.fs.path.join(allocator, &.{ home, "CodingProjects", "AGENTS.md" });
+    defer allocator.free(parent_agents);
+    const home_agents = try std.fs.path.join(allocator, &.{ home, "AGENTS.md" });
+    defer allocator.free(home_agents);
+    const parent_dir = try std.fs.path.join(allocator, &.{ home, "CodingProjects" });
+    defer allocator.free(parent_dir);
+
+    const paths = try collectAncestorInstructionRoPaths(io, allocator, workspace, home);
+    defer freeHostSystemRoPaths(allocator, paths);
+
+    try std.testing.expect(paths.len >= 2);
+
+    var saw_parent = false;
+    var saw_home_file = false;
+    for (paths) |p| {
+        try std.testing.expect(!std.mem.eql(u8, p, home));
+        try std.testing.expect(!std.mem.eql(u8, p, parent_dir));
+        try std.testing.expect(std.mem.indexOf(u8, p, "secrets.env") == null);
+        if (std.mem.eql(u8, p, parent_agents)) saw_parent = true;
+        if (std.mem.eql(u8, p, home_agents)) saw_home_file = true;
+    }
+    try std.testing.expect(saw_parent);
+    try std.testing.expect(saw_home_file);
+
+    // Empty / relative workspace → empty grant list.
+    const empty = try collectAncestorInstructionRoPaths(io, allocator, "", home);
+    defer freeHostSystemRoPaths(allocator, empty);
+    try std.testing.expectEqual(@as(usize, 0), empty.len);
+
+    const rel = try collectAncestorInstructionRoPaths(io, allocator, "relative/ws", home);
+    defer freeHostSystemRoPaths(allocator, rel);
+    try std.testing.expectEqual(@as(usize, 0), rel.len);
+}
+
+test "collectAncestorInstructionRoPaths skips workspace itself and missing parents" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    const home = try home_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+
+    try home_tmp.dir.createDirPath(io, "proj");
+    try home_tmp.dir.writeFile(io, .{
+        .sub_path = "proj/AGENTS.md",
+        .data = "# workspace only\n",
+    });
+
+    const workspace = try std.fs.path.join(allocator, &.{ home, "proj" });
+    defer allocator.free(workspace);
+    const workspace_agents = try std.fs.path.join(allocator, &.{ workspace, "AGENTS.md" });
+    defer allocator.free(workspace_agents);
+
+    const paths = try collectAncestorInstructionRoPaths(io, allocator, workspace, home);
+    defer freeHostSystemRoPaths(allocator, paths);
+
+    // Workspace file is already under workspace RW — collector starts at parent.
+    for (paths) |p| {
+        try std.testing.expect(!std.mem.eql(u8, p, workspace_agents));
+        try std.testing.expect(!std.mem.endsWith(u8, p, "/proj/AGENTS.md"));
+    }
+}
+
 test "selectEmptyBackpackAgentExitTip prefers system-ro residual for etc/codex EPERM" {
     const stack =
         \\Error loading config.toml: Failed to read requirements file /etc/codex/requirements.toml: Operation not permitted (os error 1)
@@ -1355,4 +1809,82 @@ test "selectEmptyBackpackAgentExitTip prefers system-ro residual for etc/codex E
 
     try std.testing.expect(!stderrLooksLikeEtcCodexRequirementsEperm("invalid API key"));
     try std.testing.expect(!stderrLooksLikeEtcCodexRequirementsEperm(""));
+}
+
+fn testingContainsPath(paths: []const []const u8, candidate: []const u8) bool {
+    return containsAuthorityPath(paths, candidate);
+}
+
+test "collectHostConfigWriteDenies returns authority paths on all platforms" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", "/Users/synthetic");
+
+    const paths = try collectHostConfigWriteDenies(io, allocator, "codex", "/Users/synthetic/project", &env_map);
+    defer freeHostConfigWriteDenies(allocator, paths);
+
+    try std.testing.expect(paths.len > 0);
+    try std.testing.expect(testingContainsPath(paths, "/Users/synthetic/.codex/config.toml"));
+    try std.testing.expect(testingContainsPath(paths, "/Users/synthetic/project/.codex/config.toml"));
+    // Workspace walk reaches ancestors including `/`.
+    try std.testing.expect(testingContainsPath(paths, "/.codex/config.toml"));
+
+    const unknown = try collectHostConfigWriteDenies(io, allocator, "echo", "/Users/synthetic/project", &env_map);
+    defer freeHostConfigWriteDenies(allocator, unknown);
+    try std.testing.expectEqual(@as(usize, 0), unknown.len);
+}
+
+test "collectHostConfigWriteDenies honors env authority templates cross-platform" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", "/Users/synthetic");
+    try env_map.put("HERMES_HOME", "/Users/synthetic/.hermes/profiles/work");
+    try env_map.put("PI_CODING_AGENT_DIR", "/Users/synthetic/.pi/agent");
+    try env_map.put("OPENCODE_CONFIG", "/Users/synthetic/.config/opencode/company.jsonc");
+    try env_map.put("CODEX_HOME", "/Users/synthetic/.codex-work");
+
+    const cases = [_]struct { host: []const u8, expected: []const u8 }{
+        .{ .host = "claude", .expected = "/Users/synthetic/.claude.json" },
+        .{ .host = "opencode", .expected = "/Users/synthetic/.config/opencode/company.jsonc" },
+        .{ .host = "hermes", .expected = "/Users/synthetic/.hermes/profiles/work/config.yaml" },
+        .{ .host = "pi", .expected = "/Users/synthetic/.pi/agent/settings.json" },
+        .{ .host = "codex", .expected = "/Users/synthetic/.codex-work/config.toml" },
+        .{ .host = "grok", .expected = "/Users/synthetic/.grok/user-settings.json" },
+    };
+    for (cases) |case| {
+        const paths = try collectHostConfigWriteDenies(
+            io,
+            allocator,
+            case.host,
+            "/Users/synthetic/project",
+            &env_map,
+        );
+        defer freeHostConfigWriteDenies(allocator, paths);
+        try std.testing.expect(testingContainsPath(paths, case.expected));
+    }
+}
+
+test "collectHostConfigWriteDenies fails closed on hardlink aliases" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, ".codex");
+    try tmp.dir.writeFile(io, .{ .sub_path = ".codex/config.toml", .data = "[mcp_servers]\n" });
+    tmp.dir.hardLink(".codex/config.toml", tmp.dir, ".codex/config-alias.toml", io, .{}) catch
+        return error.SkipZigTest;
+    const home = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+    try std.testing.expectError(
+        error.UnsafeHostConfigHardlink,
+        collectHostConfigWriteDenies(io, allocator, "codex", home, &env_map),
+    );
 }

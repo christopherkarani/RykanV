@@ -117,7 +117,11 @@ fn resolveEffectiveCwdAfterRealpathFail(
     path: []const u8,
 ) daemon.DaemonError![]const u8 {
     if (std.fs.path.isAbsolute(path)) {
-        var dir = std.Io.Dir.openDirAbsolute(io, path, .{}) catch return error.InvalidWorkingDirectory;
+        // Usability check without following a final symlink (cwd identity for allow-once).
+        // Residual: path remains the lexical absolute string when open succeeds — not
+        // a realpath-canonical form (realpath already failed for this input).
+        var dir = std.Io.Dir.openDirAbsolute(io, path, .{ .follow_symlinks = false }) catch
+            return error.InvalidWorkingDirectory;
         dir.close(io);
         return allocator.dupe(u8, path) catch error.OutOfMemory;
     }
@@ -127,7 +131,8 @@ fn resolveEffectiveCwdAfterRealpathFail(
         if (try tryGetcwdQuiet(allocator)) |cwd_abs| {
             errdefer allocator.free(cwd_abs);
             if (!std.fs.path.isAbsolute(cwd_abs)) return error.InvalidWorkingDirectory;
-            var dir = std.Io.Dir.openDirAbsolute(io, cwd_abs, .{}) catch return error.InvalidWorkingDirectory;
+            var dir = std.Io.Dir.openDirAbsolute(io, cwd_abs, .{ .follow_symlinks = false }) catch
+                return error.InvalidWorkingDirectory;
             dir.close(io);
             return cwd_abs; // success: errdefer does not run
         }

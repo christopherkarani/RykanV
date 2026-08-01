@@ -187,129 +187,6 @@ fn clonePathList(
     return try list.toOwnedSlice(allocator);
 }
 
-fn collectHostConfigWriteDenies(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    argv0: []const u8,
-    workspace_root: []const u8,
-    env_map: *const std.process.Environ.Map,
-) error{ OutOfMemory, UnsafeHostConfigHardlink }![]const []const u8 {
-    if (builtin.os.tag != .macos) {
-        return allocator.alloc([]const u8, 0);
-    }
-    const host = sandbox.host_config_grants.hostBasename(argv0);
-    if (sandbox.host_config_grants.specForHost(host) == null) return allocator.alloc([]const u8, 0);
-
-    var paths: std.ArrayList([]const u8) = .empty;
-    errdefer {
-        for (paths.items) |path| allocator.free(path);
-        paths.deinit(allocator);
-    }
-    const home = env_map.get("HOME") orelse "";
-    if (std.mem.eql(u8, host, "codex")) {
-        if (std.fs.path.isAbsolute(home)) try appendConfigPath(allocator, &paths, &.{ home, ".codex", "config.toml" });
-        if (env_map.get("CODEX_HOME")) |root| {
-            if (std.fs.path.isAbsolute(root)) try appendConfigPath(allocator, &paths, &.{ root, "config.toml" });
-        }
-    } else if (std.mem.eql(u8, host, "claude")) {
-        if (std.fs.path.isAbsolute(home)) {
-            try appendConfigPath(allocator, &paths, &.{ home, ".claude.json" });
-            try appendConfigPath(allocator, &paths, &.{ home, ".claude", "settings.json" });
-            try appendConfigPath(allocator, &paths, &.{ home, ".claude", "settings.local.json" });
-        }
-        if (env_map.get("CLAUDE_CONFIG_DIR")) |root| if (std.fs.path.isAbsolute(root)) {
-            try appendConfigPath(allocator, &paths, &.{ root, "settings.json" });
-            try appendConfigPath(allocator, &paths, &.{ root, "settings.local.json" });
-        };
-    } else if (std.mem.eql(u8, host, "opencode")) {
-        if (std.fs.path.isAbsolute(home)) {
-            try appendConfigPath(allocator, &paths, &.{ home, ".config", "opencode", "opencode.json" });
-            try appendConfigPath(allocator, &paths, &.{ home, ".config", "opencode", "opencode.jsonc" });
-        }
-        if (env_map.get("OPENCODE_CONFIG")) |path| if (std.fs.path.isAbsolute(path)) {
-            try appendConfigPath(allocator, &paths, &.{path});
-        };
-        if (env_map.get("OPENCODE_CONFIG_DIR")) |root| if (std.fs.path.isAbsolute(root)) {
-            try appendConfigPath(allocator, &paths, &.{ root, "opencode.json" });
-            try appendConfigPath(allocator, &paths, &.{ root, "opencode.jsonc" });
-        };
-    } else if (std.mem.eql(u8, host, "hermes")) {
-        const root = env_map.get("HERMES_HOME") orelse if (std.fs.path.isAbsolute(home)) blk: {
-            break :blk try std.fs.path.join(allocator, &.{ home, ".hermes" });
-        } else null;
-        defer if (root) |path| if (env_map.get("HERMES_HOME") == null) allocator.free(path);
-        if (root) |path| if (std.fs.path.isAbsolute(path)) try appendConfigPath(allocator, &paths, &.{ path, "config.yaml" });
-    } else if (std.mem.eql(u8, host, "pi")) {
-        const root = env_map.get("PI_CODING_AGENT_DIR") orelse if (std.fs.path.isAbsolute(home)) blk: {
-            break :blk try std.fs.path.join(allocator, &.{ home, ".pi", "agent" });
-        } else null;
-        defer if (root) |path| if (env_map.get("PI_CODING_AGENT_DIR") == null) allocator.free(path);
-        if (root) |path| if (std.fs.path.isAbsolute(path)) try appendConfigPath(allocator, &paths, &.{ path, "settings.json" });
-    } else if (std.mem.eql(u8, host, "grok")) {
-        if (std.fs.path.isAbsolute(home)) {
-            try appendConfigPath(allocator, &paths, &.{ home, ".grok", "user-settings.json" });
-        }
-    }
-
-    // Project configuration is writable through the workspace grant. Protect
-    // every candidate authority file, including missing files, so a running
-    // agent cannot add a direct MCP launch path for this or the next session.
-    if (std.fs.path.isAbsolute(workspace_root)) {
-        var current = workspace_root;
-        while (true) {
-            if (std.mem.eql(u8, host, "codex"))
-                try appendConfigPath(allocator, &paths, &.{ current, ".codex", "config.toml" })
-            else if (std.mem.eql(u8, host, "opencode")) {
-                try appendConfigPath(allocator, &paths, &.{ current, "opencode.json" });
-                try appendConfigPath(allocator, &paths, &.{ current, "opencode.jsonc" });
-                try appendConfigPath(allocator, &paths, &.{ current, ".opencode", "opencode.json" });
-                try appendConfigPath(allocator, &paths, &.{ current, ".opencode", "opencode.jsonc" });
-            } else if (std.mem.eql(u8, host, "claude")) {
-                try appendConfigPath(allocator, &paths, &.{ current, ".mcp.json" });
-                try appendConfigPath(allocator, &paths, &.{ current, ".claude", "settings.json" });
-                try appendConfigPath(allocator, &paths, &.{ current, ".claude", "settings.local.json" });
-            } else if (std.mem.eql(u8, host, "pi"))
-                try appendConfigPath(allocator, &paths, &.{ current, ".pi", "settings.json" });
-            const parent = std.fs.path.dirname(current) orelse break;
-            if (std.mem.eql(u8, parent, current)) break;
-            current = parent;
-        }
-    }
-
-    // Also deny an existing symlink target so lexical aliases cannot retain
-    // configuration-write authority through the broader host RW grant.
-    const original_count = paths.items.len;
-    for (paths.items[0..original_count]) |path| {
-        const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch continue;
-        const stat = file.stat(io) catch {
-            file.close(io);
-            continue;
-        };
-        file.close(io);
-        if (stat.nlink > 1) return error.UnsafeHostConfigHardlink;
-        const canonical_z = std.Io.Dir.cwd().realPathFileAlloc(io, path, allocator) catch continue;
-        defer allocator.free(canonical_z);
-        if (!containsPath(paths.items, canonical_z)) try appendConfigPath(allocator, &paths, &.{canonical_z});
-    }
-    return paths.toOwnedSlice(allocator);
-}
-
-fn appendConfigPath(
-    allocator: std.mem.Allocator,
-    paths: *std.ArrayList([]const u8),
-    components: []const []const u8,
-) error{OutOfMemory}!void {
-    const path = try std.fs.path.join(allocator, components);
-    if (containsPath(paths.items, path)) {
-        allocator.free(path);
-        return;
-    }
-    paths.append(allocator, path) catch |err| {
-        allocator.free(path);
-        return err;
-    };
-}
-
 fn containsPath(paths: []const []const u8, candidate: []const u8) bool {
     for (paths) |path| if (std.mem.eql(u8, path, candidate)) return true;
     return false;
@@ -376,7 +253,7 @@ fn freeOwnedList(allocator: std.mem.Allocator, list: *std.ArrayList([]const u8))
 }
 
 fn isApprovedCodexHome(path: []const u8, home: []const u8) bool {
-    if (!isPathWithin(path, home) or std.mem.eql(u8, path, home)) return false;
+    if (!sandbox.profile.isPathWithin(path, home) or std.mem.eql(u8, path, home)) return false;
     const relative = path[home.len + 1 ..];
     return std.mem.eql(u8, relative, ".codex") or
         std.mem.startsWith(u8, relative, ".codex-") or
@@ -384,7 +261,7 @@ fn isApprovedCodexHome(path: []const u8, home: []const u8) bool {
 }
 
 fn isApprovedCustomHostConfigPath(host: []const u8, path: []const u8, home: []const u8) bool {
-    if (!isPathWithin(path, home) or std.mem.eql(u8, path, home)) return false;
+    if (!sandbox.profile.isPathWithin(path, home) or std.mem.eql(u8, path, home)) return false;
     if (sandbox.host_config_grants.isForbiddenHostConfigPath(path, home)) return false;
     const relative = path[home.len + 1 ..];
     if (std.mem.eql(u8, host, "claude")) {
@@ -480,12 +357,6 @@ fn normalizeMacosUsersPath(path: []const u8) []const u8 {
     return path;
 }
 
-fn isPathWithin(path: []const u8, root: []const u8) bool {
-    if (root.len == 0) return false;
-    if (std.mem.eql(u8, path, root)) return true;
-    return path.len > root.len and std.mem.startsWith(u8, path, root) and path[root.len] == '/';
-}
-
 /// Apply OS sandbox for the production run path.
 ///
 /// `progress` is the TTY stream for prepare activity (typically stdout, same as
@@ -537,8 +408,10 @@ pub fn applyForRun(
     var io_rt: std.Io.Threaded = .init_single_threaded;
     const launch_io = io_rt.io();
     const home_for_config: []const u8 = if (env_map.get("HOME")) |h| h else "";
+    // Authority write-deny paths (cross-platform): Seatbelt literal write-deny on
+    // macOS + Landlock control_roots expand (RO leaf under host RW) on Linux.
     const config_write_denies = if (mode != .off and launch_argv0 != null)
-        collectHostConfigWriteDenies(
+        sandbox.host_config_grants.collectHostConfigWriteDenies(
             launch_io,
             allocator,
             launch_argv0.?,
@@ -556,7 +429,7 @@ pub fn applyForRun(
         }
     else
         try allocator.alloc([]const u8, 0);
-    defer freeMergedPathList(allocator, config_write_denies);
+    defer sandbox.host_config_grants.freeHostConfigWriteDenies(allocator, config_write_denies);
     const agent_exec_paths: []const []const u8 = if (launch_argv0) |argv0|
         try sandbox.apply.collectLaunchExecPaths(launch_io, allocator, argv0, env_map)
     else
@@ -614,7 +487,20 @@ pub fn applyForRun(
         );
         errdefer sandbox.host_config_grants.freeHostSystemRoPaths(allocator, toolchain_ro);
         // mergeOwnedPathLists consumes both inputs on success.
-        break :blk try mergeOwnedPathLists(allocator, install_system, toolchain_ro);
+        const install_system_toolchain = try mergeOwnedPathLists(allocator, install_system, toolchain_ro);
+        errdefer freeMergedPathList(allocator, install_system_toolchain);
+
+        // Parent-of-workspace AGENTS.md / CLAUDE.md (file RO only). Pi and peers
+        // walk up from cwd; empty backpack previously denied these by design and
+        // agents printed EPERM warnings. Never grants parent directory trees.
+        const ancestor_ro = try sandbox.host_config_grants.collectAncestorInstructionRoPaths(
+            launch_io,
+            allocator,
+            workspace_root,
+            home_for_config,
+        );
+        errdefer sandbox.host_config_grants.freeHostSystemRoPaths(allocator, ancestor_ro);
+        break :blk try mergeOwnedPathLists(allocator, install_system_toolchain, ancestor_ro);
     };
     defer freeMergedPathList(allocator, base_launch_ro_paths);
     // Pack dylib/formula RO (Homebrew linked libs) + MCP/extra RO.
@@ -689,9 +575,13 @@ pub fn applyForRun(
         .env_map = env_map,
         .minted_env_lookup = minted_env_lookup,
         .with_host_secrets = with_host_secrets,
+        // Authority files as control roots: Landlock expands host RW with these RO.
+        // Merged with default `.orca`/`.git` inside compileProfile.
+        .control_roots = config_write_denies,
         .launch_exec_paths = launch_exec_paths,
         .launch_ro_paths = launch_ro_paths,
         .launch_host_rw_paths = launch_host_rw_paths,
+        // macOS Seatbelt exact literal write-deny (dual path with control_roots).
         .launch_write_deny_literals = config_write_denies,
         .network_proxy_port = network_proxy_port,
         .require_network_route_forcing = require_network_route_forcing,
@@ -912,18 +802,15 @@ test "Codex config write denies cover user and project authority files" {
     defer env_map.deinit();
     try env_map.put("HOME", "/Users/synthetic");
 
-    const paths = try collectHostConfigWriteDenies(
+    const paths = try sandbox.host_config_grants.collectHostConfigWriteDenies(
         std.testing.io,
         std.testing.allocator,
         "codex",
         "/Users/synthetic/project",
         &env_map,
     );
-    defer freeMergedPathList(std.testing.allocator, paths);
-    if (builtin.os.tag != .macos) {
-        try std.testing.expectEqual(@as(usize, 0), paths.len);
-        return;
-    }
+    defer sandbox.host_config_grants.freeHostConfigWriteDenies(std.testing.allocator, paths);
+    // Cross-platform: authority paths feed Landlock control_roots and Seatbelt literals.
     try std.testing.expect(containsPath(paths, "/Users/synthetic/.codex/config.toml"));
     try std.testing.expect(containsPath(
         paths,
@@ -949,18 +836,14 @@ test "Codex config write denies honor custom CODEX_HOME" {
     try env_map.put("HOME", home);
     try env_map.put("CODEX_HOME", codex_home);
 
-    const paths = try collectHostConfigWriteDenies(
+    const paths = try sandbox.host_config_grants.collectHostConfigWriteDenies(
         std.testing.io,
         std.testing.allocator,
         "codex",
         home,
         &env_map,
     );
-    defer freeMergedPathList(std.testing.allocator, paths);
-    if (builtin.os.tag != .macos) {
-        try std.testing.expectEqual(@as(usize, 0), paths.len);
-        return;
-    }
+    defer sandbox.host_config_grants.freeHostConfigWriteDenies(std.testing.allocator, paths);
     const expected = try std.fs.path.join(std.testing.allocator, &.{ codex_home, "config.toml" });
     defer std.testing.allocator.free(expected);
     try std.testing.expect(containsPath(paths, expected));
@@ -987,7 +870,7 @@ test "custom CODEX_HOME removes default auth root but retains shared skills" {
 }
 
 test "host config write denies fail closed on hardlink aliases" {
-    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1002,11 +885,11 @@ test "host config write denies fail closed on hardlink aliases" {
     try env_map.put("HOME", home);
     try std.testing.expectError(
         error.UnsafeHostConfigHardlink,
-        collectHostConfigWriteDenies(io, std.testing.allocator, "codex", home, &env_map),
+        sandbox.host_config_grants.collectHostConfigWriteDenies(io, std.testing.allocator, "codex", home, &env_map),
     );
 }
 
-test "host MCP configuration authority is write denied on macOS" {
+test "host MCP configuration authority is write denied cross-platform" {
     var env_map = std.process.Environ.Map.init(std.testing.allocator);
     defer env_map.deinit();
     try env_map.put("HOME", "/Users/synthetic");
@@ -1021,18 +904,15 @@ test "host MCP configuration authority is write denied on macOS" {
         .{ .host = "pi", .expected = "/Users/synthetic/.pi/agent/settings.json" },
     };
     for (cases) |case| {
-        const paths = try collectHostConfigWriteDenies(
+        const paths = try sandbox.host_config_grants.collectHostConfigWriteDenies(
             std.testing.io,
             std.testing.allocator,
             case.host,
             "/Users/synthetic/project",
             &env_map,
         );
-        defer freeMergedPathList(std.testing.allocator, paths);
-        if (builtin.os.tag == .macos)
-            try std.testing.expect(containsPath(paths, case.expected))
-        else
-            try std.testing.expectEqual(@as(usize, 0), paths.len);
+        defer sandbox.host_config_grants.freeHostConfigWriteDenies(std.testing.allocator, paths);
+        try std.testing.expect(containsPath(paths, case.expected));
     }
 }
 

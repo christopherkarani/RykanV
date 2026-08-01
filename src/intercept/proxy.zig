@@ -1290,15 +1290,41 @@ test "connectUpstream dials IP literals and DNS hostnames" {
     var ip_stream = try connectUpstream(io, "127.0.0.1", port);
     ip_stream.close(io);
 
-    // DNS path — skip if offline / no resolv.
-    const host_stream = connectUpstream(io, "example.com", 443) catch return error.SkipZigTest;
+    // DNS path via localhost (hermetic: no external resolv / offline skip).
+    // Proves HostName dial, not IP-literal-only path.
+    var host_server = try listen_addr.listen(io, .{ .reuse_address = true });
+    defer host_server.deinit(io);
+    const host_port = host_server.socket.address.getPort();
+    const host_accept = try std.Thread.spawn(.{}, struct {
+        fn run(s: *std.Io.net.Server, thread_io: std.Io) void {
+            var stream = s.accept(thread_io) catch return;
+            stream.close(thread_io);
+        }
+    }.run, .{ &host_server, io });
+    defer host_accept.join();
+    var host_stream = try connectUpstream(io, "localhost", host_port);
     host_stream.close(io);
 }
 
 test "proxy CONNECT allowlisted hostname returns 200 Connection Established" {
-    // Production path: listen+startServing + HTTPS CONNECT to a real host.
-    // Proves HostName DNS dial (not IpAddress.resolve IP-only) works after allow.
+    // Hermetic production path: allowlist `localhost`, CONNECT to a loopback
+    // listener. Proves HostName DNS dial (not IP-literal-only) after allow
+    // without external network / offline SkipZigTest.
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    const thread_io = threaded.io();
+    const upstream_addr = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var upstream = try upstream_addr.listen(thread_io, .{ .reuse_address = true });
+    defer upstream.deinit(thread_io);
+    const upstream_port = upstream.socket.address.getPort();
+    const accept_thread = try std.Thread.spawn(.{}, struct {
+        fn run(s: *std.Io.net.Server, io: std.Io) void {
+            var stream = s.accept(io) catch return;
+            stream.close(io);
+        }
+    }.run, .{ &upstream, thread_io });
+    defer accept_thread.join();
 
     var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
         \\version: 1
@@ -1307,7 +1333,7 @@ test "proxy CONNECT allowlisted hostname returns 200 Connection Established" {
         \\  mode: allowlist
         \\  backend: proxy
         \\  allow:
-        \\    - "example.com"
+        \\    - "localhost"
     , "proxy-connect-hostname.yaml");
     defer loaded.deinit();
 
@@ -1321,17 +1347,20 @@ test "proxy CONNECT allowlisted hostname returns 200 Connection Established" {
     var client = try std.Io.net.IpAddress.connect(&proxy_addr, io, .{ .mode = .stream });
     defer client.close(io);
 
+    var req_buf: [128]u8 = undefined;
+    const req = try std.fmt.bufPrint(
+        &req_buf,
+        "CONNECT localhost:{d} HTTP/1.1\r\nHost: localhost:{d}\r\n\r\n",
+        .{ upstream_port, upstream_port },
+    );
     var write_buf: [256]u8 = undefined;
     var writer = client.writer(io, &write_buf);
-    try writer.interface.writeAll("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n");
+    try writer.interface.writeAll(req);
     try writer.interface.flush();
 
     var response_buf: [512]u8 = undefined;
-    const response_len = readHttpResponse(io, client, &response_buf) catch return error.SkipZigTest;
-    // Offline / DNS failure: skip rather than fail CI hermetic builds.
-    if (std.mem.indexOf(u8, response_buf[0..response_len], "200 Connection Established") == null) {
-        return error.SkipZigTest;
-    }
+    const response_len = try readHttpResponse(io, client, &response_buf);
+    try std.testing.expect(std.mem.indexOf(u8, response_buf[0..response_len], "200 Connection Established") != null);
     try runtime.waitForIdle(2 * std.time.ns_per_s);
     const events = try runtime.snapshotAuditEvents(std.testing.allocator);
     defer runtime.freeAuditEvents(std.testing.allocator, events);

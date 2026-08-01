@@ -133,8 +133,10 @@ pub const ApplyBoundary = struct {
     /// Empty backpack keeps HOME in env but denies home FS; these narrow subpaths
     /// restore host login/config (+ session write) for known agents without bare `$HOME`.
     launch_host_rw_paths: []const []const u8 = &.{},
-    /// macOS-only exact files inside host RW trees that remain user authority.
-    /// Seatbelt emits last-match literal write denies for these paths.
+    /// Exact authority files inside host RW trees (config.toml / settings.json / …).
+    /// macOS Seatbelt emits last-match literal write denies. Callers should also
+    /// pass the same paths as `control_roots` so Landlock control-expand keeps
+    /// them RO under host RW on Linux (dual path).
     launch_write_deny_literals: []const []const u8 = &.{},
     /// Empty-backpack sessions require OS enforcement for workspace `.env`
     /// and `.env.*` names (safe templates remain readable).
@@ -630,10 +632,8 @@ pub fn collectLaunchInstallRoPaths(
     return try list.toOwnedSlice(allocator);
 }
 
-/// Free the slice returned by `collectLaunchInstallRoPaths`.
-pub fn freeLaunchInstallRoPaths(allocator: std.mem.Allocator, paths: []const []const u8) void {
-    freeLaunchExecPaths(allocator, paths);
-}
+/// Free the slice returned by `collectLaunchInstallRoPaths` (same shape as exec paths).
+pub const freeLaunchInstallRoPaths = freeLaunchExecPaths;
 
 /// Optional argv rewrite for shell wrappers that `exec /abs/interp /abs/main …`.
 ///
@@ -706,10 +706,7 @@ pub fn expandShellWrapperLaunch(
 }
 
 /// Free owned launch argv from `expandShellWrapperLaunch` or `absoluteizeLaunchArgv`.
-pub fn freeExpandedShellWrapperArgv(allocator: std.mem.Allocator, argv: []const []const u8) void {
-    for (argv) |a| allocator.free(a);
-    allocator.free(argv);
-}
+pub const freeExpandedShellWrapperArgv = freeLaunchExecPaths;
 
 /// Resolve bare argv0 to an absolute path **before** PATH honesty filtering.
 ///
@@ -926,17 +923,30 @@ fn findPackageRootForFile(
     return null;
 }
 
-/// Make `path` absolute (lexical). Relative paths join cwd.
+/// Make `path` absolute for grant emission. Absolute inputs are duped as-is.
+/// Relative paths join a proven cwd (realpath, else quiet getcwd). When no
+/// absolute base can be proven, returns an empty owned string so callers skip
+/// the grant — never invents root-absolute `/{path}`.
 fn absolutePathForGrant(io: std.Io, allocator: std.mem.Allocator, path: []const u8) error{OutOfMemory}![]u8 {
     if (std.fs.path.isAbsolute(path)) {
         return allocator.dupe(u8, path) catch return error.OutOfMemory;
     }
-    const cwd = std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator) catch {
-        // Fall back to lexical join with "."; compile still requires absolute later.
-        return std.fmt.allocPrint(allocator, "/{s}", .{path}) catch return error.OutOfMemory;
-    };
-    defer allocator.free(cwd);
-    return std.fs.path.join(allocator, &.{ cwd, path }) catch return error.OutOfMemory;
+    if (std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator)) |cwd| {
+        defer allocator.free(cwd);
+        return std.fs.path.join(allocator, &.{ cwd, path }) catch return error.OutOfMemory;
+    } else |_| {}
+    // realpath failed (e.g. Seatbelt EPERM): try process getcwd without inventing `/rel`.
+    if (builtin.os.tag != .windows) {
+        var buf: [std.posix.PATH_MAX]u8 = undefined;
+        if (std.c.getcwd(&buf, buf.len)) |rc| {
+            const cwd = std.mem.sliceTo(rc, 0);
+            if (std.fs.path.isAbsolute(cwd)) {
+                return std.fs.path.join(allocator, &.{ cwd, path }) catch return error.OutOfMemory;
+            }
+        }
+    }
+    // Unproven absolute form — empty skip (callers treat len==0 as no grant).
+    return allocator.dupe(u8, "") catch return error.OutOfMemory;
 }
 
 fn realpathInto(path: []const u8, out: *[std.fs.max_path_bytes]u8) ?[]const u8 {

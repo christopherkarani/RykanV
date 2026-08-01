@@ -175,13 +175,12 @@ fn profileLabel(grade: ?[]const u8) []const u8 {
     return grade orelse "default";
 }
 
-/// Render the memorable shield card + dim machine receipt footer.
+/// Render the shield card + dim machine receipt footer.
 pub fn render(io: std.Io, stdout: anytype, input: CardInput) !void {
     const look = lookFor(input.posture);
     const a = theme.active(io, stdout);
     const use_unicode = a.supportsUnicode();
 
-    // Box geometry (double-line when unicode — more memorable "armor" feel).
     const tl: []const u8 = if (use_unicode) "╔" else "+";
     const tr: []const u8 = if (use_unicode) "╗" else "+";
     const bl: []const u8 = if (use_unicode) "╚" else "+";
@@ -192,8 +191,6 @@ pub fn render(io: std.Io, stdout: anytype, input: CardInput) !void {
     var fs_buf: [160]u8 = undefined;
     const files_human = humanizeFsScope(&fs_buf, input.fs_scope);
 
-    // Build body lines into fixed storage (no allocator).
-    // Live rows use a filled bullet when active; hollow otherwise.
     const bullet: []const u8 = if (input.posture == .active)
         (if (use_unicode) "●" else "*")
     else
@@ -223,7 +220,6 @@ pub fn render(io: std.Io, stdout: anytype, input: CardInput) !void {
         },
     ) catch "  (see receipt)";
 
-    // Title row: shield + SHIELD UP (and greppable OS sandbox status inside card).
     const status_word: []const u8 = switch (input.posture) {
         .active => "active",
         .prepared => "prepared",
@@ -235,7 +231,6 @@ pub fn render(io: std.Io, stdout: anytype, input: CardInput) !void {
     const title_plain = std.fmt.bufPrint(&title_buf, "  🛡  {s}", .{look.title}) catch look.title;
 
     var status_buf: [40]u8 = undefined;
-    // Greppable: "OS sandbox: active" (and siblings) live in the card header area.
     const status_plain = std.fmt.bufPrint(&status_buf, "  OS sandbox: {s}", .{status_word}) catch "  OS sandbox:";
 
     const body = [_][]const u8{
@@ -252,19 +247,16 @@ pub fn render(io: std.Io, stdout: anytype, input: CardInput) !void {
         footer_line,
     };
 
-    // Interior width from widest body line + padding.
     var content_width: usize = 0;
     for (body) |line| {
         const w = tui_render.displayWidth(line);
         if (w > content_width) content_width = w;
     }
-    // Floor so short states still look like a solid card.
     if (content_width < 48) content_width = 48;
-    const inner = content_width + 2; // side padding
+    const inner = content_width + 2;
 
     try stdout.writeAll("\n");
 
-    // Top border
     try theme.paint(io, stdout, look.token, tl);
     {
         var i: usize = 0;
@@ -276,13 +268,12 @@ pub fn render(io: std.Io, stdout: anytype, input: CardInput) !void {
     for (body) |line| {
         try theme.paint(io, stdout, look.token, v);
         try stdout.writeAll(" ");
-        // Emphasize title / status; mute blank and footer; normal for rows.
         if (std.mem.startsWith(u8, line, "  🛡")) {
             try theme.paintBold(io, stdout, look.token, line);
         } else if (std.mem.startsWith(u8, line, "  OS sandbox:")) {
             try theme.paintBold(io, stdout, .text_bright, line);
         } else if (line.len == 0) {
-            // empty interior
+            // blank body row (padding only)
         } else if (std.mem.eql(u8, line, look.tagline)) {
             try theme.paint(io, stdout, .muted, line);
         } else if (std.mem.indexOf(u8, line, "Files") != null or
@@ -290,7 +281,6 @@ pub fn render(io: std.Io, stdout: anytype, input: CardInput) !void {
             std.mem.indexOf(u8, line, "Secrets") != null or
             std.mem.indexOf(u8, line, "Profile") != null)
         {
-            // Instrument rows: success when live, muted when not.
             const row_token: theme.Token = if (input.posture == .active) .success else .text;
             try theme.paint(io, stdout, row_token, line);
         } else {
@@ -304,7 +294,6 @@ pub fn render(io: std.Io, stdout: anytype, input: CardInput) !void {
         try stdout.writeAll("\n");
     }
 
-    // Bottom border
     try theme.paint(io, stdout, look.token, bl);
     {
         var i: usize = 0;
@@ -313,11 +302,9 @@ pub fn render(io: std.Io, stdout: anytype, input: CardInput) !void {
     try theme.paint(io, stdout, look.token, br);
     try stdout.writeAll("\n");
 
-    // Dim machine receipt: preserves exact greppable tokens for scripts/tests.
     try stdout.writeAll("\n");
     try theme.paint(io, stdout, .muted, "  receipt");
     try stdout.writeAll("\n");
-    // posture line may include trailing newline when from formatSessionPostureLine.
     if (input.machine_posture_line.len > 0) {
         const posture_trimmed = std.mem.trim(u8, input.machine_posture_line, "\r\n");
         try stdout.writeAll("  ");
@@ -328,12 +315,11 @@ pub fn render(io: std.Io, stdout: anytype, input: CardInput) !void {
     try theme.paint(io, stdout, .muted, input.machine_os_line);
     try stdout.writeAll("\n");
 
-    // Optional grade token on its own when present (some greps look for key=value).
+    // Standalone seatbelt_profile= only when missing from the OS machine line.
     if (input.seatbelt_profile) |grade| {
         var token_buf: [48]u8 = undefined;
         const token = std.fmt.bufPrint(&token_buf, "seatbelt_profile={s}", .{grade}) catch null;
         if (token) |t| {
-            // Only emit standalone if not already in the machine OS line.
             if (std.mem.indexOf(u8, input.machine_os_line, t) == null) {
                 try stdout.writeAll("  ");
                 try theme.paint(io, stdout, .muted, t);
@@ -344,10 +330,6 @@ pub fn render(io: std.Io, stdout: anytype, input: CardInput) !void {
 
     try stdout.writeAll("\n");
 }
-
-// ────────────────────────────────────────────────────────────────────────────
-// Tests
-// ────────────────────────────────────────────────────────────────────────────
 
 test "humanizeFsScope: common active macOS tokens" {
     var buf: [160]u8 = undefined;
@@ -434,6 +416,5 @@ test "shouldHold: active on interactive TTY only" {
 }
 
 test "holdIfNeeded is a no-op under tests even when shouldHold would be true" {
-    // Must not sleep 2s in the unit suite.
     holdIfNeeded(std.testing.io, .active, true, false, false);
 }
