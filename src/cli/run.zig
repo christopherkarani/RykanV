@@ -1549,6 +1549,29 @@ fn writeSessionPosture(
     );
 }
 
+/// Format the greppable posture line into `buf` (includes trailing newline).
+fn formatSessionPostureLine(
+    buf: []u8,
+    network_mode: policy.schema.NetworkMode,
+    secretless: bool,
+    with_host_secrets: bool,
+    sandbox_posture: sandbox.posture.SessionPosture,
+    anthropic_gateway: bool,
+    openai_gateway: bool,
+) ![]const u8 {
+    return try std.fmt.bufPrint(
+        buf,
+        "Posture: secret-boundary={s} sandbox={s} gateway={s} escape={s} network={s}\n",
+        .{
+            if (secretless) "on" else "off",
+            @tagName(sandbox_posture),
+            gatewayPostureLabel(anthropic_gateway, openai_gateway),
+            if (with_host_secrets) "host-secrets" else "none",
+            network_mode.toString(),
+        },
+    );
+}
+
 fn printSessionStart(
     io: std.Io,
     stdout: anytype,
@@ -1575,15 +1598,7 @@ fn printSessionStart(
         count = 4;
     }
     try tui.render.keyValue(io, stdout, rows[0..count]);
-    try writeSessionPosture(
-        stdout,
-        network_mode,
-        secretless,
-        with_host_secrets,
-        os_receipt.posture,
-        anthropic_gateway,
-        openai_gateway,
-    );
+
     // Mechanism-neutral OS sandbox line (S-GLO-03) — never "Seatbelt"/"Landlock" here.
     // Sized for longest production landlock route-forced banner (see posture.session_banner_buf_len).
     var os_line_buf: [sandbox.posture.session_banner_buf_len]u8 = undefined;
@@ -1592,8 +1607,41 @@ fn printSessionStart(
         os_receipt,
         with_host_secrets,
     );
-    try stdout.print("{s}\n", .{os_line});
-    try stdout.writeAll("\n");
+    var posture_line_buf: [192]u8 = undefined;
+    const posture_line = try formatSessionPostureLine(
+        &posture_line_buf,
+        network_mode,
+        secretless,
+        with_host_secrets,
+        os_receipt.posture,
+        anthropic_gateway,
+        openai_gateway,
+    );
+
+    // Memorable shield card when the OS box is live (or trying). Quiet receipt
+    // lines otherwise so disabled sessions stay compact for humans and tests.
+    const dramatic = switch (os_receipt.posture) {
+        .active, .prepared, .unavailable, .failed => true,
+        .disabled => false,
+    };
+    if (dramatic) {
+        const grade_str: ?[]const u8 = if (os_receipt.seatbelt_profile) |g| g.toString() else null;
+        try tui.sandbox_card.render(io, stdout, .{
+            .posture = tui.sandbox_card.PostureKind.parse(@tagName(os_receipt.posture)),
+            .fs_scope = os_receipt.fs_scope,
+            .network_scope = os_receipt.network_scope,
+            .seatbelt_profile = grade_str,
+            .secretless = secretless,
+            .with_host_secrets = with_host_secrets,
+            .network_mode = network_mode.toString(),
+            .gateway_label = gatewayPostureLabel(anthropic_gateway, openai_gateway),
+            .machine_posture_line = posture_line,
+            .machine_os_line = os_line,
+        });
+    } else {
+        try stdout.writeAll(posture_line);
+        try stdout.print("{s}\n\n", .{os_line});
+    }
 }
 
 fn printSessionEnd(
@@ -2090,7 +2138,8 @@ test "run secretless injects a minted provider phantom and keeps raw secrets out
     try current.put("RANDOM_HOST_VALUE", "must-not-survive");
     try current.put("TOKEN_ghp_fakeSyntheticNameCanary1234567890", "ordinary");
 
-    var stdout_buf: [2048]u8 = undefined;
+    // Active secret-boundary path renders the multi-line SHIELD UP card + receipt.
+    var stdout_buf: [8192]u8 = undefined;
     var stderr_buf: [2048]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
@@ -2202,7 +2251,8 @@ test "run secretless resolves broker grant in parent and injects phantom only" {
     defer current.deinit();
     const path_env = if (std.c.getenv("PATH")) |path| std.mem.span(path) else "/usr/bin:/bin:/usr/sbin:/sbin";
     try current.put("PATH", path_env);
-    var stdout_buffer: [2048]u8 = undefined;
+    // Active secret-boundary path renders the multi-line SHIELD UP card + receipt.
+    var stdout_buffer: [8192]u8 = undefined;
     var stderr_buffer: [2048]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buffer);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buffer);
@@ -3875,7 +3925,8 @@ test "empty backpack non-host binary does not fail closed for missing claude con
 }
 
 test "session start banner is mechanism-neutral for disabled OS sandbox" {
-    var buf: [512]u8 = undefined;
+    // Shield card (active path) is multi-line; keep headroom for both postures.
+    var buf: [4096]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buf);
     const id = try core.session.generateSessionId(core.time.Timestamp.fromUnixSeconds(1_777_983_130));
     const session: core.session.Session = .{
@@ -3911,6 +3962,7 @@ test "session start banner is mechanism-neutral for disabled OS sandbox" {
         ),
     );
     const active_out = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, active_out, "SHIELD UP") != null);
     try std.testing.expect(std.mem.indexOf(u8, active_out, "secret-boundary=on") != null);
     try std.testing.expect(std.mem.indexOf(u8, active_out, "sandbox=active") != null);
     try std.testing.expect(std.mem.indexOf(u8, active_out, "gateway=anthropic") != null);
