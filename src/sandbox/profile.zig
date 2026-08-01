@@ -272,7 +272,11 @@ fn assertControlRootSafe(io: std.Io, path: []const u8) error{InvalidControlRoot}
 /// Default system read-only prefixes (no home, no /tmp, no broad data volume).
 ///
 /// macOS: never grant bare `/System` (covers `/System/Volumes/Data` homes/secrets)
-/// or bare `/Library` (keychain / host config). Only sealed framework/dyld trees.
+/// or bare `/Library` (keychain / host config). Only sealed framework/dyld trees
+/// plus **narrow** DNS/TLS leaves under `/etc` and `/private/etc` (not bare `/etc`).
+/// Without hosts/resolv/ssl, agent HTTPS dies with getaddrinfo ENOTFOUND and
+/// LibreSSL fopen of openssl.cnf — sockets can be "unrestricted" while name
+/// resolution and cert loading still fail closed on FS.
 /// Linux: include `/lib64`, `/etc`, `/dev`, and narrow `/proc/self` +
 /// `/proc/thread-self` for dynlinker / NSS / devices / self-procfs under Landlock
 /// Never bare `/proc` (same-uid peer environ/cmdline). `/dev` stays
@@ -290,6 +294,17 @@ pub fn defaultSystemRoPrefixes() []const []const u8 {
             // Framework surface only — never bare `/Library` (keychain/config).
             "/Library/Frameworks",
             "/Library/Apple",
+            // DNS: hosts + resolv.conf (symlink → /private/var/run/resolv.conf).
+            // Both Users-form /etc and firmlink /private/etc so open succeeds.
+            "/etc/hosts",
+            "/private/etc/hosts",
+            "/etc/resolv.conf",
+            "/private/etc/resolv.conf",
+            "/var/run/resolv.conf",
+            "/private/var/run/resolv.conf",
+            // TLS: LibreSSL/curl/openssl.cnf + CA bundle (not bare /etc).
+            "/etc/ssl",
+            "/private/etc/ssl",
         },
         else => &[_][]const u8{
             "/usr",
@@ -820,6 +835,29 @@ fn serializeCanonical(
 }
 
 // --- tests (P1-U) ----------------------------------------------------------------
+
+test "macOS default system RO includes DNS and TLS leaves not bare /etc" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var compiled = try compileProfile(allocator, .{
+        .workspace_root = "/tmp/orca-profile-dns-tls-ws",
+        // null → production defaults
+        .system_ro_prefixes = null,
+    });
+    defer compiled.deinit();
+
+    try std.testing.expect(compiled.hasGrant("/private/etc/ssl", .ro));
+    try std.testing.expect(compiled.hasGrant("/etc/ssl", .ro));
+    try std.testing.expect(compiled.hasGrant("/private/etc/hosts", .ro));
+    try std.testing.expect(compiled.hasGrant("/private/var/run/resolv.conf", .ro));
+    try std.testing.expect(compiled.isGrantedReadable("/private/etc/ssl/cert.pem"));
+    try std.testing.expect(compiled.isGrantedReadable("/private/etc/hosts"));
+    // Never bare /etc content grant.
+    try std.testing.expect(!compiled.hasGrant("/etc", .ro));
+    try std.testing.expect(!compiled.hasGrant("/private/etc", .ro));
+    try std.testing.expect(!compiled.isGrantedReadable("/etc/passwd"));
+    try std.testing.expect(!compiled.isGrantedReadable("/private/etc/passwd"));
+}
 
 test "P1-U-01 workspace grant is RW for absolute workspace" {
     const allocator = std.testing.allocator;
