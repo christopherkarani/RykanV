@@ -1284,6 +1284,31 @@ test "control root .git symlink on disk fails closed" {
     try std.testing.expectError(error.InvalidControlRoot, compiled.validateControlRootsOnDisk(io));
 }
 
+// Linked worktrees / some submodules use a gitdir *file* at workspace/.git.
+// Non-directory control roots must fail closed (same class as symlink) so
+// attach does not treat a file as a writable tree under the parent RW grant.
+test "control root .git as gitdir file fails closed" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.writeFile(io, .{ .sub_path = ".git", .data = "gitdir: /tmp/elsewhere/worktrees/wt1\n" });
+    const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(ws_root);
+
+    var compiled = try compileProfile(allocator, .{
+        .workspace_root = ws_root,
+        .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
+    });
+    defer compiled.deinit();
+
+    try std.testing.expectError(error.InvalidControlRoot, compiled.validateControlRootsOnDisk(io));
+}
+
 test "isPathWithin handles filesystem root and prefix boundaries" {
     try std.testing.expect(isPathWithin("/", "/"));
     try std.testing.expect(isPathWithin("/etc", "/"));
