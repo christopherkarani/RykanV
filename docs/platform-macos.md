@@ -78,6 +78,10 @@ Invalid `ORCA_SEATBELT_PROFILE` values are **ignored with a stderr warning** and
 
 When the proxy backend is active and OS sandbox attach succeeds, Orca renders the child Seatbelt profile without broad `(allow network*)` and permits outbound TCP only to the Orca loopback proxy port.
 
+**Agent hosts (`ryk pi`, `ryk claude`, …):** mediation (proxy + route-force) is the default. If either cannot start, the session **fails closed**. Escape with `ryk run --network open -- <agent>` (loud unrestricted warning). Kill switch: `ORCA_AGENT_NETWORK_DEFAULT=legacy`. See `docs/network.md`.
+
+**Residual:** UDP/QUIC/WebRTC are not locked by Seatbelt proxy-port TCP rules; do not claim full transparent network lockdown.
+
 Under **`hardened` / `compatible`**, inbound TCP and bind remain allowed so agents can still start listeners (dev servers, test databases, ephemeral binds); route forcing is outbound connect mediation, not a listener lockdown (same product intent as Landlock connect-only rules).
 
 Under **`strict`**, inbound/bind are omitted (listener lockdown — intentional Landlock parity break). Without route force, `strict` also omits broad `network*` so deny-default blocks network.
