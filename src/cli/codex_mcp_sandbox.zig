@@ -85,6 +85,7 @@ pub fn prepare(
         try std.fs.path.join(allocator, &.{ workspace_root, selected_cwd });
     defer if (owned_inventory_cwd) |path| allocator.free(path);
     const effective_inventory_cwd = owned_inventory_cwd orelse selected_cwd;
+    // Single bind: reuse prepare()'s trusted host key; do not re-resolve argv0.
     const result = runCanonicalInventorySandboxed(
         io,
         allocator,
@@ -92,6 +93,7 @@ pub fn prepare(
         effective_inventory_cwd,
         workspace_root,
         env_map,
+        identity.hostKey(),
     ) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.SessionTmpPrepareFailed => return error.SessionTmpPrepareFailed,
@@ -133,6 +135,8 @@ fn runCanonicalInventorySandboxed(
     inventory_cwd: []const u8,
     workspace_root: []const u8,
     env_map: *const std.process.Environ.Map,
+    /// Already-bound trusted host_config_table key from prepare() (empty → no host grants).
+    trusted_host_key: []const u8,
 ) !std.process.RunResult {
     if (builtin.os.tag != .macos or inventory_argv.len == 0) return error.InventoryCommandFailed;
     std.Io.Dir.cwd().access(io, "/usr/bin/sandbox-exec", .{}) catch return error.InventoryCommandFailed;
@@ -146,18 +150,10 @@ fn runCanonicalInventorySandboxed(
     }
 
     const home = env_map.get("HOME") orelse "";
-    // Inventory subject is already gated as trusted codex in prepare(); grants use
-    // the table key only after that bind (never a free-floating "codex" string).
-    var inv_identity = try sandbox.host_identity.resolveHostIdentity(
-        io,
-        allocator,
-        inventory_argv[0],
-        env_map,
-        .{ .workspace_root = workspace_root },
-    );
-    defer inv_identity.deinit(allocator);
-    const host_ro = if (inv_identity.isTrusted() and std.mem.eql(u8, inv_identity.hostKey(), "codex"))
-        try sandbox.host_config_grants.collectHostConfigPaths(io, allocator, "codex", home)
+    // Grants use the single-bound table key from prepare() only — never re-resolve
+    // argv0 or hardcode a host string here (M-7 / F-02 single-bind).
+    const host_ro = if (trusted_host_key.len > 0)
+        try sandbox.host_config_grants.collectHostConfigPaths(io, allocator, trusted_host_key, home)
     else
         try allocator.alloc([]const u8, 0);
     defer sandbox.host_config_grants.freeHostConfigPaths(allocator, host_ro);

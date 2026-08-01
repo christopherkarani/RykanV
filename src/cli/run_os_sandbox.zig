@@ -480,24 +480,28 @@ pub fn applyForRun(
     // macOS: Apple developer toolchains (CLT / Xcode Developer) so /usr/bin/git
     // libxcselect stubs work for every agent (opencode, hermes, …) without a
     // false “install developer tools” dialog — never bare /Applications.
+    // Nested scopes so mergeOwnedPathLists consume + errdefer pairs end before
+    // later fallible work (otherwise OOM after consume double-frees inputs).
     const base_launch_ro_paths: []const []const u8 = blk: {
-        const install_system: []const []const u8 = if (launch_argv0) |argv0| inner: {
-            const install_ro = try sandbox.apply.collectLaunchInstallRoPaths(launch_io, allocator, argv0, env_map);
-            errdefer sandbox.apply.freeLaunchInstallRoPaths(allocator, install_ro);
-            const system_ro = try sandbox.host_config_grants.collectHostSystemRoPaths(allocator, trusted_host);
-            errdefer sandbox.host_config_grants.freeHostSystemRoPaths(allocator, system_ro);
-            break :inner try mergeOwnedPathLists(allocator, install_ro, system_ro);
-        } else try allocator.alloc([]const u8, 0);
-        errdefer freeMergedPathList(allocator, install_system);
+        const install_system_toolchain: []const []const u8 = merge_ist: {
+            const install_system: []const []const u8 = if (launch_argv0) |argv0| inner: {
+                const install_ro = try sandbox.apply.collectLaunchInstallRoPaths(launch_io, allocator, argv0, env_map);
+                errdefer sandbox.apply.freeLaunchInstallRoPaths(allocator, install_ro);
+                const system_ro = try sandbox.host_config_grants.collectHostSystemRoPaths(allocator, trusted_host);
+                errdefer sandbox.host_config_grants.freeHostSystemRoPaths(allocator, system_ro);
+                break :inner try mergeOwnedPathLists(allocator, install_ro, system_ro);
+            } else try allocator.alloc([]const u8, 0);
+            errdefer freeMergedPathList(allocator, install_system);
 
-        const toolchain_ro = try sandbox.host_config_grants.collectMacosDeveloperToolchainRoPaths(
-            launch_io,
-            allocator,
-            env_map,
-        );
-        errdefer sandbox.host_config_grants.freeHostSystemRoPaths(allocator, toolchain_ro);
-        // mergeOwnedPathLists consumes both inputs on success.
-        const install_system_toolchain = try mergeOwnedPathLists(allocator, install_system, toolchain_ro);
+            const toolchain_ro = try sandbox.host_config_grants.collectMacosDeveloperToolchainRoPaths(
+                launch_io,
+                allocator,
+                env_map,
+            );
+            errdefer sandbox.host_config_grants.freeHostSystemRoPaths(allocator, toolchain_ro);
+            // Consumes both inputs on success; errdefers above only run if this fails.
+            break :merge_ist try mergeOwnedPathLists(allocator, install_system, toolchain_ro);
+        };
         errdefer freeMergedPathList(allocator, install_system_toolchain);
 
         // Parent-of-workspace AGENTS.md / CLAUDE.md (file RO only). Pi and peers
@@ -788,6 +792,21 @@ pub fn formatOsSandboxBannerLine(
         .failed => "OS sandbox: failed",
         .disabled => "OS sandbox: disabled",
     };
+}
+
+// Ownership contract: mergeOwnedPathLists frees both inputs on success. Callers
+// must end errdefer of those inputs before later fallible work (see applyForRun
+// base_launch_ro_paths nested merge_ist scope).
+test "mergeOwnedPathLists consumes inputs on success" {
+    const a = try std.testing.allocator.alloc([]const u8, 1);
+    a[0] = try std.testing.allocator.dupe(u8, "/install");
+    const b = try std.testing.allocator.alloc([]const u8, 1);
+    b[0] = try std.testing.allocator.dupe(u8, "/toolchain");
+    const merged = try mergeOwnedPathLists(std.testing.allocator, a, b);
+    defer freeMergedPathList(std.testing.allocator, merged);
+    try std.testing.expectEqual(@as(usize, 2), merged.len);
+    try std.testing.expectEqualStrings("/install", merged[0]);
+    try std.testing.expectEqualStrings("/toolchain", merged[1]);
 }
 
 test "PrepareActivity start/clear is idempotent without residual success glyph" {

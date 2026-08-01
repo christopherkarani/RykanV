@@ -2913,10 +2913,7 @@ test "workspace basename spoof does not empty-backpack without secretless" {
     );
     try std.testing.expectEqual(exit_codes.success, code);
     // F-02: basename spoof must not auto empty-backpack (would reject --os-sandbox off).
-    try std.testing.expect(
-        std.mem.indexOf(u8, stdout_writer.buffered(), "secret-boundary=off") != null or
-            std.mem.indexOf(u8, stdout_writer.buffered(), "secret-boundary=on") == null,
-    );
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "secret-boundary=off") != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "requires an active OS sandbox") == null);
     const ran = try tmp.dir.readFileAlloc(std.testing.io, "child-out.txt", std.testing.allocator, .limited(64));
     defer std.testing.allocator.free(ran);
@@ -3335,7 +3332,8 @@ test "run require-backend multi-feature does not short-circuit after network-pro
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "required backend feature is unavailable") != null);
 }
 
-// Phase 1 network honesty: host-alias path forces proxy + route-force (or fail closed).
+// Phase 1 network honesty: trusted host-alias path forces proxy + route-force (or fail closed).
+// F-02: mediation keys off trusted install identity, not workspace basename alone.
 test "run host-alias path mediates network with proxy and route-force or fails closed" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
     try skipUnlessOsSandboxBackend();
@@ -3365,16 +3363,20 @@ test "run host-alias path mediates network with proxy and route-force or fails c
     const policy_path = try tmp.dir.realPathFileAlloc(std.testing.io, "policy.yaml", std.testing.allocator);
     defer std.testing.allocator.free(policy_path);
 
-    // Fake host-named binary so empty-backpack + mediation fire without real agent install.
+    // Trusted install fixture (not workspace basename spoof).
+    var trust_tmp = std.testing.tmpDir(.{});
+    defer trust_tmp.cleanup();
+    const trust_root = try trust_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(trust_root);
     {
-        const script = try tmp.dir.createFile(std.testing.io, "pi", .{});
+        const script = try trust_tmp.dir.createFile(std.testing.io, "pi", .{});
         defer script.close(std.testing.io);
         try script.writeStreamingAll(std.testing.io,
             \\#!/bin/sh
             \\env > child-env.txt
             \\
         );
-        try tmp.dir.setFilePermissions(std.testing.io, "pi", @enumFromInt(0o755), .{});
+        try trust_tmp.dir.setFilePermissions(std.testing.io, "pi", @enumFromInt(0o755), .{});
     }
     var home_tmp = std.testing.tmpDir(.{});
     defer home_tmp.cleanup();
@@ -3385,20 +3387,21 @@ test "run host-alias path mediates network with proxy and route-force or fails c
 
     var current = std.process.Environ.Map.init(std.testing.allocator);
     defer current.deinit();
-    const path_env = if (std.c.getenv("PATH")) |path| std.mem.span(path) else "/usr/bin:/bin:/usr/sbin:/sbin";
+    const system_path = if (std.c.getenv("PATH")) |path| std.mem.span(path) else "/usr/bin:/bin:/usr/sbin:/sbin";
+    const path_env = try std.fmt.allocPrint(std.testing.allocator, "{s}:{s}", .{ trust_root, system_path });
+    defer std.testing.allocator.free(path_env);
     try current.put("PATH", path_env);
     try current.put("HOME", fake_home);
+    try current.put("ORCA_TRUSTED_HOST_PREFIXES", trust_root);
 
     var stdout_buf: [16384]u8 = undefined;
     var stderr_buf: [8192]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
-    const pi_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/pi", .{root});
-    defer std.testing.allocator.free(pi_path);
-
+    // Bare alias on trusted PATH — must empty-backpack + mediate (F-02).
     const code = try commandForTestWithEnvAndShellEvaluator(
-        &.{ "--workspace", root, "--policy", policy_path, "--mode", "observe", "--", pi_path },
+        &.{ "--workspace", root, "--policy", policy_path, "--mode", "observe", "--", "pi" },
         &stdout_writer,
         &stderr_writer,
         .ignore,
@@ -3406,7 +3409,7 @@ test "run host-alias path mediates network with proxy and route-force or fails c
         shell_eval.mockDaemonAllowEvaluator,
     );
     // Mediated path must either succeed with route-forced env or refuse to start.
-    // Basename is "pi" → host alias → empty backpack + proxy + require route-force.
+    // Trusted host "pi" → empty backpack + proxy + require route-force.
     if (code == exit_codes.success) {
         const written = try tmp.dir.readFileAlloc(std.testing.io, "child-env.txt", std.testing.allocator, .limited(16384));
         defer std.testing.allocator.free(written);
@@ -3438,6 +3441,82 @@ test "run host-alias path mediates network with proxy and route-force or fails c
     }
 }
 
+// F-02 negative control: workspace-planted `pi` is basename-only, not trusted mediation.
+test "run workspace pi basename does not mediate network without trusted install" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+    {
+        const policy_file = try tmp.dir.createFile(std.testing.io, "policy.yaml", .{});
+        defer policy_file.close(std.testing.io);
+        try policy_file.writeStreamingAll(std.testing.io,
+            \\version: 1
+            \\mode: observe
+            \\env:
+            \\  inherit: true
+            \\network:
+            \\  mode: allowlist
+            \\  allow:
+            \\    - "api.github.com"
+            \\commands:
+            \\  allow:
+            \\    - "/bin/sh *"
+            \\    - "true"
+        );
+    }
+    const policy_path = try tmp.dir.realPathFileAlloc(std.testing.io, "policy.yaml", std.testing.allocator);
+    defer std.testing.allocator.free(policy_path);
+
+    {
+        const script = try tmp.dir.createFile(std.testing.io, "pi", .{});
+        defer script.close(std.testing.io);
+        try script.writeStreamingAll(std.testing.io,
+            \\#!/bin/sh
+            \\env > spoof-env.txt
+            \\
+        );
+        try tmp.dir.setFilePermissions(std.testing.io, "pi", @enumFromInt(0o755), .{});
+    }
+    var current = std.process.Environ.Map.init(std.testing.allocator);
+    defer current.deinit();
+    const path_env = if (std.c.getenv("PATH")) |path| std.mem.span(path) else "/usr/bin:/bin:/usr/sbin:/sbin";
+    try current.put("PATH", path_env);
+    try current.put("HOME", root);
+
+    var stdout_buf: [8192]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const pi_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/pi", .{root});
+    defer std.testing.allocator.free(pi_path);
+
+    // Workspace spoof: no empty-backpack mediation; --os-sandbox off is legal.
+    const code = try commandForTestWithEnvAndShellEvaluator(
+        &.{
+            "--workspace",  root,
+            "--policy",     policy_path,
+            "--mode",       "observe",
+            "--os-sandbox", "off",
+            "--",           pi_path,
+        },
+        &stdout_writer,
+        &stderr_writer,
+        .ignore,
+        &current,
+        shell_eval.mockDaemonAllowEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.success, code);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "secret-boundary=off") != null);
+    const written = try tmp.dir.readFileAlloc(std.testing.io, "spoof-env.txt", std.testing.allocator, .limited(16384));
+    defer std.testing.allocator.free(written);
+    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_PROXY_ROUTE_FORCED=true") == null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_PROXY_MEDIATED_NETWORK_ENFORCEMENT=active") == null);
+}
+
 test "run host-alias --network open does not require route-force and warns loudly" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
@@ -3464,15 +3543,20 @@ test "run host-alias --network open does not require route-force and warns loudl
     const policy_path = try tmp.dir.realPathFileAlloc(std.testing.io, "policy.yaml", std.testing.allocator);
     defer std.testing.allocator.free(policy_path);
 
+    // Trusted install fixture (F-02): basename alone is not an agent host.
+    var trust_tmp = std.testing.tmpDir(.{});
+    defer trust_tmp.cleanup();
+    const trust_root = try trust_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(trust_root);
     {
-        const script = try tmp.dir.createFile(std.testing.io, "pi", .{});
+        const script = try trust_tmp.dir.createFile(std.testing.io, "pi", .{});
         defer script.close(std.testing.io);
         try script.writeStreamingAll(std.testing.io,
             \\#!/bin/sh
             \\env > open-env.txt
             \\
         );
-        try tmp.dir.setFilePermissions(std.testing.io, "pi", @enumFromInt(0o755), .{});
+        try trust_tmp.dir.setFilePermissions(std.testing.io, "pi", @enumFromInt(0o755), .{});
     }
     var home_tmp = std.testing.tmpDir(.{});
     defer home_tmp.cleanup();
@@ -3482,19 +3566,19 @@ test "run host-alias --network open does not require route-force and warns loudl
 
     var current = std.process.Environ.Map.init(std.testing.allocator);
     defer current.deinit();
-    const path_env = if (std.c.getenv("PATH")) |path| std.mem.span(path) else "/usr/bin:/bin:/usr/sbin:/sbin";
+    const system_path = if (std.c.getenv("PATH")) |path| std.mem.span(path) else "/usr/bin:/bin:/usr/sbin:/sbin";
+    const path_env = try std.fmt.allocPrint(std.testing.allocator, "{s}:{s}", .{ trust_root, system_path });
+    defer std.testing.allocator.free(path_env);
     try current.put("PATH", path_env);
     try current.put("HOME", fake_home);
+    try current.put("ORCA_TRUSTED_HOST_PREFIXES", trust_root);
 
     var stdout_buf: [8192]u8 = undefined;
     var stderr_buf: [4096]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
-    const pi_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/pi", .{root});
-    defer std.testing.allocator.free(pi_path);
-
-    // --os-sandbox off is illegal with empty backpack; open escape still needs sandbox for host alias.
+    // --os-sandbox off is illegal with empty backpack; open escape still needs sandbox for trusted host.
     // Use observe + default auto/on path. If backend missing, skip.
     try skipUnlessOsSandboxBackend();
 
@@ -3504,7 +3588,7 @@ test "run host-alias --network open does not require route-force and warns loudl
             "--policy",    policy_path,
             "--mode",      "observe",
             "--network",   "open",
-            "--",          pi_path,
+            "--",          "pi",
         },
         &stdout_writer,
         &stderr_writer,
@@ -3537,6 +3621,7 @@ test "run host-alias --network open does not require route-force and warns loudl
 
 test "run host-alias with host-secrets and os-sandbox off fails closed under mediation" {
     // M-1: mediation must not spawn when route-force cannot apply (sandbox off).
+    // F-02: requires trusted host identity (not workspace basename) for mediation.
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
     var tmp = std.testing.tmpDir(.{});
@@ -3563,29 +3648,43 @@ test "run host-alias with host-secrets and os-sandbox off fails closed under med
     const policy_path = try tmp.dir.realPathFileAlloc(std.testing.io, "policy.yaml", std.testing.allocator);
     defer std.testing.allocator.free(policy_path);
 
+    var trust_tmp = std.testing.tmpDir(.{});
+    defer trust_tmp.cleanup();
+    const trust_root = try trust_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(trust_root);
     {
-        const script = try tmp.dir.createFile(std.testing.io, "pi", .{});
+        const script = try trust_tmp.dir.createFile(std.testing.io, "pi", .{});
         defer script.close(std.testing.io);
         try script.writeStreamingAll(std.testing.io,
             \\#!/bin/sh
             \\env > child-env-off.txt
             \\exit 0
         );
-        try tmp.dir.setFilePermissions(std.testing.io, "pi", @enumFromInt(0o755), .{});
+        try trust_tmp.dir.setFilePermissions(std.testing.io, "pi", @enumFromInt(0o755), .{});
     }
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    try home_tmp.dir.createDirPath(std.testing.io, ".pi");
+    const fake_home = try home_tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(fake_home);
+
     var current = std.process.Environ.Map.init(std.testing.allocator);
     defer current.deinit();
-    const path_env = if (std.c.getenv("PATH")) |path| std.mem.span(path) else "/usr/bin:/bin:/usr/sbin:/sbin";
+    const system_path = if (std.c.getenv("PATH")) |path| std.mem.span(path) else "/usr/bin:/bin:/usr/sbin:/sbin";
+    const path_env = try std.fmt.allocPrint(std.testing.allocator, "{s}:{s}", .{ trust_root, system_path });
+    defer std.testing.allocator.free(path_env);
     try current.put("PATH", path_env);
+    try current.put("HOME", fake_home);
+    try current.put("ORCA_TRUSTED_HOST_PREFIXES", trust_root);
 
     var stdout_buf: [4096]u8 = undefined;
     var stderr_buf: [4096]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
-    const pi_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/pi", .{root});
-    defer std.testing.allocator.free(pi_path);
-
+    // Trusted host + --with-host-secrets keeps mediation on; sandbox off cannot route-force.
+    // Empty-backpack requires sandbox, so --with-host-secrets is needed to reach mediation fail-closed
+    // for the os-sandbox-off path (secret boundary off, network mediation still on).
     const code = try commandForTestWithEnvAndShellEvaluator(
         &.{
             "--workspace",         root,
@@ -3593,7 +3692,7 @@ test "run host-alias with host-secrets and os-sandbox off fails closed under med
             "--mode",              "observe",
             "--with-host-secrets", "--os-sandbox",
             "off",                 "--",
-            pi_path,
+            "pi",
         },
         &stdout_writer,
         &stderr_writer,

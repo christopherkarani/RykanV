@@ -111,7 +111,7 @@ pub fn resolveHostIdentity(
     errdefer allocator.free(path);
     defer if (resolved.link_path) |lp| allocator.free(lp);
 
-    if (isTmpPath(path, env_map)) {
+    if (try isTmpPath(io, allocator, path, env_map)) {
         return genericTakePath(path, deny_tmp);
     }
     if (options.workspace_root) |ws| {
@@ -252,7 +252,34 @@ fn realpathOwned(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ![]
     return try allocator.dupe(u8, canonical_z);
 }
 
-fn isTmpPath(path: []const u8, env_map: ?*const std.process.Environ.Map) bool {
+/// Strip macOS Data-volume firmlink prefix so `/System/Volumes/Data/Users/…` → `/Users/…`.
+/// Local twin of `run_os_sandbox.normalizeMacosUsersPath` (no cross-module import).
+fn normalizeMacosUsersPath(path: []const u8) []const u8 {
+    const data_prefix = "/System/Volumes/Data";
+    if (std.mem.startsWith(u8, path, data_prefix) and path.len > data_prefix.len and
+        path[data_prefix.len] == '/' and std.mem.startsWith(u8, path[data_prefix.len..], "/Users/"))
+    {
+        return path[data_prefix.len..];
+    }
+    return path;
+}
+
+/// `isPathWithinRoot` plus Darwin `/var` ↔ `/private/var` dual form (no allocation).
+fn isPathWithinRootOrPrivateVarDual(path: []const u8, root: []const u8) bool {
+    if (isPathWithinRoot(path, root)) return true;
+    // realpath binary often `/private/var/...` while TMPDIR env is `/var/...`
+    if (std.mem.startsWith(u8, path, "/private") and isPathWithinRoot(path["/private".len..], root)) return true;
+    // inverse: path `/var/...`, root `/private/var/...`
+    if (std.mem.startsWith(u8, root, "/private") and isPathWithinRoot(path, root["/private".len..])) return true;
+    return false;
+}
+
+fn isTmpPath(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!bool {
     const prefixes = [_][]const u8{
         "/tmp/",
         "/private/tmp/",
@@ -265,6 +292,10 @@ fn isTmpPath(path: []const u8, env_map: ?*const std.process.Environ.Map) bool {
     // Exact /tmp etc.
     if (std.mem.eql(u8, path, "/tmp") or std.mem.eql(u8, path, "/private/tmp")) return true;
 
+    // Darwin `/var/folders` is process-temp via TMPDIR, not a blanket deny: test
+    // fixtures and some tools live under the same tree. Match TMPDIR with
+    // `/var`↔`/private/var` dual form + best-effort realpath (apply.zig class).
+    // Inject of `/var/folders` / `/private/var` is rejected separately (M-2).
     const tmpdir = blk: {
         if (env_map) |map| {
             if (map.get("TMPDIR")) |t| break :blk t;
@@ -273,7 +304,15 @@ fn isTmpPath(path: []const u8, env_map: ?*const std.process.Environ.Map) bool {
         break :blk null;
     };
     if (tmpdir) |td| {
-        if (td.len > 0 and isPathWithinRoot(path, td)) return true;
+        if (td.len == 0) return false;
+        // Lexical TMPDIR vs realpath path: `/var/folders` ↔ `/private/var/folders`.
+        if (isPathWithinRootOrPrivateVarDual(path, td)) return true;
+        // Best-effort realpath of TMPDIR (custom temp dirs with form mismatch).
+        const td_real = realpathOwned(io, allocator, td) catch null;
+        if (td_real) |tr| {
+            defer allocator.free(tr);
+            if (isPathWithinRoot(path, tr) or isPathWithinRootOrPrivateVarDual(path, tr)) return true;
+        }
     }
     return false;
 }
@@ -295,7 +334,6 @@ fn isTrustedInstallPath(
     env_map: ?*const std.process.Environ.Map,
     extra: []const []const u8,
 ) error{OutOfMemory}!bool {
-    _ = io;
     for (builtin_trusted_prefixes) |prefix| {
         if (pathHasTrustedPrefix(path, prefix)) return true;
     }
@@ -304,7 +342,7 @@ fn isTrustedInstallPath(
     }
 
     // ORCA_TRUSTED_HOST_PREFIXES=colon-separated absolute prefixes (tests + ops extend).
-    // Reject over-broad prefixes (filesystem root, bare $HOME, single-component).
+    // Reject over-broad prefixes (filesystem root, bare $HOME, tmp/shared, bare brew roots).
     const injected = blk: {
         if (env_map) |map| {
             if (map.get("ORCA_TRUSTED_HOST_PREFIXES")) |v| break :blk v;
@@ -320,44 +358,72 @@ fn isTrustedInstallPath(
         }
     }
 
-    const home = blk: {
+    const home_raw = blk: {
         if (env_map) |map| {
             if (map.get("HOME")) |h| break :blk h;
         }
         if (std.c.getenv("HOME")) |h| break :blk std.mem.span(h);
         break :blk "";
     };
-    if (home.len > 0 and std.fs.path.isAbsolute(home)) {
-        // $HOME/.local/bin/ — user-writable residual (documented FP).
-        const local_bin = try std.fs.path.join(allocator, &.{ home, ".local/bin" });
-        defer allocator.free(local_bin);
-        if (isPathWithinRoot(path, local_bin)) return true;
+    if (home_raw.len > 0 and std.fs.path.isAbsolute(home_raw)) {
+        // Realpath HOME best-effort + Users↔Data dual forms (firmlink FN for ~/.local installs).
+        const home_real = realpathOwned(io, allocator, home_raw) catch null;
+        defer if (home_real) |hr| allocator.free(hr);
 
-        // $HOME/.local/lib/ — npm/npx realpath targets (…/node_modules/…/bin/codex.js).
-        // User-writable residual (same FP class as .local/bin); not bare $HOME/.local.
-        const local_lib = try std.fs.path.join(allocator, &.{ home, ".local/lib" });
-        defer allocator.free(local_lib);
-        if (isPathWithinRoot(path, local_lib)) return true;
+        var data_home_owned: ?[]const u8 = null;
+        defer if (data_home_owned) |d| allocator.free(d);
 
-        // $HOME/.local/share/ — self-contained agent installs (e.g. claude versions/).
-        const local_share = try std.fs.path.join(allocator, &.{ home, ".local/share" });
-        defer allocator.free(local_share);
-        if (isPathWithinRoot(path, local_share)) return true;
+        var homes_buf: [4][]const u8 = undefined;
+        var homes_len: usize = 0;
+        const addHome = struct {
+            fn add(buf: *[4][]const u8, len: *usize, h: []const u8) void {
+                if (h.len == 0) return;
+                for (buf.*[0..len.*]) |existing| {
+                    if (std.mem.eql(u8, existing, h)) return;
+                }
+                if (len.* >= buf.len) return;
+                buf.*[len.*] = h;
+                len.* += 1;
+            }
+        }.add;
 
-        // $HOME/.opencode/ — OpenCode self-extract / bin tree.
-        const opencode_home = try std.fs.path.join(allocator, &.{ home, ".opencode" });
-        defer allocator.free(opencode_home);
-        if (isPathWithinRoot(path, opencode_home)) return true;
+        addHome(&homes_buf, &homes_len, home_raw);
+        if (home_real) |hr| {
+            addHome(&homes_buf, &homes_len, hr);
+            const norm = normalizeMacosUsersPath(hr);
+            if (norm.ptr != hr.ptr) addHome(&homes_buf, &homes_len, norm);
+        }
+        const home_users = normalizeMacosUsersPath(home_raw);
+        if (home_users.ptr != home_raw.ptr) addHome(&homes_buf, &homes_len, home_users);
+        // Data-volume dual of Users-form HOME (binary realpath may be Data-prefixed).
+        if (std.mem.startsWith(u8, home_users, "/Users")) {
+            data_home_owned = try std.fs.path.join(allocator, &.{ "/System/Volumes/Data", home_users });
+            addHome(&homes_buf, &homes_len, data_home_owned.?);
+        }
 
-        // $HOME/.npm-global/bin/
-        const npm_global = try std.fs.path.join(allocator, &.{ home, ".npm-global/bin" });
-        defer allocator.free(npm_global);
-        if (isPathWithinRoot(path, npm_global)) return true;
+        // Also match when path is Data-form and home roots are Users-form via normalize.
+        const path_users = normalizeMacosUsersPath(path);
 
-        // $HOME/.nvm/versions/node/<ver>/bin/<host>
-        const nvm_root = try std.fs.path.join(allocator, &.{ home, ".nvm/versions/node" });
-        defer allocator.free(nvm_root);
-        if (isNvmNodeBinPath(path, nvm_root)) return true;
+        const home_rels = [_][]const u8{
+            ".local/bin",
+            ".local/lib",
+            ".local/share",
+            ".opencode",
+            ".npm-global/bin",
+        };
+        for (homes_buf[0..homes_len]) |home| {
+            for (home_rels) |rel| {
+                const joined = try std.fs.path.join(allocator, &.{ home, rel });
+                defer allocator.free(joined);
+                if (isPathWithinRoot(path, joined)) return true;
+                if (path_users.ptr != path.ptr and isPathWithinRoot(path_users, joined)) return true;
+            }
+            // $HOME/.nvm/versions/node/<ver>/bin/<host>
+            const nvm_root = try std.fs.path.join(allocator, &.{ home, ".nvm/versions/node" });
+            defer allocator.free(nvm_root);
+            if (isNvmNodeBinPath(path, nvm_root)) return true;
+            if (path_users.ptr != path.ptr and isNvmNodeBinPath(path_users, nvm_root)) return true;
+        }
     }
 
     return false;
@@ -401,18 +467,58 @@ fn allowsLinkBasenameFallback(realpath: []const u8) bool {
 
 fn isAcceptableInjectedTrustPrefix(prefix: []const u8, env_map: ?*const std.process.Environ.Map) bool {
     if (prefix.len < 4 or !std.fs.path.isAbsolute(prefix)) return false;
-    if (std.mem.eql(u8, prefix, "/") or std.mem.eql(u8, prefix, "/Users") or
-        std.mem.eql(u8, prefix, "/home") or std.mem.eql(u8, prefix, "/var") or
-        std.mem.eql(u8, prefix, "/tmp") or std.mem.eql(u8, prefix, "/private"))
-        return false;
-    // Require at least two non-empty components after root (e.g. /opt/homebrew).
+
+    // Trim trailing slash for policy compares (except "/").
+    var p = prefix;
+    while (p.len > 1 and p[p.len - 1] == '/') p = p[0 .. p.len - 1];
+
+    // Exact over-broad roots (filesystem, home roots, Darwin tmp/shared, bare brew trees).
+    // Bare `/usr/local` and `/opt/homebrew` require a deeper component (bin/Cellar/lib/…).
+    const exact_deny = [_][]const u8{
+        "/",
+        "/Users",
+        "/home",
+        "/var",
+        "/tmp",
+        "/private",
+        "/private/var",
+        "/private/tmp",
+        "/var/tmp",
+        "/private/var/tmp",
+        "/var/folders",
+        "/private/var/folders",
+        "/Users/Shared",
+        "/usr/local",
+        "/opt/homebrew",
+    };
+    for (exact_deny) |d| {
+        if (std.mem.eql(u8, p, d)) return false;
+    }
+
+    // Reject inject prefixes under tmp / shared / private-var trees (user-writable).
+    const under_deny = [_][]const u8{
+        "/tmp/",
+        "/private/tmp/",
+        "/var/tmp/",
+        "/private/var/tmp/",
+        "/var/folders/",
+        "/private/var/folders/",
+        "/private/var/",
+        "/Users/Shared/",
+    };
+    for (under_deny) |d| {
+        if (std.mem.startsWith(u8, p, d)) return false;
+    }
+
+    // Require at least two non-empty components after root (e.g. /opt/homebrew/bin).
     var components: usize = 0;
-    var it = std.mem.splitScalar(u8, prefix, '/');
+    var it = std.mem.splitScalar(u8, p, '/');
     while (it.next()) |part| {
         if (part.len == 0) continue;
         components += 1;
     }
     if (components < 2) return false;
+
     const home = blk: {
         if (env_map) |map| {
             if (map.get("HOME")) |h| break :blk h;
@@ -420,10 +526,11 @@ fn isAcceptableInjectedTrustPrefix(prefix: []const u8, env_map: ?*const std.proc
         if (std.c.getenv("HOME")) |h| break :blk std.mem.span(h);
         break :blk "";
     };
-    if (home.len > 0 and (std.mem.eql(u8, prefix, home) or std.mem.eql(u8, prefix, "/Users") or
-        (prefix.len == home.len + 1 and std.mem.startsWith(u8, prefix, home) and prefix[home.len] == '/')))
-        return false;
-    if (home.len > 0 and std.mem.eql(u8, prefix, home)) return false;
+    if (home.len > 0) {
+        var h = home;
+        while (h.len > 1 and h[h.len - 1] == '/') h = h[0 .. h.len - 1];
+        if (std.mem.eql(u8, p, h)) return false;
+    }
     return true;
 }
 
@@ -454,6 +561,11 @@ fn isNvmNodeBinPath(path: []const u8, nvm_versions_node: []const u8) bool {
 }
 
 // ─── tests ───────────────────────────────────────────────────────────────────
+
+/// Shadow process TMPDIR so zig `tmpDir` fixtures under Darwin `/var/folders`
+/// are not auto-classified as tmp after the dual-form TMPDIR fence (M-1).
+/// Production launches do not plant trusted hosts under process temp.
+const test_tmpdir_sentinel = "/tmp/ryk-host-identity-test-tmpdir-sentinel";
 
 test "resolveHostIdentity trusted-prefix symlink to /bin/sh named codex is generic" {
     const allocator = std.testing.allocator;
@@ -621,6 +733,8 @@ test "resolveHostIdentity trusted fixture under injected prefix grants host" {
     defer env_map.deinit();
     try env_map.put("HOME", home);
     try env_map.put("PATH", trust_root); // bare "codex" resolves here
+    // Fixture lives under zig tmpDir (process TMPDIR); shadow so tmp fence does not deny.
+    try env_map.put("TMPDIR", test_tmpdir_sentinel);
 
     var id = try resolveHostIdentity(io, allocator, "codex", &env_map, .{
         .extra_trusted_prefixes = &.{trust_root},
@@ -664,6 +778,7 @@ test "resolveHostIdentity wrong basename under trusted prefix is generic" {
     var env_map = std.process.Environ.Map.init(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", "/Users/synthetic");
+    try env_map.put("TMPDIR", test_tmpdir_sentinel);
 
     var id = try resolveHostIdentity(io, allocator, binary, &env_map, .{
         .extra_trusted_prefixes = &.{trust_root},
@@ -693,15 +808,19 @@ test "resolveHostIdentity trusted grok table host" {
     var env_map = std.process.Environ.Map.init(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", "/Users/synthetic");
-    try env_map.put("ORCA_TRUSTED_HOST_PREFIXES", trust_root);
+    try env_map.put("TMPDIR", test_tmpdir_sentinel);
+    // zig tmpDir lands under Darwin `/var/folders` — inject denylist rejects that
+    // tree (M-2); use the test-only extra_trusted_prefixes hatch for the fixture.
 
-    var id = try resolveHostIdentity(io, allocator, binary, &env_map, .{});
+    var id = try resolveHostIdentity(io, allocator, binary, &env_map, .{
+        .extra_trusted_prefixes = &.{trust_root},
+    });
     defer id.deinit(allocator);
     try std.testing.expect(id.isTrusted());
     try std.testing.expectEqualStrings("grok", id.host.?);
 }
 
-test "resolveHostIdentity ORCA_TRUSTED_HOST_PREFIXES injection" {
+test "resolveHostIdentity trusted pi table host via extra prefix" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -721,12 +840,42 @@ test "resolveHostIdentity ORCA_TRUSTED_HOST_PREFIXES injection" {
     var env_map = std.process.Environ.Map.init(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", "/Users/synthetic");
-    try env_map.put("ORCA_TRUSTED_HOST_PREFIXES", trust_root);
+    try env_map.put("TMPDIR", test_tmpdir_sentinel);
 
-    var id = try resolveHostIdentity(io, allocator, binary, &env_map, .{});
+    var id = try resolveHostIdentity(io, allocator, binary, &env_map, .{
+        .extra_trusted_prefixes = &.{trust_root},
+    });
     defer id.deinit(allocator);
     try std.testing.expect(id.isTrusted());
     try std.testing.expectEqualStrings("pi", id.host.?);
+}
+
+test "isTrustedInstallPath ORCA_TRUSTED_HOST_PREFIXES accepts narrow non-tmp inject" {
+    // Pure path match: acceptable inject prefix (not bare brew / tmp / Shared).
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", "/Users/synthetic");
+    try env_map.put("ORCA_TRUSTED_HOST_PREFIXES", "/Users/synthetic/.tools/bin");
+
+    try std.testing.expect(try isTrustedInstallPath(
+        io,
+        allocator,
+        "/Users/synthetic/.tools/bin/codex",
+        &env_map,
+        &.{},
+    ));
+    // Over-broad inject must not open trust (M-2).
+    try env_map.put("ORCA_TRUSTED_HOST_PREFIXES", "/private/var:/var/folders:/Users/Shared:/usr/local");
+    try std.testing.expect(!try isTrustedInstallPath(
+        io,
+        allocator,
+        "/private/var/folders/xx/T/codex",
+        &env_map,
+        &.{},
+    ));
 }
 
 test "pathHasTrustedPrefix cellar and bin forms" {
@@ -775,6 +924,9 @@ test "resolveHostIdentity trusted npm-style codex.js under local bin" {
     const local_bin = try std.fs.path.join(allocator, &.{ home, ".local/bin" });
     defer allocator.free(local_bin);
     try env_map.put("PATH", local_bin);
+    // HOME fixture is under zig tmpDir; shadow process TMPDIR so dual-form fence
+    // does not deny the synthetic ~/.local install tree.
+    try env_map.put("TMPDIR", test_tmpdir_sentinel);
 
     var id = try resolveHostIdentity(io, allocator, "codex", &env_map, .{});
     defer id.deinit(allocator);
@@ -818,6 +970,8 @@ test "resolveHostIdentity workspace hardlink of trusted binary is generic" {
     defer env_map.deinit();
     try env_map.put("HOME", "/Users/synthetic");
     try env_map.put("PATH", "/usr/bin:/bin");
+    // Workspace fixture under process TMPDIR must not be classified as tmp first.
+    try env_map.put("TMPDIR", test_tmpdir_sentinel);
 
     var id = try resolveHostIdentity(io, allocator, spoof, &env_map, .{
         .workspace_root = ws_path,
@@ -879,8 +1033,21 @@ test "isAcceptableInjectedTrustPrefix rejects empty slash home and tmp" {
     try std.testing.expect(!isAcceptableInjectedTrustPrefix("/home", null));
     try std.testing.expect(!isAcceptableInjectedTrustPrefix("/var", null));
     try std.testing.expect(!isAcceptableInjectedTrustPrefix("/opt", null)); // single component after root
-    try std.testing.expect(isAcceptableInjectedTrustPrefix("/opt/homebrew", null));
+    // Bare brew trees are over-broad; require a deeper component (bin/Cellar/lib/…).
+    try std.testing.expect(!isAcceptableInjectedTrustPrefix("/opt/homebrew", null));
+    try std.testing.expect(!isAcceptableInjectedTrustPrefix("/usr/local", null));
     try std.testing.expect(isAcceptableInjectedTrustPrefix("/opt/homebrew/bin", null));
+    try std.testing.expect(isAcceptableInjectedTrustPrefix("/usr/local/bin", null));
+
+    // Darwin tmp / shared roots (M-2 incomplete-inject-denylist).
+    try std.testing.expect(!isAcceptableInjectedTrustPrefix("/private/var", null));
+    try std.testing.expect(!isAcceptableInjectedTrustPrefix("/private/var/folders", null));
+    try std.testing.expect(!isAcceptableInjectedTrustPrefix("/var/folders", null));
+    try std.testing.expect(!isAcceptableInjectedTrustPrefix("/private/tmp", null));
+    try std.testing.expect(!isAcceptableInjectedTrustPrefix("/var/tmp", null));
+    try std.testing.expect(!isAcceptableInjectedTrustPrefix("/Users/Shared", null));
+    try std.testing.expect(!isAcceptableInjectedTrustPrefix("/private/var/folders/xx/yy/T", null));
+    try std.testing.expect(!isAcceptableInjectedTrustPrefix("/Users/Shared/Agents", null));
 
     var env_map = std.process.Environ.Map.init(std.testing.allocator);
     defer env_map.deinit();
@@ -889,4 +1056,155 @@ test "isAcceptableInjectedTrustPrefix rejects empty slash home and tmp" {
     try std.testing.expect(!isAcceptableInjectedTrustPrefix("/Users/synthetic/", &env_map));
     // Narrow home subdir is acceptable as an ops extension (still not bare home).
     try std.testing.expect(isAcceptableInjectedTrustPrefix("/Users/synthetic/.local/bin", &env_map));
+}
+
+test "isTmpPath dual TMPDIR private-var form and classic tmp prefixes" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    try std.testing.expect(try isTmpPath(io, allocator, "/tmp/claude", null));
+    try std.testing.expect(try isTmpPath(io, allocator, "/private/tmp/claude", null));
+    try std.testing.expect(try isTmpPath(io, allocator, "/var/tmp/claude", null));
+    try std.testing.expect(!try isTmpPath(io, allocator, "/opt/homebrew/bin/claude", null));
+
+    // Lexical TMPDIR `/var/folders/...` vs realpath-style `/private/var/folders/...` path
+    // (Darwin default — apply.zig isUngrantedHostTmpdir dual-form class).
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("TMPDIR", "/var/folders/ns/xmz0/T/");
+    try std.testing.expect(try isTmpPath(
+        io,
+        allocator,
+        "/private/var/folders/ns/xmz0/T/planted/claude",
+        &env_map,
+    ));
+    // Inverse dual: lexical private form, path without /private.
+    try env_map.put("TMPDIR", "/private/var/folders/ns/xmz0/T/");
+    try std.testing.expect(try isTmpPath(
+        io,
+        allocator,
+        "/var/folders/ns/xmz0/T/planted/claude",
+        &env_map,
+    ));
+    // Outside TMPDIR must not match solely because path is under /var/folders.
+    try env_map.put("TMPDIR", "/var/folders/other/T/");
+    try std.testing.expect(!try isTmpPath(
+        io,
+        allocator,
+        "/private/var/folders/ns/xmz0/T/planted/claude",
+        &env_map,
+    ));
+}
+
+test "resolveHostIdentity realpath under TMPDIR with lexical dual form denies tmp" {
+    // M-1: binary realpath under process temp must hit deny_tmp even when env TMPDIR
+    // is the non-private `/var/folders/...` form (Darwin default).
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(tmp_path);
+
+    // Only assert deny_tmp when the tmpDir actually lands under Darwin folders/tmp.
+    const under_tmp_tree = std.mem.startsWith(u8, tmp_path, "/var/folders/") or
+        std.mem.startsWith(u8, tmp_path, "/private/var/folders/") or
+        std.mem.startsWith(u8, tmp_path, "/tmp/") or
+        std.mem.startsWith(u8, tmp_path, "/private/tmp/");
+    if (!under_tmp_tree) return error.SkipZigTest;
+
+    {
+        const f = try tmp.dir.createFile(io, "claude", .{});
+        defer f.close(io);
+        try f.writeStreamingAll(io, "#!/bin/sh\n");
+        try tmp.dir.setFilePermissions(io, "claude", @enumFromInt(0o755), .{});
+    }
+    const spoof = try std.fs.path.join(allocator, &.{ tmp_path, "claude" });
+    defer allocator.free(spoof);
+
+    // Lexical TMPDIR: prefer dual form of realpath when private-prefixed.
+    const lexical_tmpdir = if (std.mem.startsWith(u8, tmp_path, "/private"))
+        tmp_path["/private".len..]
+    else
+        tmp_path;
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", "/Users/synthetic");
+    try env_map.put("PATH", "/usr/bin:/bin");
+    try env_map.put("TMPDIR", lexical_tmpdir);
+    // Even with over-broad inject, tmp fence must win first (deny_tmp, not trusted).
+    try env_map.put("ORCA_TRUSTED_HOST_PREFIXES", tmp_path);
+
+    var id = try resolveHostIdentity(io, allocator, spoof, &env_map, .{});
+    defer id.deinit(allocator);
+    try std.testing.expect(!id.isTrusted());
+    try std.testing.expectEqualStrings(deny_tmp, id.deny_reason.?);
+}
+
+test "isTrustedInstallPath HOME joins match Data-volume realpath form" {
+    // M-3: lexical HOME `/Users/…` must trust binary realpath under
+    // `/System/Volumes/Data/Users/…/.local/bin/...` (firmlink dual form).
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", "/Users/synthetic");
+
+    const data_local_bin = "/System/Volumes/Data/Users/synthetic/.local/bin/codex";
+    try std.testing.expect(try isTrustedInstallPath(io, allocator, data_local_bin, &env_map, &.{}));
+
+    const data_nvm = "/System/Volumes/Data/Users/synthetic/.nvm/versions/node/v22.0.0/bin/claude";
+    try std.testing.expect(try isTrustedInstallPath(io, allocator, data_nvm, &env_map, &.{}));
+
+    const data_opencode = "/System/Volumes/Data/Users/synthetic/.opencode/bin/opencode";
+    try std.testing.expect(try isTrustedInstallPath(io, allocator, data_opencode, &env_map, &.{}));
+
+    // Non-home install under Data volume must not falsely match.
+    const data_other = "/System/Volumes/Data/Users/other/.local/bin/codex";
+    try std.testing.expect(!try isTrustedInstallPath(io, allocator, data_other, &env_map, &.{}));
+
+    // Lexical Users-form still matches.
+    try std.testing.expect(try isTrustedInstallPath(
+        io,
+        allocator,
+        "/Users/synthetic/.local/lib/node_modules/x/bin/codex.js",
+        &env_map,
+        &.{},
+    ));
+}
+
+test "ORCA_TRUSTED_HOST_PREFIXES rejects Darwin tmp Shared and bare brew roots" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var trust = std.testing.tmpDir(.{});
+    defer trust.cleanup();
+    // Plant under a path that is NOT itself a tmp tree when possible; if zig tmp
+    // lands under folders, inject of that path is rejected by the denylist and
+    // identity stays generic either way.
+    const trust_root = try trust.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(trust_root);
+    {
+        const f = try trust.dir.createFile(io, "codex", .{});
+        defer f.close(io);
+        try f.writeStreamingAll(io, "#!/bin/sh\n");
+        try trust.dir.setFilePermissions(io, "codex", @enumFromInt(0o755), .{});
+    }
+    const binary = try std.fs.path.join(allocator, &.{ trust_root, "codex" });
+    defer allocator.free(binary);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", "/Users/synthetic");
+    try env_map.put("PATH", "/usr/bin:/bin");
+    try env_map.put("ORCA_TRUSTED_HOST_PREFIXES", "/private/var:/var/folders:/Users/Shared:/usr/local:/opt/homebrew");
+
+    var id = try resolveHostIdentity(io, allocator, binary, &env_map, .{});
+    defer id.deinit(allocator);
+    try std.testing.expect(!id.isTrusted());
+    try std.testing.expect(id.deny_reason != null);
+    try std.testing.expectEqualStrings("", id.hostKey());
 }
