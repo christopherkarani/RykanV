@@ -1309,12 +1309,20 @@ fn isRegularFile(io: std.Io, path: []const u8) bool {
 /// - Session `active` only after agent-child apply handshake + `activateAfterHandshake` (S-GLO-01)
 pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
     switch (boundary.mode) {
-        .off => return .{
-            .receipt = posture.disabledReceipt(),
-            .env_scrubbed = false,
-            .env_launch_allowlisted = false,
-            .env_keys_removed = 0,
-            .profile_compiled = false,
+        .off => {
+            // Route-force cannot apply with sandbox off; fail closed when required
+            // (e.g. host-alias network mediation or --require-backend network_enforce).
+            if (boundary.require_network_route_forcing) {
+                setFailReason(boundary, "network_route_forcing_unavailable");
+                return error.RequireFailed;
+            }
+            return .{
+                .receipt = posture.disabledReceipt(),
+                .env_scrubbed = false,
+                .env_launch_allowlisted = false,
+                .env_keys_removed = 0,
+                .profile_compiled = false,
+            };
         },
         .on, .auto => {},
     }
@@ -1335,7 +1343,8 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
         error.OutOfMemory => return error.OutOfMemory,
         else => {
             setFailReason(boundary, "profile_compile_failed");
-            if (boundary.mode == .on) return error.RequireFailed;
+            // Fail closed when mode is on, or when route-force is required (mediation).
+            if (boundary.mode == .on or boundary.require_network_route_forcing) return error.RequireFailed;
             return .{
                 .receipt = posture.unavailableReceipt("profile_compile_failed"),
                 .env_scrubbed = false,
@@ -1352,7 +1361,7 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
     const control_io = control_io_rt.io();
     compiled.validateControlRootsOnDisk(control_io) catch {
         setFailReason(boundary, "control_root_unsafe");
-        if (boundary.mode == .on) return error.RequireFailed;
+        if (boundary.mode == .on or boundary.require_network_route_forcing) return error.RequireFailed;
         return .{
             .receipt = posture.unavailableReceipt("control_root_unsafe"),
             .env_scrubbed = false,
@@ -1411,7 +1420,8 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
         // Fail closed when materials require session tmp (M-8): never lie with classic /tmp.
         if (!ensureWorkspaceSessionTmp(boundary.workspace_root)) {
             setFailReason(boundary, "session_tmp_prepare_failed");
-            if (boundary.mode == .on) return error.RequireFailed;
+            // Materials abandoned → no live route-force; fail closed when required.
+            if (boundary.mode == .on or boundary.require_network_route_forcing) return error.RequireFailed;
             return .{
                 .receipt = posture.failedReceipt("session_tmp_prepare_failed"),
                 .env_scrubbed = scrubbed,
@@ -1482,7 +1492,7 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
             const sbpl_z = platform.takeSeatbeltSbpl() orelse {
                 // prepared_child + seatbelt without SBPL is a contract bug — fail closed.
                 setFailReason(boundary, "seatbelt_sbpl_missing");
-                if (boundary.mode == .on) return error.RequireFailed;
+                if (boundary.mode == .on or boundary.require_network_route_forcing) return error.RequireFailed;
                 return .{
                     .receipt = posture.failedReceipt("seatbelt_sbpl_missing"),
                     .env_scrubbed = scrubbed,
@@ -1517,7 +1527,7 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
         },
         .unavailable => {
             setFailReason(boundary, platform.reason_code);
-            if (boundary.mode == .on) return error.RequireFailed;
+            if (boundary.mode == .on or boundary.require_network_route_forcing) return error.RequireFailed;
             return .{
                 .receipt = posture.unavailableReceipt(platform.reason_code),
                 .env_scrubbed = scrubbed,
@@ -1529,7 +1539,7 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
         },
         .failed => {
             setFailReason(boundary, platform.reason_code);
-            if (boundary.mode == .on) return error.RequireFailed;
+            if (boundary.mode == .on or boundary.require_network_route_forcing) return error.RequireFailed;
             return .{
                 .receipt = posture.failedReceipt(platform.reason_code),
                 .env_scrubbed = scrubbed,
@@ -2171,6 +2181,21 @@ test "require_network_route_forcing without proxy port fails closed" {
         .workspace_root = "/tmp/orca-apply-ws-route-force-req",
         .env_map = null,
         .network_proxy_port = null,
+        .require_network_route_forcing = true,
+        .fail_reason_out = &fail_reason,
+    });
+    try std.testing.expectError(error.RequireFailed, err);
+    try std.testing.expectEqualStrings("network_route_forcing_unavailable", fail_reason);
+}
+
+test "require_network_route_forcing with sandbox off fails closed" {
+    var fail_reason: []const u8 = "unset";
+    const err = applyBeforeExec(.{
+        .allocator = std.testing.allocator,
+        .mode = .off,
+        .workspace_root = "/tmp/orca-apply-ws-route-force-off",
+        .env_map = null,
+        .network_proxy_port = 18080,
         .require_network_route_forcing = true,
         .fail_reason_out = &fail_reason,
     });

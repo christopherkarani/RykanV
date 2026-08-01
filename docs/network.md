@@ -102,7 +102,7 @@ The `credentials.use` value is a reference name for policy, audit, and external 
 - With `network.backend: proxy` plus OS sandbox attach, Orca installs child OS network rules where supported and exports `ORCA_PROXY_ROUTE_FORCED=true`. Scope differs by mechanism:
   - **macOS Seatbelt:** outbound TCP only to the Orca **loopback** proxy port (`localhost:port` SBPL). Under default `--seatbelt-profile hardened` (and `compatible`), inbound/bind remain open (Landlock connect-only parity). Under `strict`, inbound/bind are denied. Residual mach-lookup / XPC isolation is still out of scope (see `docs/platform-macos.md` Seatbelt residual).
   - **Linux Landlock (ABI >= 4):** TCP **port-scoped only** (any remote IP on the proxy port; not address-scoped). **UDP/QUIC unrestricted.** Do **not** describe Landlock route force as loopback-only.
-- Host aliases **require** route-force when mediation is on (equivalent to `--require-backend network_enforce` for those launches only).
+- Host aliases **require** route-force when mediation is on: `apply` fails closed if route-force cannot start (including sandbox `off` / soft-degrade), and `ryk run` refuses spawn when mediation is requested but `network_route_forced` is still false.
 - `--require-backend network-proxy` is satisfied only when the explicit proxy backend starts successfully. `--require-backend network_enforce` is satisfied only by a route-forced OS sandbox session, not by proxy startup alone.
 
 ### Residuals (not claimed locked)

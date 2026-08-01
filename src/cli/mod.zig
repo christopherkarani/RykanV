@@ -801,8 +801,9 @@ test "command-specific help works through help command and command flag" {
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "ryk run") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Examples:") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "ryk run -- <custom-command>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "defaults network mode to ask") != null or
-        std.mem.indexOf(u8, stdout_writer.buffered(), "network mode allowlist") != null);
+    // Phase 1 dual contract: host-alias allowlist + non-alias ask.
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "network mode allowlist") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "defaults network mode to ask") != null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 
     stdout_writer = .fixed(&stdout_buf);

@@ -31,7 +31,8 @@ const RunOptions = struct {
     secretless: bool = false,
     with_host_secrets: bool = false,
     inherit_env: bool = false,
-    /// Set by `--network` / `--no-network`. Null means apply agent-primary default (ask).
+    /// Set by `--network` / `--no-network`. Null → host-alias mediated default allowlist
+    /// (unless legacy kill switch); otherwise ask. Explicit flags always win.
     network_mode: ?policy.schema.NetworkMode = null,
     network_backend: ?policy.schema.NetworkBackend = null,
     /// OS FS sandbox mode (`--os-sandbox`). Default auto (on when available).
@@ -347,7 +348,8 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         };
         if (proxy_runtime) |runtime| {
             try intercept.network.appendProxyEnvironment(&filtered_env.env_map, runtime.bindUrl(), "localhost,127.0.0.1,::1");
-            try filtered_env.env_map.put("ORCA_PROXY_MEDIATED_NETWORK_ENFORCEMENT", "active");
+            // Do not claim MEDIATED=active until route-force is proven (post-apply).
+            try filtered_env.env_map.put("ORCA_PROXY_MEDIATED_NETWORK_ENFORCEMENT", "bind-only");
             try filtered_env.env_map.put("ORCA_PROXY_BIND", runtime.bindUrl());
             // ORCA_PROXY_ROUTE_FORCED=false is set by appendProxyEnvironment; only flip to true when route-forced below.
             try filtered_env.env_map.put("ORCA_PROXY_HTTPS_VISIBILITY", "host-port-only");
@@ -425,8 +427,20 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         .ok => |r| r,
     };
     defer apply_result.deinit();
+    // Belt-and-suspenders: mediation must achieve real route-force before spawn
+    // (covers apply soft-degrade paths that return .ok without route-force).
+    if (mediate_agent_network and !apply_result.network_route_forced) {
+        try stderr.writeAll(
+            "Agent host network mediation requires OS route-force onto the loopback proxy.\n" ++
+                "Fix sandbox attach / proxy, or re-run with:\n" ++
+                "  ryk run --network open -- <agent>\n" ++
+                "(or set ORCA_AGENT_NETWORK_DEFAULT=legacy for one-release pre-change defaults).\n",
+        );
+        return exit_codes.unsupported;
+    }
     if (proxy_runtime != null and apply_result.network_route_forced) {
         try filtered_env.env_map.put("ORCA_PROXY_ROUTE_FORCED", "true");
+        try filtered_env.env_map.put("ORCA_PROXY_MEDIATED_NETWORK_ENFORCEMENT", "active");
         // Honest for both Seatbelt and Landlock: this feature is TCP localhost
         // proxy-port scoped (not full transparent network / not UDP-scoped).
         try filtered_env.env_map.put("ORCA_TRANSPARENT_NETWORK_ENFORCEMENT", "tcp-port-route-forced");
@@ -853,6 +867,18 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 };
                 try self.auditNetworkDecision(session, "*", .network_connect_allowed, decision);
             }
+            // Kill switch: durable audit marker (stderr already warned at start).
+            if (std.c.getenv("ORCA_AGENT_NETWORK_DEFAULT")) |raw| {
+                if (std.mem.eql(u8, std.mem.span(raw), "legacy")) {
+                    try self.auditNetworkDecision(session, "*", .network_connect_attempt, null);
+                    const decision: core.decision.Decision = .{
+                        .result = .allow,
+                        .reason = "network mediation disabled; ORCA_AGENT_NETWORK_DEFAULT=legacy",
+                        .ci_may_proceed = true,
+                    };
+                    try self.auditNetworkDecision(session, "*", .network_connect_allowed, decision);
+                }
+            }
             if (mode == .off) {
                 try self.auditNetworkDecision(session, "*", .network_connect_attempt, null);
                 const decision: core.decision.Decision = .{
@@ -952,10 +978,10 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         .workspace_root = workspace_root_for_policy,
         .shell_evaluator = shell_evaluator,
     };
-    // Fail closed if proxy dies when policy/backend requires it, or when the
-    // session is route-forced onto the proxy port (M-7).
+    // Fail closed if proxy dies when policy/backend requires it, session is
+    // route-forced onto the proxy port (M-7), or host-alias mediation is active.
     const proxy_fail_closed = proxy_runtime != null and ((proxy_required_by_backend and (effective_policy_mode == .strict or effective_policy_mode == .ci or requiresBackend(options, .network_proxy_enforce))) or
-        apply_result.network_route_forced);
+        apply_result.network_route_forced or mediate_agent_network);
     const gateway_required = anthropic_gateway != null or openai_gateway != null;
     var boundary_health_context: BoundaryHealthContext = undefined;
     const health_monitor: ?supervisor.HealthMonitor = if (proxy_fail_closed or gateway_required) blk: {
@@ -1490,16 +1516,14 @@ fn isAgentHostCommand(options: RunOptions) bool {
 
 /// Host aliases default to proxy + OS route-force unless the user escapes.
 /// Non-alias `ryk run -- <cmd>` is unchanged (no silent lockdown).
+/// Escapes only: `--network open` and `ORCA_AGENT_NETWORK_DEFAULT=legacy`.
+/// `--network-backend decision-only` does **not** opt out (would recreate labels-only theater).
 fn wantsMediatedAgentNetwork(options: RunOptions, agent_net_default: AgentNetworkDefault) bool {
     if (agent_net_default != .mediated) return false;
     if (!isAgentHostCommand(options)) return false;
     if (options.network_mode) |mode| {
         // Explicit unrestricted escape — no route-force required.
         if (mode == .open) return false;
-    }
-    // Explicit decision-only opts out of mediation (honesty warning is caller's job).
-    if (options.network_backend) |backend| {
-        if (backend == .decision_only) return false;
     }
     return true;
 }
@@ -1528,11 +1552,11 @@ fn applyNetworkOverlay(
     agent_net_default: AgentNetworkDefault,
 ) !void {
     selected_policy.network.mode = cliNetworkMode(options, agent_net_default);
-    if (options.network_backend) |backend| {
-        selected_policy.network.backend = backend;
-    } else if (wantsMediatedAgentNetwork(options, agent_net_default)) {
-        // Host aliases: force proxy so allowlist/ask labels are not decision-only theater.
+    if (wantsMediatedAgentNetwork(options, agent_net_default)) {
+        // Host aliases: always force proxy (overrides decision-only) so labels are not theater.
         selected_policy.network.backend = .proxy;
+    } else if (options.network_backend) |backend| {
+        selected_policy.network.backend = backend;
     }
     const runtime_allow = options.allowNetwork();
     if (runtime_allow.len == 0) return;
@@ -2609,6 +2633,11 @@ test "run defaults host agents to empty backpack and keeps generic commands unch
             .command_argv = &.{host},
             .network_mode = .open,
         }, .mediated));
+        // decision-only does not opt out of mediation (would recreate labels-only theater).
+        try std.testing.expect(wantsMediatedAgentNetwork(.{
+            .command_argv = &.{host},
+            .network_backend = .decision_only,
+        }, .mediated));
     }
     try std.testing.expectEqual(
         intercept.env.SecretBoundary.empty_backpack,
@@ -2766,7 +2795,19 @@ test "applyNetworkOverlay host-alias defaults force proxy backend and allowlist 
     try std.testing.expectEqual(policy.schema.NetworkBackend.decision_only, pol.network.effectiveBackend());
     try std.testing.expect(!wantsMediatedAgentNetwork(open_opts, .mediated));
 
-    // Explicit --network-backend wins when set.
+    // decision-only does not disable mediation: still force proxy on host aliases.
+    pol.network.backend = .decision_only;
+    try applyNetworkOverlay(std.testing.allocator, &pol, .{
+        .command_argv = &.{"pi"},
+        .network_backend = .decision_only,
+    }, .mediated);
+    try std.testing.expectEqual(policy.schema.NetworkBackend.proxy, pol.network.backend.?);
+    try std.testing.expect(wantsMediatedAgentNetwork(.{
+        .command_argv = &.{"pi"},
+        .network_backend = .decision_only,
+    }, .mediated));
+
+    // Explicit --network-backend proxy still works with mediation.
     pol.network.backend = null;
     try applyNetworkOverlay(std.testing.allocator, &pol, .{
         .command_argv = &.{"claude"},
@@ -3165,6 +3206,8 @@ test "run host-alias path mediates network with proxy and route-force or fails c
         try std.testing.expect(std.mem.indexOf(u8, written, "HTTP_PROXY=http://127.0.0.1:") != null or
             std.mem.indexOf(u8, written, "HTTP_PROXY=http://localhost:") != null);
         try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_PROXY_ROUTE_FORCED=true") != null);
+        try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_PROXY_MEDIATED_NETWORK_ENFORCEMENT=active") != null);
+        try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_NETWORK_MODE=allowlist") != null);
         try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND_NETWORK_ENFORCEMENT=tcp-port-route-forced") != null or
             std.mem.indexOf(u8, written, "ORCA_TRANSPARENT_NETWORK_ENFORCEMENT=tcp-port-route-forced") != null);
         // Honesty: not labels-only unavailable with a populated allowlist.
@@ -3274,6 +3317,80 @@ test "run host-alias --network open does not require route-force and warns loudl
     defer std.testing.allocator.free(events);
     try std.testing.expect(std.mem.indexOf(u8, events, "network unrestricted") != null or
         std.mem.indexOf(u8, events, "escape used") != null);
+}
+
+test "run host-alias with host-secrets and os-sandbox off fails closed under mediation" {
+    // M-1: mediation must not spawn when route-force cannot apply (sandbox off).
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+    {
+        const policy_file = try tmp.dir.createFile(std.testing.io, "policy.yaml", .{});
+        defer policy_file.close(std.testing.io);
+        try policy_file.writeStreamingAll(std.testing.io,
+            \\version: 1
+            \\mode: observe
+            \\env:
+            \\  inherit: true
+            \\network:
+            \\  mode: allowlist
+            \\  allow:
+            \\    - "example.com"
+            \\commands:
+            \\  allow:
+            \\    - "*"
+        );
+    }
+    const policy_path = try tmp.dir.realPathFileAlloc(std.testing.io, "policy.yaml", std.testing.allocator);
+    defer std.testing.allocator.free(policy_path);
+
+    {
+        const script = try tmp.dir.createFile(std.testing.io, "pi", .{});
+        defer script.close(std.testing.io);
+        try script.writeStreamingAll(std.testing.io,
+            \\#!/bin/sh
+            \\env > child-env-off.txt
+            \\exit 0
+        );
+        try tmp.dir.setFilePermissions(std.testing.io, "pi", @enumFromInt(0o755), .{});
+    }
+    var current = std.process.Environ.Map.init(std.testing.allocator);
+    defer current.deinit();
+    const path_env = if (std.c.getenv("PATH")) |path| std.mem.span(path) else "/usr/bin:/bin:/usr/sbin:/sbin";
+    try current.put("PATH", path_env);
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const pi_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/pi", .{root});
+    defer std.testing.allocator.free(pi_path);
+
+    const code = try commandForTestWithEnvAndShellEvaluator(
+        &.{
+            "--workspace",        root,
+            "--policy",           policy_path,
+            "--mode",             "observe",
+            "--with-host-secrets",
+            "--os-sandbox",       "off",
+            "--",                 pi_path,
+        },
+        &stdout_writer,
+        &stderr_writer,
+        .ignore,
+        &current,
+        shell_eval.mockDaemonAllowEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.unsupported, code);
+    const err = stderr_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, err, "network mediation") != null or
+        std.mem.indexOf(u8, err, "route-force") != null or
+        std.mem.indexOf(u8, err, "network_route_forcing") != null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "--network open") != null);
 }
 
 test "run non-alias default does not force proxy backend" {
