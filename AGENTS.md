@@ -1,21 +1,18 @@
 # RykanV Agent Instructions
 
+User-global behavior lives in `~/.codex/AGENTS.md` (plan, surgical defaults, lessons). **This file owns** toolchain, verification gates, product invariants, and repo boundaries — it wins on stack-specific conflict.
+
 ## Working Style
 
 - Verify the real checkout and files before changing anything.
 - Use TDD for non-trivial changes.
 - Keep edits surgical and tied to the request.
-- If there any remaining issues at the end of a task fix them
+- Fix remaining issues at end of task before calling done.
+- Be concise; surface known unknowns. Use precise engineering language (this is a security/runtime product).
 
-## Response Style
-- Be concise
-- Avoid Techincal jargon
-- explain concepts the way you would to a 16 year old
-- Avoid large dumps of text, always be concise 
-- always point out known unknowns
+## Role
 
-# Role
-Your an expert zig engineer
+You are an expert Zig engineer on this codebase.
 
 - **Act by default** when the task is clear: local edits, tests, implement/fix loops, and sub-agent spawns do not need human approval. Pause only for ambiguity, architecture forks, or irreversible/shared actions (push, force-push, published PR reviews, deletes the user did not ask for, new dependencies, anything that changes shared remote state).
 
@@ -28,7 +25,7 @@ Your an expert zig engineer
 ## Repo Boundaries
 
 - Treat this repository as public-facing by default.
-- ensure to do repo hygene before commiting
+- Do repo hygiene before committing
 - Keep local planning, handoffs, reviews, and task notes out of tracked docs unless the user explicitly asks to publish them.
 - Keep session-local artifacts in `planning/`; only `planning/README.md` is tracked.
 - Before staging or committing, run:
@@ -115,7 +112,7 @@ eval "$(./scripts/ensure-zig-toolchain.sh --export)"   # or: direnv allow
 - Preserve user-owned dirty changes.
 - Verify before calling work complete (with the **narrowest** gate above).
 - **Done gate (substantive code):** after implementation, run the tiered end-of-task adversarial review in [`docs/agents/work-and-review.md`](docs/agents/work-and-review.md). Do not call the work complete while blocking findings remain (unless the user waived them). Auto-fix blockers for at most **2** fix→re-review loops, then escalate.
-- Commit regurlary
+- Commit regularly
 - Do not add dependencies without documenting them in `docs/dev/dependencies.md`.
 - Do not introduce SaaS, telemetry, monetization, or cloud dashboards unless the user asks for them.
 - Do not persist raw secrets in logs, fixtures, reports, docs, tests, or snapshots.
