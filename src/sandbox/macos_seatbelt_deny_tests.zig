@@ -1479,3 +1479,101 @@ test "real FS: Users path-walk + codex npm install realpath chain" {
         else => return error.UnexpectedSandboxChildExit,
     }
 }
+
+// Live residual: hermes venv/python is a symlink → uv cpython outside `.hermes`.
+// Seatbelt denies open/exec of the *symlink path* (cross-grant follow) even when
+// the realpath target is RO-granted. Product rewrites argv to realpath
+// (`expandShellWrapperLaunch`). Prove realpath exec works under production grants.
+// Exit: 0=ok, 2=apply fail, 3=realpath exec fail, 5=realpath unreadable.
+test "real FS: hermes nested uv python exec under launch grants" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    if (!sandboxInitAvailable()) return error.SkipZigTest;
+    const ver = try detectProductVersion();
+    try std.testing.expect(isMatrixMajor(ver.major));
+    try std.testing.expectEqual(SupportStatus.supported, evaluateSupport());
+
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const apply = @import("apply.zig");
+    const host_config_grants = @import("host_config_grants.zig");
+
+    const home_z = std.c.getenv("HOME") orelse return error.SkipZigTest;
+    const home = std.mem.span(home_z);
+    if (home.len == 0) return error.SkipZigTest;
+
+    const wrapper = try std.fs.path.join(allocator, &.{ home, ".local/bin/hermes" });
+    defer allocator.free(wrapper);
+    const venv_py = try std.fs.path.join(allocator, &.{ home, ".hermes/hermes-agent/venv/bin/python" });
+    defer allocator.free(venv_py);
+    std.Io.Dir.cwd().access(io, wrapper, .{}) catch return error.SkipZigTest;
+    std.Io.Dir.cwd().access(io, venv_py, .{}) catch return error.SkipZigTest;
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+    try env_map.put("PATH", "/usr/bin:/bin");
+
+    const execs = try apply.collectLaunchExecPaths(io, allocator, wrapper, &env_map);
+    defer apply.freeLaunchExecPaths(allocator, execs);
+    const ros = try apply.collectLaunchInstallRoPaths(io, allocator, wrapper, &env_map);
+    defer apply.freeLaunchInstallRoPaths(allocator, ros);
+    const host_rw = try host_config_grants.collectHostConfigPaths(io, allocator, "hermes", home);
+    defer host_config_grants.freeHostConfigPaths(allocator, host_rw);
+    try std.testing.expect(host_rw.len > 0);
+    try std.testing.expect(ros.len > 0);
+
+    var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const real_py: []const u8 = blk: {
+        var in_buf: [std.fs.max_path_bytes]u8 = undefined;
+        @memcpy(in_buf[0..venv_py.len], venv_py);
+        in_buf[venv_py.len] = 0;
+        const r = std.c.realpath(in_buf[0..venv_py.len :0].ptr, &real_buf) orelse break :blk venv_py;
+        break :blk std.mem.span(r);
+    };
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const ws = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(ws);
+
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = ws,
+        .include_tmp = false,
+        .exec_paths = execs,
+        .ro_paths = ros,
+        .host_rw_paths = host_rw,
+        .protect_workspace_secrets = false,
+    });
+    defer compiled.deinit();
+    try std.testing.expect(compiled.isGrantedReadable(real_py));
+
+    const prepared = prepareForChildApply(allocator, &compiled);
+    defer if (prepared.sbpl_z) |p| allocator.free(p);
+    try std.testing.expectEqual(.prepared, prepared.status);
+    const sbpl_z = prepared.sbpl_z.?;
+    try std.testing.expect(std.mem.indexOf(u8, sbpl_z, "/.local/share/uv/python/") != null);
+
+    const real_z = try allocator.dupeZ(u8, real_py);
+    defer allocator.free(real_z);
+
+    const pid = std.c.fork();
+    if (pid < 0) return error.SkipZigTest;
+    if (pid == 0) {
+        applyInChild(sbpl_z.ptr) catch std.c._exit(2);
+        const rfd = std.c.open(real_z.ptr, .{ .ACCMODE = .RDONLY });
+        if (rfd < 0) std.c._exit(5);
+        _ = std.c.close(rfd);
+        const argv = [_:null]?[*:0]const u8{ real_z.ptr, "--version", null };
+        _ = std.c.execve(real_z.ptr, @ptrCast(&argv), @ptrCast(std.c.environ));
+        std.c._exit(3);
+    }
+
+    const exit_code = try waitExitCode(pid);
+    switch (exit_code) {
+        0 => {},
+        2 => return error.SeatbeltApplyFailedOnHost,
+        3 => return error.HermesNestedPythonExecDenied,
+        5 => return error.HermesUvPythonUnreadable,
+        else => return error.UnexpectedSandboxChildExit,
+    }
+}

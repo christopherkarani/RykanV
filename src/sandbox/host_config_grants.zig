@@ -70,6 +70,10 @@ pub const host_config_table = [_]HostConfigSpec{
         .home_rel_dirs = &.{
             ".config/opencode",
             ".local/share/opencode",
+            // Bun/OpenCode mkdir state + cache under empty backpack (EEXIST residual when
+            // only config/share are granted and write/stat on siblings is denied).
+            ".cache/opencode",
+            ".local/state/opencode",
         },
     },
     .{
@@ -79,6 +83,12 @@ pub const host_config_table = [_]HostConfigSpec{
     .{
         .host = "hermes",
         .home_rel_dirs = &.{".hermes"},
+        // Optional managed overlay under /etc/hermes (stat EPERM residual on empty
+        // backpack). Grant missing-ok so open is ENOENT not EPERM; never bare /etc.
+        .system_ro_dirs = if (builtin.os.tag == .macos)
+            &.{ "/etc/hermes", "/private/etc/hermes" }
+        else
+            &.{"/etc/hermes"},
     },
 };
 

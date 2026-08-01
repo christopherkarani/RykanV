@@ -452,6 +452,10 @@ pub fn collectLaunchExecPaths(
     // Shebang interpreter of the launch file only (not nested scripts).
     try appendShebangInterpreterGrants(io, allocator, &list, abs, env_map);
 
+    // Shell wrappers often `exec /abs/path/to/python …` (hermes → uv cpython).
+    // Shebang alone grants bash; nested absolute targets need file-only .exec too.
+    try appendShellWrapperNestedExecTargets(io, allocator, &list, abs, env_map);
+
     return try list.toOwnedSlice(allocator);
 }
 
@@ -506,12 +510,148 @@ pub fn collectLaunchInstallRoPaths(
         }
     }
 
+    // Shell wrappers (e.g. hermes → venv python outside the wrapper path) need
+    // install RO on nested absolute targets + their bin-layout roots (uv cpython).
+    try appendShellWrapperNestedInstallRo(io, allocator, &list, abs, env_map);
+
     return try list.toOwnedSlice(allocator);
 }
 
 /// Free the slice returned by `collectLaunchInstallRoPaths`.
 pub fn freeLaunchInstallRoPaths(allocator: std.mem.Allocator, paths: []const []const u8) void {
     freeLaunchExecPaths(allocator, paths);
+}
+
+/// Optional argv rewrite for shell wrappers that `exec /abs/interp /abs/main …`.
+///
+/// Seatbelt on macOS denies following a symlink under a host-config grant when the
+/// target lives outside that grant (even if the target is separately RO-granted).
+/// Hermes does `exec venv/bin/python → uv cpython`; open/exec of the **symlink path**
+/// fails, while exec of the realpath succeeds. Rewrite launch to realpath so the
+/// agent binary runs past attach.
+///
+/// When the lexical interpreter is a venv `…/bin/python`, also injects `PYTHONPATH`
+/// to that venv's `site-packages` (host wrappers often `unset PYTHONPATH` then exec
+/// the symlink; realpath loses venv site discovery via argv0). Injection runs on
+/// the **mutable** child env after scrub/allowlist so the path is ryk-owned.
+///
+/// Returns null when argv0 is not a shell wrapper with nested absolute targets
+/// (caller keeps original argv). On success, returns an owned argv slice; caller
+/// frees with `freeExpandedShellWrapperArgv`.
+pub fn expandShellWrapperLaunch(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    env_map: ?*std.process.Environ.Map,
+) error{OutOfMemory}!?[]const []const u8 {
+    if (argv.len == 0) return null;
+    const argv0 = argv[0];
+    if (argv0.len == 0) return null;
+
+    const env_const: ?*const std.process.Environ.Map = env_map;
+    const resolved = apply_posix.resolveArgv0(io, allocator, argv0, env_const) catch return null;
+    defer if (resolved.owned) allocator.free(resolved.path);
+    const abs = try absolutePathForGrant(io, allocator, resolved.path);
+    defer allocator.free(abs);
+
+    if (!(try launchFileIsShellWrapper(io, allocator, abs, env_const))) return null;
+
+    var targets: [wrapper_nested_target_max][]const u8 = undefined;
+    const n = try collectShellWrapperAbsoluteTargets(io, allocator, abs, env_const, &targets);
+    defer for (targets[0..n]) |t| allocator.free(t);
+    if (n == 0) return null;
+
+    // Primary interpreter = first nested absolute path (realpath preferred for exec).
+    var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const interp: []const u8 = if (realpathInto(targets[0], &real_buf)) |real| real else targets[0];
+
+    // Venv residual: realpath loses site-packages; inject ryk-owned PYTHONPATH.
+    if (env_map) |map| {
+        try injectVenvSitePackagesPythonPath(io, allocator, map, targets[0]);
+    }
+
+    // Build: [interp_real, other nested targets…, original args after argv0]
+    var list: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (list.items) |p| allocator.free(p);
+        list.deinit(allocator);
+    }
+    try list.append(allocator, try allocator.dupe(u8, interp));
+    var i: usize = 1;
+    while (i < n) : (i += 1) {
+        // Prefer realpath for each nested file path (same symlink residual).
+        if (realpathInto(targets[i], &real_buf)) |real| {
+            try list.append(allocator, try allocator.dupe(u8, real));
+        } else {
+            try list.append(allocator, try allocator.dupe(u8, targets[i]));
+        }
+    }
+    for (argv[1..]) |arg| {
+        try list.append(allocator, try allocator.dupe(u8, arg));
+    }
+    return try list.toOwnedSlice(allocator);
+}
+
+/// Free argv from `expandShellWrapperLaunch`.
+pub fn freeExpandedShellWrapperArgv(allocator: std.mem.Allocator, argv: []const []const u8) void {
+    for (argv) |a| allocator.free(a);
+    allocator.free(argv);
+}
+
+/// If `python_path` is `…/bin/python*`, locate `…/lib/python*/site-packages` and
+/// put it into `PYTHONPATH` on `env_map` (owned by the map). No-op when layout
+/// does not match or site-packages is missing.
+fn injectVenvSitePackagesPythonPath(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    env_map: *std.process.Environ.Map,
+    python_path: []const u8,
+) error{OutOfMemory}!void {
+    if (python_path.len == 0 or !std.fs.path.isAbsolute(python_path)) return;
+    const bin_dir = std.fs.path.dirname(python_path) orelse return;
+    if (!std.mem.eql(u8, std.fs.path.basename(bin_dir), "bin")) return;
+    const venv_root = std.fs.path.dirname(bin_dir) orelse return;
+    if (venv_root.len <= 1) return;
+
+    const lib_dir = try std.fs.path.join(allocator, &.{ venv_root, "lib" });
+    defer allocator.free(lib_dir);
+
+    var lib_it = std.Io.Dir.cwd().openDir(io, lib_dir, .{ .iterate = true }) catch return;
+    defer lib_it.close(io);
+
+    var site: ?[]u8 = null;
+    errdefer if (site) |s| allocator.free(s);
+    var walker = lib_it.iterate();
+    while (walker.next(io) catch null) |entry| {
+        if (entry.kind != .directory) continue;
+        if (!std.mem.startsWith(u8, entry.name, "python")) continue;
+        const candidate = try std.fs.path.join(allocator, &.{ lib_dir, entry.name, "site-packages" });
+        errdefer allocator.free(candidate);
+        if (!isDir(io, candidate)) {
+            allocator.free(candidate);
+            continue;
+        }
+        // Prefer the first matching pythonX.Y site-packages.
+        if (site) |old| allocator.free(old);
+        site = candidate;
+        break;
+    }
+    const site_path = site orelse return;
+    // Map.put copies the value; free our temporary after insert.
+    try env_map.put("PYTHONPATH", site_path);
+    allocator.free(site_path);
+}
+
+fn isDir(io: std.Io, path: []const u8) bool {
+    if (path.len == 0) return false;
+    if (std.fs.path.isAbsolute(path)) {
+        var dir = std.Io.Dir.openDirAbsolute(io, path, .{}) catch return false;
+        dir.close(io);
+        return true;
+    }
+    var dir = std.Io.Dir.cwd().openDir(io, path, .{}) catch return false;
+    dir.close(io);
+    return true;
 }
 
 fn appendInstallRoForLaunchFile(
@@ -708,6 +848,188 @@ fn appendShebangInterpreterGrants(
             try appendLaunchExecCandidate(io, allocator, list, real, env_map);
         }
     }
+}
+
+/// Max body bytes scanned in a shell wrapper for nested absolute exec targets.
+const wrapper_body_scan_max: usize = 4096;
+/// Cap nested absolute targets per wrapper (avoid pathological scripts).
+const wrapper_nested_target_max: usize = 8;
+
+fn isShellInterpreterBasename(name: []const u8) bool {
+    return std.mem.eql(u8, name, "sh") or
+        std.mem.eql(u8, name, "bash") or
+        std.mem.eql(u8, name, "zsh") or
+        std.mem.eql(u8, name, "dash");
+}
+
+/// True when shebang of `script_path` resolves to a shell (sh/bash/zsh/dash).
+fn launchFileIsShellWrapper(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    script_path: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!bool {
+    const interp_token = (try readShebangInterpreterToken(io, allocator, script_path)) orelse return false;
+    defer allocator.free(interp_token);
+    const base = std.fs.path.basename(interp_token);
+    if (isShellInterpreterBasename(base)) return true;
+    // `#!/usr/bin/env bash` → token is bare `bash`.
+    if (std.mem.indexOfScalar(u8, interp_token, '/') == null and isShellInterpreterBasename(interp_token))
+        return true;
+    // Resolved absolute path basename.
+    const resolved = apply_posix.resolveArgv0(io, allocator, interp_token, env_map) catch return false;
+    defer if (resolved.owned) allocator.free(resolved.path);
+    return isShellInterpreterBasename(std.fs.path.basename(resolved.path));
+}
+
+/// Append file-only `.exec` for absolute nested targets in a shell wrapper body
+/// (`exec "/abs/python" …`). Also grants realpath when different.
+fn appendShellWrapperNestedExecTargets(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList([]const u8),
+    script_path: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!void {
+    if (!(try launchFileIsShellWrapper(io, allocator, script_path, env_map))) return;
+
+    var targets: [wrapper_nested_target_max][]const u8 = undefined;
+    const n = try collectShellWrapperAbsoluteTargets(io, allocator, script_path, env_map, &targets);
+    defer for (targets[0..n]) |t| allocator.free(t);
+
+    for (targets[0..n]) |target| {
+        try appendLaunchExecCandidate(io, allocator, list, target, env_map);
+        var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+        if (realpathInto(target, &real_buf)) |real| {
+            if (!std.mem.eql(u8, real, target)) {
+                try appendLaunchExecCandidate(io, allocator, list, real, env_map);
+            }
+        }
+    }
+}
+
+/// Append install RO for nested absolute targets + bin-layout install roots
+/// (e.g. `…/cpython-3.11…/bin/python3.11` → RO `…/cpython-3.11…` for libpython).
+fn appendShellWrapperNestedInstallRo(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList([]const u8),
+    script_path: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!void {
+    if (!(try launchFileIsShellWrapper(io, allocator, script_path, env_map))) return;
+
+    var targets: [wrapper_nested_target_max][]const u8 = undefined;
+    const n = try collectShellWrapperAbsoluteTargets(io, allocator, script_path, env_map, &targets);
+    defer for (targets[0..n]) |t| allocator.free(t);
+
+    for (targets[0..n]) |target| {
+        try appendInstallRoForLaunchFile(io, allocator, list, target, env_map);
+        try appendBinLayoutInstallRo(io, allocator, list, target, env_map);
+        var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+        if (realpathInto(target, &real_buf)) |real| {
+            if (!std.mem.eql(u8, real, target)) {
+                try appendInstallRoForLaunchFile(io, allocator, list, real, env_map);
+                try appendBinLayoutInstallRo(io, allocator, list, real, env_map);
+            }
+        }
+    }
+}
+
+/// If `file_path` is `…/bin/<leaf>`, grant RO on the parent of `bin` (install root).
+/// Never bare HOME or `/`. Used for uv/cpython and similar layouts without package.json.
+fn appendBinLayoutInstallRo(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList([]const u8),
+    file_path: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!void {
+    _ = io;
+    if (file_path.len == 0 or !std.fs.path.isAbsolute(file_path)) return;
+    const bin_dir = std.fs.path.dirname(file_path) orelse return;
+    if (!std.mem.eql(u8, std.fs.path.basename(bin_dir), "bin")) return;
+    const install_root = std.fs.path.dirname(bin_dir) orelse return;
+    if (install_root.len <= 1) return;
+    if (envHome(env_map)) |home| {
+        if (std.mem.eql(u8, install_root, home)) return;
+    }
+    const owned = try allocator.dupe(u8, install_root);
+    try appendUniqueInstallRo(allocator, list, owned);
+}
+
+/// Scan a shell wrapper body for absolute path strings that are existing regular files.
+/// Returns count of owned paths written into `out` (caller frees each).
+fn collectShellWrapperAbsoluteTargets(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    script_path: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+    out: *[wrapper_nested_target_max][]const u8,
+) error{OutOfMemory}!usize {
+    if (script_path.len == 0 or !isRegularFile(io, script_path)) return 0;
+
+    var buf: [wrapper_body_scan_max]u8 = undefined;
+    const n: usize = blk: {
+        if (std.fs.path.isAbsolute(script_path)) {
+            const file = std.Io.Dir.openFileAbsolute(io, script_path, .{}) catch return 0;
+            defer file.close(io);
+            break :blk std.Io.File.readStreaming(file, io, &.{buf[0..]}) catch return 0;
+        }
+        const file = std.Io.Dir.cwd().openFile(io, script_path, .{}) catch return 0;
+        defer file.close(io);
+        break :blk std.Io.File.readStreaming(file, io, &.{buf[0..]}) catch return 0;
+    };
+    if (n == 0) return 0;
+
+    const body = buf[0..n];
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i < body.len and count < wrapper_nested_target_max) {
+        // Absolute path: starts at `/` after start/whitespace/quote/`=`.
+        if (body[i] != '/') {
+            i += 1;
+            continue;
+        }
+        // Require a safe left boundary so we do not match mid-token.
+        if (i > 0) {
+            const prev = body[i - 1];
+            if (prev != ' ' and prev != '\t' and prev != '\n' and prev != '\r' and
+                prev != '"' and prev != '\'' and prev != '=' and prev != '(')
+            {
+                i += 1;
+                continue;
+            }
+        }
+        const start = i;
+        i += 1;
+        while (i < body.len) : (i += 1) {
+            const c = body[i];
+            if (c == ' ' or c == '\t' or c == '\n' or c == '\r' or
+                c == '"' or c == '\'' or c == ')' or c == ';' or c == '&' or c == '|')
+                break;
+        }
+        const candidate = body[start..i];
+        if (candidate.len < 2) continue;
+        // Reject bare root and bare HOME.
+        if (candidate.len == 1) continue;
+        if (envHome(env_map)) |home| {
+            if (std.mem.eql(u8, candidate, home)) continue;
+        }
+        if (!isRegularFile(io, candidate)) continue;
+        // Dedup against already collected.
+        var dup = false;
+        for (out[0..count]) |existing| {
+            if (std.mem.eql(u8, existing, candidate)) {
+                dup = true;
+                break;
+            }
+        }
+        if (dup) continue;
+        out[count] = try allocator.dupe(u8, candidate);
+        count += 1;
+    }
+    return count;
 }
 
 /// Read the first line of `path` when it is a shebang; return an owned interpreter
@@ -2044,6 +2366,204 @@ test "collectLaunchInstallRoPaths rejects package.json planted at HOME" {
     const ro = try collectLaunchInstallRoPaths(io, allocator, script, &env_map);
     defer freeLaunchInstallRoPaths(allocator, ro);
     try std.testing.expectEqual(@as(usize, 0), ro.len);
+}
+
+test "expandShellWrapperLaunch rewrites hermes-style exec to realpath python" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+
+    try tmp.dir.createDirPath(io, ".hermes/agent/venv/bin");
+    try tmp.dir.createDirPath(io, ".local/bin");
+    try tmp.dir.createDirPath(io, ".local/share/uv/python/cpython-fake/bin");
+    try tmp.dir.writeFile(io, .{
+        .sub_path = ".local/share/uv/python/cpython-fake/bin/python3.11",
+        .data = "#!/bin/sh\necho fake\n",
+    });
+    try tmp.dir.setFilePermissions(io, ".local/share/uv/python/cpython-fake/bin/python3.11", std.Io.File.Permissions.fromMode(0o755), .{});
+    const real_py = try std.fs.path.join(allocator, &.{ home, ".local/share/uv/python/cpython-fake/bin/python3.11" });
+    defer allocator.free(real_py);
+    const py_lex = try std.fs.path.join(allocator, &.{ home, ".hermes/agent/venv/bin/python" });
+    defer allocator.free(py_lex);
+    std.Io.Dir.cwd().symLink(io, real_py, py_lex, .{}) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    const hermes_main = try std.fs.path.join(allocator, &.{ home, ".hermes/agent/hermes" });
+    defer allocator.free(hermes_main);
+    try tmp.dir.writeFile(io, .{ .sub_path = ".hermes/agent/hermes", .data = "print(1)\n" });
+    const body = try std.fmt.allocPrint(allocator,
+        \\#!/usr/bin/env bash
+        \\exec "{s}" "{s}" "$@"
+        \\
+    , .{ py_lex, hermes_main });
+    defer allocator.free(body);
+    try tmp.dir.writeFile(io, .{ .sub_path = ".local/bin/hermes", .data = body });
+    try tmp.dir.setFilePermissions(io, ".local/bin/hermes", std.Io.File.Permissions.fromMode(0o755), .{});
+    const wrapper = try std.fs.path.join(allocator, &.{ home, ".local/bin/hermes" });
+    defer allocator.free(wrapper);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+    try env_map.put("PATH", "/usr/bin:/bin");
+
+    // Plant a venv site-packages so inject path is testable.
+    try tmp.dir.createDirPath(io, ".hermes/agent/venv/lib/python3.11/site-packages");
+    try tmp.dir.writeFile(io, .{
+        .sub_path = ".hermes/agent/venv/lib/python3.11/site-packages/yaml.py",
+        .data = "ok=1\n",
+    });
+
+    const argv_in = [_][]const u8{ wrapper, "--version" };
+    const expanded = (try expandShellWrapperLaunch(io, allocator, &argv_in, &env_map)) orelse {
+        try std.testing.expect(false); // must expand
+        return;
+    };
+    defer freeExpandedShellWrapperArgv(allocator, expanded);
+    try std.testing.expect(expanded.len >= 3);
+    try std.testing.expectEqualStrings(real_py, expanded[0]);
+    try std.testing.expectEqualStrings("--version", expanded[expanded.len - 1]);
+    const pp = env_map.get("PYTHONPATH") orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    try std.testing.expect(std.mem.indexOf(u8, pp, "site-packages") != null);
+}
+
+test "collectLaunchInstallRoPaths real host hermes grants uv cpython when present" {
+    // Live host residual: hermes wrapper execs venv python → uv cpython under
+    // ~/.local/share/uv/python/…. Prove collection finds that install root.
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const home_z = std.c.getenv("HOME") orelse return error.SkipZigTest;
+    const home = std.mem.span(home_z);
+    if (home.len == 0) return error.SkipZigTest;
+    const wrapper = try std.fs.path.join(allocator, &.{ home, ".local/bin/hermes" });
+    defer allocator.free(wrapper);
+    if (!isRegularFile(io, wrapper)) return error.SkipZigTest;
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+    try env_map.put("PATH", "/usr/bin:/bin");
+
+    const ro = try collectLaunchInstallRoPaths(io, allocator, wrapper, &env_map);
+    defer freeLaunchInstallRoPaths(allocator, ro);
+
+    var found_uv = false;
+    for (ro) |p| {
+        if (std.mem.indexOf(u8, p, "/.local/share/uv/python/") != null) {
+            found_uv = true;
+            break;
+        }
+    }
+    if (!found_uv) {
+        std.debug.print("hermes install RO paths ({d}):\n", .{ro.len});
+        for (ro) |p| std.debug.print("  {s}\n", .{p});
+    }
+    try std.testing.expect(found_uv);
+
+    const execs = try collectLaunchExecPaths(io, allocator, wrapper, &env_map);
+    defer freeLaunchExecPaths(allocator, execs);
+    var found_py = false;
+    for (execs) |p| {
+        if (std.mem.indexOf(u8, p, "python") != null) {
+            found_py = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_py);
+
+    // Prove SBPL emit includes process-exec + file-read* for the nested python install.
+    if (builtin.os.tag == .macos) {
+        var compiled = try profile.compileProfile(allocator, .{
+            .workspace_root = "/tmp/orca-hermes-sbpl-ws",
+            .exec_paths = execs,
+            .ro_paths = ro,
+            .host_rw_paths = &.{},
+            .include_tmp = false,
+            .protect_workspace_secrets = false,
+        });
+        defer compiled.deinit();
+        const sbpl = try macos_profile.renderSbpl(allocator, &compiled);
+        defer allocator.free(sbpl);
+        try std.testing.expect(std.mem.indexOf(u8, sbpl, "/.local/share/uv/python/") != null);
+        try std.testing.expect(std.mem.indexOf(u8, sbpl, "file-read*") != null);
+        try std.testing.expect(std.mem.indexOf(u8, sbpl, "process-exec") != null);
+    }
+}
+
+test "collectLaunchExecPaths shell wrapper grants nested absolute python" {
+    // Hermes-style: #!/usr/bin/env bash + exec "/abs/venv/bin/python" …
+    // Nested python (and its realpath when different) must get file-only .exec;
+    // bin-layout install root must get RO for libpython.
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+
+    try tmp.dir.createDirPath(io, ".hermes/agent/venv/bin");
+    try tmp.dir.createDirPath(io, ".local/bin");
+    try tmp.dir.createDirPath(io, ".local/share/uv/python/cpython-fake/bin");
+    try tmp.dir.createDirPath(io, ".local/share/uv/python/cpython-fake/lib");
+    try tmp.dir.writeFile(io, .{
+        .sub_path = ".local/share/uv/python/cpython-fake/bin/python3.11",
+        .data = "#!/bin/sh\necho fake-python\n",
+    });
+    try tmp.dir.setFilePermissions(io, ".local/share/uv/python/cpython-fake/bin/python3.11", std.Io.File.Permissions.fromMode(0o755), .{});
+
+    const real_py = try std.fs.path.join(allocator, &.{ home, ".local/share/uv/python/cpython-fake/bin/python3.11" });
+    defer allocator.free(real_py);
+    const py_lex = try std.fs.path.join(allocator, &.{ home, ".hermes/agent/venv/bin/python" });
+    defer allocator.free(py_lex);
+    std.Io.Dir.cwd().symLink(io, real_py, py_lex, .{}) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    const hermes_main = try std.fs.path.join(allocator, &.{ home, ".hermes/agent/hermes" });
+    defer allocator.free(hermes_main);
+    try tmp.dir.writeFile(io, .{ .sub_path = ".hermes/agent/hermes", .data = "print('hermes')\n" });
+
+    const body = try std.fmt.allocPrint(allocator,
+        \\#!/usr/bin/env bash
+        \\unset PYTHONPATH
+        \\exec "{s}" "{s}" "$@"
+        \\
+    , .{ py_lex, hermes_main });
+    defer allocator.free(body);
+    try tmp.dir.writeFile(io, .{ .sub_path = ".local/bin/hermes", .data = body });
+    try tmp.dir.setFilePermissions(io, ".local/bin/hermes", std.Io.File.Permissions.fromMode(0o755), .{});
+
+    const wrapper = try std.fs.path.join(allocator, &.{ home, ".local/bin/hermes" });
+    defer allocator.free(wrapper);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+    try env_map.put("PATH", "/usr/bin:/bin");
+
+    const execs = try collectLaunchExecPaths(io, allocator, wrapper, &env_map);
+    defer freeLaunchExecPaths(allocator, execs);
+    try std.testing.expect(pathsContain(execs, wrapper));
+    try std.testing.expect(pathsContain(execs, real_py));
+    try std.testing.expect(!pathsContainHomeOrDir(execs, home));
+
+    const ro = try collectLaunchInstallRoPaths(io, allocator, wrapper, &env_map);
+    defer freeLaunchInstallRoPaths(allocator, ro);
+    const cpython_root = try std.fs.path.join(allocator, &.{ home, ".local/share/uv/python/cpython-fake" });
+    defer allocator.free(cpython_root);
+    try std.testing.expect(pathsContain(ro, cpython_root));
+    try std.testing.expect(!pathsContainHomeOrDir(ro, home));
 }
 
 fn pathsContain(paths: []const []const u8, want: []const u8) bool {

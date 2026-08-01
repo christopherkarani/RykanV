@@ -917,9 +917,24 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         .openai = if (openai_gateway != null) &openai_gateway.? else null,
     };
 
+    // Empty-backpack: shell wrappers (hermes → venv/python symlink → uv) hit a
+    // Seatbelt residual where open/exec of the *symlink path* is denied even when
+    // the realpath target is RO-granted. Expand to realpath argv before spawn.
+    var expanded_argv_owned: ?[]const []const u8 = null;
+    defer if (expanded_argv_owned) |a| sandbox.apply.freeExpandedShellWrapperArgv(allocator, a);
+    if (secret_boundary == .empty_backpack and options.command_argv.len > 0) {
+        expanded_argv_owned = sandbox.apply.expandShellWrapperLaunch(
+            io,
+            allocator,
+            options.command_argv,
+            &filtered_env.env_map, // mutable: may inject ryk-owned PYTHONPATH for venv
+        ) catch null;
+    }
+    const spawn_argv: []const []const u8 = expanded_argv_owned orelse options.command_argv;
+
     var result = supervisor.run(io, allocator, .{
-        .command = options.command_argv[0],
-        .args = options.command_argv[1..],
+        .command = spawn_argv[0],
+        .args = spawn_argv[1..],
         .workspace = options.workspace,
         .mode = session_mode,
         .session_name = options.session_name,
