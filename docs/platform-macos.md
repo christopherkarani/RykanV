@@ -84,6 +84,25 @@ When the proxy backend is active and OS sandbox attach succeeds, Orca renders th
 
 **Agent hosts (`ryk pi`, `ryk claude`, …):** mediation (proxy + route-force) is the default. If either cannot start, the session **fails closed**. Escape with `ryk run --network open -- <agent>` (loud unrestricted warning). Kill switch: `ORCA_AGENT_NETWORK_DEFAULT=legacy`. See `docs/network.md`.
 
+### Session sandbox grade (Phase 5 honesty)
+
+Each protected spawn sets **`ORCA_SESSION_SANDBOX_GRADE`** (and a banner line `Session grade: …`). This is **this session’s** effective enforcement class — not a doctor capability probe.
+
+| Grade | Meaning |
+|---|---|
+| `strong-mediated` | OS attach planned + network route-forced (host-alias default after P1–2) |
+| `fs-attached` | OS attach planned; network not route-forced |
+| `wrapper-only` | No OS attach; shims/hooks only |
+| `unrestricted-escape` | User chose `--network open` / `ORCA_AGENT_NETWORK_DEFAULT=legacy` / explicit open |
+
+**Doctor ≠ session:** `ryk doctor` reports host capability only (probe ≠ live attach; S-GLO-01). Read session grade from the run banner or child env.
+
+**P1–4 operator summary (host aliases):** network mediation by default; workspace `.git` + `.orca` are OS control write-deny; Pi ask auto-denies noninteractive/subagent; PATH denylist + `ORCA_TOOL_PACK=essentials` under attach.
+
+**Escapes:** `--network open`, `ORCA_AGENT_NETWORK_DEFAULT=legacy`, `ORCA_TOOL_PACK=none`.
+
+**Residuals:** UDP/QUIC not route-forced; absolute paths skip shims; nested git not control roots; decide protocol recovery is per-call fail-closed with one retry (never allow-on-error). Regression pack: `./scripts/sandbox-stress-regression.sh`.
+
 **Residual:** UDP/QUIC/WebRTC are not locked by Seatbelt proxy-port TCP rules; do not claim full transparent network lockdown.
 
 Under **`hardened` / `compatible`**, inbound TCP and bind remain allowed so agents can still start listeners (dev servers, test databases, ephemeral binds); route forcing is outbound connect mediation, not a listener lockdown (same product intent as Landlock connect-only rules).

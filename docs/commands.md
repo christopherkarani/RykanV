@@ -54,6 +54,19 @@ Interactive Ask mode prompts in plain language: **Once** (this invocation), **Al
 
 PATH shims cover shells, package managers, network tools, Python/Node, SSH/SCP/Netcat, PowerShell, and cmd wrappers. They are **wrapper-level coverage only**, not transparent OS command interception. Absolute paths (for example `/usr/bin/curl`) skip the shim directory; OS filesystem and network attach still apply to those paths when the sandbox is active.
 
+## Session sandbox grade
+
+Protected launches export **`ORCA_SESSION_SANDBOX_GRADE`** and print `Session grade: …` on the session banner:
+
+| Value | When |
+|---|---|
+| `strong-mediated` | OS attach + network route-force (typical `ryk pi` / host alias) |
+| `fs-attached` | OS attach without route-force |
+| `wrapper-only` | No OS attach |
+| `unrestricted-escape` | `--network open` or `ORCA_AGENT_NETWORK_DEFAULT=legacy` |
+
+Doctor reports **capability** only; do not treat doctor “partial” strong-sandbox as a live session claim. See `docs/platform-macos.md` and `./scripts/sandbox-stress-regression.sh` for the P1–4 probe pack.
+
 ## PATH honesty and tool packs (OS attach)
 
 When an OS sandbox will attach to the agent child (Seatbelt/Landlock materials prepared):
