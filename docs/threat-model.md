@@ -56,4 +56,8 @@ Strict and CI modes deny invalid policies, missing required backend features, un
 
 ## Host-config launch identity (F-02)
 
-Host-config RW trees (e.g. `~/.codex`), empty-backpack defaults for agent aliases, and agent network mediation require a **trusted resolved launch binary** (realpath under an install allowlist + host-config table basename). A workspace file named `codex` / `claude` does **not** receive host login grants. Residuals: user-writable `~/.local/bin` over-trust; installs outside the allowlist get no host-config; hardlink smuggle of auth files into the workspace is a separate control (not closed by identity bind alone).
+Host-config RW trees (e.g. `~/.codex`), empty-backpack defaults for agent aliases, and agent network mediation require a **trusted resolved launch binary** (realpath under an install allowlist + host-config table basename). A workspace file named `codex` / `claude` does **not** receive host login grants. Residuals: user-writable `~/.local/bin` over-trust; installs outside the allowlist get no host-config.
+
+## Host-config hardlink smuggle (F-03)
+
+On macOS session-attach, Seatbelt denies `file-link` then re-allows only under the workspace, so a child cannot hard-link host-config grant files into the workspace. Residuals: `cp` while auth is readable; same-tree host hardlinks denied; no Landlock `file-link` twin on Linux; secretless still exposes raw login files for trusted hosts until S1C/gateway (F-04).
