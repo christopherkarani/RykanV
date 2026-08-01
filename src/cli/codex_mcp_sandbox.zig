@@ -57,9 +57,18 @@ pub fn prepare(
     mode: []const u8,
     env_map: *const std.process.Environ.Map,
 ) !?Plan {
-    if (builtin.os.tag != .macos or original_argv.len == 0 or
-        !std.mem.eql(u8, sandbox.host_config_grants.hostBasename(original_argv[0]), "codex"))
-    {
+    if (builtin.os.tag != .macos or original_argv.len == 0) return null;
+    // Require trusted codex launch identity — do not grant inventory host-config
+    // from a basename spoof or bare string (F-02 / S1A).
+    var identity = try sandbox.host_identity.resolveHostIdentity(
+        io,
+        allocator,
+        original_argv[0],
+        env_map,
+        .{ .workspace_root = workspace_root },
+    );
+    defer identity.deinit(allocator);
+    if (!identity.isTrusted() or !std.mem.eql(u8, identity.hostKey(), "codex")) {
         return null;
     }
 
@@ -137,12 +146,20 @@ fn runCanonicalInventorySandboxed(
     }
 
     const home = env_map.get("HOME") orelse "";
-    const host_ro = try sandbox.host_config_grants.collectHostConfigPaths(
+    // Inventory subject is already gated as trusted codex in prepare(); grants use
+    // the table key only after that bind (never a free-floating "codex" string).
+    var inv_identity = try sandbox.host_identity.resolveHostIdentity(
         io,
         allocator,
-        "codex",
-        home,
+        inventory_argv[0],
+        env_map,
+        .{ .workspace_root = workspace_root },
     );
+    defer inv_identity.deinit(allocator);
+    const host_ro = if (inv_identity.isTrusted() and std.mem.eql(u8, inv_identity.hostKey(), "codex"))
+        try sandbox.host_config_grants.collectHostConfigPaths(io, allocator, "codex", home)
+    else
+        try allocator.alloc([]const u8, 0);
     defer sandbox.host_config_grants.freeHostConfigPaths(allocator, host_ro);
     var ro_paths: std.ArrayList([]const u8) = .empty;
     defer ro_paths.deinit(allocator);

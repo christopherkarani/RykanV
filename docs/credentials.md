@@ -102,14 +102,14 @@ Before launching the agent process, Orca filters the environment variables based
 
 ### Secret Boundary (empty backpack)
 
-Agent-primary host launches enter the **empty-backpack** secret boundary by default:
+**Trusted** agent-primary host launches enter the **empty-backpack** secret boundary by default when the resolved launch binary is a trusted install of a host-launch alias (`claude`, `codex`, `pi`, `opencode`, `openclaw`, `hermes`):
 
 ```bash
 ryk claude
 ryk codex
 ```
 
-Use `ryk run --secretless -- <command>` to apply the same boundary to a custom command.
+A workspace file named like an agent (`./codex`) is **not** treated as that host: no auto empty-backpack, no host-config RW, no agent network mediation defaults. Use `ryk run --secretless -- <command>` to apply the empty-backpack boundary to a custom/generic command.
 
 In this mode:
 - The child env is **public host keys only** from the launch exact allowlist (PATH, HOME, TERM, display, selected proxy/TLS trust keys, etc.) — secret-like names and values are not passed through. Prefix families such as `LC_*` / `XDG_*` are **not** automatically retained unless listed exactly
@@ -127,7 +127,7 @@ In this mode:
 | Fact | Detail |
 |------|--------|
 | Env contract | Public-only constructed child env plus exact session phantoms for granted model keys |
-| Claude / Pi / Codex / OpenCode | Host login remains preferred; empty-backpack Seatbelt grants **narrow RW** to known agent config roots (e.g. `~/.claude`, Claude Application Support trees, `~/.codex`) — never bare `$HOME`, bare `~/Library`, `Library/Keychains`, or `~/.ssh`. Anthropic/OpenAI env-key clients that honor their base-URL variables use the loopback gateway. For Claude/Codex non-help launches: **usable login material** (non-empty `~/.claude/.credentials.json` / Codex auth markers) **or** a **host-matched** gateway is required; config dir alone fails closed. **Claude OAuth:** if `claudeAiOauth.expiresAt` is in the past and there is no Anthropic gateway, ryk **fails closed** (clear stderr) instead of blank-hanging after `sandbox=active`. Help/version-only (`--help` / `-h` / `--version`) skips both missing-auth and stale-OAuth preflights so self-contained `--help` still works. Residual hang risk remains when expiry is missing/unparseable, refresh might work but is not relied on, Keychain-only auth is needed, or the host agent hangs for network reasons |
+| Claude / Pi / Codex / OpenCode | Host login remains preferred; empty-backpack Seatbelt grants **narrow RW** to known agent config roots only for a **trusted resolved launch binary** (install-prefix allowlist + table host basename — not `basename(argv0)` alone). Trees include e.g. `~/.claude`, Claude Application Support trees, `~/.codex` — never bare `$HOME`, bare `~/Library`, `Library/Keychains`, or `~/.ssh`. Anthropic/OpenAI env-key clients that honor their base-URL variables use the loopback gateway. For trusted Claude/Codex non-help launches: **usable login material** (non-empty `~/.claude/.credentials.json` / Codex auth markers) **or** a **host-matched** gateway is required; config dir alone fails closed. Basename spoofs do not trigger host auth preflight. **Claude OAuth:** if `claudeAiOauth.expiresAt` is in the past and there is no Anthropic gateway, ryk **fails closed** (clear stderr) instead of blank-hanging after `sandbox=active`. Help/version-only (`--help` / `-h` / `--version`) skips both missing-auth and stale-OAuth preflights so self-contained `--help` still works. Residual hang risk remains when expiry is missing/unparseable, refresh might work but is not relied on, Keychain-only auth is needed, or the host agent hangs for network reasons. **Identity residuals:** `$HOME/.local/bin` over-trust (FP); installs outside allowlist get no host-config (FN — extend allowlist / `ORCA_TRUSTED_HOST_PREFIXES`); hardlink auth plant into workspace is still open until S1B |
 | FS scope honesty | When host-config grants are active, receipts say `narrow host-config RW, no bare home` (not bare `no home`) |
 | Redirected stdio residual | Seatbelt does **not** grant host `/var/folders` or classic `/tmp` content under production defaults. Redirecting agent stdout/stderr into those paths can trigger Bun `EPERM fstat` / `process.stderr.fd` crashes (exit **1** after attach). Prefer TTY, pipes, or capture files under the workspace (session tmp is `{workspace}/.orca-tmp`). Ryk detects parent stdio paths under classic tmp and prints a **stdio/fstat** tip (not a re-login lead). |
 

@@ -53,3 +53,7 @@ Strict and CI modes deny invalid policies, missing required backend features, un
 - Real network blocking when traffic bypasses Orca and no active OS/backend enforcement exists.
 - Transparent blocking of arbitrary filesystem calls on platforms where `doctor` reports limited or unavailable support.
 - Privileged users who intentionally bypass wrappers, shims, or audit paths.
+
+## Host-config launch identity (F-02)
+
+Host-config RW trees (e.g. `~/.codex`), empty-backpack defaults for agent aliases, and agent network mediation require a **trusted resolved launch binary** (realpath under an install allowlist + host-config table basename). A workspace file named `codex` / `claude` does **not** receive host login grants. Residuals: user-writable `~/.local/bin` over-trust; installs outside the allowlist get no host-config; hardlink smuggle of auth files into the workspace is a separate control (not closed by identity bind alone).

@@ -195,11 +195,11 @@ fn containsPath(paths: []const []const u8, candidate: []const u8) bool {
 fn collectCustomCodexHome(
     io: std.Io,
     allocator: std.mem.Allocator,
-    argv0: []const u8,
+    host: []const u8,
     home: []const u8,
     env_map: *const std.process.Environ.Map,
 ) error{OutOfMemory}![]const []const u8 {
-    if (!std.mem.eql(u8, sandbox.host_config_grants.hostBasename(argv0), "codex")) {
+    if (!std.mem.eql(u8, host, "codex")) {
         return allocator.alloc([]const u8, 0);
     }
     const custom = env_map.get("CODEX_HOME") orelse return allocator.alloc([]const u8, 0);
@@ -309,11 +309,10 @@ fn customConfigEnvKeys(host: []const u8) []const []const u8 {
 fn collectCustomHostConfigPaths(
     io: std.Io,
     allocator: std.mem.Allocator,
-    argv0: []const u8,
+    host: []const u8,
     home: []const u8,
     env_map: *std.process.Environ.Map,
 ) error{OutOfMemory}![]const []const u8 {
-    const host = sandbox.host_config_grants.hostBasename(argv0);
     if (home.len == 0 or !std.fs.path.isAbsolute(home)) return allocator.alloc([]const u8, 0);
 
     var paths: std.ArrayList([]const u8) = .empty;
@@ -365,12 +364,13 @@ fn normalizeMacosUsersPath(path: []const u8) []const u8 {
 /// `launch_argv0` is the agent command (first argv of `ryk run -- <cmd>`). When set,
 /// resolved absolute file paths are granted as narrow `.exec` profile entries so
 /// agents installed outside workspace/system prefixes (typical `~/.local/...`) can
-/// pass child preflight after Seatbelt/Landlock attach. Known host basenames also
-/// collect host-config RW subpaths (e.g. `$HOME/.claude`) so empty backpack can
-/// still use host login without granting bare `$HOME`. Host-scoped system RO trees
-/// (e.g. codex `/etc/codex`) and macOS Apple developer toolchains (CLT / Xcode
-/// `Contents/Developer` for `/usr/bin/git` libxcselect) merge into the same launch
-/// RO list as install package roots.
+/// pass child preflight after Seatbelt/Landlock attach. **Trusted** launch identity
+/// (realpath under an install allowlist + host_config_table basename) also collects
+/// host-config RW subpaths (e.g. `$HOME/.claude`) so empty backpack can still use
+/// host login without granting bare `$HOME`. Basename-only spoofs get no host-config.
+/// Host-scoped system RO trees (e.g. codex `/etc/codex`) and macOS Apple developer
+/// toolchains (CLT / Xcode `Contents/Developer` for `/usr/bin/git` libxcselect) merge
+/// into the same launch RO list as install package roots.
 pub fn applyForRun(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -408,13 +408,23 @@ pub fn applyForRun(
     var io_rt: std.Io.Threaded = .init_single_threaded;
     const launch_io = io_rt.io();
     const home_for_config: []const u8 = if (env_map.get("HOME")) |h| h else "";
+    // Bind host-config identity once (realpath + trusted prefix). Generic → empty
+    // host key → no host-config RW / system RO / write-denies / custom cfg.
+    var host_id = if (launch_argv0) |argv0|
+        try sandbox.host_identity.resolveHostIdentity(launch_io, allocator, argv0, env_map, .{
+            .workspace_root = workspace_root,
+        })
+    else
+        sandbox.host_identity.HostIdentity{};
+    defer host_id.deinit(allocator);
+    const trusted_host = host_id.hostKey();
     // Authority write-deny paths (cross-platform): Seatbelt literal write-deny on
     // macOS + Landlock control_roots expand (RO leaf under host RW) on Linux.
-    const config_write_denies = if (mode != .off and launch_argv0 != null)
+    const config_write_denies = if (mode != .off and trusted_host.len > 0)
         sandbox.host_config_grants.collectHostConfigWriteDenies(
             launch_io,
             allocator,
-            launch_argv0.?,
+            trusted_host,
             workspace_root,
             env_map,
         ) catch |err| switch (err) {
@@ -474,7 +484,7 @@ pub fn applyForRun(
         const install_system: []const []const u8 = if (launch_argv0) |argv0| inner: {
             const install_ro = try sandbox.apply.collectLaunchInstallRoPaths(launch_io, allocator, argv0, env_map);
             errdefer sandbox.apply.freeLaunchInstallRoPaths(allocator, install_ro);
-            const system_ro = try sandbox.host_config_grants.collectHostSystemRoPaths(allocator, argv0);
+            const system_ro = try sandbox.host_config_grants.collectHostSystemRoPaths(allocator, trusted_host);
             errdefer sandbox.host_config_grants.freeHostSystemRoPaths(allocator, system_ro);
             break :inner try mergeOwnedPathLists(allocator, install_ro, system_ro);
         } else try allocator.alloc([]const u8, 0);
@@ -533,13 +543,13 @@ pub fn applyForRun(
         // toolchain here could change a bare MCP command after approval.
     }
 
-    const base_host_rw_paths_unfiltered: []const []const u8 = if (launch_argv0) |argv0|
-        try sandbox.host_config_grants.collectHostConfigPaths(launch_io, allocator, argv0, home_for_config)
+    const base_host_rw_paths_unfiltered: []const []const u8 = if (trusted_host.len > 0)
+        try sandbox.host_config_grants.collectHostConfigPaths(launch_io, allocator, trusted_host, home_for_config)
     else
         try allocator.alloc([]const u8, 0);
     defer sandbox.host_config_grants.freeHostConfigPaths(allocator, base_host_rw_paths_unfiltered);
-    const custom_codex_home = if (launch_argv0) |argv0|
-        try collectCustomCodexHome(launch_io, allocator, argv0, home_for_config, env_map)
+    const custom_codex_home = if (trusted_host.len > 0)
+        try collectCustomCodexHome(launch_io, allocator, trusted_host, home_for_config, env_map)
     else
         try allocator.alloc([]const u8, 0);
     defer freeMergedPathList(allocator, custom_codex_home);
@@ -556,8 +566,8 @@ pub fn applyForRun(
         custom_codex_home,
     );
     defer freeMergedPathList(allocator, base_and_codex_rw_paths);
-    const custom_host_config = if (launch_argv0) |argv0|
-        try collectCustomHostConfigPaths(launch_io, allocator, argv0, home_for_config, env_map)
+    const custom_host_config = if (trusted_host.len > 0)
+        try collectCustomHostConfigPaths(launch_io, allocator, trusted_host, home_for_config, env_map)
     else
         try allocator.alloc([]const u8, 0);
     defer freeMergedPathList(allocator, custom_host_config);
