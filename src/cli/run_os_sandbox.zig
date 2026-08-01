@@ -364,10 +364,13 @@ fn normalizeMacosUsersPath(path: []const u8) []const u8 {
 /// `launch_argv0` is the agent command (first argv of `ryk run -- <cmd>`). When set,
 /// resolved absolute file paths are granted as narrow `.exec` profile entries so
 /// agents installed outside workspace/system prefixes (typical `~/.local/...`) can
-/// pass child preflight after Seatbelt/Landlock attach. **Trusted** launch identity
-/// (realpath under an install allowlist + host_config_table basename) also collects
-/// host-config RW subpaths (e.g. `$HOME/.claude`) so empty backpack can still use
-/// host login without granting bare `$HOME`. Basename-only spoofs get no host-config.
+/// pass child preflight after Seatbelt/Landlock attach.
+///
+/// `trusted_host_key` is the **already-bound** host_config_table key from
+/// `host_identity.resolveHostIdentity` in `run.zig` (empty when generic). Host-config
+/// RW / system RO / write-denies / custom cfg use this key only — do not re-resolve
+/// under the filtered child env (empty-backpack strips `ORCA_TRUSTED_HOST_PREFIXES`
+/// and would split-brain empty backpack vs grants). Basename-only spoofs pass empty.
 /// Host-scoped system RO trees (e.g. codex `/etc/codex`) and macOS Apple developer
 /// toolchains (CLT / Xcode `Contents/Developer` for `/usr/bin/git` libxcselect) merge
 /// into the same launch RO list as install package roots.
@@ -386,6 +389,8 @@ pub fn applyForRun(
     progress: anytype,
     stderr: anytype,
     launch_argv0: ?[]const u8,
+    /// Table host key from a single pre-apply `resolveHostIdentity` (or empty).
+    trusted_host_key: []const u8,
     extra_exec_paths: []const []const u8,
     extra_ro_paths: []const []const u8,
 ) !ApplyForRunOutcome {
@@ -408,16 +413,11 @@ pub fn applyForRun(
     var io_rt: std.Io.Threaded = .init_single_threaded;
     const launch_io = io_rt.io();
     const home_for_config: []const u8 = if (env_map.get("HOME")) |h| h else "";
-    // Bind host-config identity once (realpath + trusted prefix). Generic → empty
-    // host key → no host-config RW / system RO / write-denies / custom cfg.
-    var host_id = if (launch_argv0) |argv0|
-        try sandbox.host_identity.resolveHostIdentity(launch_io, allocator, argv0, env_map, .{
-            .workspace_root = workspace_root,
-        })
+    // Single bind in run.zig — empty key means generic (no host-config grants).
+    const trusted_host = if (sandbox.host_config_grants.specForHost(trusted_host_key) != null)
+        trusted_host_key
     else
-        sandbox.host_identity.HostIdentity{};
-    defer host_id.deinit(allocator);
-    const trusted_host = host_id.hostKey();
+        "";
     // Authority write-deny paths (cross-platform): Seatbelt literal write-deny on
     // macOS + Landlock control_roots expand (RO leaf under host RW) on Linux.
     const config_write_denies = if (mode != .off and trusted_host.len > 0)

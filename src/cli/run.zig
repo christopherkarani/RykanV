@@ -448,6 +448,9 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         stdout,
         stderr,
         launch_argv0,
+        // Same bind as empty-backpack / mediation / auth preflight — do not re-resolve
+        // under filtered child env (would drop ORCA_TRUSTED_HOST_PREFIXES).
+        trusted_host_key,
         if (codex_mcp_plan) |plan| plan.exec_paths else &.{},
         if (codex_mcp_plan) |plan| plan.ro_paths else &.{},
     )) {

@@ -199,13 +199,31 @@ fn resolveLaunchPaths(
             };
             return .{ .realpath = real, .link_path = candidate };
         }
-        // Fall back to apply_posix (same PATH rules) without link basename.
+        // Fall back to apply_posix (same PATH rules). resolveArgv0 may return a
+        // non-realpathed PATH candidate when realpath fails — never treat that as
+        // identity (symlink leaf under a trusted prefix must not become trusted
+        // without a verified final realpath).
         const resolved = apply_posix.resolveArgv0(io, allocator, argv0, env_map) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return .{},
         };
         if (resolved.owned) {
-            return .{ .realpath = resolved.path, .link_path = null };
+            const real = realpathOwned(io, allocator, resolved.path) catch |err| switch (err) {
+                error.OutOfMemory => {
+                    allocator.free(resolved.path);
+                    return error.OutOfMemory;
+                },
+                else => {
+                    allocator.free(resolved.path);
+                    return .{};
+                },
+            };
+            // Keep the PATH candidate as link_path when it differs (wrapper leaf).
+            if (std.mem.eql(u8, real, resolved.path)) {
+                allocator.free(resolved.path);
+                return .{ .realpath = real, .link_path = null };
+            }
+            return .{ .realpath = real, .link_path = resolved.path };
         }
         const real = realpathOwned(io, allocator, resolved.path) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
@@ -769,4 +787,106 @@ test "isNvmNodeBinPath matches versioned bin only" {
     try std.testing.expect(isNvmNodeBinPath("/Users/x/.nvm/versions/node/v22.0.0/bin/codex", root));
     try std.testing.expect(!isNvmNodeBinPath("/Users/x/.nvm/versions/node/v22.0.0/lib/codex", root));
     try std.testing.expect(!isNvmNodeBinPath("/Users/x/.nvm/versions/node/codex", root));
+}
+
+test "resolveHostIdentity workspace hardlink of trusted binary is generic" {
+    // F-02 class: hardlink of a real trusted host binary into the workspace must
+    // not inherit host-config (realpath is the workspace path, not the install path).
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var trust = std.testing.tmpDir(.{});
+    defer trust.cleanup();
+    const trust_root = try trust.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(trust_root);
+    {
+        const f = try trust.dir.createFile(io, "codex", .{});
+        defer f.close(io);
+        try f.writeStreamingAll(io, "#!/bin/sh\necho trusted\n");
+        try trust.dir.setFilePermissions(io, "codex", @enumFromInt(0o755), .{});
+    }
+    var ws = std.testing.tmpDir(.{});
+    defer ws.cleanup();
+    const ws_path = try ws.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(ws_path);
+    const spoof = try std.fs.path.join(allocator, &.{ ws_path, "codex" });
+    defer allocator.free(spoof);
+    // Hardlink across tmp dirs may fail (different volumes) — skip, not fail.
+    trust.dir.hardLink("codex", ws.dir, "codex", io, .{}) catch return error.SkipZigTest;
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", "/Users/synthetic");
+    try env_map.put("PATH", "/usr/bin:/bin");
+
+    var id = try resolveHostIdentity(io, allocator, spoof, &env_map, .{
+        .workspace_root = ws_path,
+        .extra_trusted_prefixes = &.{trust_root},
+    });
+    defer id.deinit(allocator);
+    try std.testing.expect(!id.isTrusted());
+    try std.testing.expectEqualStrings(deny_workspace, id.deny_reason.?);
+    try std.testing.expectEqualStrings("", id.hostKey());
+}
+
+test "ORCA_TRUSTED_HOST_PREFIXES rejects over-broad roots" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    // Plant a codex binary under a synthetic home that is NOT otherwise trusted.
+    // zig testing tmp often lands under TMPDIR — identity may deny via tmp_path or
+    // untrusted_prefix; either way over-broad inject must not yield trusted.
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    const home = try home_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+    {
+        const f = try home_tmp.dir.createFile(io, "codex", .{});
+        defer f.close(io);
+        try f.writeStreamingAll(io, "#!/bin/sh\n");
+        try home_tmp.dir.setFilePermissions(io, "codex", @enumFromInt(0o755), .{});
+    }
+    const binary = try std.fs.path.join(allocator, &.{ home, "codex" });
+    defer allocator.free(binary);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+    try env_map.put("PATH", "/usr/bin:/bin");
+    // Bare HOME / filesystem root / single-component must not open grants.
+    try env_map.put("ORCA_TRUSTED_HOST_PREFIXES", "/:/tmp:/Users");
+
+    var id = try resolveHostIdentity(io, allocator, binary, &env_map, .{});
+    defer id.deinit(allocator);
+    try std.testing.expect(!id.isTrusted());
+    try std.testing.expect(id.deny_reason != null);
+    try std.testing.expectEqualStrings("", id.hostKey());
+
+    // Injecting bare $HOME must also fail closed.
+    try env_map.put("ORCA_TRUSTED_HOST_PREFIXES", home);
+    var id2 = try resolveHostIdentity(io, allocator, binary, &env_map, .{});
+    defer id2.deinit(allocator);
+    try std.testing.expect(!id2.isTrusted());
+    try std.testing.expect(id2.deny_reason != null);
+    try std.testing.expectEqualStrings("", id2.hostKey());
+}
+
+test "isAcceptableInjectedTrustPrefix rejects empty slash home and tmp" {
+    try std.testing.expect(!isAcceptableInjectedTrustPrefix("", null));
+    try std.testing.expect(!isAcceptableInjectedTrustPrefix("/", null));
+    try std.testing.expect(!isAcceptableInjectedTrustPrefix("/tmp", null));
+    try std.testing.expect(!isAcceptableInjectedTrustPrefix("/Users", null));
+    try std.testing.expect(!isAcceptableInjectedTrustPrefix("/home", null));
+    try std.testing.expect(!isAcceptableInjectedTrustPrefix("/var", null));
+    try std.testing.expect(!isAcceptableInjectedTrustPrefix("/opt", null)); // single component after root
+    try std.testing.expect(isAcceptableInjectedTrustPrefix("/opt/homebrew", null));
+    try std.testing.expect(isAcceptableInjectedTrustPrefix("/opt/homebrew/bin", null));
+
+    var env_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", "/Users/synthetic");
+    try std.testing.expect(!isAcceptableInjectedTrustPrefix("/Users/synthetic", &env_map));
+    try std.testing.expect(!isAcceptableInjectedTrustPrefix("/Users/synthetic/", &env_map));
+    // Narrow home subdir is acceptable as an ops extension (still not bare home).
+    try std.testing.expect(isAcceptableInjectedTrustPrefix("/Users/synthetic/.local/bin", &env_map));
 }
