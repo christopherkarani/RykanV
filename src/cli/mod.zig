@@ -112,6 +112,7 @@ test {
     _ = rust_legacy_stub;
     _ = rust_visibility;
     _ = evaluate;
+    _ = decide;
     _ = agent_hook;
     _ = daemon_contracts;
     _ = packs;

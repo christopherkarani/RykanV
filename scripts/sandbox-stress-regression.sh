@@ -255,46 +255,54 @@ SH
   }
 
   local net_out="${WORK_DIR}/out-net-mediate.txt"
-  set +e
-  run_mediated_pi 'echo GRADE=$ORCA_SESSION_SANDBOX_GRADE; echo ROUTE=$ORCA_PROXY_ROUTE_FORCED; code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 5 https://example.com 2>/dev/null || echo fail); echo HTTP=$code; if [ "$code" = "200" ]; then echo HTTP_200; exit 0; fi; echo STRESS_DENY_OK; exit 1' "${net_out}"
-  local net_code=$?
-  set -e
-  if mediation_launch_failed "${net_out}" && ! grep -q 'HTTP_200\|GRADE=\|ROUTE=' "${net_out}"; then
-    skip "host-alias mediation unavailable (fail-closed); network live deny not proven"
-    sed 's/^/[stress:net] /' "${net_out}" | head -15 || true
-  elif grep -q 'HTTP_200' "${net_out}"; then
-    fail "curl example.com allowed under mediation (see ${net_out})"
-  elif [[ ${net_code} -ne 0 ]] || grep -q 'STRESS_DENY_OK' "${net_out}"; then
-    pass "curl-example.com denied under mediation"
-    if grep -q 'GRADE=strong-mediated' "${net_out}"; then
-      pass "session-grade strong-mediated under host-alias mediation"
-    elif grep -qE 'GRADE=' "${net_out}"; then
-      skip "mediated grade not strong-mediated (see ${net_out})"
-    fi
+  if ! command -v curl >/dev/null 2>&1; then
+    skip "curl not on PATH; network deny probe not proven (install curl to exercise P1)"
   else
-    fail "network mediate probe inconclusive (see ${net_out})"
+    set +e
+    run_mediated_pi 'echo GRADE=$ORCA_SESSION_SANDBOX_GRADE; echo ROUTE=$ORCA_PROXY_ROUTE_FORCED; code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 5 https://example.com 2>/dev/null || echo fail); echo HTTP=$code; if [ "$code" = "200" ]; then echo HTTP_200; exit 0; fi; echo STRESS_DENY_OK; exit 1' "${net_out}"
+    local net_code=$?
+    set -e
+    if mediation_launch_failed "${net_out}" && ! grep -q 'HTTP_200\|GRADE=\|ROUTE=' "${net_out}"; then
+      skip "host-alias mediation unavailable (fail-closed); network live deny not proven"
+      sed 's/^/[stress:net] /' "${net_out}" | head -15 || true
+    elif grep -q 'HTTP_200' "${net_out}"; then
+      fail "curl example.com allowed under mediation (see ${net_out})"
+    elif [[ ${net_code} -ne 0 ]] || grep -q 'STRESS_DENY_OK' "${net_out}"; then
+      pass "curl-example.com denied under mediation"
+      if grep -q 'GRADE=strong-mediated' "${net_out}"; then
+        pass "session-grade strong-mediated under host-alias mediation"
+      elif grep -qE 'GRADE=' "${net_out}"; then
+        skip "mediated grade not strong-mediated (see ${net_out})"
+      fi
+    else
+      fail "network mediate probe inconclusive (see ${net_out})"
+    fi
   fi
 
   local tcp_out="${WORK_DIR}/out-tcp.txt"
-  set +e
-  # Python socket connect: timeout/refuse → deny success under mediation.
-  run_mediated_pi 'python3 -c "import socket,sys
+  if ! command -v python3 >/dev/null 2>&1; then
+    skip "python3 not on PATH; raw-tcp deny probe not proven"
+  else
+    set +e
+    # Python socket connect: timeout/refuse → deny success under mediation.
+    run_mediated_pi 'python3 -c "import socket,sys
 try:
  s=socket.create_connection((\"1.1.1.1\",80),2); s.close(); print(\"TCP_OK\"); sys.exit(0)
 except Exception as e:
  print(\"STRESS_DENY_OK\", type(e).__name__); sys.exit(1)
 "' "${tcp_out}"
-  local tcp_code=$?
-  set -e
-  if mediation_launch_failed "${tcp_out}" && ! grep -qE 'TCP_OK|STRESS_DENY_OK|GRADE=' "${tcp_out}"; then
-    skip "raw-tcp probe skipped (mediation fail-closed)"
-  elif grep -q 'TCP_OK' "${tcp_out}"; then
-    fail "raw TCP to 1.1.1.1:80 allowed under mediation (see ${tcp_out})"
-    sed 's/^/[stress:tcp] /' "${tcp_out}" | head -20 || true
-  elif [[ ${tcp_code} -ne 0 ]] || grep -q 'STRESS_DENY_OK' "${tcp_out}"; then
-    pass "raw-tcp-1.1.1.1 denied under mediation"
-  else
-    skip "raw-tcp probe inconclusive (python3 missing?)"
+    local tcp_code=$?
+    set -e
+    if mediation_launch_failed "${tcp_out}" && ! grep -qE 'TCP_OK|STRESS_DENY_OK|GRADE=' "${tcp_out}"; then
+      skip "raw-tcp probe skipped (mediation fail-closed)"
+    elif grep -q 'TCP_OK' "${tcp_out}"; then
+      fail "raw TCP to 1.1.1.1:80 allowed under mediation (see ${tcp_out})"
+      sed 's/^/[stress:tcp] /' "${tcp_out}" | head -20 || true
+    elif [[ ${tcp_code} -ne 0 ]] || grep -q 'STRESS_DENY_OK' "${tcp_out}"; then
+      pass "raw-tcp-1.1.1.1 denied under mediation"
+    else
+      fail "raw-tcp probe inconclusive (see ${tcp_out})"
+    fi
   fi
 
   # Optional open escape loud + grade (already partially covered above).

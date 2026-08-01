@@ -66,7 +66,7 @@ Run `orca doctor`. If a feature is `limited`, `wrapper-only`, `observe-only`, or
 
 ## Pi tools fail with malformed JSON / evaluation errors
 
-Protocol failures (timeout, malformed JSON, spawn failure, inconsistent exit) **fail closed for that tool call only**. Pi retries decide/evaluate **once**, then blocks with a failure **class** token in the message (e.g. `[malformed_json]`). After several consecutive protocol failures, Pi notifies **protocol degraded** once — still fail-closed per call, never silent allow. Retry the tool; if it persists, `/ryk-setup` then `/ryk-doctor`. Do not pass blanket `--ci` to interactive decide.
+Protocol failures (timeout, malformed JSON, spawn failure, inconsistent exit) **fail closed for that tool call only**. Pi retries decide/evaluate **once** only for *transient* classes (`timeout`, `malformed_json`, `spawn_failed`, `output_too_large`, `inconsistent_exit`); schema-valid `decision: "error"` is not retried. Messages include a failure **class** token (e.g. `[malformed_json]`). After several consecutive protocol failures, Pi notifies **protocol degraded** once — still fail-closed per call, never silent allow. `allow-with-warning` soft-allows only `spawn_failed` (binary missing); other protocol classes still block. Retry the tool; if it persists, `/ryk-setup` then `/ryk-doctor`. Do not pass blanket `--ci` to interactive decide.
 
 ## Sandbox stress regression (P1–4)
 

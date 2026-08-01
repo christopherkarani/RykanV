@@ -262,6 +262,32 @@ export function protocolFailureClassFromReason(
 	return undefined;
 }
 
+/**
+ * Transient protocol failures warrant one automatic retry (spawn/JSON glitches).
+ * Deterministic `decision: "error"` / unexpected responses do not retry.
+ */
+export function isTransientProtocolFailure(
+	failureClass: ProtocolFailureClass | undefined,
+): boolean {
+	return (
+		failureClass === "timeout" ||
+		failureClass === "malformed_json" ||
+		failureClass === "spawn_failed" ||
+		failureClass === "output_too_large" ||
+		failureClass === "inconsistent_exit"
+	);
+}
+
+/**
+ * `allow-with-warning` may soft-allow only true binary unavailability.
+ * Protocol corruption / typed decision errors always fail closed (Phase 5).
+ */
+export function allowWithWarningPermitsProtocolClass(
+	failureClass: ProtocolFailureClass | undefined,
+): boolean {
+	return failureClass === "spawn_failed";
+}
+
 type OrcaEvaluateResponse = {
 	decision?: string;
 	reason?: string;
@@ -596,8 +622,9 @@ async function runOrcaEvaluateOnce(
 }
 
 /**
- * Shell evaluate with one automatic retry on protocol failure.
- * Fail-closed per call; never allows on error.
+ * Shell evaluate with one automatic retry on *transient* protocol failure.
+ * Fail-closed per call; never allows on error. Non-transient errors (e.g.
+ * schema-valid decision:"error") are not retried.
  */
 export async function runOrcaEvaluate(
 	request: OrcaEvaluateRequest,
@@ -607,7 +634,7 @@ export async function runOrcaEvaluate(
 ): Promise<OrcaDecision> {
 	const first = await runOrcaEvaluateOnce(request, options);
 	if (first.kind !== "error") return first;
-	// One retry for transient spawn/JSON glitches; second failure still fail-closed.
+	if (!isTransientProtocolFailure(first.failureClass)) return first;
 	return runOrcaEvaluateOnce(request, options);
 }
 
@@ -746,8 +773,8 @@ async function runOrcaDecideOnce(
 }
 
 /**
- * Shared `orca decide <kind> --json` runner with one automatic retry on protocol
- * failure. Fail-closed per call; never allows on error.
+ * Shared `orca decide <kind> --json` runner with one automatic retry on
+ * *transient* protocol failure. Fail-closed per call; never allows on error.
  */
 async function runOrcaDecide(
 	kind: "file" | "tool",
@@ -761,6 +788,7 @@ async function runOrcaDecide(
 ): Promise<OrcaDecision> {
 	const first = await runOrcaDecideOnce(kind, payload, options, map);
 	if (first.kind !== "error") return first;
+	if (!isTransientProtocolFailure(first.failureClass)) return first;
 	return runOrcaDecideOnce(kind, payload, options, map);
 }
 
@@ -1515,7 +1543,13 @@ async function handleUnavailable(
 	allowOnce = true,
 ): Promise<ToolCallResult> {
 	const repair = repairMessage(reason, toolLabel);
-	if (mode === "allow-with-warning") {
+	const failureClass = protocolFailureClassFromReason(reason);
+	// allow-with-warning soft-allows only spawn_failed (binary missing).
+	// Protocol corruption / typed errors always fail closed (Phase 5).
+	if (
+		mode === "allow-with-warning" &&
+		allowWithWarningPermitsProtocolClass(failureClass)
+	) {
 		clearOrcaWidget(ctx);
 		notify(
 			ctx,
@@ -1524,7 +1558,11 @@ async function handleUnavailable(
 		);
 		return undefined;
 	}
-	if (mode === "strict" || mode === "noninteractive-block") {
+	if (
+		mode === "strict" ||
+		mode === "noninteractive-block" ||
+		mode === "allow-with-warning"
+	) {
 		const card = {
 			variant: "block" as const,
 			title: "RYK BLOCKED",

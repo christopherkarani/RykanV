@@ -26,6 +26,8 @@ import {
 	resolveUnavailableMode,
 	formatProtocolErrorReason,
 	protocolFailureClassFromReason,
+	isTransientProtocolFailure,
+	allowWithWarningPermitsProtocolClass,
 	runOrcaDecideFile,
 	runOrcaDecideTool,
 	runOrcaEvaluate,
@@ -628,13 +630,14 @@ test("custom tool unavailable fails closed", async () => {
 
 test("session bypass skips decide tool for custom tools", async () => {
 	const { pi, handlers } = makePi();
-	const err = { code: 3 as number, stdout: errorJson() };
-	const { spawn, calls } = makeSpawn([err, err]);
+	// Typed decision:error is non-transient → single attempt (no retry).
+	const err = { code: 1 as number, stdout: errorJson() };
+	const { spawn, calls } = makeSpawn([err]);
 	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
 	const { ctx, selections } = makeCtx();
 	selections.push("Disable ryk for this Pi session");
 
-	// First call triggers unavailable (with one protocol retry) → user disables session.
+	// First call triggers unavailable → user disables session.
 	const first = await fireToolCall(
 		handlers.get("tool_call")![0],
 		ctx,
@@ -651,8 +654,8 @@ test("session bypass skips decide tool for custom tools", async () => {
 	);
 	assert.equal(first, undefined);
 	assert.equal(second, undefined);
-	// Protocol retry on first unavailable (2), then bypass skips further spawns.
-	assert.equal(calls.length, 2);
+	// Non-transient error: one spawn, then bypass skips further spawns.
+	assert.equal(calls.length, 1);
 });
 
 test("empty custom tool name fails closed without spawning decide", async () => {
@@ -748,6 +751,41 @@ test("formatProtocolErrorReason includes class token", () => {
 	const reason = formatProtocolErrorReason("timeout", "ryk decide timed out.");
 	assert.equal(protocolFailureClassFromReason(reason), "timeout");
 	assert.match(reason, /\[timeout\]/);
+});
+
+test("isTransientProtocolFailure covers spawn/json glitches only", () => {
+	assert.equal(isTransientProtocolFailure("timeout"), true);
+	assert.equal(isTransientProtocolFailure("malformed_json"), true);
+	assert.equal(isTransientProtocolFailure("spawn_failed"), true);
+	assert.equal(isTransientProtocolFailure("output_too_large"), true);
+	assert.equal(isTransientProtocolFailure("inconsistent_exit"), true);
+	assert.equal(isTransientProtocolFailure("unexpected"), false);
+	assert.equal(isTransientProtocolFailure(undefined), false);
+	assert.equal(allowWithWarningPermitsProtocolClass("spawn_failed"), true);
+	assert.equal(allowWithWarningPermitsProtocolClass("timeout"), false);
+	assert.equal(allowWithWarningPermitsProtocolClass("malformed_json"), false);
+	assert.equal(allowWithWarningPermitsProtocolClass("unexpected"), false);
+});
+
+test("runOrcaDecideTool does not retry non-transient decision error", async () => {
+	const err = {
+		code: 1,
+		stdout: JSON.stringify({
+			decision: "error",
+			reason: "ryk decide: evaluation failed; fail closed.",
+			error_code: "evaluation_failed",
+		}),
+	};
+	const { spawn, calls } = makeSpawn([err, err]);
+	const result = await runOrcaDecideTool(
+		{ name: "x" },
+		{ spawn, orcaBin: "orca", timeoutMs: 1_000, cwd: process.cwd() },
+	);
+	assert.equal(result.kind, "error");
+	assert.equal(calls.length, 1);
+	if (result.kind === "error") {
+		assert.equal(result.failureClass, "unexpected");
+	}
 });
 
 test("write tool is evaluated via orca decide file", async () => {
@@ -1593,17 +1631,34 @@ test("strict mode blocks", async () => {
 	assert.equal(result.block, true);
 });
 
-test("allow-with-warning mode allows and warns", async () => {
+test("allow-with-warning allows only spawn_failed unavailability", async () => {
 	const { pi, handlers, commands } = makePi();
-	const err = { code: 3 as number, stdout: errorJson() };
-	const { spawn } = makeSpawn([err, err]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	const missing = { error: new Error("ENOENT") };
+	// spawn_failed is transient → one retry, then allow-with-warning soft-allows.
+	const { spawn } = makeSpawn([missing, missing]);
+	installOrcaExtension(pi, { spawn, orcaBin: "missing-orca" });
 	const { ctx, notifications } = makeCtx();
 	await commands.get("orca-mode")!.handler("allow-with-warning", ctx);
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(result, undefined);
 	assert.equal(notifications.at(-1)?.type, "warning");
+	assert.match(notifications.at(-1)?.message ?? "", /allowing bash with warning/i);
+});
+
+test("allow-with-warning still fail-closes on protocol decision error", async () => {
+	const { pi, handlers, commands } = makePi();
+	const err = { code: 3 as number, stdout: errorJson() };
+	const { spawn, calls } = makeSpawn([err]);
+	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	const { ctx } = makeCtx();
+	await commands.get("orca-mode")!.handler("allow-with-warning", ctx);
+
+	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
+	assert.equal(result?.block, true);
+	assert.match(result?.reason ?? "", /Failure class|unexpected|daemon/i);
+	// Non-transient: single attempt.
+	assert.equal(calls.length, 1);
 });
 
 test("malformed Orca JSON follows unavailable policy", async () => {
@@ -1662,8 +1717,8 @@ test("repeated protocol failures notify degraded once without allowing", async (
 test("session bypass allows subsequent bash calls during same session", async () => {
 	const { pi, handlers } = makePi();
 	const err = { code: 3 as number, stdout: errorJson() };
-	// First tool call retries once (2 spawns), then session bypass skips further evals.
-	const { spawn, calls } = makeSpawn([err, err]);
+	// Non-transient decision:error → single spawn, then session bypass.
+	const { spawn, calls } = makeSpawn([err]);
 	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
 	const { ctx, selections } = makeCtx();
 	selections.push("Disable ryk for this Pi session");
@@ -1672,14 +1727,13 @@ test("session bypass allows subsequent bash calls during same session", async ()
 	const second = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(first, undefined);
 	assert.equal(second, undefined);
-	assert.equal(calls.length, 2);
+	assert.equal(calls.length, 1);
 });
 
 test("session bypass does not leak across Pi session ids", async () => {
 	const { pi, handlers } = makePi();
 	const err = { code: 3 as number, stdout: errorJson() };
 	const { spawn, calls } = makeSpawn([
-		err,
 		err,
 		{ code: 0, stdout: allowJson() },
 	]);
@@ -1696,8 +1750,8 @@ test("session bypass does not leak across Pi session ids", async () => {
 		secondSession.ctx,
 	);
 	assert.equal(result, undefined);
-	// 2 protocol attempts on first session error path + 1 allow on second session.
-	assert.equal(calls.length, 3);
+	// 1 non-transient error on first session + 1 allow on second session.
+	assert.equal(calls.length, 2);
 });
 
 test("malformed bash tool calls fail closed", async () => {
