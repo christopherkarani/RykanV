@@ -91,12 +91,22 @@ pub const PreparedChild = struct {
     /// `spawnAgent` territory (S-GLO-01). Renamed from `os_child_apply_used`
     /// which overclaimed handshake semantics (Z-8).
     custom_spawn_used: bool = false,
+    /// When true, parent handed the controlling TTY foreground to the agent
+    /// process group (interactive inherit + setpgid sandbox path). Reclaim on
+    /// wait/terminate so the shell does not stay orphaned from the TTY.
+    terminal_handed_off: bool = false,
+    /// Foreground process group before handoff; restored on reclaim.
+    saved_fg_pgid: ?std.posix.pid_t = null,
 
     pub fn spawn(self: *PreparedChild) !void {
         switch (self.os_child_apply) {
             .none => try self.spawnPlain(),
             .custom => |hook| try self.spawnCustom(hook),
         }
+        // After sandboxed setpgid(0,0), the agent is a background pgrp while
+        // ryk remains the TTY foreground. Interactive TUIs then stop on
+        // tcsetattr (SIGTTOU) — blank banner hang. Hand the terminal over.
+        self.giveTerminalToAgentProcessGroup();
     }
 
     fn recordSpawnedPid(self: *PreparedChild, child: std.process.Child) void {
@@ -151,6 +161,7 @@ pub const PreparedChild = struct {
         const child = &(self.child orelse return error.InvalidState);
         const term = try child.wait(self.io);
         self.spawned = false;
+        self.reclaimTerminal();
         self.cleanupProcessGroup();
         return term;
     }
@@ -183,7 +194,57 @@ pub const PreparedChild = struct {
         }
         if (sticky) |pid| waitpidEintr(pid);
         self.spawned = false;
+        self.reclaimTerminal();
         self.process_group_id = null;
+    }
+
+    /// Best-effort: make the agent process group the TTY foreground so interactive
+    /// agents (Codex/Claude TUI) can `tcsetattr` without SIGTTOU stop.
+    ///
+    /// Only when: inherit stdio, stdin is a TTY, and the child is a process-group
+    /// leader (sandbox `setpgid(0,0)` path). Failures are silent (piped tests).
+    fn giveTerminalToAgentProcessGroup(self: *PreparedChild) void {
+        switch (builtin.os.tag) {
+            .linux, .macos, .freebsd, .netbsd, .openbsd, .dragonfly => {},
+            else => return,
+        }
+        if (self.stdio != .inherit) return;
+        if (self.terminal_handed_off) return;
+        const pgid = self.process_group_id orelse return;
+        if (std.c.isatty(std.posix.STDIN_FILENO) == 0) return;
+
+        // Plain spawn does not create a new pgrp; only sandbox setpgid leaders.
+        const leader = libcGetpgid(pgid);
+        if (leader < 0 or leader != pgid) return;
+
+        const saved = libcTcgetpgrp(std.posix.STDIN_FILENO) orelse return;
+        if (saved == pgid) return;
+
+        withTtouIgnored(struct {
+            fn call(child_pgid: std.posix.pid_t) void {
+                _ = libcTcsetpgrp(std.posix.STDIN_FILENO, child_pgid);
+            }
+        }.call, pgid);
+
+        // Confirm handoff; do not claim success on silent failure.
+        const now = libcTcgetpgrp(std.posix.STDIN_FILENO) orelse return;
+        if (now != pgid) return;
+        self.saved_fg_pgid = saved;
+        self.terminal_handed_off = true;
+    }
+
+    fn reclaimTerminal(self: *PreparedChild) void {
+        if (!self.terminal_handed_off) return;
+        const restore = self.saved_fg_pgid;
+        self.terminal_handed_off = false;
+        self.saved_fg_pgid = null;
+        const pgid = restore orelse return;
+        if (std.c.isatty(std.posix.STDIN_FILENO) == 0) return;
+        withTtouIgnored(struct {
+            fn call(p: std.posix.pid_t) void {
+                _ = libcTcsetpgrp(std.posix.STDIN_FILENO, p);
+            }
+        }.call, pgid);
     }
 
     /// Health-monitor path: **signal only**, never wait/reap.
@@ -243,6 +304,52 @@ fn mapStdio(behavior: StdioBehavior) std.process.SpawnOptions.StdIo {
         .inherit => .inherit,
         .ignore => .ignore,
     };
+}
+
+/// Run `func(arg)` while SIGTTOU is ignored so `tcsetpgrp` from a background
+/// process group does not stop the caller (POSIX job-control rule).
+fn withTtouIgnored(comptime func: anytype, arg: anytype) void {
+    switch (builtin.os.tag) {
+        .windows, .wasi => {
+            func(arg);
+            return;
+        },
+        else => {},
+    }
+    const ignore: std.posix.Sigaction = .{
+        .handler = .{ .handler = std.posix.SIG.IGN },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+    var previous: std.posix.Sigaction = undefined;
+    std.posix.sigaction(.TTOU, &ignore, &previous);
+    defer std.posix.sigaction(.TTOU, &previous, null);
+    func(arg);
+}
+
+// Zig 0.16 macOS `std.posix.tc{get,set}pgrp` bind missing libc symbols; use
+// direct libc wrappers (present on macOS/Linux).
+fn libcGetpgid(pid: std.c.pid_t) std.c.pid_t {
+    const getpgid = struct {
+        extern "c" fn getpgid(p: std.c.pid_t) std.c.pid_t;
+    }.getpgid;
+    return getpgid(pid);
+}
+
+fn libcTcgetpgrp(fd: std.posix.fd_t) ?std.posix.pid_t {
+    const tcgetpgrp = struct {
+        extern "c" fn tcgetpgrp(f: c_int) std.c.pid_t;
+    }.tcgetpgrp;
+    const p = tcgetpgrp(@intCast(fd));
+    if (p < 0) return null;
+    return p;
+}
+
+fn libcTcsetpgrp(fd: std.posix.fd_t, pgrp: std.posix.pid_t) bool {
+    const tcsetpgrp = struct {
+        extern "c" fn tcsetpgrp(f: c_int, p: std.c.pid_t) c_int;
+    }.tcsetpgrp;
+    return tcsetpgrp(@intCast(fd), pgrp) == 0;
 }
 
 fn killProcessGroup(pgid: std.posix.pid_t) void {
@@ -464,4 +571,65 @@ test "terminateForHealthFailure signals without reaping so main wait is sole rea
     const term = try prepared.wait();
     try std.testing.expect(term == .signal or term == .exited);
     try std.testing.expect(!prepared.spawned);
+}
+
+// Interactive agents under sandboxed setpgid: without parent tcsetpgrp the child
+// stops on tcsetattr (SIGTTOU) and the parent wait hangs — blank banner after
+// sandbox=active. This proves handoff lets a new process group complete TUI-like
+// termios init.
+// Exit: 0=ok, 2=setpgid fail, 3=tcsetattr fail after handoff.
+test "TTY handoff: process-group leader can tcsetattr without SIGTTOU stop" {
+    if (builtin.os.tag == .windows or builtin.os.tag == .wasi) return error.SkipZigTest;
+    if (std.c.isatty(std.posix.STDIN_FILENO) == 0) return error.SkipZigTest;
+
+    const nanosleep = struct {
+        fn call(ms: u64) void {
+            const ts: std.c.timespec = .{
+                .sec = @intCast(ms / 1000),
+                .nsec = @intCast((ms % 1000) * std.time.ns_per_ms),
+            };
+            _ = std.c.nanosleep(&ts, null);
+        }
+    }.call;
+
+    const pid = std.c.fork();
+    if (pid < 0) return error.SkipZigTest;
+    if (pid == 0) {
+        if (std.c.setpgid(0, 0) != 0) std.c._exit(2);
+        // Parent will tcsetpgrp us before we race; brief yield for handoff.
+        nanosleep(50);
+        var term: std.c.termios = undefined;
+        if (std.c.tcgetattr(std.posix.STDIN_FILENO, &term) != 0) std.c._exit(3);
+        if (std.c.tcsetattr(std.posix.STDIN_FILENO, .NOW, &term) != 0) std.c._exit(3);
+        std.c._exit(0);
+    }
+
+    // Parent: wait until child is process-group leader, then hand TTY over.
+    var tries: usize = 0;
+    while (tries < 50) : (tries += 1) {
+        if (libcGetpgid(pid) == pid) break;
+        nanosleep(2);
+    }
+    try std.testing.expectEqual(pid, libcGetpgid(pid));
+
+    var prepared = prepareChild(std.testing.io, std.testing.allocator, .{
+        .io = std.testing.io,
+        .argv = &[_][]const u8{"true"},
+        .workspace_root = ".",
+        .stdio = .inherit,
+    });
+    prepared.process_group_id = pid;
+    prepared.spawned = true;
+    prepared.giveTerminalToAgentProcessGroup();
+    try std.testing.expect(prepared.terminal_handed_off);
+
+    var status: c_int = 0;
+    const rc = std.c.waitpid(pid, &status, 0);
+    prepared.reclaimTerminal();
+    try std.testing.expect(rc == pid);
+    // WIFSTOPPED would mean SIGTTOU hang residual.
+    const stopped = (status & 0xff) == 0x7f;
+    try std.testing.expect(!stopped);
+    const code: u8 = @intCast((status >> 8) & 0xff);
+    try std.testing.expectEqual(@as(u8, 0), code);
 }
