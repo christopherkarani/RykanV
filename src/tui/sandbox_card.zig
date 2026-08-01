@@ -5,6 +5,7 @@
 //! footer so scripts and tests keep working.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const theme = @import("theme.zig");
 const tui_render = @import("render.zig");
 
@@ -23,7 +24,35 @@ pub const PostureKind = enum {
         if (std.mem.eql(u8, tag, "failed")) return .failed;
         return .disabled;
     }
+
+    /// True when session start shows the dramatic shield card (not the compact disabled line).
+    pub fn isDramatic(self: PostureKind) bool {
+        return switch (self) {
+            .active, .prepared, .unavailable, .failed => true,
+            .disabled => false,
+        };
+    }
 };
+
+/// Minimum on-screen dwell for the shield card so humans can read it (interactive TTY only).
+pub const hold_ns: u64 = 2 * std.time.ns_per_s;
+
+/// Pure decision: should we pause after rendering the shield card?
+///
+/// Hold only for dramatic postures on a real interactive terminal. Skip tests,
+/// pipes, `TERM=dumb`, and when `hold_disabled` (e.g. `ORCA_SHIELD_HOLD=0`).
+pub fn shouldHold(posture: PostureKind, is_tty: bool, term_dumb: bool, hold_disabled: bool) bool {
+    if (hold_disabled) return false;
+    if (!is_tty or term_dumb) return false;
+    return posture.isDramatic();
+}
+
+/// Block for `hold_ns` when `shouldHold` is true. No-op in tests and when hold is skipped.
+pub fn holdIfNeeded(io: std.Io, posture: PostureKind, is_tty: bool, term_dumb: bool, hold_disabled: bool) void {
+    if (builtin.is_test) return;
+    if (!shouldHold(posture, is_tty, term_dumb, hold_disabled)) return;
+    std.Io.sleep(io, std.Io.Duration.fromNanoseconds(hold_ns), .awake) catch {};
+}
 
 /// Inputs for the shield card. All slices are borrowed for the call.
 pub const CardInput = struct {
@@ -391,4 +420,20 @@ test "PostureKind.parse maps tags" {
     try std.testing.expectEqual(PostureKind.active, PostureKind.parse("active"));
     try std.testing.expectEqual(PostureKind.disabled, PostureKind.parse("disabled"));
     try std.testing.expectEqual(PostureKind.disabled, PostureKind.parse("unknown"));
+}
+
+test "shouldHold: active on interactive TTY only" {
+    try std.testing.expect(shouldHold(.active, true, false, false));
+    try std.testing.expect(shouldHold(.prepared, true, false, false));
+    try std.testing.expect(shouldHold(.unavailable, true, false, false));
+    try std.testing.expect(shouldHold(.failed, true, false, false));
+    try std.testing.expect(!shouldHold(.disabled, true, false, false));
+    try std.testing.expect(!shouldHold(.active, false, false, false)); // pipe
+    try std.testing.expect(!shouldHold(.active, true, true, false)); // TERM=dumb
+    try std.testing.expect(!shouldHold(.active, true, false, true)); // hold disabled
+}
+
+test "holdIfNeeded is a no-op under tests even when shouldHold would be true" {
+    // Must not sleep 2s in the unit suite.
+    holdIfNeeded(std.testing.io, .active, true, false, false);
 }

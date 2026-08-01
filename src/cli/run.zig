@@ -506,7 +506,9 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 self.openai_gateway,
                 self.apply_result.receipt,
             );
+            // Flush before the shield dwell so the card is on-screen, not buffered.
             try flushIfSupported(self.writer);
+            holdShieldCardIfNeeded(self.io, self.writer, self.apply_result.receipt);
         }
     };
 
@@ -1620,14 +1622,11 @@ fn printSessionStart(
 
     // Memorable shield card when the OS box is live (or trying). Quiet receipt
     // lines otherwise so disabled sessions stay compact for humans and tests.
-    const dramatic = switch (os_receipt.posture) {
-        .active, .prepared, .unavailable, .failed => true,
-        .disabled => false,
-    };
-    if (dramatic) {
+    const card_posture = tui.sandbox_card.PostureKind.parse(@tagName(os_receipt.posture));
+    if (card_posture.isDramatic()) {
         const grade_str: ?[]const u8 = if (os_receipt.seatbelt_profile) |g| g.toString() else null;
         try tui.sandbox_card.render(io, stdout, .{
-            .posture = tui.sandbox_card.PostureKind.parse(@tagName(os_receipt.posture)),
+            .posture = card_posture,
             .fs_scope = os_receipt.fs_scope,
             .network_scope = os_receipt.network_scope,
             .seatbelt_profile = grade_str,
@@ -1833,6 +1832,59 @@ fn flushIfSupported(writer: anytype) !void {
             }
         },
     }
+}
+
+/// After the shield card is painted + flushed, dwell ~2s on an interactive TTY
+/// so humans can actually read it. Skips pipes, dumb terminals, tests, and
+/// `ORCA_SHIELD_HOLD=0` / `RYK_SHIELD_HOLD=0`.
+fn holdShieldCardIfNeeded(io: std.Io, stdout: anytype, receipt: sandbox.posture.AttachReceipt) void {
+    const posture = tui.sandbox_card.PostureKind.parse(@tagName(receipt.posture));
+    const is_tty = stdoutIsTty(io, stdout);
+    const term_dumb = blk: {
+        const term = std.c.getenv("TERM") orelse break :blk false;
+        break :blk std.mem.eql(u8, std.mem.sliceTo(term, 0), "dumb");
+    };
+    const hold_disabled = shieldHoldDisabledByEnv();
+    tui.sandbox_card.holdIfNeeded(io, posture, is_tty, term_dumb, hold_disabled);
+}
+
+fn shieldHoldDisabledByEnv() bool {
+    // Dual-read ryk/orca env (Phase 5a brand cut).
+    inline for (.{ "RYK_SHIELD_HOLD", "ORCA_SHIELD_HOLD" }) |name| {
+        if (std.c.getenv(name)) |raw| {
+            const v = std.mem.sliceTo(raw, 0);
+            if (v.len == 0) continue;
+            if (std.mem.eql(u8, v, "0") or std.mem.eql(u8, v, "off") or std.mem.eql(u8, v, "false")) return true;
+        }
+    }
+    return false;
+}
+
+fn stdoutIsTty(io: std.Io, stdout: anytype) bool {
+    const Writer = @TypeOf(stdout);
+    const is_file = switch (@typeInfo(Writer)) {
+        .pointer => |ptr| ptr.child == std.Io.File,
+        else => Writer == std.Io.File,
+    };
+    if (is_file) {
+        const file = switch (@typeInfo(Writer)) {
+            .pointer => stdout.*,
+            else => stdout,
+        };
+        return file.isTty(io) catch false;
+    }
+    const is_file_writer = switch (@typeInfo(Writer)) {
+        .pointer => |ptr| @hasField(ptr.child, "file") and @hasField(ptr.child, "interface"),
+        else => @hasField(Writer, "file") and @hasField(Writer, "interface"),
+    };
+    if (is_file_writer) {
+        const w = switch (@typeInfo(Writer)) {
+            .pointer => stdout.*,
+            else => stdout,
+        };
+        return w.file.isTty(io) catch false;
+    }
+    return std.Io.File.stdout().isTty(io) catch false;
 }
 
 /// Returns true if the workspace has no prior .orca/sessions/ entries.
