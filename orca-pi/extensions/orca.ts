@@ -209,7 +209,58 @@ export type OrcaDecision =
 	| { kind: "deny"; reason: string; response: unknown }
 	| { kind: "ask"; reason: string; response: unknown }
 	| { kind: "warn"; reason: string; response: unknown }
-	| { kind: "error"; reason: string; response?: unknown; error?: Error };
+	| {
+			kind: "error";
+			reason: string;
+			response?: unknown;
+			error?: Error;
+			/** Protocol failure class token for recovery UX (never means allow). */
+			failureClass?: ProtocolFailureClass;
+	  };
+
+/** Classify decide/evaluate protocol failures for recovery UX (Phase 5). */
+export type ProtocolFailureClass =
+	| "timeout"
+	| "malformed_json"
+	| "spawn_failed"
+	| "inconsistent_exit"
+	| "output_too_large"
+	| "unexpected";
+
+/** Consecutive protocol failures before one-shot session degraded notify. */
+export const PROTOCOL_DEGRADED_THRESHOLD = 3;
+
+/**
+ * Build a fail-closed reason that always includes a bracketed class token.
+ * Never used to allow; diagnosis only.
+ */
+export function formatProtocolErrorReason(
+	failureClass: ProtocolFailureClass,
+	detail: string,
+): string {
+	const cleaned = sanitizeVisibleText(detail);
+	return `[${failureClass}] ${cleaned}`;
+}
+
+/** Extract class token from a reason string, if present. */
+export function protocolFailureClassFromReason(
+	reason: string,
+): ProtocolFailureClass | undefined {
+	const match = /^\[([a-z_]+)\]/.exec(reason.trim());
+	if (!match) return undefined;
+	const token = match[1];
+	if (
+		token === "timeout" ||
+		token === "malformed_json" ||
+		token === "spawn_failed" ||
+		token === "inconsistent_exit" ||
+		token === "output_too_large" ||
+		token === "unexpected"
+	) {
+		return token;
+	}
+	return undefined;
+}
 
 type OrcaEvaluateResponse = {
 	decision?: string;
@@ -252,6 +303,10 @@ type SessionState = {
 	bypass: boolean;
 	status: SetupResult["status"];
 	bootstrap?: Promise<SetupResult>;
+	/** Consecutive decide/evaluate protocol failures (reset on non-error decision). */
+	protocolFailures: number;
+	/** True after one-shot degraded notify for this session. */
+	protocolDegradedNotified: boolean;
 };
 
 export type OrcaExtensionOptions = {
@@ -444,7 +499,7 @@ export function resolveToolPath(pathInput: string, ctx: PiContext): string {
 	return resolve(resolveCwd(ctx.cwd), trimmed);
 }
 
-export async function runOrcaEvaluate(
+async function runOrcaEvaluateOnce(
 	request: OrcaEvaluateRequest,
 	options: Required<
 		Pick<OrcaExtensionOptions, "orcaBin" | "spawn" | "timeoutMs">
@@ -461,22 +516,45 @@ export async function runOrcaEvaluate(
 	);
 
 	if (result.timedOut) {
-		return { kind: "error", reason: "ryk evaluation timed out." };
+		return {
+			kind: "error",
+			failureClass: "timeout",
+			reason: formatProtocolErrorReason(
+				"timeout",
+				"ryk evaluation timed out.",
+			),
+		};
 	}
 
 	if (result.error) {
-		const reason =
-			result.error.message === "ryk output exceeded maximum size"
-				? "ryk output exceeded maximum size."
-				: "ryk is unavailable.";
-		return { kind: "error", reason, error: result.error };
+		const oversized =
+			result.error.message === "ryk output exceeded maximum size";
+		const failureClass: ProtocolFailureClass = oversized
+			? "output_too_large"
+			: "spawn_failed";
+		const detail = oversized
+			? "ryk output exceeded maximum size."
+			: "ryk is unavailable.";
+		return {
+			kind: "error",
+			failureClass,
+			reason: formatProtocolErrorReason(failureClass, detail),
+			error: result.error,
+		};
 	}
 
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(result.stdout);
 	} catch {
-		return { kind: "error", reason: "ryk returned malformed JSON." };
+		return {
+			kind: "error",
+			failureClass: "malformed_json",
+			reason: formatProtocolErrorReason(
+				"malformed_json",
+				"ryk returned malformed JSON.",
+			),
+		};
 	}
 
 	const decision = getStringField(parsed, "decision");
@@ -497,16 +575,40 @@ export async function runOrcaEvaluate(
 	if (decision === "error") {
 		return {
 			kind: "error",
-			reason: sanitizeVisibleText(getDecisionReason(parsed)),
+			failureClass: "unexpected",
+			reason: formatProtocolErrorReason(
+				"unexpected",
+				sanitizeVisibleText(getDecisionReason(parsed)),
+			),
 			response: parsed,
 		};
 	}
 
 	return {
 		kind: "error",
-		reason: `ryk returned an unexpected evaluation result (exit ${result.code ?? "unknown"}).`,
+		failureClass: "inconsistent_exit",
+		reason: formatProtocolErrorReason(
+			"inconsistent_exit",
+			`ryk returned an unexpected evaluation result (exit ${result.code ?? "unknown"}).`,
+		),
 		response: parsed,
 	};
+}
+
+/**
+ * Shell evaluate with one automatic retry on protocol failure.
+ * Fail-closed per call; never allows on error.
+ */
+export async function runOrcaEvaluate(
+	request: OrcaEvaluateRequest,
+	options: Required<
+		Pick<OrcaExtensionOptions, "orcaBin" | "spawn" | "timeoutMs">
+	> & { env?: NodeJS.ProcessEnv },
+): Promise<OrcaDecision> {
+	const first = await runOrcaEvaluateOnce(request, options);
+	if (first.kind !== "error") return first;
+	// One retry for transient spawn/JSON glitches; second failure still fail-closed.
+	return runOrcaEvaluateOnce(request, options);
 }
 
 type DecideRuntimeOptions = Required<
@@ -514,10 +616,10 @@ type DecideRuntimeOptions = Required<
 > & { env?: NodeJS.ProcessEnv; cwd?: string };
 
 /**
- * Shared `orca decide <kind> --json` runner. Fail-closed on timeout, spawn
- * error, malformed JSON, and decision/exit-code mismatch.
+ * Single decide attempt. Fail-closed on timeout, spawn error, malformed JSON,
+ * and decision/exit-code mismatch. Reasons include a class token for recovery UX.
  */
-async function runOrcaDecide(
+async function runOrcaDecideOnce(
 	kind: "file" | "tool",
 	payload: object,
 	options: DecideRuntimeOptions,
@@ -538,21 +640,41 @@ async function runOrcaDecide(
 	);
 
 	if (result.timedOut) {
-		return { kind: "error", reason: "ryk decide timed out." };
+		return {
+			kind: "error",
+			failureClass: "timeout",
+			reason: formatProtocolErrorReason("timeout", "ryk decide timed out."),
+		};
 	}
 	if (result.error) {
-		const reason =
-			result.error.message === "ryk output exceeded maximum size"
-				? "ryk output exceeded maximum size."
-				: "ryk is unavailable.";
-		return { kind: "error", reason, error: result.error };
+		const oversized =
+			result.error.message === "ryk output exceeded maximum size";
+		const failureClass: ProtocolFailureClass = oversized
+			? "output_too_large"
+			: "spawn_failed";
+		const detail = oversized
+			? "ryk output exceeded maximum size."
+			: "ryk is unavailable.";
+		return {
+			kind: "error",
+			failureClass,
+			reason: formatProtocolErrorReason(failureClass, detail),
+			error: result.error,
+		};
 	}
 
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(result.stdout);
 	} catch {
-		return { kind: "error", reason: "ryk decide returned malformed JSON." };
+		return {
+			kind: "error",
+			failureClass: "malformed_json",
+			reason: formatProtocolErrorReason(
+				"malformed_json",
+				"ryk decide returned malformed JSON.",
+			),
+		};
 	}
 
 	const decision = getStringField(parsed, "decision");
@@ -568,7 +690,11 @@ async function runOrcaDecide(
 	) {
 		return {
 			kind: "error",
-			reason: `ryk decide returned an inconsistent result (decision ${decision ?? "missing"}, exit ${result.code ?? "signal"}).`,
+			failureClass: "inconsistent_exit",
+			reason: formatProtocolErrorReason(
+				"inconsistent_exit",
+				`ryk decide returned an inconsistent result (decision ${decision ?? "missing"}, exit ${result.code ?? "signal"}).`,
+			),
 			response: parsed,
 		};
 	}
@@ -600,14 +726,42 @@ async function runOrcaDecide(
 		return { kind: "warn", reason, response: parsed };
 	}
 	if (decision === "error") {
-		return { kind: "error", reason, response: parsed };
+		return {
+			kind: "error",
+			failureClass: "unexpected",
+			reason: formatProtocolErrorReason("unexpected", reason),
+			response: parsed,
+		};
 	}
 
 	return {
 		kind: "error",
-		reason: `ryk decide returned an unexpected result (exit ${result.code ?? "unknown"}).`,
+		failureClass: "unexpected",
+		reason: formatProtocolErrorReason(
+			"unexpected",
+			`ryk decide returned an unexpected result (exit ${result.code ?? "unknown"}).`,
+		),
 		response: parsed,
 	};
+}
+
+/**
+ * Shared `orca decide <kind> --json` runner with one automatic retry on protocol
+ * failure. Fail-closed per call; never allows on error.
+ */
+async function runOrcaDecide(
+	kind: "file" | "tool",
+	payload: object,
+	options: DecideRuntimeOptions,
+	map: {
+		defaultReason: string;
+		/** File write only: context_only must not allow side effects. */
+		denyContextOnly?: boolean;
+	},
+): Promise<OrcaDecision> {
+	const first = await runOrcaDecideOnce(kind, payload, options, map);
+	if (first.kind !== "error") return first;
+	return runOrcaDecideOnce(kind, payload, options, map);
 }
 
 /** Non-shell file tools → Zig `orca decide file` (path only; not daemon Evaluate). */
@@ -760,7 +914,12 @@ export function installOrcaExtension(
 		const key = sessionKey(ctx);
 		const current = sessionState.get(key);
 		if (current) return current;
-		const next = { bypass: false, status: "degraded" as const };
+		const next: SessionState = {
+			bypass: false,
+			status: "degraded",
+			protocolFailures: 0,
+			protocolDegradedNotified: false,
+		};
 		sessionState.set(key, next);
 		return next;
 	};
@@ -777,6 +936,8 @@ export function installOrcaExtension(
 		const state = stateFor(ctx);
 		state.bypass = false;
 		state.status = "degraded";
+		state.protocolFailures = 0;
+		state.protocolDegradedNotified = false;
 		updateStatus(ctx);
 		if (
 			(process.env.RYK_PI_AUTO_SETUP ?? process.env.ORCA_PI_AUTO_SETUP) ===
@@ -870,6 +1031,7 @@ export function installOrcaExtension(
 					unavailableMode,
 					disableSession,
 					runtime.env,
+					stateFor(ctx),
 				);
 			}
 
@@ -917,6 +1079,7 @@ export function installOrcaExtension(
 					unavailableMode,
 					disableSession,
 					runtime.env,
+					stateFor(ctx),
 				);
 			}
 
@@ -942,6 +1105,7 @@ export function installOrcaExtension(
 				unavailableMode,
 				disableSession,
 				runtime.env,
+				stateFor(ctx),
 			);
 		},
 	);
@@ -1095,17 +1259,21 @@ async function applyToolDecision(
 	unavailableMode: UnavailableMode,
 	disableSession: () => void,
 	env: NodeJS.ProcessEnv = process.env,
+	session?: SessionState,
 ): Promise<ToolCallResult> {
 	if (decision.kind === "allow") {
+		if (session) session.protocolFailures = 0;
 		clearOrcaWidget(ctx);
 		return undefined;
 	}
 	if (decision.kind === "deny") {
+		if (session) session.protocolFailures = 0;
 		const card = buildOrcaDecisionCard(decision.response, "block");
 		showOrcaDecision(pi, ctx, card);
 		return block(formatOrcaDecisionSummary(card, toolLabel));
 	}
 	if (decision.kind === "warn") {
+		if (session) session.protocolFailures = 0;
 		clearOrcaWidget(ctx);
 		notify(
 			ctx,
@@ -1115,6 +1283,7 @@ async function applyToolDecision(
 		return undefined;
 	}
 	if (decision.kind === "ask") {
+		if (session) session.protocolFailures = 0;
 		return resolvePolicyAsk(
 			decision.reason,
 			pi,
@@ -1124,6 +1293,21 @@ async function applyToolDecision(
 			allowOnceBypassEnabled(env, unavailableMode),
 			env,
 		);
+	}
+	// Protocol / unavailable: track consecutive failures; never silent-allow.
+	if (session) {
+		session.protocolFailures += 1;
+		if (
+			session.protocolFailures >= PROTOCOL_DEGRADED_THRESHOLD &&
+			!session.protocolDegradedNotified
+		) {
+			session.protocolDegradedNotified = true;
+			notify(
+				ctx,
+				`ryk protocol degraded after ${session.protocolFailures} consecutive evaluation failures (class token in error text). Each tool call still fail-closes; run /ryk-setup then /ryk-doctor. Session is not permanently bricked.`,
+				"warning",
+			);
+		}
 	}
 	return handleUnavailable(
 		decision.reason,
@@ -1873,7 +2057,20 @@ function notify(
 }
 
 function repairMessage(reason: string, toolLabel = "bash"): string {
-	return `ryk could not evaluate this ${toolLabel} action: ${sanitizeVisibleText(reason)}\n\nRun /ryk-setup, then /ryk-doctor. Coverage: ${piCoverageLabel()}.`;
+	const cleaned = sanitizeVisibleText(reason);
+	const klass =
+		protocolFailureClassFromReason(cleaned) ??
+		(cleaned.includes("malformed")
+			? "malformed_json"
+			: cleaned.includes("timed out")
+				? "timeout"
+				: cleaned.includes("unavailable")
+					? "spawn_failed"
+					: cleaned.includes("inconsistent")
+						? "inconsistent_exit"
+						: undefined);
+	const classHint = klass ? ` Failure class: ${klass}.` : "";
+	return `ryk could not evaluate this ${toolLabel} action: ${cleaned}${classHint}\n\nThis call is fail-closed only (not a permanent session brick). Retry the tool, or run /ryk-setup then /ryk-doctor if failures persist. Coverage: ${piCoverageLabel()}.`;
 }
 
 function modeSummary(mode: UnavailableMode, sessionBypass: boolean): string {
