@@ -45,10 +45,10 @@ fn childExecNc(port_text: [*:0]const u8) noreturn {
 }
 
 // CTRL template: unsandboxed canary readable; sandboxed child denies outside grant,
-// allows workspace neighbor read/write, and denies control-root write.
+// allows workspace neighbor read/write, and denies control-root write (.orca + .git).
 // Uses prepare SBPL + applyInChild.
 // Exit codes from child: 0=ok, 2=apply fail, 3=outside readable (leak), 4=ws read fail,
-// 5=ws write fail, 6=control root writable (leak).
+// 5=ws write fail, 6=.orca control writable (leak), 7=.git control writable (leak).
 test "real FS deny: outside canary denied; workspace readable and writable" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
     if (!sandboxInitAvailable()) return error.SkipZigTest;
@@ -63,9 +63,10 @@ test "real FS deny: outside canary denied; workspace readable and writable" {
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    // Control root must exist under the workspace before apply so the write probe
-    // targets a real path (profile always carves {workspace}/.orca).
+    // Control roots must exist under the workspace before apply so write probes
+    // target real paths (profile always carves {workspace}/.orca and .git).
     try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".git");
     // realPath so Seatbelt grants match kernel paths (/private/var vs /var).
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
@@ -102,6 +103,11 @@ test "real FS deny: outside canary denied; workspace readable and writable" {
     const control_write_z = try allocator.dupeZ(u8, control_write_path);
     defer allocator.free(control_write_z);
 
+    const git_control_write_path = try std.fs.path.join(allocator, &.{ ws_root, ".git", "phase2-probe" });
+    defer allocator.free(git_control_write_path);
+    const git_control_write_z = try allocator.dupeZ(u8, git_control_write_path);
+    defer allocator.free(git_control_write_z);
+
     // CTRL-BASELINE: unsandboxed parent can read the outside canary.
     {
         const baseline = try std.Io.Dir.cwd().readFileAlloc(io, canary_path, allocator, .limited(4096));
@@ -124,8 +130,9 @@ test "real FS deny: outside canary denied; workspace readable and writable" {
     // Outside path must not sit under the workspace grant.
     try std.testing.expect(!compiled.isAgentWritable(canary_path));
     try std.testing.expect(compiled.isAgentWritable(neighbor_path));
-    // Control path under workspace must not be agent-writable (profile carves .orca).
+    // Control paths under workspace must not be agent-writable (.orca + .git).
     try std.testing.expect(!compiled.isAgentWritable(control_write_path));
+    try std.testing.expect(!compiled.isAgentWritable(git_control_write_path));
 
     const prepared = prepareForChildApply(allocator, &compiled);
     defer if (prepared.sbpl_z) |p| allocator.free(p);
@@ -170,7 +177,18 @@ test "real FS deny: outside canary denied; workspace readable and writable" {
         );
         if (cfd >= 0) {
             _ = std.c.close(cfd);
-            std.c._exit(6); // control write leak
+            std.c._exit(6); // .orca control write leak
+        }
+
+        // Phase 2: workspace .git is a default control root — same write-deny class as .orca.
+        const gfd = std.c.open(
+            git_control_write_z.ptr,
+            .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true },
+            @as(std.c.mode_t, 0o600),
+        );
+        if (gfd >= 0) {
+            _ = std.c.close(gfd);
+            std.c._exit(7); // .git control write leak
         }
 
         std.c._exit(0);
@@ -189,6 +207,7 @@ test "real FS deny: outside canary denied; workspace readable and writable" {
         4 => return error.WorkspaceNeighborUnreadableUnderSandbox,
         5 => return error.WorkspaceWriteFailedUnderSandbox,
         6 => return error.ControlRootWritableUnderSandbox,
+        7 => return error.GitControlRootWritableUnderSandbox,
         else => return error.UnexpectedSandboxChildExit,
     }
     try std.testing.expectEqual(@as(u8, 0), exit_code);
@@ -198,9 +217,11 @@ test "real FS deny: outside canary denied; workspace readable and writable" {
     defer allocator.free(probe);
     try std.testing.expectEqualStrings("wrote", probe);
 
-    // Control file must not have been created by the sandboxed child.
+    // Control files must not have been created by the sandboxed child.
     const ctrl_probe = std.Io.Dir.cwd().access(io, control_write_path, .{});
     try std.testing.expectError(error.FileNotFound, ctrl_probe);
+    const git_ctrl_probe = std.Io.Dir.cwd().access(io, git_control_write_path, .{});
+    try std.testing.expectError(error.FileNotFound, git_ctrl_probe);
 }
 
 test "real network route forcing: proxy port allowed and neighboring loopback port denied" {

@@ -882,6 +882,8 @@ test "SBPL control roots deny write under workspace" {
 
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(require-not (subpath \"/workspace/proj/.orca\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-write* (subpath \"/workspace/proj/.orca\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(require-not (subpath \"/workspace/proj/.git\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-write* (subpath \"/workspace/proj/.git\"))") != null);
 }
 
 test "SBPL emits process-exec for launch .exec grants without HOME" {
@@ -1399,9 +1401,11 @@ test "SBPL emits Users-form for Data-volume realpath workspace (M-28 / R2-1)" {
     const allow_ws_users = "(allow file-read* (subpath \"/Users/dev/projects/app\"))";
     try std.testing.expect(std.mem.indexOf(u8, sbpl, allow_ws_users) != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(subpath \"/System/Volumes/Data/Users/dev/projects/app\")") == null);
-    // Control carve-out also Users-form.
+    // Control carve-outs also Users-form (.orca + .git).
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(require-not (subpath \"/Users/dev/projects/app/.orca\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-write* (subpath \"/Users/dev/projects/app/.orca\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(require-not (subpath \"/Users/dev/projects/app/.git\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-write* (subpath \"/Users/dev/projects/app/.git\"))") != null);
     // Data deny still present (blocks Data-form sibling opens).
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-read* (subpath \"/System/Volumes/Data\"))") != null);
     // Users-mapped workspace needs no Data re-allow section.

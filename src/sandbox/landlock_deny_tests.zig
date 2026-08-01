@@ -31,6 +31,7 @@ test "real FS deny: outside denied; neighbor RW; control root not writable" {
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
     try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".git");
     try ws_tmp.dir.writeFile(io, .{ .sub_path = "neighbor.txt", .data = "WORKSPACE_NEIGHBOR_OK" });
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
@@ -47,6 +48,8 @@ test "real FS deny: outside denied; neighbor RW; control root not writable" {
     defer allocator.free(neighbor_path);
     const control_write = try std.fs.path.join(allocator, &.{ ws_root, ".orca", "policy.yaml" });
     defer allocator.free(control_write);
+    const git_control_write = try std.fs.path.join(allocator, &.{ ws_root, ".git", "phase2-probe" });
+    defer allocator.free(git_control_write);
 
     // Production system RO defaults without temp RW (canaries live under tmpDir).
     var compiled = try profile.compileProfile(allocator, .{
@@ -58,6 +61,7 @@ test "real FS deny: outside denied; neighbor RW; control root not writable" {
     try std.testing.expect(!compiled.isAgentWritable(canary_path));
     try std.testing.expect(compiled.isAgentWritable(neighbor_path));
     try std.testing.expect(!compiled.isAgentWritable(control_write));
+    try std.testing.expect(!compiled.isAgentWritable(git_control_write));
 
     // Parent-side expand plan before fork (child never opendir/readdir).
     var plan = try buildChildLandlockPlan(allocator, &compiled);
@@ -95,7 +99,7 @@ test "real FS deny: outside denied; neighbor RW; control root not writable" {
         _ = linux.close(@intCast(wfd));
         if (wrote != 6) linux.exit(5);
 
-        // Control root write must fail.
+        // Control root write must fail (.orca).
         @memcpy(path_buf[0..control_write.len], control_write);
         path_buf[control_write.len] = 0;
         const cfd = linux.open(
@@ -105,7 +109,20 @@ test "real FS deny: outside denied; neighbor RW; control root not writable" {
         );
         if (linux.errno(cfd) == .SUCCESS) {
             _ = linux.close(@intCast(cfd));
-            linux.exit(6); // control write leak
+            linux.exit(6); // .orca control write leak
+        }
+
+        // Phase 2: workspace .git is a default control root — same write-deny class as .orca.
+        @memcpy(path_buf[0..git_control_write.len], git_control_write);
+        path_buf[git_control_write.len] = 0;
+        const gfd = linux.open(
+            path_buf[0..git_control_write.len :0].ptr,
+            .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true, .CLOEXEC = true },
+            0o600,
+        );
+        if (linux.errno(gfd) == .SUCCESS) {
+            _ = linux.close(@intCast(gfd));
+            linux.exit(9); // .git control write leak
         }
 
         // F-2: workspace root is listable (RO expand), but create-at-root is denied
@@ -158,6 +175,7 @@ test "real FS deny: outside denied; neighbor RW; control root not writable" {
         6 => return error.ControlRootWritableUnderSandbox,
         7 => return error.WorkspaceRootUnlistableUnderExpand,
         8 => return error.CreateAtWorkspaceRootAllowedUnderExpand,
+        9 => return error.GitControlRootWritableUnderSandbox,
         else => return error.UnexpectedSandboxProbeExit,
     }
 }

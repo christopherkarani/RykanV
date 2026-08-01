@@ -250,6 +250,13 @@ audit:
   tamper_evident: true
 ```
 
+**`.git` / `.orca` write deny and OS attach:** policy and builtins deny
+`files.write` under `./.git/**` and `./.orca/**`. When OS sandbox session-attach
+succeeds, those paths are also default **control roots** (write-deny on disk,
+still readable). Policy alone does not stop raw bash when attach is off. With
+attach, `git commit` / `git add` and other writers into `.git` hit EPERM as well
+(same class as planting under `.orca`).
+
 `audit.redact_secrets` may be omitted (it defaults to `true`) or explicitly set
 to `true`. Setting it to `false` is rejected: persisted audit records and
 exported replay data never permit raw secrets.

@@ -23,6 +23,8 @@ Session directories may include:
 
 Orca normalizes paths, records original hashes where feasible, verifies staged blob hashes before apply, and denies protected paths such as `.git/**`, `.orca/**`, `.env`, SSH keys, and cloud credentials according to policy.
 
+**OS control roots (session-attach):** when Seatbelt/Landlock attach succeeds, default write-deny control roots are `{workspace}/.orca` and `{workspace}/.git` (readable, not agent-writable). This matches policy/builtin `files.write` deny so raw bash cannot plant under `.git` while YAML claims otherwise. Side effect: `git commit` / index writers under attach get EPERM until a mediated git path exists. Without OS attach, only policy/hook evaluation applies.
+
 ## Symlink And Traversal Notes
 
 Path traversal and symlink escape attempts are treated as security-sensitive and covered by tests. Review diffs before applying staged writes.

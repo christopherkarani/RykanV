@@ -1,10 +1,11 @@
 //! OS-filesystem sandbox profile model (P1-U).
 //!
-//! Compiles a deterministic grant list: workspace RW (minus trusted Orca control
-//! roots; control remains readable / write-deny), system RO prefixes, optional
-//! classic tmp when `include_tmp` — never a broad $HOME grant and never automatic
-//! bare `/tmp` on production defaults (session temp is workspace-scoped).
-//! No Landlock/Seatbelt apply lives here; this is the portable grant model only.
+//! Compiles a deterministic grant list: workspace RW (minus trusted control roots
+//! `{workspace}/.orca` and `{workspace}/.git`; control remains readable / write-deny),
+//! system RO prefixes, optional classic tmp when `include_tmp` — never a broad $HOME
+//! grant and never automatic bare `/tmp` on production defaults (session temp is
+//! workspace-scoped). No Landlock/Seatbelt apply lives here; this is the portable
+//! grant model only.
 //!
 //! Grant queries (`isAgentWritable`, `hasGrant`, path math) are pure over the
 //! compiled in-memory model. The sole intentional FS I/O is
@@ -37,7 +38,7 @@ pub const CompileOptions = struct {
     /// Absolute workspace root. Relative or empty → fail closed.
     workspace_root: []const u8,
     /// Extra trusted control roots (absolute, or relative to workspace).
-    /// Always combined with `{workspace}/.orca`.
+    /// Always combined with `{workspace}/.orca` and `{workspace}/.git`.
     control_roots: []const []const u8 = &.{},
     /// When true, add explicit RW grants for classic platform temp trees
     /// (`tmp_path` plus `defaultTmpPrefixes`). **Default false:** production
@@ -463,7 +464,8 @@ pub fn compileProfile(allocator: std.mem.Allocator, options: CompileOptions) !Co
         has_host_config_rw = true;
     }
 
-    // Control roots: always workspace/.orca plus any listed roots.
+    // Control roots: always workspace/.orca and workspace/.git plus any listed roots.
+    // Both match policy/builtin files.write deny; OS attach must not leave .git agent-writable.
     var control_list: std.ArrayList([]const u8) = .empty;
     errdefer {
         for (control_list.items) |c| allocator.free(c);
@@ -471,11 +473,14 @@ pub fn compileProfile(allocator: std.mem.Allocator, options: CompileOptions) !Co
     }
 
     {
-        const default_control = try joinAbsolute(allocator, workspace_root, ".orca");
-        control_list.append(allocator, default_control) catch |err| {
-            allocator.free(default_control);
-            return err;
-        };
+        const default_controls = [_][]const u8{ ".orca", ".git" };
+        for (default_controls) |name| {
+            const default_control = try joinAbsolute(allocator, workspace_root, name);
+            control_list.append(allocator, default_control) catch |err| {
+                allocator.free(default_control);
+                return err;
+            };
+        }
     }
 
     for (options.control_roots) |raw| {
@@ -909,12 +914,39 @@ test "P1-U-04 trusted Orca state carve-out is not agent-writable" {
     try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.orca/policy.yaml"));
     try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.orca/sessions/approvals"));
 
+    // Default workspace/.git is always a control root (parity with policy write deny).
+    try std.testing.expect(profile.isControlPath("/workspace/proj/.git"));
+    try std.testing.expect(profile.isControlPath("/workspace/proj/.git/hooks/pre-commit"));
+    try std.testing.expect(profile.isControlPath("/workspace/proj/.git/config"));
+    try std.testing.expect(profile.isControlPath("/workspace/proj/.git/objects/zz"));
+    try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.git"));
+    try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.git/hooks/pre-commit"));
+    try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.git/config"));
+    try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.git/objects/zz"));
+
     // Extra control root (relative → under workspace).
     try std.testing.expect(profile.isControlPath("/workspace/proj/.orca/extra-control"));
     try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.orca/extra-control/ipc.sock"));
 
     // Ordinary workspace file remains writable.
     try std.testing.expect(profile.isAgentWritable("/workspace/proj/src/app.zig"));
+}
+
+test "default control roots include .orca and .git" {
+    const allocator = std.testing.allocator;
+    var profile = try compileProfile(allocator, .{
+        .workspace_root = "/workspace/proj",
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+    });
+    defer profile.deinit();
+
+    try std.testing.expect(profile.isControlPath("/workspace/proj/.orca"));
+    try std.testing.expect(profile.isControlPath("/workspace/proj/.git"));
+    try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.git/phase2-probe"));
+    try std.testing.expect(profile.isAgentWritable("/workspace/proj/src/foo.zig"));
+    // Control roots stay readable (write-deny only).
+    try std.testing.expect(profile.isGrantedReadable("/workspace/proj/.git/config"));
+    try std.testing.expect(profile.isGrantedReadable("/workspace/proj/.orca/policy.yaml"));
 }
 
 test "P1-U-03 no broad HOME grant" {
@@ -1206,6 +1238,7 @@ test "control root real directory is accepted" {
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
     try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".git");
     try ws_tmp.dir.writeFile(io, .{ .sub_path = "neighbor.txt", .data = "ok" });
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
@@ -1216,6 +1249,39 @@ test "control root real directory is accepted" {
     });
     defer compiled.deinit();
     try compiled.validateControlRootsOnDisk(io);
+}
+
+test "control root .git symlink on disk fails closed" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(io, "src");
+    // Real .orca so only the .git symlink fails validation.
+    try ws_tmp.dir.createDirPath(io, ".orca");
+    const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(ws_root);
+
+    const src_path = try std.fs.path.join(allocator, &.{ ws_root, "src" });
+    defer allocator.free(src_path);
+    const git_link = try std.fs.path.join(allocator, &.{ ws_root, ".git" });
+    defer allocator.free(git_link);
+
+    std.Io.Dir.cwd().symLink(io, src_path, git_link, .{}) catch |err| switch (err) {
+        error.PermissionDenied => return error.SkipZigTest,
+        else => return err,
+    };
+
+    var compiled = try compileProfile(allocator, .{
+        .workspace_root = ws_root,
+        .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
+    });
+    defer compiled.deinit();
+
+    try std.testing.expectError(error.InvalidControlRoot, compiled.validateControlRootsOnDisk(io));
 }
 
 test "isPathWithin handles filesystem root and prefix boundaries" {
