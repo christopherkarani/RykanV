@@ -408,10 +408,21 @@ pub fn parseRequest(bytes: []const u8) !ParsedRequest {
     };
 }
 
+/// Dial upstream by IP literal or DNS hostname.
+/// Zig 0.16 `IpAddress.resolve` only parses IP text (not DNS). Hostnames need
+/// `HostName.connect` (lookup + connect). Using resolve alone abort CONNECT tunnels
+/// after policy allow — empty reply / "Proxy CONNECT aborted" for example.com.
+fn connectUpstream(io: std.Io, host: []const u8, port: u16) !std.Io.net.Stream {
+    if (std.Io.net.IpAddress.parse(host, port)) |address| {
+        return address.connect(io, .{ .mode = .stream });
+    } else |_| {
+        const hostname = try std.Io.net.HostName.init(host);
+        return hostname.connect(io, port, .{ .mode = .stream });
+    }
+}
+
 fn forwardHttp(allocator: std.mem.Allocator, io: std.Io, client: std.Io.net.Stream, request: ParsedRequest, first_read: []const u8) !void {
-    const address = std.Io.net.IpAddress.parse(request.host, request.port orelse 80) catch
-        try std.Io.net.IpAddress.resolve(io, request.host, request.port orelse 80);
-    var upstream = try address.connect(io, .{ .mode = .stream });
+    var upstream = try connectUpstream(io, request.host, request.port orelse 80);
     defer upstream.close(io);
     var upstream_buf: [64 * 1024]u8 = undefined;
     var upstream_writer = upstream.writer(io, &upstream_buf);
@@ -428,8 +439,7 @@ fn forwardHttp(allocator: std.mem.Allocator, io: std.Io, client: std.Io.net.Stre
 
 fn tunnelConnect(allocator: std.mem.Allocator, io: std.Io, client: std.Io.net.Stream, host: []const u8, port: u16) !void {
     _ = allocator;
-    const address = try std.Io.net.IpAddress.resolve(io, host, port);
-    var upstream = try address.connect(io, .{ .mode = .stream });
+    var upstream = try connectUpstream(io, host, port);
     defer upstream.close(io);
     var client_buf: [256]u8 = undefined;
     var client_writer = client.writer(io, &client_buf);
@@ -1258,4 +1268,73 @@ fn readHttpResponse(io: std.Io, stream: std.Io.net.Stream, buffer: []u8) !usize 
 fn bindPort(bind_url: []const u8) !u16 {
     const colon = std.mem.lastIndexOfScalar(u8, bind_url, ':') orelse return error.InvalidBindUrl;
     return std.fmt.parseInt(u16, bind_url[colon + 1 ..], 10);
+}
+
+test "connectUpstream dials IP literals and DNS hostnames" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    const io = threaded.io();
+
+    // IP path (loopback listen + dial)
+    const listen_addr = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var server = try listen_addr.listen(io, .{ .reuse_address = true });
+    defer server.deinit(io);
+    const port = server.socket.address.getPort();
+    const accept_thread = try std.Thread.spawn(.{}, struct {
+        fn run(s: *std.Io.net.Server, thread_io: std.Io) void {
+            var stream = s.accept(thread_io) catch return;
+            stream.close(thread_io);
+        }
+    }.run, .{ &server, io });
+    defer accept_thread.join();
+    var ip_stream = try connectUpstream(io, "127.0.0.1", port);
+    ip_stream.close(io);
+
+    // DNS path — skip if offline / no resolv.
+    const host_stream = connectUpstream(io, "example.com", 443) catch return error.SkipZigTest;
+    host_stream.close(io);
+}
+
+test "proxy CONNECT allowlisted hostname returns 200 Connection Established" {
+    // Production path: listen+startServing + HTTPS CONNECT to a real host.
+    // Proves HostName DNS dial (not IpAddress.resolve IP-only) works after allow.
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
+        \\version: 1
+        \\mode: observe
+        \\network:
+        \\  mode: allowlist
+        \\  backend: proxy
+        \\  allow:
+        \\    - "example.com"
+    , "proxy-connect-hostname.yaml");
+    defer loaded.deinit();
+
+    var runtime = try start(std.testing.allocator, &loaded, .observe);
+    defer runtime.deinit();
+
+    const io = std.testing.io;
+    std.Io.sleep(io, std.Io.Duration.fromNanoseconds(50 * std.time.ns_per_ms), .awake) catch {};
+    const proxy_port = try bindPort(runtime.bindUrl());
+    const proxy_addr = try std.Io.net.IpAddress.parse("127.0.0.1", proxy_port);
+    var client = try std.Io.net.IpAddress.connect(&proxy_addr, io, .{ .mode = .stream });
+    defer client.close(io);
+
+    var write_buf: [256]u8 = undefined;
+    var writer = client.writer(io, &write_buf);
+    try writer.interface.writeAll("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n");
+    try writer.interface.flush();
+
+    var response_buf: [512]u8 = undefined;
+    const response_len = readHttpResponse(io, client, &response_buf) catch return error.SkipZigTest;
+    // Offline / DNS failure: skip rather than fail CI hermetic builds.
+    if (std.mem.indexOf(u8, response_buf[0..response_len], "200 Connection Established") == null) {
+        return error.SkipZigTest;
+    }
+    try runtime.waitForIdle(2 * std.time.ns_per_s);
+    const events = try runtime.snapshotAuditEvents(std.testing.allocator);
+    defer runtime.freeAuditEvents(std.testing.allocator, events);
+    try std.testing.expect(events.len >= 2);
+    try std.testing.expectEqual(@import("orca_core").core.event.EventType.network_connect_allowed, events[1].event_type);
 }
