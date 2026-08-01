@@ -39,6 +39,7 @@
 //! `appendProxyEnvironment` (both cases) so loopback wins over host proxies.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 /// Exact env names removed for shell/interpreter/library injection.
 /// (Most `LD_*` are covered by the `LD_` prefix; exact entries kept for docs/tests.)
@@ -128,6 +129,10 @@ pub const launch_allow_exact = [_][]const u8{
     "CURL_CA_BUNDLE",
     "NODE_EXTRA_CA_CERTS",
     "GIT_SSL_CAINFO",
+    // Apple libxcselect: ryk pins this to CLT/Xcode Developer under Seatbelt so
+    // /usr/bin/git and friends do not hit a false “install developer tools” dialog.
+    // Value is only set by ryk to allowlisted paths (or a pre-set allowlisted parent value).
+    "DEVELOPER_DIR",
     // Ryk-owned provider gateway endpoints. Empty-backpack filtering rejects
     // host-supplied values; run injects loopback values only after binding.
     "ANTHROPIC_BASE_URL",
@@ -351,7 +356,41 @@ pub fn applyLaunchAllowlistInPlaceWithMints(
 
     // Sanitize retained proxy values after the key set is final.
     try sanitizeRetainedProxyEnvInPlace(env_map);
+    // Empty backpack often has no host SSL_CERT_*; rustls agents then fail with
+    // UnknownIssuer under Seatbelt (Security.framework residual). Pin the system
+    // PEM bundle that system RO already grants.
+    try ensureDefaultTlsTrustEnv(env_map);
     return removed;
+}
+
+/// Default system CA PEM for sandboxed TLS (matches macOS/Linux system RO leaves).
+/// Prefer an already-set SSL_CERT_FILE; otherwise the first known public path.
+pub fn defaultSystemCaBundlePath() ?[]const u8 {
+    return switch (builtin.os.tag) {
+        .macos => "/etc/ssl/cert.pem",
+        .linux => "/etc/ssl/certs/ca-certificates.crt",
+        else => null,
+    };
+}
+
+/// If the child env has no SSL_CERT_FILE after allowlist, inject the public
+/// system CA PEM (and mirror to common CA env names when unset). Never
+/// overwrites a parent-provided path. No-op when no platform default exists.
+pub fn ensureDefaultTlsTrustEnv(env_map: *std.process.Environ.Map) error{OutOfMemory}!void {
+    const ca = defaultSystemCaBundlePath() orelse return;
+    if (env_map.get("SSL_CERT_FILE") == null) {
+        try env_map.put("SSL_CERT_FILE", ca);
+    }
+    // Mirror for stacks that ignore SSL_CERT_FILE but honor these names.
+    if (env_map.get("CURL_CA_BUNDLE") == null) {
+        try env_map.put("CURL_CA_BUNDLE", ca);
+    }
+    if (env_map.get("REQUESTS_CA_BUNDLE") == null) {
+        try env_map.put("REQUESTS_CA_BUNDLE", ca);
+    }
+    if (env_map.get("GIT_SSL_CAINFO") == null) {
+        try env_map.put("GIT_SSL_CAINFO", ca);
+    }
 }
 
 /// Strip URL userinfo from retained proxy env values in place.
@@ -613,6 +652,7 @@ test "launch allowlist keeps TLS trust and strips SSH_AUTH_SOCK" {
     try std.testing.expect(isLaunchAllowlisted("CURL_CA_BUNDLE"));
     try std.testing.expect(isLaunchAllowlisted("NODE_EXTRA_CA_CERTS"));
     try std.testing.expect(isLaunchAllowlisted("GIT_SSL_CAINFO"));
+    try std.testing.expect(isLaunchAllowlisted("DEVELOPER_DIR"));
     // Host SSH agent socket is not on the default attach allowlist (M-10).
     try std.testing.expect(!isLaunchAllowlisted("SSH_AUTH_SOCK"));
 }
@@ -660,6 +700,36 @@ test "launch allowlist retains only exact mint-table phantom pairs" {
         lookup,
     ));
     try std.testing.expect(!shouldRetainLaunchEnvWithMints("ANTHROPIC_API_KEY", "sk-ant-raw", lookup));
+}
+
+test "ensureDefaultTlsTrustEnv injects system CA when missing" {
+    var env_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer env_map.deinit();
+    try env_map.put("PATH", "/usr/bin");
+    try ensureDefaultTlsTrustEnv(&env_map);
+    if (defaultSystemCaBundlePath()) |ca| {
+        try std.testing.expectEqualStrings(ca, env_map.get("SSL_CERT_FILE").?);
+        try std.testing.expectEqualStrings(ca, env_map.get("CURL_CA_BUNDLE").?);
+        try std.testing.expectEqualStrings(ca, env_map.get("REQUESTS_CA_BUNDLE").?);
+        try std.testing.expectEqualStrings(ca, env_map.get("GIT_SSL_CAINFO").?);
+    }
+    // Never overwrite an explicit parent value.
+    try env_map.put("SSL_CERT_FILE", "/custom/ca.pem");
+    try ensureDefaultTlsTrustEnv(&env_map);
+    try std.testing.expectEqualStrings("/custom/ca.pem", env_map.get("SSL_CERT_FILE").?);
+}
+
+test "applyLaunchAllowlistInPlace injects TLS trust when host had none" {
+    var env_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer env_map.deinit();
+    try env_map.put("PATH", "/usr/bin");
+    try env_map.put("HOME", "/tmp");
+    try env_map.put("SECRET_LEAK", "nope");
+    _ = try applyLaunchAllowlistInPlace(&env_map);
+    try std.testing.expect(env_map.get("SECRET_LEAK") == null);
+    if (defaultSystemCaBundlePath()) |ca| {
+        try std.testing.expectEqualStrings(ca, env_map.get("SSL_CERT_FILE").?);
+    }
 }
 
 test "applyLaunchAllowlistInPlace strips non-allowlisted keys" {

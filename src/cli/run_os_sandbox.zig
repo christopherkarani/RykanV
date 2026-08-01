@@ -164,7 +164,9 @@ fn freeMergedPathList(allocator: std.mem.Allocator, paths: []const []const u8) v
 /// pass child preflight after Seatbelt/Landlock attach. Known host basenames also
 /// collect host-config RW subpaths (e.g. `$HOME/.claude`) so empty backpack can
 /// still use host login without granting bare `$HOME`. Host-scoped system RO trees
-/// (e.g. codex `/etc/codex`) merge into the same launch RO list as install package roots.
+/// (e.g. codex `/etc/codex`) and macOS Apple developer toolchains (CLT / Xcode
+/// `Contents/Developer` for `/usr/bin/git` libxcselect) merge into the same launch
+/// RO list as install package roots.
 pub fn applyForRun(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -208,14 +210,46 @@ pub fn applyForRun(
     // Node/npm agents: RO package root so nested optional deps + vendor binaries
     // are readable after empty-backpack Seatbelt (file-only .exec is not enough).
     // Host system RO (e.g. codex `/etc/codex`) merges into the same `.ro` list.
-    const launch_ro_paths: []const []const u8 = if (launch_argv0) |argv0| blk: {
-        const install_ro = try sandbox.apply.collectLaunchInstallRoPaths(launch_io, allocator, argv0, env_map);
-        errdefer sandbox.apply.freeLaunchInstallRoPaths(allocator, install_ro);
-        const system_ro = try sandbox.host_config_grants.collectHostSystemRoPaths(allocator, argv0);
-        errdefer sandbox.host_config_grants.freeHostSystemRoPaths(allocator, system_ro);
-        break :blk try mergeOwnedPathLists(allocator, install_ro, system_ro);
-    } else &.{};
-    defer if (launch_argv0 != null) freeMergedPathList(allocator, launch_ro_paths);
+    // macOS: Apple developer toolchains (CLT / Xcode Developer) so /usr/bin/git
+    // libxcselect stubs work for every agent (opencode, hermes, …) without a
+    // false “install developer tools” dialog — never bare /Applications.
+    const launch_ro_paths: []const []const u8 = blk: {
+        const install_system: []const []const u8 = if (launch_argv0) |argv0| inner: {
+            const install_ro = try sandbox.apply.collectLaunchInstallRoPaths(launch_io, allocator, argv0, env_map);
+            errdefer sandbox.apply.freeLaunchInstallRoPaths(allocator, install_ro);
+            const system_ro = try sandbox.host_config_grants.collectHostSystemRoPaths(allocator, argv0);
+            errdefer sandbox.host_config_grants.freeHostSystemRoPaths(allocator, system_ro);
+            break :inner try mergeOwnedPathLists(allocator, install_ro, system_ro);
+        } else try allocator.alloc([]const u8, 0);
+        errdefer freeMergedPathList(allocator, install_system);
+
+        const toolchain_ro = try sandbox.host_config_grants.collectMacosDeveloperToolchainRoPaths(
+            launch_io,
+            allocator,
+            env_map,
+        );
+        errdefer sandbox.host_config_grants.freeHostSystemRoPaths(allocator, toolchain_ro);
+        // mergeOwnedPathLists consumes both inputs on success.
+        break :blk try mergeOwnedPathLists(allocator, install_system, toolchain_ro);
+    };
+    defer freeMergedPathList(allocator, launch_ro_paths);
+
+    // Pin DEVELOPER_DIR for the child (prefer CLT). Stops libxcselect from
+    // requiring host select-link resolution when links are stale/broken, and
+    // avoids the false “install developer tools” dialog under Seatbelt.
+    // Uses launch_ro_paths after merge so the map value is duped from a live path.
+    if (builtin.os.tag == .macos) {
+        const existing = env_map.get("DEVELOPER_DIR");
+        const existing_ok = if (existing) |d|
+            sandbox.host_config_grants.isAllowlistedMacosDeveloperToolchainPath(d)
+        else
+            false;
+        if (!existing_ok) {
+            if (sandbox.host_config_grants.preferredMacosDeveloperDir(launch_ro_paths)) |preferred| {
+                try env_map.put("DEVELOPER_DIR", preferred);
+            }
+        }
+    }
 
     const home_for_config: []const u8 = if (env_map.get("HOME")) |h| h else "";
     const launch_host_rw_paths: []const []const u8 = if (launch_argv0) |argv0|

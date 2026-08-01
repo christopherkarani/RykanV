@@ -52,7 +52,11 @@ pub const host_config_table = [_]HostConfigSpec{
     },
     .{
         .host = "codex",
-        .home_rel_dirs = &.{".codex"},
+        .home_rel_dirs = &.{
+            ".codex",
+            // Shared agent skills tree (codex walks ~/.agents/skills at start).
+            ".agents",
+        },
         .login_markers = &.{ ".codex/auth.json", ".codex/config.toml" },
         // Enterprise/system requirements under /etc/codex. macOS also has the
         // firmlink form /private/etc/codex. Never bare /etc (see collectHostSystemRoPaths).
@@ -63,11 +67,22 @@ pub const host_config_table = [_]HostConfigSpec{
     },
     .{
         .host = "pi",
-        .home_rel_dirs = &.{".pi"},
+        .home_rel_dirs = &.{
+            ".pi",
+            // Lens + MCP extension state (sibling home roots, not under .pi). Without
+            // these, extension load does mkdir EPERM and pi exits 1 after attach.
+            ".pi-lens",
+            ".mcp_sequential_thinking",
+            // Optional MCP OAuth/cache store used by some pi extensions.
+            ".mcp-auth",
+        },
     },
     .{
         .host = "opencode",
         .home_rel_dirs = &.{
+            // Project/instance state root (mkdir EEXIST residual when missing from
+            // grant table while dir already exists on host).
+            ".opencode",
             ".config/opencode",
             ".local/share/opencode",
             // Bun/OpenCode mkdir state + cache under empty backpack (EEXIST residual when
@@ -280,6 +295,155 @@ pub fn freeHostSystemRoPaths(allocator: std.mem.Allocator, paths: []const []cons
     freeHostConfigPaths(allocator, paths);
 }
 
+/// True when `path` is a safe Apple developer-toolchain root to grant RO under Seatbelt.
+///
+/// `/usr/bin/git` (and many other Apple stubs) are thin `libxcselect` wrappers that
+/// open the active Xcode / Command Line Tools tree. Empty-backpack system RO does
+/// not cover `/Applications` or bare `/Library/Developer`, so agents that spawn
+/// `git` hit a blocked open and macOS may show the false “install developer tools”
+/// dialog. These allowlisted roots fix that without bare `/Applications` or HOME.
+pub fn isAllowlistedMacosDeveloperToolchainPath(path: []const u8) bool {
+    if (path.len == 0 or !std.fs.path.isAbsolute(path)) return false;
+    if (path.len == 1 and path[0] == '/') return false;
+    // No `..` / `.` components (path is absolute — strip leading `/` for the check).
+    if (relHasUnsafeComponents(path[1..])) return false;
+    if (pathContainsMacosSecretSegment(path)) return false;
+
+    // Standalone CLT install (not bare `/Library/Developer`).
+    if (std.mem.eql(u8, path, "/Library/Developer/CommandLineTools")) return true;
+
+    // Any Xcode.app (or beta / renamed) developer dir — under /Applications or a
+    // user install path. Never bare `/Applications` or whole `$HOME`.
+    // Examples: /Applications/Xcode.app/Contents/Developer
+    //           /Applications/Xcode-beta.app/Contents/Developer
+    const developer_suffix = ".app/Contents/Developer";
+    if (std.mem.endsWith(u8, path, developer_suffix)) {
+        const prefix = path[0 .. path.len - developer_suffix.len];
+        if (prefix.len == 0) return false;
+        // Require the last component of prefix to be a non-empty app name (no slash at end).
+        if (std.mem.endsWith(u8, prefix, "/")) return false;
+        return true;
+    }
+    return false;
+}
+
+/// Prefer CLT when present (smaller surface, no Xcode license/framework residual).
+/// Otherwise the first collected toolchain path. Used to pin `DEVELOPER_DIR` in
+/// the agent child so libxcselect does not need broken/host select links.
+pub fn preferredMacosDeveloperDir(paths: []const []const u8) ?[]const u8 {
+    for (paths) |p| {
+        if (std.mem.eql(u8, p, "/Library/Developer/CommandLineTools")) return p;
+    }
+    if (paths.len > 0) return paths[0];
+    return null;
+}
+
+/// Collect existing Apple developer-toolchain roots for RO+exec under empty backpack.
+///
+/// Host-agnostic (opencode, hermes, claude, generic `ryk run -- git`, …). Only
+/// allowlisted paths that exist on disk. Sources: `DEVELOPER_DIR`, xcode-select
+/// data links under `/var/select` + `/var/db`, and known default install roots.
+/// Never invents missing trees.
+///
+/// Non-macOS → empty slice. Caller frees with `freeHostSystemRoPaths`.
+pub fn collectMacosDeveloperToolchainRoPaths(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}![]const []const u8 {
+    if (builtin.os.tag != .macos) {
+        return try allocator.alloc([]const u8, 0);
+    }
+
+    var list: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (list.items) |p| allocator.free(p);
+        list.deinit(allocator);
+    }
+
+    // Prefer an explicit DEVELOPER_DIR when the parent already set one (xcode-select).
+    if (env_map) |map| {
+        if (map.get("DEVELOPER_DIR")) |raw| {
+            try appendMacosDeveloperToolchainIfOk(io, allocator, &list, raw);
+        }
+    }
+
+    // Active select links (parent-side readlink — not sandboxed). Targets may be
+    // dangling (stale Downloads installs); only grant when the target exists.
+    const select_links = [_][]const u8{
+        "/var/select/developer_dir",
+        "/private/var/select/developer_dir",
+        "/var/db/xcode_select_link",
+        "/private/var/db/xcode_select_link",
+    };
+    for (select_links) |link| {
+        try appendMacosDeveloperToolchainFromSymlink(io, allocator, &list, link);
+    }
+
+    // Stable known roots — grant only when present.
+    const known = [_][]const u8{
+        "/Library/Developer/CommandLineTools",
+        "/Applications/Xcode.app/Contents/Developer",
+        "/Applications/Xcode-beta.app/Contents/Developer",
+    };
+    for (known) |raw| {
+        try appendMacosDeveloperToolchainIfOk(io, allocator, &list, raw);
+    }
+
+    return try list.toOwnedSlice(allocator);
+}
+
+fn pathContainsMacosSecretSegment(path: []const u8) bool {
+    // Keep toolchain grants out of classic secret trees even under custom Xcode paths.
+    const banned = [_][]const u8{
+        "/.ssh/",
+        "/.gnupg/",
+        "/.aws/",
+        "/Library/Keychains/",
+        "/Library/Cookies/",
+    };
+    for (banned) |b| {
+        if (std.mem.indexOf(u8, path, b) != null) return true;
+    }
+    return false;
+}
+
+fn appendMacosDeveloperToolchainFromSymlink(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList([]const u8),
+    link_path: []const u8,
+) error{OutOfMemory}!void {
+    var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const n = std.Io.Dir.readLinkAbsolute(io, link_path, &target_buf) catch return;
+    try appendMacosDeveloperToolchainIfOk(io, allocator, list, target_buf[0..n]);
+}
+
+fn appendMacosDeveloperToolchainIfOk(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList([]const u8),
+    raw: []const u8,
+) error{OutOfMemory}!void {
+    // Trim trailing slashes for stable allowlist + dedup (except root, already rejected).
+    var path = raw;
+    while (path.len > 1 and path[path.len - 1] == '/') {
+        path = path[0 .. path.len - 1];
+    }
+    if (!isAllowlistedMacosDeveloperToolchainPath(path)) return;
+    if (!pathExists(io, path)) return;
+
+    for (list.items) |existing| {
+        if (std.mem.eql(u8, existing, path)) return;
+    }
+
+    const owned = try allocator.dupe(u8, path);
+    list.append(allocator, owned) catch |err| {
+        allocator.free(owned);
+        return err;
+    };
+}
+
 /// True when a known host has at least one listed config root present under home.
 pub fn hostConfigPresent(
     io: std.Io,
@@ -478,7 +642,7 @@ pub const empty_backpack_system_ro_exit_tip =
 
 /// Generic tip when empty-backpack agent exits non-zero without a more specific residual.
 pub const empty_backpack_agent_exit_tip =
-    \\ryk run: empty-backpack tip: agent exited non-zero after sandbox attach. Common causes: Seatbelt path-walk EPERM (lstat/realpath on path parents), redirected stdio into /tmp or /var/folders (fstat denials — capture under the workspace), system config RO residual (/etc/codex), stale host auth (re-login outside ryk), missing host-matched API key for gateway, or --with-host-secrets (loud). Keychain FS is not granted (by design).
+    \\ryk run: empty-backpack tip: agent exited non-zero after sandbox attach. Common causes: Seatbelt path-walk EPERM (lstat/realpath on path parents), redirected stdio into /tmp or /var/folders (fstat denials — capture under the workspace), system config RO residual (/etc/codex), TLS UnknownIssuer (system CA inject missing), stale host auth (re-login outside ryk), missing host-matched API key for gateway, or --with-host-secrets (loud). Keychain FS is not granted (by design).
     \\
 ;
 
@@ -648,6 +812,66 @@ test "specForHost exact allowlist only" {
     try std.testing.expect(specForHost("Claude") == null);
     try std.testing.expect(specForHost("echo") == null);
     try std.testing.expect(specForHost("") == null);
+}
+
+test "pi and opencode host tables list known sibling home roots" {
+    const pi = specForHost("pi").?;
+    var found_pi = false;
+    var found_lens = false;
+    var found_mcp = false;
+    for (pi.home_rel_dirs) |rel| {
+        if (std.mem.eql(u8, rel, ".pi")) found_pi = true;
+        if (std.mem.eql(u8, rel, ".pi-lens")) found_lens = true;
+        if (std.mem.eql(u8, rel, ".mcp_sequential_thinking")) found_mcp = true;
+    }
+    try std.testing.expect(found_pi);
+    try std.testing.expect(found_lens);
+    try std.testing.expect(found_mcp);
+
+    const oc = specForHost("opencode").?;
+    var found_dot_opencode = false;
+    var found_config = false;
+    for (oc.home_rel_dirs) |rel| {
+        if (std.mem.eql(u8, rel, ".opencode")) found_dot_opencode = true;
+        if (std.mem.eql(u8, rel, ".config/opencode")) found_config = true;
+    }
+    try std.testing.expect(found_dot_opencode);
+    try std.testing.expect(found_config);
+}
+
+test "collectHostConfigPaths grants pi lens and opencode roots when present" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    const home = try home_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+
+    try home_tmp.dir.createDirPath(io, ".pi");
+    try home_tmp.dir.createDirPath(io, ".pi-lens");
+    try home_tmp.dir.createDirPath(io, ".mcp_sequential_thinking");
+    try home_tmp.dir.createDirPath(io, ".opencode");
+    try home_tmp.dir.createDirPath(io, ".config/opencode");
+    try home_tmp.dir.createDirPath(io, ".local/share/opencode");
+
+    const pi_paths = try collectHostConfigPaths(io, allocator, "pi", home);
+    defer freeHostConfigPaths(allocator, pi_paths);
+    try std.testing.expect(pi_paths.len >= 3);
+    var saw_lens = false;
+    for (pi_paths) |p| {
+        if (std.mem.endsWith(u8, p, "/.pi-lens")) saw_lens = true;
+    }
+    try std.testing.expect(saw_lens);
+
+    const oc_paths = try collectHostConfigPaths(io, allocator, "opencode", home);
+    defer freeHostConfigPaths(allocator, oc_paths);
+    try std.testing.expect(oc_paths.len >= 3);
+    var saw_dot = false;
+    for (oc_paths) |p| {
+        if (std.mem.endsWith(u8, p, "/.opencode")) saw_dot = true;
+    }
+    try std.testing.expect(saw_dot);
 }
 
 test "isForbiddenHostConfigPath rejects root home and ssh" {
@@ -995,6 +1219,86 @@ test "collectHostSystemRoPaths grants codex etc trees even when missing" {
     const echo = try collectHostSystemRoPaths(allocator, "/bin/echo");
     defer freeHostSystemRoPaths(allocator, echo);
     try std.testing.expectEqual(@as(usize, 0), echo.len);
+}
+
+test "isAllowlistedMacosDeveloperToolchainPath accepts CLT and Xcode Developer only" {
+    try std.testing.expect(isAllowlistedMacosDeveloperToolchainPath("/Library/Developer/CommandLineTools"));
+    try std.testing.expect(isAllowlistedMacosDeveloperToolchainPath("/Applications/Xcode.app/Contents/Developer"));
+    try std.testing.expect(isAllowlistedMacosDeveloperToolchainPath("/Applications/Xcode-beta.app/Contents/Developer"));
+    // Custom install locations (active xcode-select may point outside /Applications).
+    try std.testing.expect(isAllowlistedMacosDeveloperToolchainPath("/Users/dev/Downloads/Xcode.app/Contents/Developer"));
+    try std.testing.expect(isAllowlistedMacosDeveloperToolchainPath("/Applications/foo/bar.app/Contents/Developer"));
+
+    try std.testing.expect(!isAllowlistedMacosDeveloperToolchainPath(""));
+    try std.testing.expect(!isAllowlistedMacosDeveloperToolchainPath("/"));
+    try std.testing.expect(!isAllowlistedMacosDeveloperToolchainPath("/Applications"));
+    try std.testing.expect(!isAllowlistedMacosDeveloperToolchainPath("/Applications/Xcode.app"));
+    try std.testing.expect(!isAllowlistedMacosDeveloperToolchainPath("/Library/Developer"));
+    try std.testing.expect(!isAllowlistedMacosDeveloperToolchainPath("/Library/Developer/CommandLineTools/usr"));
+    try std.testing.expect(!isAllowlistedMacosDeveloperToolchainPath("/Applications/Evil/../Xcode.app/Contents/Developer"));
+    try std.testing.expect(!isAllowlistedMacosDeveloperToolchainPath("Library/Developer/CommandLineTools"));
+    try std.testing.expect(!isAllowlistedMacosDeveloperToolchainPath("/Users/dev/.ssh/Xcode.app/Contents/Developer"));
+}
+
+test "preferredMacosDeveloperDir prefers CLT" {
+    try std.testing.expect(preferredMacosDeveloperDir(&.{}) == null);
+    try std.testing.expectEqualStrings(
+        "/Applications/Xcode.app/Contents/Developer",
+        preferredMacosDeveloperDir(&.{"/Applications/Xcode.app/Contents/Developer"}).?,
+    );
+    try std.testing.expectEqualStrings(
+        "/Library/Developer/CommandLineTools",
+        preferredMacosDeveloperDir(&.{
+            "/Applications/Xcode.app/Contents/Developer",
+            "/Library/Developer/CommandLineTools",
+        }).?,
+    );
+}
+
+test "collectMacosDeveloperToolchainRoPaths grants existing allowlisted roots only" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const paths = try collectMacosDeveloperToolchainRoPaths(io, allocator, null);
+    defer freeHostSystemRoPaths(allocator, paths);
+
+    if (builtin.os.tag != .macos) {
+        try std.testing.expectEqual(@as(usize, 0), paths.len);
+        return;
+    }
+
+    // Every returned path must be allowlisted and exist (collector is exist-only).
+    for (paths) |p| {
+        try std.testing.expect(isAllowlistedMacosDeveloperToolchainPath(p));
+        try std.testing.expect(pathExists(io, p));
+        try std.testing.expect(!std.mem.eql(u8, p, "/Applications"));
+        try std.testing.expect(!std.mem.eql(u8, p, "/Library/Developer"));
+    }
+
+    // On this host at least one of CLT / Xcode Developer is expected for agent DX.
+    // Soft: if the machine has neither, empty is still correct.
+    var saw_clt = false;
+    var saw_xcode = false;
+    for (paths) |p| {
+        if (std.mem.eql(u8, p, "/Library/Developer/CommandLineTools")) saw_clt = true;
+        if (std.mem.eql(u8, p, "/Applications/Xcode.app/Contents/Developer")) saw_xcode = true;
+    }
+    if (pathExists(io, "/Library/Developer/CommandLineTools")) {
+        try std.testing.expect(saw_clt);
+    }
+    if (pathExists(io, "/Applications/Xcode.app/Contents/Developer")) {
+        try std.testing.expect(saw_xcode);
+    }
+
+    // DEVELOPER_DIR must pass the allowlist; rejected dirs are ignored.
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("DEVELOPER_DIR", "/Applications");
+    const rejected = try collectMacosDeveloperToolchainRoPaths(io, allocator, &env_map);
+    defer freeHostSystemRoPaths(allocator, rejected);
+    for (rejected) |p| {
+        try std.testing.expect(!std.mem.eql(u8, p, "/Applications"));
+    }
 }
 
 test "selectEmptyBackpackAgentExitTip prefers system-ro residual for etc/codex EPERM" {

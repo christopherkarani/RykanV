@@ -1850,7 +1850,7 @@ fn holdShieldCardIfNeeded(io: std.Io, stdout: anytype, receipt: sandbox.posture.
 
 fn shieldHoldDisabledByEnv() bool {
     // Dual-read ryk/orca env (Phase 5a brand cut).
-    inline for (.{ "RYK_SHIELD_HOLD", "ORCA_SHIELD_HOLD" }) |name| {
+    for ([_][:0]const u8{ "RYK_SHIELD_HOLD", "ORCA_SHIELD_HOLD" }) |name| {
         if (std.c.getenv(name)) |raw| {
             const v = std.mem.sliceTo(raw, 0);
             if (v.len == 0) continue;

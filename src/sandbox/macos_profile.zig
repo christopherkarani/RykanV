@@ -330,9 +330,22 @@ fn appendBootstrapFs(
             \\
         ),
         // Hardened/strict: no broad /private/var — only dyld + shell select + tmp.
+        // `/var` is a firmlink to `/private/var`; libxcselect opens `/var/select/…`
+        // and `/var/db/xcode_select_link` (not only private-form). Without both path
+        // forms, `/usr/bin/git` dies with "unable to read data link … Operation not
+        // permitted" and macOS may show a false developer-tools install dialog.
+        // Never bare `/var/db` (receipts, host DB) — only the xcode_select_link leaf.
         .hardened, .strict => try out.appendSlice(allocator,
             \\;; bootstrap FS (hardened/strict): no broad /private/var
+            \\(allow file-read-metadata (literal "/var"))
+            \\(allow file-read-metadata (literal "/private/var"))
+            \\(allow file-read-metadata (literal "/var/db"))
+            \\(allow file-read-metadata (literal "/private/var/db"))
+            \\(allow file-read* (literal "/var"))
             \\(allow file-read* (subpath "/private/var/select"))
+            \\(allow file-read* (subpath "/var/select"))
+            \\(allow file-read* (literal "/private/var/db/xcode_select_link"))
+            \\(allow file-read* (literal "/var/db/xcode_select_link"))
             \\
         ),
     }
@@ -1099,6 +1112,12 @@ test "SBPL hardened default narrows process* and broad /private/var" {
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow process-info*)") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/private/var\"))") == null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/private/var/select\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/var/select\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/var/db/xcode_select_link\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/private/var/db/xcode_select_link\"))") != null);
+    // Must not open bare /var/db tree (host receipts) — only dyld + xcode_select_link leaves.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/var/db\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/private/var/db\"))") == null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/private/var/db/dyld\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow network*)") != null);
 }
