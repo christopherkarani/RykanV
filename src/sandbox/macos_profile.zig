@@ -16,8 +16,11 @@
 //!
 //! Path form (M-28): Seatbelt `subpath` filters on product majors match the
 //! normalized `/Users/…` firmlink form. Realpath often returns
-//! `/System/Volumes/Data/Users/…`; we strip the Data prefix for SBPL emission
-//! so grants are live-effective. Data-form path strings are not dual-emitted.
+//! `/System/Volumes/Data/Users/…`; we strip the Data prefix for *content* grant
+//! emission so grants are live-effective. After the Data deny, we also emit
+//! **metadata-only** Data-form ancestor literals (`/System/Volumes/Data/Users…`)
+//! so firmlink-backed `lstat` of path components is not last-match denied.
+//! Content grants on bare Users / Data Users stay off.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -30,8 +33,28 @@ const data_volume_prefix = "/System/Volumes/Data";
 pub const SeatbeltProfileGrade = posture.SeatbeltProfileGrade;
 
 /// Bounds for prepare-time hardlink alias discovery under protect-on.
+///
+/// `max_entries` counts every dirent under the workspace (files + directories),
+/// not only multi-nlink aliases. Align with Linux workspace-view default
+/// (`linux_workspace_view` max_scan_entries = 1_000_000) so monorepos with
+/// dependency trees and build artifacts do not fail closed at prepare with
+/// `seatbelt_secret_hardlink_scan_capacity` while Linux still attaches.
 pub const secret_hardlink_scan_max_depth: u32 = 48;
-pub const secret_hardlink_scan_max_entries: u32 = 50_000;
+pub const secret_hardlink_scan_max_entries: u32 = 1_000_000;
+
+/// Outside residual (`nlink - seen_in_workspace`) is treated as hostile only
+/// when residual is small and secret-plausible. Planted outside secrets are
+/// typically `nlink=2` (residual 1). Content-addressed package stores
+/// (pnpm/yarn) often have huge `nlink` with `seen=1`; those must not mass-deny
+/// every store leaf into SBPL (re-blooms profile → `sandbox_init` failure).
+pub const secret_hardlink_max_outside_residual_links: u64 = 8;
+
+/// Cap on explicit `hardlink_alias_denies` paths after filtering. Walk capacity
+/// is separate (`ScanCapacity`). Exceeding this fail-closes with
+/// `HardlinkAliasDenyCapacity` → prepare reason
+/// `seatbelt_hardlink_alias_deny_capacity`. After residual narrowing this is
+/// rare; the cap is a fail-closed backstop against unbounded SBPL growth.
+pub const secret_hardlink_alias_deny_max: u32 = 4096;
 
 pub const NetworkRouteForcing = struct {
     proxy_port: u16,
@@ -41,11 +64,14 @@ pub const RenderOptions = struct {
     network_route_forcing: ?NetworkRouteForcing = null,
     /// Residual grade. Default is hardened.
     profile_grade: SeatbeltProfileGrade = SeatbeltProfileGrade.default_grade,
-    /// Absolute paths of multi-nlink non-secret basenames under the workspace
-    /// (prepare-time hardlink residual closes outside secret-form inodes linked
-    /// under ordinary names). Each path receives last-match deny for
-    /// read/write/metadata. Caller owns the slices.
+    /// Absolute paths of multi-nlink non-secret basenames that need explicit
+    /// last-match denies (secret-sharing inodes and *small* outside-link
+    /// residual). Internal-only hardlink groups and large package-store
+    /// residuals are not included. Caller owns the slices.
     hardlink_alias_denies: []const []const u8 = &.{},
+    /// Exact host-owned configuration files that stay readable under a wider
+    /// host-config RW grant but must not be changed by the sandboxed agent.
+    write_deny_literals: []const []const u8 = &.{},
 };
 
 /// Honest network_scope string for receipts/banners after child attach.
@@ -93,8 +119,9 @@ pub fn renderSbplWithOptions(
     // Baseline: process lifecycle, signals, sysctl, mach, and optional network.
     // Intentional non-goals (FS confinement only — not process/IPC/network isolation):
     // unfiltered mach-lookup remains on all grades. See docs/platform-macos.md.
-    // Metadata is scoped to root literals + granted trees only — never bare
-    // (allow file-read-metadata) which enables host-wide path discovery.
+    // Metadata is scoped to root literals + grant trees + grant-path *ancestors*
+    // (literal metadata only for path-walk) — never bare (allow file-read-metadata)
+    // which enables host-wide path discovery.
     try appendProcessBaseline(&out, allocator, options.profile_grade);
     try out.appendSlice(allocator,
         \\(allow signal)
@@ -109,27 +136,19 @@ pub fn renderSbplWithOptions(
 
     // Path grants from the portable profile model (Users-form when under Data/Users).
     // `.exec` uses `literal` (file-only) so a mistaken directory path cannot tree-open.
+    //
+    // Ancestor path-walk: Node/realpath and similar call lstat on each path component
+    // (e.g. `/Users` before `/Users/dev/proj`). Grant subpaths do not cover those
+    // parents. Emit metadata-only *literals* on intermediate components so path-walk
+    // succeeds without content grants on bare HOME, `/Users`, or sibling trees.
+    try out.appendSlice(allocator, ";; path-walk ancestor metadata (literal only; no content)\n");
+    for (compiled.grants) |g| {
+        try appendPathAncestorMetadataLiterals(&out, allocator, g.path);
+    }
+
     try out.appendSlice(allocator, ";; compiled path grants\n");
     for (compiled.grants) |g| {
-        // Metadata only under granted trees.
-        switch (g.mode) {
-            .exec => {
-                try appendAllowLiteral(&out, allocator, "file-read-metadata", g.path);
-                try appendAllowLiteral(&out, allocator, "file-read*", g.path);
-                try appendAllowLiteral(&out, allocator, "process-exec", g.path);
-            },
-            .ro => {
-                try appendAllowSubpath(&out, allocator, "file-read-metadata", g.path);
-                try appendAllowSubpath(&out, allocator, "file-read*", g.path);
-                try appendAllowSubpath(&out, allocator, "process-exec", g.path);
-            },
-            .rw => {
-                try appendAllowSubpath(&out, allocator, "file-read-metadata", g.path);
-                try appendAllowSubpath(&out, allocator, "file-read*", g.path);
-                // RW with control-root write denies (require-not).
-                try appendAllowWriteMinusControls(&out, allocator, g.path, compiled.control_roots);
-            },
-        }
+        try appendGrantAllows(&out, allocator, g, compiled.control_roots);
     }
 
     // Explicit control write denies (defense in depth if a broader allow slips in).
@@ -168,22 +187,24 @@ pub fn renderSbplWithOptions(
             try out.appendSlice(allocator, ";; re-allow non-Users grants under /System/Volumes/Data (last-match after Data deny)\n");
             reallowed = true;
         }
-        switch (g.mode) {
-            .exec => {
-                try appendAllowLiteral(&out, allocator, "file-read-metadata", g.path);
-                try appendAllowLiteral(&out, allocator, "file-read*", g.path);
-                try appendAllowLiteral(&out, allocator, "process-exec", g.path);
-            },
-            .ro => {
-                try appendAllowSubpath(&out, allocator, "file-read-metadata", g.path);
-                try appendAllowSubpath(&out, allocator, "file-read*", g.path);
-                try appendAllowSubpath(&out, allocator, "process-exec", g.path);
-            },
-            .rw => {
-                try appendAllowSubpath(&out, allocator, "file-read-metadata", g.path);
-                try appendAllowSubpath(&out, allocator, "file-read*", g.path);
-                try appendAllowWriteMinusControls(&out, allocator, g.path, compiled.control_roots);
-            },
+        try appendGrantAllows(&out, allocator, g, compiled.control_roots);
+    }
+
+    // Path-walk firmlink residual: vnode for `/Users` is often under
+    // `/System/Volumes/Data/Users`. Earlier Users-form metadata literals do not
+    // match that Data path string, and the Data deny above is last-match for it.
+    // Re-emit *metadata-only* ancestors in Data-form for Users-mapped grants so
+    // Node realpathSync/lstat(`/Users`) succeeds without content grants on home.
+    try out.appendSlice(allocator, ";; path-walk Data-form ancestor metadata (after Data deny; metadata only)\n");
+    for (compiled.grants) |g| {
+        try appendPathAncestorMetadataLiteralsDataForm(&out, allocator, g.path);
+    }
+
+    if (options.write_deny_literals.len > 0) {
+        try out.appendSlice(allocator, ";; host configuration authority write-deny\n");
+        for (options.write_deny_literals) |path| {
+            if (!std.fs.path.isAbsolute(path) or path.len <= 1) return error.InvalidWriteDenyLiteral;
+            try appendDenyLiteralWithDataAlias(&out, allocator, "file-write*", path);
         }
     }
 
@@ -300,9 +321,22 @@ fn appendBootstrapFs(
             \\
         ),
         // Hardened/strict: no broad /private/var — only dyld + shell select + tmp.
+        // `/var` is a firmlink to `/private/var`; libxcselect opens `/var/select/…`
+        // and `/var/db/xcode_select_link` (not only private-form). Without both path
+        // forms, `/usr/bin/git` dies with "unable to read data link … Operation not
+        // permitted" and macOS may show a false developer-tools install dialog.
+        // Never bare `/var/db` (receipts, host DB) — only the xcode_select_link leaf.
         .hardened, .strict => try out.appendSlice(allocator,
             \\;; bootstrap FS (hardened/strict): no broad /private/var
+            \\(allow file-read-metadata (literal "/var"))
+            \\(allow file-read-metadata (literal "/private/var"))
+            \\(allow file-read-metadata (literal "/var/db"))
+            \\(allow file-read-metadata (literal "/private/var/db"))
+            \\(allow file-read* (literal "/var"))
             \\(allow file-read* (subpath "/private/var/select"))
+            \\(allow file-read* (subpath "/var/select"))
+            \\(allow file-read* (literal "/private/var/db/xcode_select_link"))
+            \\(allow file-read* (literal "/var/db/xcode_select_link"))
             \\
         ),
     }
@@ -319,21 +353,46 @@ fn appendBootstrapFs(
     );
 }
 
-/// Regular file recorded during protect-on hardlink alias discovery.
+/// Multi-nlink regular file recorded during protect-on hardlink alias discovery.
 const ScannedFile = struct {
     path: []u8,
     secret_name: bool,
     nlink: u64,
+    dev: u64,
+    ino: u64,
+};
+
+const InodeKey = struct {
+    dev: u64,
+    ino: u64,
+};
+
+const InodeAgg = struct {
+    /// Number of multi-nlink paths for this inode found under the workspace walk.
+    seen: u32,
+    nlink: u64,
+    has_secret: bool,
 };
 
 /// Walk `workspace_root` and return owned absolute paths of regular files that
 /// need explicit last-match Seatbelt path denies as hardlink aliases.
 ///
-/// Policy (aligns with Linux FUSE multi-nlink taint):
+/// Policy:
 /// - Secret-form basenames are covered by the shared path-regex deny.
-/// - Non-secret basenames with `nlink > 1` are denied by path: they can alias
-///   an outside secret-form inode (e.g. host `.env` hardlinked as `config.txt`)
-///   or a workspace secret-form name. Single-nlink ordinary files stay allowed.
+/// - Non-secret basenames are denied by path only when their inode is hostile:
+///   1. any scanned path on that inode is secret-form (workspace `.env` hardlinked
+///      as `notes.txt`), or
+///   2. **small** outside residual: `nlink > seen` and
+///      `(nlink - seen) <= secret_hardlink_max_outside_residual_links`
+///      (host `.env` hardlinked into the workspace as `config.txt` while the
+///      secret basename lives outside the walk; planted secrets ≈ residual 1).
+/// - **Large** outside residual (package-manager content-addressed stores with
+///   huge `nlink` and few workspace paths) is **accepted** — not mass-denied.
+/// - Multi-nlink groups that are entirely non-secret and fully contained in the
+///   workspace (cargo/incremental hardlink graphs, APFS shared build artifacts)
+///   are **not** denied — denying them bloated SBPL until `sandbox_init` failed
+///   with `child_apply_failed` on monorepos.
+/// - Single-nlink ordinary files stay allowed.
 ///
 /// Fail-closed policy (protect-on prepare path):
 /// - Missing workspace (`error.FileNotFound`) → empty list (regex deny still
@@ -347,9 +406,12 @@ const ScannedFile = struct {
 ///   may be regular files fail closed.
 /// - Scan capacity/depth exceeded → `error.ScanCapacity` /
 ///   `error.ScanDepthExceeded`.
+/// - Filtered alias denylist exceeds `secret_hardlink_alias_deny_max` →
+///   `error.HardlinkAliasDenyCapacity`.
 ///
-/// Prepare maps `OutOfMemory` to `seatbelt_profile_oom` and other scan errors
-/// to distinct `seatbelt_secret_hardlink_scan_*` reason codes.
+/// Prepare maps `OutOfMemory` to `seatbelt_profile_oom`, alias-deny capacity to
+/// `seatbelt_hardlink_alias_deny_capacity`, and other scan errors to distinct
+/// `seatbelt_secret_hardlink_scan_*` reason codes.
 ///
 /// Caller frees each path and the outer slice via `freeHardlinkAliasPaths`.
 pub fn collectSecretHardlinkAliasPaths(
@@ -386,6 +448,25 @@ pub fn collectSecretHardlinkAliasPaths(
         &entries,
     );
 
+    var aggs = std.AutoHashMap(InodeKey, InodeAgg).init(allocator);
+    defer aggs.deinit();
+
+    for (entries.items) |e| {
+        const key = InodeKey{ .dev = e.dev, .ino = e.ino };
+        const gop = try aggs.getOrPut(key);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .{
+                .seen = 0,
+                .nlink = e.nlink,
+                .has_secret = false,
+            };
+        }
+        gop.value_ptr.seen = std.math.add(u32, gop.value_ptr.seen, 1) catch return error.ScanCapacity;
+        if (e.secret_name) gop.value_ptr.has_secret = true;
+        // Prefer the higher link count if fstat disagrees (should not happen).
+        if (e.nlink > gop.value_ptr.nlink) gop.value_ptr.nlink = e.nlink;
+    }
+
     var aliases: std.ArrayList([]const u8) = .empty;
     errdefer {
         for (aliases.items) |p| allocator.free(p);
@@ -393,8 +474,11 @@ pub fn collectSecretHardlinkAliasPaths(
     }
 
     for (entries.items) |e| {
-        // Secret basenames: path-regex deny. Multi-nlink non-secret: explicit path deny.
-        if (e.secret_name or e.nlink <= 1) continue;
+        // Secret basenames: path-regex deny (no per-path entry needed).
+        if (e.secret_name) continue;
+        const agg = aggs.get(.{ .dev = e.dev, .ino = e.ino }) orelse continue;
+        if (!inodeNeedsHardlinkAliasDeny(agg)) continue;
+        if (aliases.items.len >= secret_hardlink_alias_deny_max) return error.HardlinkAliasDenyCapacity;
         // dupe before append: free on append failure (partial-success path).
         const owned = try allocator.dupe(u8, e.path);
         errdefer allocator.free(owned);
@@ -402,6 +486,22 @@ pub fn collectSecretHardlinkAliasPaths(
     }
 
     return try aliases.toOwnedSlice(allocator);
+}
+
+/// True when a non-secret basename on this inode needs an explicit path deny.
+fn inodeNeedsHardlinkAliasDeny(agg: InodeAgg) bool {
+    if (agg.has_secret) return true;
+    return outsideResidualIsHostile(agg.nlink, agg.seen);
+}
+
+/// Outside residual is hostile only when residual link count is in
+/// `(0, secret_hardlink_max_outside_residual_links]`. Equal nlink (fully
+/// contained) and large package-store residuals are not hostile.
+/// Pure helper for unit tests of the residual threshold.
+pub fn outsideResidualIsHostile(nlink: u64, seen: u32) bool {
+    if (nlink <= @as(u64, seen)) return false;
+    const residual = nlink - @as(u64, seen);
+    return residual <= secret_hardlink_max_outside_residual_links;
 }
 
 pub fn freeHardlinkAliasPaths(allocator: std.mem.Allocator, paths: []const []const u8) void {
@@ -479,6 +579,10 @@ fn recordScannedRegular(
     entries: *std.ArrayList(ScannedFile),
 ) !void {
     const meta = (try regularFileMetaForPath(io, child_path)) orelse return;
+    // Single-nlink files cannot be hardlink aliases — skip storage (regex still
+    // covers secret basenames). Monorepo build trees hardlink thousands of
+    // ordinary objects; retaining them only for the multi-nlink filter.
+    if (meta.nlink <= 1) return;
     const secret_name = profile.isWorkspaceSecretBasename(entry_name);
     const owned = try allocator.dupe(u8, child_path);
     errdefer allocator.free(owned);
@@ -486,11 +590,15 @@ fn recordScannedRegular(
         .path = owned,
         .secret_name = secret_name,
         .nlink = meta.nlink,
+        .dev = meta.dev,
+        .ino = meta.ino,
     });
 }
 
 const RegularFileMeta = struct {
     nlink: u64,
+    dev: u64,
+    ino: u64,
 };
 
 /// Open/fstat a path as a regular file. Open/fstat failures → `ScanOpenFailed`
@@ -502,12 +610,15 @@ fn regularFileMetaForPath(io: std.Io, path: []const u8) error{ScanOpenFailed}!?R
         .follow_symlinks = false,
     }) catch return error.ScanOpenFailed;
     defer file.close(io);
-    // Zig 0.16 File.Stat omits nlink; use libc fstat for multi-link detection.
+    // Zig 0.16 File.Stat has nlink/inode but not st_dev; fstat supplies the
+    // (dev, ino) pair used as hardlink-group key plus nlink in one syscall.
     var st: std.posix.Stat = undefined;
     if (std.c.fstat(file.handle, &st) != 0) return error.ScanOpenFailed;
     if (!std.posix.S.ISREG(st.mode)) return null;
     return .{
         .nlink = @intCast(st.nlink),
+        .dev = @intCast(st.dev),
+        .ino = @intCast(st.ino),
     };
 }
 
@@ -555,6 +666,33 @@ fn sbplEmitPath(path: []const u8) []const u8 {
     return path;
 }
 
+/// Emit allow rules for one compiled grant (primary path grants and Data re-allow).
+fn appendGrantAllows(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    g: profile.PathGrant,
+    control_roots: []const []const u8,
+) !void {
+    switch (g.mode) {
+        .exec => {
+            try appendAllowLiteral(out, allocator, "file-read-metadata", g.path);
+            try appendAllowLiteral(out, allocator, "file-read*", g.path);
+            try appendAllowLiteral(out, allocator, "process-exec", g.path);
+        },
+        .ro => {
+            try appendAllowSubpath(out, allocator, "file-read-metadata", g.path);
+            try appendAllowSubpath(out, allocator, "file-read*", g.path);
+            try appendAllowSubpath(out, allocator, "process-exec", g.path);
+        },
+        .rw => {
+            try appendAllowSubpath(out, allocator, "file-read-metadata", g.path);
+            try appendAllowSubpath(out, allocator, "file-read*", g.path);
+            // RW with control-root write denies (require-not).
+            try appendAllowWriteMinusControls(out, allocator, g.path, control_roots);
+        },
+    }
+}
+
 fn appendAllowSubpath(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
@@ -584,6 +722,63 @@ fn appendAllowLiteral(
     try out.appendSlice(allocator, "\"))\n");
 }
 
+/// Emit `file-read-metadata` **literals** for each intermediate path component of
+/// `path` (after Users-form normalization). Enables component-wise path-walk
+/// (Node `realpathSync` / `lstat`) without content grants on ancestors.
+///
+/// For `/Users/dev/proj` emits literals on `/Users` and `/Users/dev` only — not
+/// the leaf (covered by the grant itself) and not bare unrestricted metadata.
+/// Never emits `file-read*` or `subpath` on those ancestors.
+fn appendPathAncestorMetadataLiterals(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    path: []const u8,
+) !void {
+    const emit = sbplEmitPath(path);
+    try appendPathAncestorMetadataLiteralsForEmit(out, allocator, emit);
+}
+
+/// Same as ancestor metadata, but emit `/System/Volumes/Data` + Users-form path
+/// components when the grant maps to Users-form. Used *after* the Data deny so
+/// firmlink-backed lstat of `/Users` (Data vnode) is not last-match denied.
+fn appendPathAncestorMetadataLiteralsDataForm(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    path: []const u8,
+) !void {
+    const emit = sbplEmitPath(path);
+    // Only Users-mapped grants need Data-form twins.
+    if (!std.mem.eql(u8, emit, "/Users") and !std.mem.startsWith(u8, emit, "/Users/")) return;
+
+    // Data-form path: /System/Volumes/Data + Users path.
+    var data_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const prefix = data_volume_prefix; // /System/Volumes/Data
+    if (prefix.len + emit.len >= data_buf.len) return;
+    @memcpy(data_buf[0..prefix.len], prefix);
+    @memcpy(data_buf[prefix.len..][0..emit.len], emit);
+    const data_path = data_buf[0 .. prefix.len + emit.len];
+    try appendPathAncestorMetadataLiteralsForEmit(out, allocator, data_path);
+}
+
+fn appendPathAncestorMetadataLiteralsForEmit(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    emit: []const u8,
+) !void {
+    if (emit.len < 2 or emit[0] != '/') return;
+
+    var idx: usize = 1;
+    while (idx < emit.len) : (idx += 1) {
+        if (emit[idx] != '/') continue;
+        const ancestor = emit[0..idx];
+        // Bootstrap already grants metadata on "/"; skip empty and root-only.
+        if (ancestor.len <= 1) continue;
+        try out.appendSlice(allocator, "(allow file-read-metadata (literal \"");
+        try appendEscaped(out, allocator, ancestor);
+        try out.appendSlice(allocator, "\"))\n");
+    }
+}
+
 fn appendDenySubpath(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
@@ -594,6 +789,34 @@ fn appendDenySubpath(
     try out.appendSlice(allocator, "(deny ");
     try out.appendSlice(allocator, op);
     try out.appendSlice(allocator, " (subpath \"");
+    try appendEscaped(out, allocator, emit);
+    try out.appendSlice(allocator, "\"))\n");
+}
+
+fn appendDenyLiteralWithDataAlias(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    op: []const u8,
+    path: []const u8,
+) !void {
+    const emit = sbplEmitPath(path);
+    try appendDenyLiteralForEmit(out, allocator, op, emit);
+    if (!std.mem.eql(u8, emit, "/Users") and !std.mem.startsWith(u8, emit, "/Users/")) return;
+
+    const data_path = try std.fmt.allocPrint(allocator, "{s}{s}", .{ data_volume_prefix, emit });
+    defer allocator.free(data_path);
+    try appendDenyLiteralForEmit(out, allocator, op, data_path);
+}
+
+fn appendDenyLiteralForEmit(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    op: []const u8,
+    emit: []const u8,
+) !void {
+    try out.appendSlice(allocator, "(deny ");
+    try out.appendSlice(allocator, op);
+    try out.appendSlice(allocator, " (literal \"");
     try appendEscaped(out, allocator, emit);
     try out.appendSlice(allocator, "\"))\n");
 }
@@ -689,6 +912,8 @@ test "SBPL control roots deny write under workspace" {
 
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(require-not (subpath \"/workspace/proj/.orca\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-write* (subpath \"/workspace/proj/.orca\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(require-not (subpath \"/workspace/proj/.git\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-write* (subpath \"/workspace/proj/.git\"))") != null);
 }
 
 test "SBPL emits process-exec for launch .exec grants without HOME" {
@@ -774,6 +999,184 @@ test "SBPL never emits bare unrestricted file-read-metadata" {
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (subpath \"/usr\"))") != null);
 }
 
+test "SBPL path-walk ancestor metadata literals for Users-form grants" {
+    const allocator = std.testing.allocator;
+    const ws = "/Users/dev/projects/app";
+    const host_cfg = "/Users/dev/.codex";
+    const launch = "/opt/homebrew/bin/node";
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = ws,
+        .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
+        .host_rw_paths = &.{host_cfg},
+        .exec_paths = &.{launch},
+        .include_tmp = false,
+    });
+    defer compiled.deinit();
+
+    const sbpl = try renderSbpl(allocator, &compiled);
+    defer allocator.free(sbpl);
+
+    // Workspace ancestors: metadata literals only (Node realpath lstat chain).
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/Users\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/Users/dev\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/Users/dev/projects\"))") != null);
+    // Data-form twins after Data deny (firmlink lstat residual).
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/System/Volumes/Data/Users\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/System/Volumes/Data/Users/dev\"))") != null);
+    // Last-match: Data deny before Data-form metadata re-allow.
+    const deny_data = std.mem.indexOf(u8, sbpl, "(deny file-read-metadata (subpath \"/System/Volumes/Data\"))") orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    const data_form_meta = std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/System/Volumes/Data/Users\"))") orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    try std.testing.expect(deny_data < data_form_meta);
+    // Still no content grant on bare Users / Data Users.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/System/Volumes/Data/Users\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/System/Volumes/Data/Users\"))") == null);
+    // Leaf content stays grant-scoped subpath — not ancestor content grants.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/projects/app\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/Users\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/Users/dev\"))") == null);
+    // Host config content remains leaf-only; ancestors are metadata literals (shared with ws).
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/.codex\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/.ssh\"))") == null);
+    // Exec dirname chain: metadata on parents, literal content only on the binary path.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/opt\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/opt/homebrew\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/opt/homebrew/bin\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/opt/homebrew/bin/node\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/opt\"))") == null);
+    // Safety nets from existing product invariants.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata)\n") == null);
+    try std.testing.expect(!sbplGrantsHome(sbpl, "/Users/dev"));
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(subpath \"$HOME\")") == null);
+}
+
+test "SBPL path-walk ancestor metadata for Data-volume Users workspace (M-28)" {
+    const allocator = std.testing.allocator;
+    const ws_data = "/System/Volumes/Data/Users/dev/projects/app";
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = ws_data,
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+        .include_tmp = false,
+    });
+    defer compiled.deinit();
+
+    const sbpl = try renderSbpl(allocator, &compiled);
+    defer allocator.free(sbpl);
+
+    // Emitted as Users-form ancestors after sbplEmitPath.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/Users\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/Users/dev\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/Users/dev/projects\"))") != null);
+    // Data-form metadata twins after Data deny (same residual as Users-form grants).
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/System/Volumes/Data/Users\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/System/Volumes/Data/Users/dev\"))") != null);
+    // Last-match order: Data deny, then Data-form metadata re-allow (no content).
+    const deny_idx = std.mem.indexOf(u8, sbpl, "(deny file-read-metadata (subpath \"/System/Volumes/Data\"))") orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    const data_meta_idx = std.mem.indexOf(u8, sbpl, ";; path-walk Data-form ancestor metadata") orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    try std.testing.expect(deny_idx < data_meta_idx);
+    // Must not emit content on Data-form or Users ancestors.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/System/Volumes/Data/Users\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/System/Volumes/Data/Users\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/projects/app\"))") != null);
+}
+
+test "SBPL host config host_rw_paths emit subpath RW without bare HOME" {
+    const allocator = std.testing.allocator;
+    const claude_cfg = "/Users/dev/.claude";
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = "/Users/dev/projects/app",
+        .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
+        .host_rw_paths = &.{claude_cfg},
+    });
+    defer compiled.deinit();
+
+    const sbpl = try renderSbpl(allocator, &compiled);
+    defer allocator.free(sbpl);
+
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/.claude\"))") != null);
+    // RW grant emits write allow with control-root require-not, not bare HOME.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(subpath \"/Users/dev/.claude\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/.ssh\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/Library\"))") == null);
+}
+
+test "SBPL protected host config file is readable but write denied after RW grant" {
+    const config_path = "/Users/dev/.codex/config.toml";
+    // Dual path: authority file as control root (require-not + subpath deny) and
+    // write_deny_literals (exact literal deny after RW allow). Production apply
+    // passes the same list both ways.
+    var compiled = try profile.compileProfile(std.testing.allocator, .{
+        .workspace_root = "/Users/dev/work",
+        .host_rw_paths = &.{"/Users/dev/.codex"},
+        .control_roots = &.{config_path},
+    });
+    defer compiled.deinit();
+    try std.testing.expect(compiled.isControlPath(config_path));
+    try std.testing.expect(!compiled.isAgentWritable(config_path));
+    const sbpl = try renderSbplWithOptions(std.testing.allocator, &compiled, .{
+        .write_deny_literals = &.{config_path},
+    });
+    defer std.testing.allocator.free(sbpl);
+
+    const allow = std.mem.indexOf(
+        u8,
+        sbpl,
+        "(allow file-write* (require-all (subpath \"/Users/dev/.codex\")",
+    ) orelse return error.TestUnexpectedResult;
+    // Control-root require-not on the authority path.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl[allow..], "(require-not (subpath \"/Users/dev/.codex/config.toml\"))") != null);
+    const deny = std.mem.indexOf(
+        u8,
+        sbpl,
+        "(deny file-write* (literal \"/Users/dev/.codex/config.toml\"))",
+    ) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(deny > allow);
+    // Defense-in-depth subpath deny for control roots.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-write* (subpath \"/Users/dev/.codex/config.toml\"))") != null);
+}
+
+test "SBPL codex system ro_paths emit narrow /etc/codex without bare /etc" {
+    const allocator = std.testing.allocator;
+    var compiled = try profile.compileProfile(allocator, .{
+        .workspace_root = "/Users/dev/projects/app",
+        .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
+        .ro_paths = &.{ "/etc/codex", "/private/etc/codex" },
+        .host_rw_paths = &.{"/Users/dev/.codex"},
+    });
+    defer compiled.deinit();
+
+    const sbpl = try renderSbpl(allocator, &compiled);
+    defer allocator.free(sbpl);
+
+    // Narrow host system RO for Codex requirements residual.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/etc/codex\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/private/etc/codex\"))") != null);
+    // Path-walk metadata ancestors for /etc and /private/etc are OK (metadata only).
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/etc\"))") != null or
+        std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/private\"))") != null);
+    // Never bare /etc content grant (passwd, hosts, other agents).
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/etc\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/private/etc\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-write* (subpath \"/etc/codex\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev\"))") == null);
+    try std.testing.expect(!sbplGrantsHome(sbpl, "/Users/dev"));
+}
+
 test "SBPL narrows /dev writes to null and urandom only" {
     const allocator = std.testing.allocator;
     var compiled = try profile.compileProfile(allocator, .{
@@ -815,6 +1218,12 @@ test "SBPL hardened default narrows process* and broad /private/var" {
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow process-info*)") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/private/var\"))") == null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/private/var/select\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/var/select\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/var/db/xcode_select_link\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/private/var/db/xcode_select_link\"))") != null);
+    // Must not open bare /var/db tree (host receipts) — only dyld + xcode_select_link leaves.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/var/db\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/private/var/db\"))") == null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/private/var/db/dyld\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow network*)") != null);
 }
@@ -1032,9 +1441,11 @@ test "SBPL emits Users-form for Data-volume realpath workspace (M-28 / R2-1)" {
     const allow_ws_users = "(allow file-read* (subpath \"/Users/dev/projects/app\"))";
     try std.testing.expect(std.mem.indexOf(u8, sbpl, allow_ws_users) != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(subpath \"/System/Volumes/Data/Users/dev/projects/app\")") == null);
-    // Control carve-out also Users-form.
+    // Control carve-outs also Users-form (.orca + .git).
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(require-not (subpath \"/Users/dev/projects/app/.orca\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-write* (subpath \"/Users/dev/projects/app/.orca\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(require-not (subpath \"/Users/dev/projects/app/.git\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-write* (subpath \"/Users/dev/projects/app/.git\"))") != null);
     // Data deny still present (blocks Data-form sibling opens).
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-read* (subpath \"/System/Volumes/Data\"))") != null);
     // Users-mapped workspace needs no Data re-allow section.
@@ -1220,9 +1631,32 @@ test "collectSecretHardlinkAliasPaths finds non-secret basenames sharing secret 
     try std.testing.expect(!std.mem.endsWith(u8, aliases[0], "ordinary.txt"));
 }
 
+test "collectSecretHardlinkAliasPaths ignores internal non-secret hardlink groups" {
+    // Cargo/incremental trees hardlink many non-secret objects. Those must not
+    // become SBPL path denies (profile size → sandbox_init / child_apply_failed).
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "obj-a.o", .data = "object-body" });
+    tmp.dir.hardLink("obj-a.o", tmp.dir, "obj-b.o", io, .{}) catch return error.SkipZigTest;
+    try tmp.dir.writeFile(io, .{ .sub_path = "readme.txt", .data = "plain" });
+
+    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+
+    const aliases = try collectSecretHardlinkAliasPaths(allocator, io, root);
+    defer freeHardlinkAliasPaths(allocator, aliases);
+
+    try std.testing.expectEqual(@as(usize, 0), aliases.len);
+}
+
 test "collectSecretHardlinkAliasPaths denies outside secret hardlinked under non-secret name" {
     // Outside `.env` hardlinked into the workspace as config.txt must be denied
     // even though no secret-form basename exists inside the workspace walk.
+    // Small residual (nlink=2, seen=1) remains hostile under residual threshold.
     if (builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
@@ -1245,6 +1679,57 @@ test "collectSecretHardlinkAliasPaths denies outside secret hardlinked under non
     try std.testing.expectEqual(@as(usize, 1), aliases.len);
     try std.testing.expect(std.mem.endsWith(u8, aliases[0], "config.txt"));
     try std.testing.expect(!std.mem.endsWith(u8, aliases[0], "ordinary.txt"));
+}
+
+test "collectSecretHardlinkAliasPaths ignores package-store high-nlink outside residual" {
+    // pnpm/yarn content-addressed stores: one workspace leaf with huge nlink
+    // (many store hardlinks outside the walk). Large residual must not produce
+    // mass hardlink_alias_denies (SBPL re-bloom → sandbox_init failure).
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var outside = std.testing.tmpDir(.{});
+    defer outside.cleanup();
+    var workspace = std.testing.tmpDir(.{});
+    defer workspace.cleanup();
+
+    try outside.dir.writeFile(io, .{ .sub_path = "blob", .data = "content-addressed-body" });
+    // residual = nlink - seen; seen=1 in workspace. Build residual well above
+    // secret_hardlink_max_outside_residual_links (8) to model a package store.
+    const extra_links: u32 = 20;
+    var i: u32 = 0;
+    while (i < extra_links) : (i += 1) {
+        var name_buf: [32]u8 = undefined;
+        const name = try std.fmt.bufPrint(&name_buf, "hl-{d}", .{i});
+        outside.dir.hardLink("blob", outside.dir, name, io, .{}) catch return error.SkipZigTest;
+    }
+    outside.dir.hardLink("blob", workspace.dir, "pkg-file.js", io, .{}) catch return error.SkipZigTest;
+    try workspace.dir.writeFile(io, .{ .sub_path = "readme.txt", .data = "plain" });
+
+    const root = try workspace.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+
+    const aliases = try collectSecretHardlinkAliasPaths(allocator, io, root);
+    defer freeHardlinkAliasPaths(allocator, aliases);
+
+    try std.testing.expectEqual(@as(usize, 0), aliases.len);
+}
+
+test "outsideResidualIsHostile threshold: small residual yes, large no" {
+    // Pure residual law (no FS): residual in (0, max] hostile; 0 and max+1 not.
+    try std.testing.expect(!outsideResidualIsHostile(1, 1)); // fully contained
+    try std.testing.expect(!outsideResidualIsHostile(2, 2));
+    try std.testing.expect(outsideResidualIsHostile(2, 1)); // planted secret shape
+    try std.testing.expect(outsideResidualIsHostile(
+        secret_hardlink_max_outside_residual_links + 1,
+        1,
+    )); // residual == max
+    try std.testing.expect(!outsideResidualIsHostile(
+        secret_hardlink_max_outside_residual_links + 2,
+        1,
+    )); // residual == max+1 (package-store shape)
+    try std.testing.expect(!outsideResidualIsHostile(5000, 1));
 }
 
 test "collectSecretHardlinkAliasPaths skips workspace symlinks without ScanOpenFailed" {
@@ -1310,6 +1795,18 @@ test "collectSecretHardlinkAliasPaths missing workspace is empty not ScanOpenFai
     );
     defer freeHardlinkAliasPaths(allocator, aliases);
     try std.testing.expectEqual(@as(usize, 0), aliases.len);
+}
+
+test "secret hardlink scan capacity matches Linux monorepo floor" {
+    // Regression: 50_000 was below typical monorepo dirent counts (node_modules,
+    // vendor checkouts, SPM .build) and blocked protect-on Seatbelt prepare.
+    try std.testing.expect(secret_hardlink_scan_max_entries >= 1_000_000);
+    try std.testing.expect(secret_hardlink_scan_max_depth >= 48);
+    // Residual filter + alias-deny cap: small planted residual still hostile;
+    // package-store residual must not re-bloom; denylist cap is a backstop.
+    try std.testing.expect(secret_hardlink_max_outside_residual_links >= 4);
+    try std.testing.expect(secret_hardlink_max_outside_residual_links <= 8);
+    try std.testing.expect(secret_hardlink_alias_deny_max >= 1024);
 }
 
 test "secret policy: SBPL emit embeds profile-owned fragments; path == basename law" {

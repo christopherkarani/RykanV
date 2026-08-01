@@ -31,6 +31,7 @@ const macos_seatbelt = @import("macos_seatbelt.zig");
 const macos_profile = @import("macos_profile.zig");
 const apply_posix = @import("apply_posix.zig");
 const session_tmp = @import("session_tmp.zig");
+pub const host_config_grants = @import("host_config_grants.zig");
 
 /// Re-export session-tmp surface for callers that only import apply.
 pub const workspace_session_tmp_name = session_tmp.workspace_session_tmp_name;
@@ -122,6 +123,21 @@ pub const ApplyBoundary = struct {
     /// Agents installed outside workspace/system prefixes (e.g. `~/.local/...`) need these
     /// so child preflight after Seatbelt/Landlock can still read+exec argv0.
     launch_exec_paths: []const []const u8 = &.{},
+    /// Absolute RO trees for launch: Node/npm install package roots (see
+    /// `collectLaunchInstallRoPaths`) plus host-scoped system RO (e.g. codex
+    /// `/etc/codex` via `host_config_grants.collectHostSystemRoPaths`). Never bare
+    /// `$HOME` or bare `/etc`. Covers nested optional deps + vendor binaries and
+    /// narrow system config residual paths.
+    launch_ro_paths: []const []const u8 = &.{},
+    /// Absolute host-agent config trees as `.rw` grants (see `host_config_grants`).
+    /// Empty backpack keeps HOME in env but denies home FS; these narrow subpaths
+    /// restore host login/config (+ session write) for known agents without bare `$HOME`.
+    launch_host_rw_paths: []const []const u8 = &.{},
+    /// Exact authority files inside host RW trees (config.toml / settings.json / …).
+    /// macOS Seatbelt emits last-match literal write denies. Callers should also
+    /// pass the same paths as `control_roots` so Landlock control-expand keeps
+    /// them RO under host RW on Linux (dual path).
+    launch_write_deny_literals: []const []const u8 = &.{},
     /// Empty-backpack sessions require OS enforcement for workspace `.env`
     /// and `.env.*` names (safe templates remain readable).
     protect_workspace_secrets: bool = false,
@@ -133,6 +149,18 @@ pub const ApplyBoundary = struct {
     seatbelt_profile: macos_profile.SeatbeltProfileGrade = macos_profile.SeatbeltProfileGrade.default_grade,
     /// When `error.RequireFailed` is returned, set to a static reason code if non-null.
     fail_reason_out: ?*[]const u8 = null,
+};
+
+pub const AttachSessionTmp = struct {
+    allocator: std.mem.Allocator,
+    path: []u8,
+
+    pub fn deinit(self: *AttachSessionTmp) void {
+        var io_rt: std.Io.Threaded = .init_single_threaded;
+        std.Io.Dir.cwd().deleteTree(io_rt.io(), self.path) catch {};
+        self.allocator.free(self.path);
+        self.* = undefined;
+    }
 };
 
 pub const ApplyResult = struct {
@@ -155,6 +183,9 @@ pub const ApplyResult = struct {
     /// Retained fork buffers for the last successful sandboxed spawn.
     /// Freed in `deinit` after the supervisor has waited/reaped the child.
     spawn_lease: ?apply_posix.SpawnLease = null,
+    /// Fresh per-launch temp directory. Removed after the child has been reaped
+    /// and its sandbox materials are no longer needed.
+    session_tmp: ?AttachSessionTmp = null,
 
     pub fn deinit(self: *ApplyResult) void {
         if (self.spawn_lease) |*lease| {
@@ -165,6 +196,10 @@ pub const ApplyResult = struct {
             self.spawn_lease = null;
         }
         self.materials.deinit();
+        if (self.session_tmp) |*owned_tmp| {
+            owned_tmp.deinit();
+            self.session_tmp = null;
+        }
         self.* = undefined;
     }
 
@@ -364,35 +399,126 @@ fn isUngrantedHostTmpdir(path: []const u8) bool {
     return false;
 }
 
-/// Rewrite TMPDIR/TMP/TEMP into the workspace session temp for the attach path.
+const IsolatedToolCache = struct {
+    env_key: []const u8,
+    directory_name: []const u8,
+};
+
+/// Mutable caches used by common stdio MCP launchers. Every path is minted under
+/// the workspace session temp; host caches under HOME remain outside the grant.
+const isolated_tool_caches = [_]IsolatedToolCache{
+    .{ .env_key = "NPM_CONFIG_CACHE", .directory_name = "npm-cache" },
+    .{ .env_key = "UV_CACHE_DIR", .directory_name = "uv-cache" },
+    .{ .env_key = "BUN_INSTALL_CACHE_DIR", .directory_name = "bun-cache" },
+    .{ .env_key = "XDG_CACHE_HOME", .directory_name = "xdg-cache" },
+    .{ .env_key = "PLAYWRIGHT_BROWSERS_PATH", .directory_name = "playwright-browsers" },
+};
+
+pub fn createFreshAttachTmp(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    workspace_tmp: []const u8,
+) error{ OutOfMemory, SessionTmpPrepareFailed }![]u8 {
+    var random_bytes: [12]u8 = undefined;
+    io.randomSecure(&random_bytes) catch return error.SessionTmpPrepareFailed;
+    const suffix = std.fmt.bytesToHex(random_bytes, .lower);
+
+    var attempt: u8 = 0;
+    while (attempt < 8) : (attempt += 1) {
+        const path = try std.fmt.allocPrint(
+            allocator,
+            "{s}/session-{s}-{d}",
+            .{ workspace_tmp, suffix, attempt },
+        );
+        std.Io.Dir.createDirAbsolute(io, path, .default_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {
+                allocator.free(path);
+                continue;
+            },
+            else => {
+                allocator.free(path);
+                return error.SessionTmpPrepareFailed;
+            },
+        };
+        var opened = std.Io.Dir.openDirAbsolute(io, path, .{ .follow_symlinks = false }) catch {
+            std.Io.Dir.cwd().deleteTree(io, path) catch {};
+            allocator.free(path);
+            return error.SessionTmpPrepareFailed;
+        };
+        opened.close(io);
+        return path;
+    }
+    return error.SessionTmpPrepareFailed;
+}
+
+fn applyIsolatedToolCaches(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    env_map: *std.process.Environ.Map,
+    session_root: []const u8,
+) error{ OutOfMemory, SessionTmpPrepareFailed }!void {
+    for (isolated_tool_caches) |cache| {
+        const path = try std.fs.path.join(allocator, &.{ session_root, cache.directory_name });
+        defer allocator.free(path);
+        std.Io.Dir.createDirAbsolute(io, path, .default_dir) catch
+            return error.SessionTmpPrepareFailed;
+        try env_map.put(cache.env_key, path);
+    }
+}
+
+fn applyIsolatedGitConfig(env_map: *std.process.Environ.Map) error{OutOfMemory}!void {
+    try env_map.put("GIT_CONFIG_GLOBAL", "/dev/null");
+    try env_map.put("GIT_CONFIG_COUNT", "1");
+    try env_map.put("GIT_CONFIG_KEY_0", "core.excludesFile");
+    try env_map.put("GIT_CONFIG_VALUE_0", "/dev/null");
+}
+
+/// Prepare temp, tool-cache, and Git environment for the attach path.
 ///
 /// Host macOS TMPDIR under `/var/folders` is intentionally not granted (canary breadth).
-/// Prefer `{workspace}/.orca-tmp` (workspace RW; mkdir so Landlock expand sees it).
+/// Prefer a fresh child of `{workspace}/.orca-tmp` so package-manager caches
+/// cannot consume state planted by an earlier agent launch.
 ///
 /// Production defaults keep `include_tmp=false` (no classic `/tmp` RW grant). Do **not**
 /// silently rewrite to classic `/tmp` when session temp cannot be prepared — that path
 /// is agent-unwritable under the sandbox and misleads operators. Fail closed instead
 /// (`error.SessionTmpPrepareFailed`); callers map to `session_tmp_prepare_failed`.
 ///
-/// Mutates `env_map` in place only on success. Returns the path written into TMPDIR
-/// (map-owned value).
-pub fn rewriteTempEnvForAttach(
+/// Mutates `env_map` in place only on success. Returns ownership of the fresh
+/// session temp; the caller must retain it for the launch and call `deinit`.
+pub fn prepareAttachEnvironment(
     allocator: std.mem.Allocator,
     env_map: *std.process.Environ.Map,
     workspace_root: []const u8,
-) error{ OutOfMemory, SessionTmpPrepareFailed }![]const u8 {
-    const preferred = try workspaceSessionTmpPath(allocator, workspace_root);
-    defer allocator.free(preferred);
+) error{ OutOfMemory, SessionTmpPrepareFailed }!AttachSessionTmp {
+    const workspace_tmp = try workspaceSessionTmpPath(allocator, workspace_root);
+    defer allocator.free(workspace_tmp);
 
     // Create session surface first (shared with Landlock expand precreate).
     // Fail closed: production materials require session tmp under workspace RW.
     if (!ensureWorkspaceSessionTmp(workspace_root)) return error.SessionTmpPrepareFailed;
 
-    // Map put duplicates via map allocator — preferred stack path is free'd after.
-    try env_map.put("TMPDIR", preferred);
-    try env_map.put("TMP", preferred);
-    try env_map.put("TEMP", preferred);
-    return env_map.get("TMPDIR") orelse error.SessionTmpPrepareFailed;
+    var io_rt: std.Io.Threaded = .init_single_threaded;
+    const io = io_rt.io();
+    const preferred = try createFreshAttachTmp(io, allocator, workspace_tmp);
+    var attach_tmp: AttachSessionTmp = .{ .allocator = allocator, .path = preferred };
+    errdefer attach_tmp.deinit();
+
+    var staged = try env_map.clone(env_map.allocator);
+    defer staged.deinit();
+    try applyIsolatedToolCaches(io, allocator, &staged, preferred);
+
+    try staged.put("TMPDIR", preferred);
+    try staged.put("TMP", preferred);
+    try staged.put("TEMP", preferred);
+
+    // Host-global Git configuration can contain credentials and remains denied.
+    // Point Git at inert global config/ignore files so ordinary repository probes
+    // do not turn that deliberate denial into a fatal startup error.
+    try applyIsolatedGitConfig(&staged);
+
+    std.mem.swap(std.process.Environ.Map, env_map, &staged);
+    return attach_tmp;
 }
 
 /// Resolve argv0 into narrow absolute **file** paths for `.exec` profile grants.
@@ -441,6 +567,10 @@ pub fn collectLaunchExecPaths(
     // Shebang interpreter of the launch file only (not nested scripts).
     try appendShebangInterpreterGrants(io, allocator, &list, abs, env_map);
 
+    // Shell wrappers often `exec /abs/path/to/python …` (hermes → uv cpython).
+    // Shebang alone grants bash; nested absolute targets need file-only .exec too.
+    try appendShellWrapperNestedExecTargets(io, allocator, &list, abs, env_map);
+
     return try list.toOwnedSlice(allocator);
 }
 
@@ -450,17 +580,373 @@ pub fn freeLaunchExecPaths(allocator: std.mem.Allocator, paths: []const []const 
     allocator.free(paths);
 }
 
-/// Make `path` absolute (lexical). Relative paths join cwd.
+/// Collect narrow **read-only install trees** for Node/npm-style launch agents.
+///
+/// Empty-backpack grants `.exec` only on the shebang script file + interpreter.
+/// Node then loads sibling package files and nested optional deps (e.g.
+/// `@openai/codex` → `node_modules/@openai/codex-darwin-arm64/vendor/...`).
+/// Without a package-root RO subpath, realpath of the entry works but the agent
+/// dies on missing nested package content (often misread as path-walk EPERM).
+///
+/// For each resolved launch file, walk parents for a `package.json` directory
+/// and grant that directory as RO (includes nested deps + vendor binaries).
+/// Never returns bare `$HOME` or `/`. Empty when argv0 is a plain binary with
+/// no package root (file-only `.exec` is enough).
+///
+/// Caller frees with `freeLaunchInstallRoPaths` (same shape as exec paths).
+pub fn collectLaunchInstallRoPaths(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    argv0: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}![]const []const u8 {
+    if (argv0.len == 0) return try allocator.alloc([]const u8, 0);
+
+    const resolved = apply_posix.resolveArgv0(io, allocator, argv0, env_map) catch {
+        return try allocator.alloc([]const u8, 0);
+    };
+    defer if (resolved.owned) allocator.free(resolved.path);
+
+    const abs = try absolutePathForGrant(io, allocator, resolved.path);
+    defer allocator.free(abs);
+
+    var list: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (list.items) |p| allocator.free(p);
+        list.deinit(allocator);
+    }
+
+    try appendInstallRoForLaunchFile(io, allocator, &list, abs, env_map);
+
+    var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (realpathInto(abs, &real_buf)) |real| {
+        if (!std.mem.eql(u8, real, abs)) {
+            try appendInstallRoForLaunchFile(io, allocator, &list, real, env_map);
+        }
+    }
+
+    // Shell wrappers (e.g. hermes → venv python outside the wrapper path) need
+    // install RO on nested absolute targets + their bin-layout roots (uv cpython).
+    try appendShellWrapperNestedInstallRo(io, allocator, &list, abs, env_map);
+
+    return try list.toOwnedSlice(allocator);
+}
+
+/// Free the slice returned by `collectLaunchInstallRoPaths` (same shape as exec paths).
+pub const freeLaunchInstallRoPaths = freeLaunchExecPaths;
+
+/// Optional argv rewrite for shell wrappers that `exec /abs/interp /abs/main …`.
+///
+/// Seatbelt on macOS denies following a symlink under a host-config grant when the
+/// target lives outside that grant (even if the target is separately RO-granted).
+/// Hermes does `exec venv/bin/python → uv cpython`; open/exec of the **symlink path**
+/// fails, while exec of the realpath succeeds. Rewrite launch to realpath so the
+/// agent binary runs past attach.
+///
+/// When the lexical interpreter is a venv `…/bin/python`, also injects `PYTHONPATH`
+/// to that venv's `site-packages` (host wrappers often `unset PYTHONPATH` then exec
+/// the symlink; realpath loses venv site discovery via argv0). Injection runs on
+/// the **mutable** child env after scrub/allowlist so the path is ryk-owned.
+///
+/// Returns null when argv0 is not a shell wrapper with nested absolute targets
+/// (caller keeps original argv). On success, returns an owned argv slice; caller
+/// frees with `freeExpandedShellWrapperArgv`.
+pub fn expandShellWrapperLaunch(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    env_map: ?*std.process.Environ.Map,
+) error{OutOfMemory}!?[]const []const u8 {
+    if (argv.len == 0) return null;
+    const argv0 = argv[0];
+    if (argv0.len == 0) return null;
+
+    const env_const: ?*const std.process.Environ.Map = env_map;
+    const resolved = apply_posix.resolveArgv0(io, allocator, argv0, env_const) catch return null;
+    defer if (resolved.owned) allocator.free(resolved.path);
+    const abs = try absolutePathForGrant(io, allocator, resolved.path);
+    defer allocator.free(abs);
+
+    if (!(try launchFileIsShellWrapper(io, allocator, abs, env_const))) return null;
+
+    var targets: [wrapper_nested_target_max][]const u8 = undefined;
+    const n = try collectShellWrapperAbsoluteTargets(io, allocator, abs, env_const, &targets);
+    defer for (targets[0..n]) |t| allocator.free(t);
+    if (n == 0) return null;
+
+    // Primary interpreter = first nested absolute path (realpath preferred for exec).
+    var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const interp: []const u8 = if (realpathInto(targets[0], &real_buf)) |real| real else targets[0];
+
+    // Venv residual: realpath loses site-packages; inject ryk-owned PYTHONPATH.
+    if (env_map) |map| {
+        try injectVenvSitePackagesPythonPath(io, allocator, map, targets[0]);
+    }
+
+    // Build: [interp_real, other nested targets…, original args after argv0]
+    var list: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (list.items) |p| allocator.free(p);
+        list.deinit(allocator);
+    }
+    try list.append(allocator, try allocator.dupe(u8, interp));
+    var i: usize = 1;
+    while (i < n) : (i += 1) {
+        // Prefer realpath for each nested file path (same symlink residual).
+        if (realpathInto(targets[i], &real_buf)) |real| {
+            try list.append(allocator, try allocator.dupe(u8, real));
+        } else {
+            try list.append(allocator, try allocator.dupe(u8, targets[i]));
+        }
+    }
+    for (argv[1..]) |arg| {
+        try list.append(allocator, try allocator.dupe(u8, arg));
+    }
+    return try list.toOwnedSlice(allocator);
+}
+
+/// Free owned launch argv from `expandShellWrapperLaunch` or `absoluteizeLaunchArgv`.
+pub const freeExpandedShellWrapperArgv = freeLaunchExecPaths;
+
+/// Resolve bare argv0 to an absolute path **before** PATH honesty filtering.
+///
+/// Under OS attach, `tool_pack.applyPathFilterToEnv` drops ungranted package trees
+/// (e.g. `/opt/homebrew/bin`). Spawn re-resolves argv0 against the filtered child
+/// PATH, so bare host-alias names like `pi` / `opencode` fail with CommandNotFound
+/// even though grant collection already found them on the pre-filter PATH.
+///
+/// Call this while the child env still has the full host PATH (before the filter).
+/// Returns null when argv0 is already absolute, contains a path separator, is empty,
+/// or cannot be resolved (caller keeps the original argv; spawn surfaces not-found).
+/// On success, returns an owned argv slice (absolute argv0 + duped tail); free with
+/// `freeExpandedShellWrapperArgv`.
+pub fn absoluteizeLaunchArgv(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!?[]const []const u8 {
+    if (argv.len == 0) return null;
+    const argv0 = argv[0];
+    if (argv0.len == 0) return null;
+    if (std.fs.path.isAbsolute(argv0)) return null;
+    // Relative with a separator: leave for cwd-relative exec semantics.
+    if (std.mem.indexOfScalar(u8, argv0, '/') != null) return null;
+
+    const resolved = apply_posix.resolveArgv0(io, allocator, argv0, env_map) catch return null;
+    defer if (resolved.owned) allocator.free(resolved.path);
+    if (!std.fs.path.isAbsolute(resolved.path)) return null;
+    // Already the same absolute string (shouldn't happen for bare names).
+    if (std.mem.eql(u8, resolved.path, argv0)) return null;
+
+    var list: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (list.items) |p| allocator.free(p);
+        list.deinit(allocator);
+    }
+    try list.append(allocator, try allocator.dupe(u8, resolved.path));
+    for (argv[1..]) |arg| {
+        try list.append(allocator, try allocator.dupe(u8, arg));
+    }
+    return try list.toOwnedSlice(allocator);
+}
+
+/// If `python_path` is `…/bin/python*`, locate `…/lib/python*/site-packages` and
+/// put it into `PYTHONPATH` on `env_map` (owned by the map). No-op when layout
+/// does not match or site-packages is missing.
+fn injectVenvSitePackagesPythonPath(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    env_map: *std.process.Environ.Map,
+    python_path: []const u8,
+) error{OutOfMemory}!void {
+    if (python_path.len == 0 or !std.fs.path.isAbsolute(python_path)) return;
+    const bin_dir = std.fs.path.dirname(python_path) orelse return;
+    if (!std.mem.eql(u8, std.fs.path.basename(bin_dir), "bin")) return;
+    const venv_root = std.fs.path.dirname(bin_dir) orelse return;
+    if (venv_root.len <= 1) return;
+
+    const lib_dir = try std.fs.path.join(allocator, &.{ venv_root, "lib" });
+    defer allocator.free(lib_dir);
+
+    var lib_it = std.Io.Dir.cwd().openDir(io, lib_dir, .{ .iterate = true }) catch return;
+    defer lib_it.close(io);
+
+    var site: ?[]u8 = null;
+    errdefer if (site) |s| allocator.free(s);
+    var walker = lib_it.iterate();
+    while (walker.next(io) catch null) |entry| {
+        if (entry.kind != .directory) continue;
+        if (!std.mem.startsWith(u8, entry.name, "python")) continue;
+        const candidate = try std.fs.path.join(allocator, &.{ lib_dir, entry.name, "site-packages" });
+        errdefer allocator.free(candidate);
+        if (!isDir(io, candidate)) {
+            allocator.free(candidate);
+            continue;
+        }
+        // Prefer the first matching pythonX.Y site-packages.
+        if (site) |old| allocator.free(old);
+        site = candidate;
+        break;
+    }
+    const site_path = site orelse return;
+    // Map.put copies the value; free our temporary after insert.
+    try env_map.put("PYTHONPATH", site_path);
+    allocator.free(site_path);
+}
+
+fn isDir(io: std.Io, path: []const u8) bool {
+    if (path.len == 0) return false;
+    if (std.fs.path.isAbsolute(path)) {
+        var dir = std.Io.Dir.openDirAbsolute(io, path, .{}) catch return false;
+        dir.close(io);
+        return true;
+    }
+    var dir = std.Io.Dir.cwd().openDir(io, path, .{}) catch return false;
+    dir.close(io);
+    return true;
+}
+
+fn appendInstallRoForLaunchFile(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList([]const u8),
+    path: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!void {
+    if (path.len == 0) return;
+    if (!isRegularFile(io, path)) return;
+
+    const root = (try findPackageRootForFile(io, allocator, path, env_map)) orelse return;
+    // Own `root` until transfer into `list`. Do not leave a bare errdefer after
+    // appendUniqueInstallRo — that helper takes ownership (or frees on dedup).
+
+    if (envHome(env_map)) |home| {
+        if (std.mem.eql(u8, root, home)) {
+            allocator.free(root);
+            return;
+        }
+    }
+    if (root.len == 1 and root[0] == '/') {
+        allocator.free(root);
+        return;
+    }
+
+    // npm optional deps often live as *siblings* under the same scope dir
+    // (`node_modules/@openai/codex` + `node_modules/@openai/codex-darwin-arm64`).
+    // Nested `package/node_modules/...` is already covered by package-root RO;
+    // grant the scoped parent (`…/node_modules/@scope`) when the layout matches.
+    // Resolve while we still own `root` (before transfer).
+    const scope_parent = scopedNpmParentRo(allocator, root, env_map) catch |err| {
+        allocator.free(root);
+        return err;
+    };
+
+    var root_live = true;
+    errdefer if (root_live) allocator.free(root);
+    var scope_live = scope_parent != null;
+    errdefer if (scope_live) if (scope_parent) |sp| allocator.free(sp);
+
+    // Transfer ownership *before* the call: appendUniqueInstallRo frees on
+    // OOM and on dedup, so caller must not also free after the call starts.
+    root_live = false;
+    try appendUniqueInstallRo(allocator, list, root);
+
+    if (scope_parent) |sp| {
+        scope_live = false;
+        try appendUniqueInstallRo(allocator, list, sp);
+    }
+}
+
+/// Takes ownership of `path`: appends if unique, frees if duplicate or on OOM.
+fn appendUniqueInstallRo(
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList([]const u8),
+    path: []u8,
+) error{OutOfMemory}!void {
+    errdefer allocator.free(path);
+    for (list.items) |existing| {
+        if (std.mem.eql(u8, existing, path)) {
+            allocator.free(path);
+            return;
+        }
+    }
+    try list.append(allocator, path);
+}
+
+/// If `package_root` is `…/node_modules/@scope/pkg`, return owned `…/node_modules/@scope`.
+/// Otherwise null. Never bare HOME or filesystem root.
+fn scopedNpmParentRo(
+    allocator: std.mem.Allocator,
+    package_root: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!?[]u8 {
+    const pkg_name = std.fs.path.basename(package_root);
+    if (pkg_name.len == 0 or pkg_name[0] == '@') return null; // already a scope dir
+    const scope_dir = std.fs.path.dirname(package_root) orelse return null;
+    const scope_name = std.fs.path.basename(scope_dir);
+    if (scope_name.len < 2 or scope_name[0] != '@') return null;
+    const nm = std.fs.path.dirname(scope_dir) orelse return null;
+    if (!std.mem.eql(u8, std.fs.path.basename(nm), "node_modules")) return null;
+    if (envHome(env_map)) |home| {
+        if (std.mem.eql(u8, scope_dir, home)) return null;
+    }
+    if (scope_dir.len <= 1) return null;
+    return try allocator.dupe(u8, scope_dir);
+}
+
+/// Walk parents of `file_path` for a directory containing `package.json`.
+/// Caps walk depth; refuses bare HOME and filesystem root.
+fn findPackageRootForFile(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    file_path: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!?[]u8 {
+    if (!std.fs.path.isAbsolute(file_path)) return null;
+    var dir = std.fs.path.dirname(file_path) orelse return null;
+    const home = envHome(env_map);
+    var depth: usize = 0;
+    const max_depth: usize = 24;
+    while (depth < max_depth) : (depth += 1) {
+        if (dir.len <= 1) return null;
+        if (home) |h| {
+            if (std.mem.eql(u8, dir, h)) return null;
+        }
+        const pkg_json = try std.fs.path.join(allocator, &.{ dir, "package.json" });
+        defer allocator.free(pkg_json);
+        if (isRegularFile(io, pkg_json)) {
+            return try allocator.dupe(u8, dir);
+        }
+        dir = std.fs.path.dirname(dir) orelse return null;
+    }
+    return null;
+}
+
+/// Make `path` absolute for grant emission. Absolute inputs are duped as-is.
+/// Relative paths join a proven cwd (realpath, else quiet getcwd). When no
+/// absolute base can be proven, returns an empty owned string so callers skip
+/// the grant — never invents root-absolute `/{path}`.
 fn absolutePathForGrant(io: std.Io, allocator: std.mem.Allocator, path: []const u8) error{OutOfMemory}![]u8 {
     if (std.fs.path.isAbsolute(path)) {
         return allocator.dupe(u8, path) catch return error.OutOfMemory;
     }
-    const cwd = std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator) catch {
-        // Fall back to lexical join with "."; compile still requires absolute later.
-        return std.fmt.allocPrint(allocator, "/{s}", .{path}) catch return error.OutOfMemory;
-    };
-    defer allocator.free(cwd);
-    return std.fs.path.join(allocator, &.{ cwd, path }) catch return error.OutOfMemory;
+    if (std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator)) |cwd| {
+        defer allocator.free(cwd);
+        return std.fs.path.join(allocator, &.{ cwd, path }) catch return error.OutOfMemory;
+    } else |_| {}
+    // realpath failed (e.g. Seatbelt EPERM): try process getcwd without inventing `/rel`.
+    if (builtin.os.tag != .windows) {
+        var buf: [std.posix.PATH_MAX]u8 = undefined;
+        if (std.c.getcwd(&buf, buf.len)) |rc| {
+            const cwd = std.mem.sliceTo(rc, 0);
+            if (std.fs.path.isAbsolute(cwd)) {
+                return std.fs.path.join(allocator, &.{ cwd, path }) catch return error.OutOfMemory;
+            }
+        }
+    }
+    // Unproven absolute form — empty skip (callers treat len==0 as no grant).
+    return allocator.dupe(u8, "") catch return error.OutOfMemory;
 }
 
 fn realpathInto(path: []const u8, out: *[std.fs.max_path_bytes]u8) ?[]const u8 {
@@ -528,6 +1014,188 @@ fn appendShebangInterpreterGrants(
             try appendLaunchExecCandidate(io, allocator, list, real, env_map);
         }
     }
+}
+
+/// Max body bytes scanned in a shell wrapper for nested absolute exec targets.
+const wrapper_body_scan_max: usize = 4096;
+/// Cap nested absolute targets per wrapper (avoid pathological scripts).
+const wrapper_nested_target_max: usize = 8;
+
+fn isShellInterpreterBasename(name: []const u8) bool {
+    return std.mem.eql(u8, name, "sh") or
+        std.mem.eql(u8, name, "bash") or
+        std.mem.eql(u8, name, "zsh") or
+        std.mem.eql(u8, name, "dash");
+}
+
+/// True when shebang of `script_path` resolves to a shell (sh/bash/zsh/dash).
+fn launchFileIsShellWrapper(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    script_path: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!bool {
+    const interp_token = (try readShebangInterpreterToken(io, allocator, script_path)) orelse return false;
+    defer allocator.free(interp_token);
+    const base = std.fs.path.basename(interp_token);
+    if (isShellInterpreterBasename(base)) return true;
+    // `#!/usr/bin/env bash` → token is bare `bash`.
+    if (std.mem.indexOfScalar(u8, interp_token, '/') == null and isShellInterpreterBasename(interp_token))
+        return true;
+    // Resolved absolute path basename.
+    const resolved = apply_posix.resolveArgv0(io, allocator, interp_token, env_map) catch return false;
+    defer if (resolved.owned) allocator.free(resolved.path);
+    return isShellInterpreterBasename(std.fs.path.basename(resolved.path));
+}
+
+/// Append file-only `.exec` for absolute nested targets in a shell wrapper body
+/// (`exec "/abs/python" …`). Also grants realpath when different.
+fn appendShellWrapperNestedExecTargets(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList([]const u8),
+    script_path: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!void {
+    if (!(try launchFileIsShellWrapper(io, allocator, script_path, env_map))) return;
+
+    var targets: [wrapper_nested_target_max][]const u8 = undefined;
+    const n = try collectShellWrapperAbsoluteTargets(io, allocator, script_path, env_map, &targets);
+    defer for (targets[0..n]) |t| allocator.free(t);
+
+    for (targets[0..n]) |target| {
+        try appendLaunchExecCandidate(io, allocator, list, target, env_map);
+        var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+        if (realpathInto(target, &real_buf)) |real| {
+            if (!std.mem.eql(u8, real, target)) {
+                try appendLaunchExecCandidate(io, allocator, list, real, env_map);
+            }
+        }
+    }
+}
+
+/// Append install RO for nested absolute targets + bin-layout install roots
+/// (e.g. `…/cpython-3.11…/bin/python3.11` → RO `…/cpython-3.11…` for libpython).
+fn appendShellWrapperNestedInstallRo(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList([]const u8),
+    script_path: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!void {
+    if (!(try launchFileIsShellWrapper(io, allocator, script_path, env_map))) return;
+
+    var targets: [wrapper_nested_target_max][]const u8 = undefined;
+    const n = try collectShellWrapperAbsoluteTargets(io, allocator, script_path, env_map, &targets);
+    defer for (targets[0..n]) |t| allocator.free(t);
+
+    for (targets[0..n]) |target| {
+        try appendInstallRoForLaunchFile(io, allocator, list, target, env_map);
+        try appendBinLayoutInstallRo(io, allocator, list, target, env_map);
+        var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+        if (realpathInto(target, &real_buf)) |real| {
+            if (!std.mem.eql(u8, real, target)) {
+                try appendInstallRoForLaunchFile(io, allocator, list, real, env_map);
+                try appendBinLayoutInstallRo(io, allocator, list, real, env_map);
+            }
+        }
+    }
+}
+
+/// If `file_path` is `…/bin/<leaf>`, grant RO on the parent of `bin` (install root).
+/// Never bare HOME or `/`. Used for uv/cpython and similar layouts without package.json.
+fn appendBinLayoutInstallRo(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList([]const u8),
+    file_path: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!void {
+    _ = io;
+    if (file_path.len == 0 or !std.fs.path.isAbsolute(file_path)) return;
+    const bin_dir = std.fs.path.dirname(file_path) orelse return;
+    if (!std.mem.eql(u8, std.fs.path.basename(bin_dir), "bin")) return;
+    const install_root = std.fs.path.dirname(bin_dir) orelse return;
+    if (install_root.len <= 1) return;
+    if (envHome(env_map)) |home| {
+        if (std.mem.eql(u8, install_root, home)) return;
+    }
+    const owned = try allocator.dupe(u8, install_root);
+    try appendUniqueInstallRo(allocator, list, owned);
+}
+
+/// Scan a shell wrapper body for absolute path strings that are existing regular files.
+/// Returns count of owned paths written into `out` (caller frees each).
+fn collectShellWrapperAbsoluteTargets(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    script_path: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+    out: *[wrapper_nested_target_max][]const u8,
+) error{OutOfMemory}!usize {
+    if (script_path.len == 0 or !isRegularFile(io, script_path)) return 0;
+
+    var buf: [wrapper_body_scan_max]u8 = undefined;
+    const n: usize = blk: {
+        if (std.fs.path.isAbsolute(script_path)) {
+            const file = std.Io.Dir.openFileAbsolute(io, script_path, .{}) catch return 0;
+            defer file.close(io);
+            break :blk std.Io.File.readStreaming(file, io, &.{buf[0..]}) catch return 0;
+        }
+        const file = std.Io.Dir.cwd().openFile(io, script_path, .{}) catch return 0;
+        defer file.close(io);
+        break :blk std.Io.File.readStreaming(file, io, &.{buf[0..]}) catch return 0;
+    };
+    if (n == 0) return 0;
+
+    const body = buf[0..n];
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i < body.len and count < wrapper_nested_target_max) {
+        // Absolute path: starts at `/` after start/whitespace/quote/`=`.
+        if (body[i] != '/') {
+            i += 1;
+            continue;
+        }
+        // Require a safe left boundary so we do not match mid-token.
+        if (i > 0) {
+            const prev = body[i - 1];
+            if (prev != ' ' and prev != '\t' and prev != '\n' and prev != '\r' and
+                prev != '"' and prev != '\'' and prev != '=' and prev != '(')
+            {
+                i += 1;
+                continue;
+            }
+        }
+        const start = i;
+        i += 1;
+        while (i < body.len) : (i += 1) {
+            const c = body[i];
+            if (c == ' ' or c == '\t' or c == '\n' or c == '\r' or
+                c == '"' or c == '\'' or c == ')' or c == ';' or c == '&' or c == '|')
+                break;
+        }
+        const candidate = body[start..i];
+        if (candidate.len < 2) continue;
+        // Reject bare root and bare HOME.
+        if (candidate.len == 1) continue;
+        if (envHome(env_map)) |home| {
+            if (std.mem.eql(u8, candidate, home)) continue;
+        }
+        if (!isRegularFile(io, candidate)) continue;
+        // Dedup against already collected.
+        var dup = false;
+        for (out[0..count]) |existing| {
+            if (std.mem.eql(u8, existing, candidate)) {
+                dup = true;
+                break;
+            }
+        }
+        if (dup) continue;
+        out[count] = try allocator.dupe(u8, candidate);
+        count += 1;
+    }
+    return count;
 }
 
 /// Read the first line of `path` when it is a shebang; return an owned interpreter
@@ -694,12 +1362,20 @@ fn isRegularFile(io: std.Io, path: []const u8) bool {
 /// - Session `active` only after agent-child apply handshake + `activateAfterHandshake` (S-GLO-01)
 pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
     switch (boundary.mode) {
-        .off => return .{
-            .receipt = posture.disabledReceipt(),
-            .env_scrubbed = false,
-            .env_launch_allowlisted = false,
-            .env_keys_removed = 0,
-            .profile_compiled = false,
+        .off => {
+            // Route-force cannot apply with sandbox off; fail closed when required
+            // (e.g. host-alias network mediation or --require-backend network_enforce).
+            if (boundary.require_network_route_forcing) {
+                setFailReason(boundary, "network_route_forcing_unavailable");
+                return error.RequireFailed;
+            }
+            return .{
+                .receipt = posture.disabledReceipt(),
+                .env_scrubbed = false,
+                .env_launch_allowlisted = false,
+                .env_keys_removed = 0,
+                .profile_compiled = false,
+            };
         },
         .on, .auto => {},
     }
@@ -713,12 +1389,15 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
         .control_roots = boundary.control_roots,
         .include_tmp = boundary.include_tmp,
         .exec_paths = boundary.launch_exec_paths,
+        .ro_paths = boundary.launch_ro_paths,
+        .host_rw_paths = boundary.launch_host_rw_paths,
         .protect_workspace_secrets = boundary.protect_workspace_secrets,
     }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => {
             setFailReason(boundary, "profile_compile_failed");
-            if (boundary.mode == .on) return error.RequireFailed;
+            // Fail closed when mode is on, or when route-force is required (mediation).
+            if (boundary.mode == .on or boundary.require_network_route_forcing) return error.RequireFailed;
             return .{
                 .receipt = posture.unavailableReceipt("profile_compile_failed"),
                 .env_scrubbed = false,
@@ -735,7 +1414,7 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
     const control_io = control_io_rt.io();
     compiled.validateControlRootsOnDisk(control_io) catch {
         setFailReason(boundary, "control_root_unsafe");
-        if (boundary.mode == .on) return error.RequireFailed;
+        if (boundary.mode == .on or boundary.require_network_route_forcing) return error.RequireFailed;
         return .{
             .receipt = posture.unavailableReceipt("control_root_unsafe"),
             .env_scrubbed = false,
@@ -772,6 +1451,7 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
         &compiled,
         boundary.network_proxy_port,
         boundary.seatbelt_profile,
+        boundary.launch_write_deny_literals,
     );
     defer platform.deinit();
 
@@ -785,13 +1465,16 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
     // Attach path rewrites TMPDIR into workspace session temp (R2-2) — host /var/folders
     // is not granted, and classic `/tmp` is not RW under production defaults.
     var allowlisted = false;
+    var attach_tmp: ?AttachSessionTmp = null;
+    defer if (attach_tmp) |*owned| owned.deinit();
     if (platform.status == .prepared_child) {
         // Create `{workspace}/.orca-tmp` before Landlock expand enumerates children,
-        // even when env_map is null (rewriteTempEnvForAttach also ensures when env present).
+        // even when env_map is null (prepareAttachEnvironment also ensures when env present).
         // Fail closed when materials require session tmp (M-8): never lie with classic /tmp.
         if (!ensureWorkspaceSessionTmp(boundary.workspace_root)) {
             setFailReason(boundary, "session_tmp_prepare_failed");
-            if (boundary.mode == .on) return error.RequireFailed;
+            // Materials abandoned → no live route-force; fail closed when required.
+            if (boundary.mode == .on or boundary.require_network_route_forcing) return error.RequireFailed;
             return .{
                 .receipt = posture.failedReceipt("session_tmp_prepare_failed"),
                 .env_scrubbed = scrubbed,
@@ -814,7 +1497,7 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
                 allowlisted = true;
             }
             // After allowlist keeps TMPDIR key, point it at workspace session temp.
-            _ = rewriteTempEnvForAttach(boundary.allocator, env_map, boundary.workspace_root) catch |err| switch (err) {
+            attach_tmp = prepareAttachEnvironment(boundary.allocator, env_map, boundary.workspace_root) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.SessionTmpPrepareFailed => {
                     setFailReason(boundary, "session_tmp_prepare_failed");
@@ -852,12 +1535,17 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
                         .include_tmp = boundary.include_tmp,
                     } },
                     .network_route_forced = platform.network_route_forced,
+                    .session_tmp = blk: {
+                        const owned = attach_tmp;
+                        attach_tmp = null;
+                        break :blk owned;
+                    },
                 };
             }
             const sbpl_z = platform.takeSeatbeltSbpl() orelse {
                 // prepared_child + seatbelt without SBPL is a contract bug — fail closed.
                 setFailReason(boundary, "seatbelt_sbpl_missing");
-                if (boundary.mode == .on) return error.RequireFailed;
+                if (boundary.mode == .on or boundary.require_network_route_forcing) return error.RequireFailed;
                 return .{
                     .receipt = posture.failedReceipt("seatbelt_sbpl_missing"),
                     .env_scrubbed = scrubbed,
@@ -883,11 +1571,16 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
                     .profile_grade = platform.seatbelt_profile_grade,
                 } },
                 .network_route_forced = platform.network_route_forced,
+                .session_tmp = blk: {
+                    const owned = attach_tmp;
+                    attach_tmp = null;
+                    break :blk owned;
+                },
             };
         },
         .unavailable => {
             setFailReason(boundary, platform.reason_code);
-            if (boundary.mode == .on) return error.RequireFailed;
+            if (boundary.mode == .on or boundary.require_network_route_forcing) return error.RequireFailed;
             return .{
                 .receipt = posture.unavailableReceipt(platform.reason_code),
                 .env_scrubbed = scrubbed,
@@ -899,7 +1592,7 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
         },
         .failed => {
             setFailReason(boundary, platform.reason_code);
-            if (boundary.mode == .on) return error.RequireFailed;
+            if (boundary.mode == .on or boundary.require_network_route_forcing) return error.RequireFailed;
             return .{
                 .receipt = posture.failedReceipt(platform.reason_code),
                 .env_scrubbed = scrubbed,
@@ -921,10 +1614,17 @@ fn tryPlatformApply(
     compiled: *const profile.CompiledProfile,
     network_proxy_port: ?u16,
     seatbelt_profile: macos_profile.SeatbeltProfileGrade,
+    write_deny_literals: []const []const u8,
 ) ApplyError!PlatformApplyOutcome {
     return switch (builtin.os.tag) {
         .linux => tryPlatformApplyLinux(network_proxy_port),
-        .macos => try tryMacOsSeatbelt(allocator, compiled, network_proxy_port, seatbelt_profile),
+        .macos => try tryMacOsSeatbelt(
+            allocator,
+            compiled,
+            network_proxy_port,
+            seatbelt_profile,
+            write_deny_literals,
+        ),
         else => .{
             .status = .unavailable,
             .mechanism = .none,
@@ -938,6 +1638,7 @@ fn tryMacOsSeatbelt(
     compiled: *const profile.CompiledProfile,
     network_proxy_port: ?u16,
     seatbelt_profile: macos_profile.SeatbeltProfileGrade,
+    write_deny_literals: []const []const u8,
 ) ApplyError!PlatformApplyOutcome {
     const prepared = macos_seatbelt.prepareForChildApplyWithOptions(
         allocator,
@@ -946,6 +1647,7 @@ fn tryMacOsSeatbelt(
         .{
             .network_route_forcing = if (network_proxy_port) |port| .{ .proxy_port = port } else null,
             .profile_grade = seatbelt_profile,
+            .write_deny_literals = write_deny_literals,
         },
     );
     return switch (prepared.status) {
@@ -1252,6 +1954,28 @@ test "PlatformApplyOutcome deinit frees owned SBPL" {
     try std.testing.expect(outcome2.seatbelt_sbpl_z == null);
 }
 
+test "ApplyResult deinit removes its owned attach session temp" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+    var env_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer env_map.deinit();
+    const owned_tmp = try prepareAttachEnvironment(std.testing.allocator, &env_map, root);
+    const retained_path = try std.testing.allocator.dupe(u8, owned_tmp.path);
+    defer std.testing.allocator.free(retained_path);
+    var result: ApplyResult = .{
+        .receipt = posture.disabledReceipt(),
+        .session_tmp = owned_tmp,
+    };
+    result.deinit();
+
+    try std.testing.expectError(
+        error.FileNotFound,
+        std.Io.Dir.openDirAbsolute(std.testing.io, retained_path, .{}),
+    );
+}
+
 test "non-Linux never yields active receipt from apply seam without child spawn" {
     if (builtin.os.tag == .linux) return error.SkipZigTest;
 
@@ -1517,6 +2241,21 @@ test "require_network_route_forcing without proxy port fails closed" {
     try std.testing.expectEqualStrings("network_route_forcing_unavailable", fail_reason);
 }
 
+test "require_network_route_forcing with sandbox off fails closed" {
+    var fail_reason: []const u8 = "unset";
+    const err = applyBeforeExec(.{
+        .allocator = std.testing.allocator,
+        .mode = .off,
+        .workspace_root = "/tmp/orca-apply-ws-route-force-off",
+        .env_map = null,
+        .network_proxy_port = 18080,
+        .require_network_route_forcing = true,
+        .fail_reason_out = &fail_reason,
+    });
+    try std.testing.expectError(error.RequireFailed, err);
+    try std.testing.expectEqualStrings("network_route_forcing_unavailable", fail_reason);
+}
+
 test "activateAfterHandshake landlock route-forced network_scope is port-scoped not loopback" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     if (!landlock.isAbiAvailable()) return error.SkipZigTest;
@@ -1730,6 +2469,396 @@ test "collectLaunchExecPaths resolves regular file and rejects HOME" {
     const home_paths = try collectLaunchExecPaths(io, allocator, dir_path, &env_map);
     defer freeLaunchExecPaths(allocator, home_paths);
     try std.testing.expectEqual(@as(usize, 0), home_paths.len);
+}
+
+test "collectLaunchInstallRoPaths grants package root for node shebang agent" {
+    // Simulated npm global layout (scoped + sibling optional dep hoist):
+    //   $tmp/home/.local/lib/node_modules/@scope/agent/bin/cli.js  (shebang)
+    //   $tmp/home/.local/lib/node_modules/@scope/agent/package.json
+    //   $tmp/home/.local/lib/node_modules/@scope/agent-native/package.json  (sibling hoist)
+    // Install RO must be package root + scoped parent (covers sibling), never HOME.
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+
+    const pkg_rel = ".local/lib/node_modules/@scope/agent";
+    const sibling_rel = ".local/lib/node_modules/@scope/agent-native";
+    try tmp.dir.createDirPath(io, pkg_rel ++ "/bin");
+    try tmp.dir.createDirPath(io, sibling_rel ++ "/vendor/bin");
+    try tmp.dir.writeFile(io, .{ .sub_path = pkg_rel ++ "/package.json", .data = "{\"name\":\"@scope/agent\"}\n" });
+    try tmp.dir.writeFile(io, .{
+        .sub_path = sibling_rel ++ "/package.json",
+        .data = "{\"name\":\"@scope/agent-native\"}\n",
+    });
+    try tmp.dir.writeFile(io, .{
+        .sub_path = pkg_rel ++ "/bin/cli.js",
+        .data = "#!/usr/bin/env node\nconsole.log('ok');\n",
+    });
+    try tmp.dir.setFilePermissions(io, pkg_rel ++ "/bin/cli.js", std.Io.File.Permissions.fromMode(0o755), .{});
+
+    const script = try std.fs.path.join(allocator, &.{ home, pkg_rel, "bin", "cli.js" });
+    defer allocator.free(script);
+    const pkg_root = try std.fs.path.join(allocator, &.{ home, pkg_rel });
+    defer allocator.free(pkg_root);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+
+    const ro = try collectLaunchInstallRoPaths(io, allocator, script, &env_map);
+    defer freeLaunchInstallRoPaths(allocator, ro);
+
+    // Package root + scoped parent (`…/node_modules/@scope`) for sibling optional deps.
+    try std.testing.expect(ro.len >= 2);
+    try std.testing.expect(pathsContain(ro, pkg_root));
+    const scope_parent = try std.fs.path.join(allocator, &.{ home, ".local/lib/node_modules/@scope" });
+    defer allocator.free(scope_parent);
+    try std.testing.expect(pathsContain(ro, scope_parent));
+    // Sibling package sits under scope parent; package-root RO alone would miss it
+    // (path-prefix must use a boundary — `agent` is not a prefix of `agent-native` as dirs).
+    const sibling_root = try std.fs.path.join(allocator, &.{ home, sibling_rel });
+    defer allocator.free(sibling_root);
+    try std.testing.expect(std.mem.startsWith(u8, sibling_root, scope_parent));
+    try std.testing.expect(sibling_root.len > scope_parent.len and sibling_root[scope_parent.len] == '/');
+    try std.testing.expect(!std.mem.eql(u8, sibling_root, pkg_root));
+    try std.testing.expect(!pathsContain(ro, sibling_root)); // grant is scope parent, not leaf sibling alone
+    try std.testing.expect(!pathsContainHomeOrDir(ro, home));
+    // Whole node_modules must not be granted.
+    const nm_root = try std.fs.path.join(allocator, &.{ home, ".local/lib/node_modules" });
+    defer allocator.free(nm_root);
+    try std.testing.expect(!pathsContain(ro, nm_root));
+
+    // Plain system binary: no package root → empty RO list.
+    const true_src: []const u8 = blk: {
+        std.Io.Dir.cwd().access(io, "/usr/bin/true", .{}) catch break :blk "/bin/true";
+        break :blk "/usr/bin/true";
+    };
+    const plain = try collectLaunchInstallRoPaths(io, allocator, true_src, &env_map);
+    defer freeLaunchInstallRoPaths(allocator, plain);
+    try std.testing.expectEqual(@as(usize, 0), plain.len);
+}
+
+test "collectLaunchInstallRoPaths unscoped package root only (no parent RO)" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+
+    const pkg_rel = ".local/lib/node_modules/plain-agent";
+    try tmp.dir.createDirPath(io, pkg_rel ++ "/bin");
+    try tmp.dir.writeFile(io, .{ .sub_path = pkg_rel ++ "/package.json", .data = "{\"name\":\"plain-agent\"}\n" });
+    try tmp.dir.writeFile(io, .{
+        .sub_path = pkg_rel ++ "/bin/cli.js",
+        .data = "#!/usr/bin/env node\n",
+    });
+    try tmp.dir.setFilePermissions(io, pkg_rel ++ "/bin/cli.js", std.Io.File.Permissions.fromMode(0o755), .{});
+
+    const script = try std.fs.path.join(allocator, &.{ home, pkg_rel, "bin", "cli.js" });
+    defer allocator.free(script);
+    const pkg_root = try std.fs.path.join(allocator, &.{ home, pkg_rel });
+    defer allocator.free(pkg_root);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+
+    const ro = try collectLaunchInstallRoPaths(io, allocator, script, &env_map);
+    defer freeLaunchInstallRoPaths(allocator, ro);
+
+    try std.testing.expectEqual(@as(usize, 1), ro.len);
+    try std.testing.expect(pathsContain(ro, pkg_root));
+    const nm_root = try std.fs.path.join(allocator, &.{ home, ".local/lib/node_modules" });
+    defer allocator.free(nm_root);
+    try std.testing.expect(!pathsContain(ro, nm_root));
+    try std.testing.expect(!pathsContainHomeOrDir(ro, home));
+}
+
+test "collectLaunchInstallRoPaths rejects package.json planted at HOME" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+    try tmp.dir.writeFile(io, .{ .sub_path = "package.json", .data = "{}\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "agent.js", .data = "#!/usr/bin/env node\n" });
+    try tmp.dir.setFilePermissions(io, "agent.js", std.Io.File.Permissions.fromMode(0o755), .{});
+    const script = try std.fs.path.join(allocator, &.{ home, "agent.js" });
+    defer allocator.free(script);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+
+    const ro = try collectLaunchInstallRoPaths(io, allocator, script, &env_map);
+    defer freeLaunchInstallRoPaths(allocator, ro);
+    try std.testing.expectEqual(@as(usize, 0), ro.len);
+}
+
+test "absoluteizeLaunchArgv resolves bare name before PATH honesty filter" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const bin_dir = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(bin_dir);
+
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "fake-agent",
+        .data = "#!/bin/sh\necho ok\n",
+    });
+    try tmp.dir.setFilePermissions(io, "fake-agent", std.Io.File.Permissions.fromMode(0o755), .{});
+    const abs_agent = try std.fs.path.join(allocator, &.{ bin_dir, "fake-agent" });
+    defer allocator.free(abs_agent);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("PATH", bin_dir);
+
+    const argv_in = [_][]const u8{ "fake-agent", "--version" };
+    const absolute = (try absoluteizeLaunchArgv(io, allocator, &argv_in, &env_map)) orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    defer freeExpandedShellWrapperArgv(allocator, absolute);
+    try std.testing.expectEqual(@as(usize, 2), absolute.len);
+    try std.testing.expect(std.fs.path.isAbsolute(absolute[0]));
+    try std.testing.expectEqualStrings("--version", absolute[1]);
+    // realpath of the planted binary (tmp may be under a symlink prefix).
+    var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const expected = realpathInto(abs_agent, &real_buf) orelse abs_agent;
+    try std.testing.expectEqualStrings(expected, absolute[0]);
+
+    // After PATH honesty drops the bin dir, bare name fails but absolute still resolves.
+    try env_map.put("PATH", "/usr/bin:/bin");
+    try std.testing.expectError(error.FileNotFound, apply_posix.resolveArgv0(io, allocator, "fake-agent", &env_map));
+    const still = try apply_posix.resolveArgv0(io, allocator, absolute[0], &env_map);
+    defer if (still.owned) allocator.free(still.path);
+    try std.testing.expectEqualStrings(absolute[0], still.path);
+}
+
+test "absoluteizeLaunchArgv is null for absolute and missing bare names" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const abs_in = [_][]const u8{"/bin/sh"};
+    try std.testing.expect((try absoluteizeLaunchArgv(io, allocator, &abs_in, null)) == null);
+
+    const rel_in = [_][]const u8{"./local-agent"};
+    try std.testing.expect((try absoluteizeLaunchArgv(io, allocator, &rel_in, null)) == null);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("PATH", "/usr/bin:/bin");
+    const missing = [_][]const u8{"ryk-no-such-host-alias-bin"};
+    try std.testing.expect((try absoluteizeLaunchArgv(io, allocator, &missing, &env_map)) == null);
+}
+
+test "expandShellWrapperLaunch rewrites hermes-style exec to realpath python" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+
+    try tmp.dir.createDirPath(io, ".hermes/agent/venv/bin");
+    try tmp.dir.createDirPath(io, ".local/bin");
+    try tmp.dir.createDirPath(io, ".local/share/uv/python/cpython-fake/bin");
+    try tmp.dir.writeFile(io, .{
+        .sub_path = ".local/share/uv/python/cpython-fake/bin/python3.11",
+        .data = "#!/bin/sh\necho fake\n",
+    });
+    try tmp.dir.setFilePermissions(io, ".local/share/uv/python/cpython-fake/bin/python3.11", std.Io.File.Permissions.fromMode(0o755), .{});
+    const real_py = try std.fs.path.join(allocator, &.{ home, ".local/share/uv/python/cpython-fake/bin/python3.11" });
+    defer allocator.free(real_py);
+    const py_lex = try std.fs.path.join(allocator, &.{ home, ".hermes/agent/venv/bin/python" });
+    defer allocator.free(py_lex);
+    std.Io.Dir.cwd().symLink(io, real_py, py_lex, .{}) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    const hermes_main = try std.fs.path.join(allocator, &.{ home, ".hermes/agent/hermes" });
+    defer allocator.free(hermes_main);
+    try tmp.dir.writeFile(io, .{ .sub_path = ".hermes/agent/hermes", .data = "print(1)\n" });
+    const body = try std.fmt.allocPrint(allocator,
+        \\#!/usr/bin/env bash
+        \\exec "{s}" "{s}" "$@"
+        \\
+    , .{ py_lex, hermes_main });
+    defer allocator.free(body);
+    try tmp.dir.writeFile(io, .{ .sub_path = ".local/bin/hermes", .data = body });
+    try tmp.dir.setFilePermissions(io, ".local/bin/hermes", std.Io.File.Permissions.fromMode(0o755), .{});
+    const wrapper = try std.fs.path.join(allocator, &.{ home, ".local/bin/hermes" });
+    defer allocator.free(wrapper);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+    try env_map.put("PATH", "/usr/bin:/bin");
+
+    // Plant a venv site-packages so inject path is testable.
+    try tmp.dir.createDirPath(io, ".hermes/agent/venv/lib/python3.11/site-packages");
+    try tmp.dir.writeFile(io, .{
+        .sub_path = ".hermes/agent/venv/lib/python3.11/site-packages/yaml.py",
+        .data = "ok=1\n",
+    });
+
+    const argv_in = [_][]const u8{ wrapper, "--version" };
+    const expanded = (try expandShellWrapperLaunch(io, allocator, &argv_in, &env_map)) orelse {
+        try std.testing.expect(false); // must expand
+        return;
+    };
+    defer freeExpandedShellWrapperArgv(allocator, expanded);
+    try std.testing.expect(expanded.len >= 3);
+    try std.testing.expectEqualStrings(real_py, expanded[0]);
+    try std.testing.expectEqualStrings("--version", expanded[expanded.len - 1]);
+    const pp = env_map.get("PYTHONPATH") orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    try std.testing.expect(std.mem.indexOf(u8, pp, "site-packages") != null);
+}
+
+test "collectLaunchInstallRoPaths real host hermes grants uv cpython when present" {
+    // Live host residual: hermes wrapper execs venv python → uv cpython under
+    // ~/.local/share/uv/python/…. Prove collection finds that install root.
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const home_z = std.c.getenv("HOME") orelse return error.SkipZigTest;
+    const home = std.mem.span(home_z);
+    if (home.len == 0) return error.SkipZigTest;
+    const wrapper = try std.fs.path.join(allocator, &.{ home, ".local/bin/hermes" });
+    defer allocator.free(wrapper);
+    if (!isRegularFile(io, wrapper)) return error.SkipZigTest;
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+    try env_map.put("PATH", "/usr/bin:/bin");
+
+    const ro = try collectLaunchInstallRoPaths(io, allocator, wrapper, &env_map);
+    defer freeLaunchInstallRoPaths(allocator, ro);
+
+    var found_uv = false;
+    for (ro) |p| {
+        if (std.mem.indexOf(u8, p, "/.local/share/uv/python/") != null) {
+            found_uv = true;
+            break;
+        }
+    }
+    if (!found_uv) {
+        std.debug.print("hermes install RO paths ({d}):\n", .{ro.len});
+        for (ro) |p| std.debug.print("  {s}\n", .{p});
+    }
+    try std.testing.expect(found_uv);
+
+    const execs = try collectLaunchExecPaths(io, allocator, wrapper, &env_map);
+    defer freeLaunchExecPaths(allocator, execs);
+    var found_py = false;
+    for (execs) |p| {
+        if (std.mem.indexOf(u8, p, "python") != null) {
+            found_py = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_py);
+
+    // Prove SBPL emit includes process-exec + file-read* for the nested python install.
+    if (builtin.os.tag == .macos) {
+        var compiled = try profile.compileProfile(allocator, .{
+            .workspace_root = "/tmp/orca-hermes-sbpl-ws",
+            .exec_paths = execs,
+            .ro_paths = ro,
+            .host_rw_paths = &.{},
+            .include_tmp = false,
+            .protect_workspace_secrets = false,
+        });
+        defer compiled.deinit();
+        const sbpl = try macos_profile.renderSbpl(allocator, &compiled);
+        defer allocator.free(sbpl);
+        try std.testing.expect(std.mem.indexOf(u8, sbpl, "/.local/share/uv/python/") != null);
+        try std.testing.expect(std.mem.indexOf(u8, sbpl, "file-read*") != null);
+        try std.testing.expect(std.mem.indexOf(u8, sbpl, "process-exec") != null);
+    }
+}
+
+test "collectLaunchExecPaths shell wrapper grants nested absolute python" {
+    // Hermes-style: #!/usr/bin/env bash + exec "/abs/venv/bin/python" …
+    // Nested python (and its realpath when different) must get file-only .exec;
+    // bin-layout install root must get RO for libpython.
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+
+    try tmp.dir.createDirPath(io, ".hermes/agent/venv/bin");
+    try tmp.dir.createDirPath(io, ".local/bin");
+    try tmp.dir.createDirPath(io, ".local/share/uv/python/cpython-fake/bin");
+    try tmp.dir.createDirPath(io, ".local/share/uv/python/cpython-fake/lib");
+    try tmp.dir.writeFile(io, .{
+        .sub_path = ".local/share/uv/python/cpython-fake/bin/python3.11",
+        .data = "#!/bin/sh\necho fake-python\n",
+    });
+    try tmp.dir.setFilePermissions(io, ".local/share/uv/python/cpython-fake/bin/python3.11", std.Io.File.Permissions.fromMode(0o755), .{});
+
+    const real_py = try std.fs.path.join(allocator, &.{ home, ".local/share/uv/python/cpython-fake/bin/python3.11" });
+    defer allocator.free(real_py);
+    const py_lex = try std.fs.path.join(allocator, &.{ home, ".hermes/agent/venv/bin/python" });
+    defer allocator.free(py_lex);
+    std.Io.Dir.cwd().symLink(io, real_py, py_lex, .{}) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    const hermes_main = try std.fs.path.join(allocator, &.{ home, ".hermes/agent/hermes" });
+    defer allocator.free(hermes_main);
+    try tmp.dir.writeFile(io, .{ .sub_path = ".hermes/agent/hermes", .data = "print('hermes')\n" });
+
+    const body = try std.fmt.allocPrint(allocator,
+        \\#!/usr/bin/env bash
+        \\unset PYTHONPATH
+        \\exec "{s}" "{s}" "$@"
+        \\
+    , .{ py_lex, hermes_main });
+    defer allocator.free(body);
+    try tmp.dir.writeFile(io, .{ .sub_path = ".local/bin/hermes", .data = body });
+    try tmp.dir.setFilePermissions(io, ".local/bin/hermes", std.Io.File.Permissions.fromMode(0o755), .{});
+
+    const wrapper = try std.fs.path.join(allocator, &.{ home, ".local/bin/hermes" });
+    defer allocator.free(wrapper);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+    try env_map.put("PATH", "/usr/bin:/bin");
+
+    const execs = try collectLaunchExecPaths(io, allocator, wrapper, &env_map);
+    defer freeLaunchExecPaths(allocator, execs);
+    try std.testing.expect(pathsContain(execs, wrapper));
+    try std.testing.expect(pathsContain(execs, real_py));
+    try std.testing.expect(!pathsContainHomeOrDir(execs, home));
+
+    const ro = try collectLaunchInstallRoPaths(io, allocator, wrapper, &env_map);
+    defer freeLaunchInstallRoPaths(allocator, ro);
+    const cpython_root = try std.fs.path.join(allocator, &.{ home, ".local/share/uv/python/cpython-fake" });
+    defer allocator.free(cpython_root);
+    try std.testing.expect(pathsContain(ro, cpython_root));
+    try std.testing.expect(!pathsContainHomeOrDir(ro, home));
 }
 
 fn pathsContain(paths: []const []const u8, want: []const u8) bool {
@@ -1976,7 +3105,7 @@ test "isUngrantedHostTmpdir detects macOS var/folders shapes" {
     try std.testing.expect(!isUngrantedHostTmpdir("/workspace/.orca-tmp"));
 }
 
-test "rewriteTempEnvForAttach points TMPDIR at workspace session temp" {
+test "prepareAttachEnvironment points TMPDIR at fresh workspace session temp" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
@@ -1989,23 +3118,71 @@ test "rewriteTempEnvForAttach points TMPDIR at workspace session temp" {
     try env_map.put("TMP", "/var/folders/ns/xmz0/T/");
     try env_map.put("TEMP", "/var/folders/ns/xmz0/T/");
 
-    const rewritten = try rewriteTempEnvForAttach(std.testing.allocator, &env_map, root);
+    var prepared = try prepareAttachEnvironment(std.testing.allocator, &env_map, root);
+    defer prepared.deinit();
+    const rewritten = prepared.path;
     try std.testing.expect(!isUngrantedHostTmpdir(rewritten));
     // Production defaults: session temp only — never silent classic /tmp fallback (M-8).
-    try std.testing.expect(std.mem.endsWith(u8, rewritten, "/.orca-tmp"));
+    const workspace_tmp = try workspaceSessionTmpPath(std.testing.allocator, root);
+    defer std.testing.allocator.free(workspace_tmp);
+    try std.testing.expect(std.mem.startsWith(u8, rewritten, workspace_tmp));
     try std.testing.expect(!std.mem.eql(u8, rewritten, classic_tmp_fallback));
     try std.testing.expectEqualStrings(rewritten, env_map.get("TMPDIR").?);
     try std.testing.expectEqualStrings(rewritten, env_map.get("TMP").?);
     try std.testing.expectEqualStrings(rewritten, env_map.get("TEMP").?);
+
+    // MCP package launchers must not fall back to denied host state under HOME.
+    for (isolated_tool_caches) |cache| {
+        const path = env_map.get(cache.env_key) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(std.mem.startsWith(u8, path, rewritten));
+        try std.testing.expect(std.mem.endsWith(u8, path, cache.directory_name));
+    }
+
+    // Git must not fail while probing denied host-global config/ignore files.
+    try std.testing.expectEqualStrings("/dev/null", env_map.get("GIT_CONFIG_GLOBAL").?);
+    try std.testing.expectEqualStrings("1", env_map.get("GIT_CONFIG_COUNT").?);
+    try std.testing.expectEqualStrings("core.excludesFile", env_map.get("GIT_CONFIG_KEY_0").?);
+    try std.testing.expectEqualStrings("/dev/null", env_map.get("GIT_CONFIG_VALUE_0").?);
 
     // Preferred path must exist when rewrite succeeds.
     var io_rt: std.Io.Threaded = .init_single_threaded;
     const io = io_rt.io();
     var dir = try std.Io.Dir.openDirAbsolute(io, rewritten, .{});
     dir.close(io);
+    for (isolated_tool_caches) |cache| {
+        var cache_dir = try std.Io.Dir.openDirAbsolute(io, env_map.get(cache.env_key).?, .{});
+        cache_dir.close(io);
+    }
 }
 
-test "rewriteTempEnvForAttach fails closed when session tmp cannot be prepared" {
+test "prepareAttachEnvironment creates a fresh cache namespace per launch" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var first = std.process.Environ.Map.init(std.testing.allocator);
+    defer first.deinit();
+    var second = std.process.Environ.Map.init(std.testing.allocator);
+    defer second.deinit();
+
+    var first_prepared = try prepareAttachEnvironment(std.testing.allocator, &first, root);
+    defer first_prepared.deinit();
+    var second_prepared = try prepareAttachEnvironment(std.testing.allocator, &second, root);
+    defer second_prepared.deinit();
+    const first_tmp = first_prepared.path;
+    const second_tmp = second_prepared.path;
+    try std.testing.expect(!std.mem.eql(u8, first_tmp, second_tmp));
+    try std.testing.expect(std.mem.startsWith(u8, first_tmp, root));
+    try std.testing.expect(std.mem.startsWith(u8, second_tmp, root));
+    try std.testing.expect(!std.mem.eql(
+        u8,
+        first.get("NPM_CONFIG_CACHE").?,
+        second.get("NPM_CONFIG_CACHE").?,
+    ));
+}
+
+test "prepareAttachEnvironment fails closed when session tmp cannot be prepared" {
     // Empty workspace → ensureWorkspaceSessionTmp returns false; must not rewrite to /tmp.
     var env_map = std.process.Environ.Map.init(std.testing.allocator);
     defer env_map.deinit();
@@ -2015,7 +3192,7 @@ test "rewriteTempEnvForAttach fails closed when session tmp cannot be prepared" 
 
     try std.testing.expectError(
         error.SessionTmpPrepareFailed,
-        rewriteTempEnvForAttach(std.testing.allocator, &env_map, ""),
+        prepareAttachEnvironment(std.testing.allocator, &env_map, ""),
     );
     // Env must remain unchanged (no lying classic /tmp rewrite).
     try std.testing.expectEqualStrings("/var/folders/ns/xmz0/T/", env_map.get("TMPDIR").?);
@@ -2028,9 +3205,65 @@ test "rewriteTempEnvForAttach fails closed when session tmp cannot be prepared" 
     long_root[0] = '/';
     try std.testing.expectError(
         error.SessionTmpPrepareFailed,
-        rewriteTempEnvForAttach(std.testing.allocator, &env_map, long_root[0..]),
+        prepareAttachEnvironment(std.testing.allocator, &env_map, long_root[0..]),
     );
     try std.testing.expectEqualStrings("/var/folders/ns/xmz0/T/", env_map.get("TMPDIR").?);
+}
+
+test "prepareAttachEnvironment rolls back env and session temp on allocation failure" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    const original_tmp = "/var/folders/ns/xmz0/T/";
+    var observed_induced_failure = false;
+    for (0..64) |failure_offset| {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+        const allocator = failing.allocator();
+        var env_map = std.process.Environ.Map.init(allocator);
+        defer env_map.deinit();
+        try env_map.put("TMPDIR", original_tmp);
+        try env_map.put("TMP", original_tmp);
+        try env_map.put("TEMP", original_tmp);
+        try env_map.put("UNCHANGED", "yes");
+        failing.fail_index = failing.alloc_index + failure_offset;
+
+        const prepared = prepareAttachEnvironment(allocator, &env_map, root);
+        if (prepared) |owned_value| {
+            var owned = owned_value;
+            owned.deinit();
+        } else |err| switch (err) {
+            error.OutOfMemory => {
+                if (!failing.has_induced_failure) continue;
+                observed_induced_failure = true;
+                try std.testing.expectEqualStrings(original_tmp, env_map.get("TMPDIR").?);
+                try std.testing.expectEqualStrings(original_tmp, env_map.get("TMP").?);
+                try std.testing.expectEqualStrings(original_tmp, env_map.get("TEMP").?);
+                try std.testing.expectEqualStrings("yes", env_map.get("UNCHANGED").?);
+                for (isolated_tool_caches) |cache| {
+                    try std.testing.expect(env_map.get(cache.env_key) == null);
+                }
+                try std.testing.expect(env_map.get("GIT_CONFIG_GLOBAL") == null);
+
+                const workspace_tmp = try workspaceSessionTmpPath(std.testing.allocator, root);
+                defer std.testing.allocator.free(workspace_tmp);
+                var session_dir = std.Io.Dir.openDirAbsolute(
+                    std.testing.io,
+                    workspace_tmp,
+                    .{ .iterate = true },
+                ) catch |open_err| switch (open_err) {
+                    error.FileNotFound => continue,
+                    else => return open_err,
+                };
+                defer session_dir.close(std.testing.io);
+                var entries = session_dir.iterate();
+                try std.testing.expect(try entries.next(std.testing.io) == null);
+            },
+            error.SessionTmpPrepareFailed => return err,
+        }
+    }
+    try std.testing.expect(observed_induced_failure);
 }
 
 test "attach path rewrites host TMPDIR out of var/folders (R2-2)" {
@@ -2062,7 +3295,10 @@ test "attach path rewrites host TMPDIR out of var/folders (R2-2)" {
         try std.testing.expect(td.len > 0);
         try std.testing.expect(!isUngrantedHostTmpdir(td));
         // Production defaults: session temp under workspace only (M-8; no classic /tmp).
-        try std.testing.expect(std.mem.endsWith(u8, td, "/.orca-tmp"));
+        const workspace_tmp = try workspaceSessionTmpPath(std.testing.allocator, root);
+        defer std.testing.allocator.free(workspace_tmp);
+        try std.testing.expect(std.mem.startsWith(u8, td, workspace_tmp));
+        try std.testing.expect(std.mem.startsWith(u8, td[workspace_tmp.len..], "/session-"));
         try std.testing.expect(!std.mem.eql(u8, td, classic_tmp_fallback));
         // Pure grants: rewritten path must be agent-writable under production model.
         switch (result.materials) {

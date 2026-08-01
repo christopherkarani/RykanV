@@ -32,6 +32,23 @@ environment-variable reference before the model sees the message.
 - Process-level environment, network, and secretless controls require launching
   Pi through `ryk run -- pi`.
 
+### Policy `ask` session matrix
+
+When `ryk evaluate` / `ryk decide` returns policy **`ask`**, the extension
+never silently allows the tool call:
+
+| Session class | Detection | Policy `ask` outcome |
+|---------------|-----------|----------------------|
+| Interactive parent TUI | `hasUI === true` and mode not `print` / `json` / `noninteractive` | Human prompt (`select`) — Block / once / session disable / show reason |
+| Noninteractive Pi (`-p`, print, json, headless) | `hasUI !== true` or mode is `print` / `json` / `noninteractive` | **Auto-deny** with explicit reason; no UI hang |
+| Subagent / child agent | `PI_SUBAGENT_PARENT_SESSION` set (non-empty) | **Auto-deny** even if `hasUI` is true |
+| Strict / noninteractive-block | `RYK_PI_MODE=strict` (or once-bypass disabled) | Block; no once-bypass option on interactive ask |
+
+Auto-deny records a transcript audit event (`orca_ask_auto_deny`) when the host
+supports `sendMessage`, and still blocks if audit is unavailable. Parent-forward
+approval (ask the parent TUI from a subagent) is not implemented; subagents
+auto-deny by design.
+
 ## Security properties
 
 - Child processes use argv arrays with `shell: false`.

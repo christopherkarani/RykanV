@@ -382,6 +382,15 @@ pub fn createAuditWriter(io: std.Io, allocator: std.mem.Allocator, session: Sess
     return AuditWriter.init(io, allocator, session);
 }
 
+pub fn createAuditWriterWithDirName(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    session: Session,
+    audit_dir_name: []const u8,
+) !AuditWriter {
+    return AuditWriter.initWithDirName(io, allocator, session, audit_dir_name);
+}
+
 pub fn openAuditWriter(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8, session_id: []const u8) !AuditWriter {
     return AuditWriter.openExisting(io, allocator, workspace_root, session_id);
 }

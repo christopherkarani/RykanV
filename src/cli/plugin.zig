@@ -2004,19 +2004,43 @@ pub fn resolveOpenCodeDestination(allocator: std.mem.Allocator, workspace_root: 
 pub fn hermesUserPluginRoot(allocator: std.mem.Allocator) ![]u8 {
     var env_map = env_util.createProcessMap(allocator) catch return std.fs.path.join(allocator, &.{ "~", ".hermes", "plugins", "orca" });
     defer env_map.deinit();
-    const home = env_util.getOwned(&env_map, allocator, "HOME") catch return std.fs.path.join(allocator, &.{ "~", ".hermes", "plugins", "orca" });
-    const home_owned = home orelse return std.fs.path.join(allocator, &.{ "~", ".hermes", "plugins", "orca" });
-    defer allocator.free(home_owned);
-    return std.fs.path.join(allocator, &.{ home_owned, ".hermes", "plugins", "orca" });
+    const hermes_home = try hermesHomeFromEnvMap(allocator, &env_map);
+    defer allocator.free(hermes_home);
+    return std.fs.path.join(allocator, &.{ hermes_home, "plugins", "orca" });
 }
 
 pub fn hermesConfigPath(allocator: std.mem.Allocator) ![]u8 {
     var env_map = env_util.createProcessMap(allocator) catch return std.fs.path.join(allocator, &.{ "~", ".hermes", "config.yaml" });
     defer env_map.deinit();
-    const home = env_util.getOwned(&env_map, allocator, "HOME") catch return std.fs.path.join(allocator, &.{ "~", ".hermes", "config.yaml" });
-    const home_owned = home orelse return std.fs.path.join(allocator, &.{ "~", ".hermes", "config.yaml" });
-    defer allocator.free(home_owned);
-    return std.fs.path.join(allocator, &.{ home_owned, ".hermes", "config.yaml" });
+    const hermes_home = try hermesHomeFromEnvMap(allocator, &env_map);
+    defer allocator.free(hermes_home);
+    return std.fs.path.join(allocator, &.{ hermes_home, "config.yaml" });
+}
+
+fn hermesHomeFromEnvMap(
+    allocator: std.mem.Allocator,
+    env_map: *const std.process.Environ.Map,
+) ![]u8 {
+    if (env_map.get("HERMES_HOME")) |custom| {
+        if (std.fs.path.isAbsolute(custom)) return allocator.dupe(u8, custom);
+    }
+    const home = env_map.get("HOME") orelse return std.fs.path.join(allocator, &.{ "~", ".hermes" });
+    return std.fs.path.join(allocator, &.{ home, ".hermes" });
+}
+
+test "Hermes install paths honor absolute HERMES_HOME" {
+    var env_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", "/Users/synthetic");
+    try env_map.put("HERMES_HOME", "/Users/synthetic/.hermes/profiles/work");
+    const root = try hermesHomeFromEnvMap(std.testing.allocator, &env_map);
+    defer std.testing.allocator.free(root);
+    try std.testing.expectEqualStrings("/Users/synthetic/.hermes/profiles/work", root);
+
+    try env_map.put("HERMES_HOME", "relative/profile");
+    const fallback = try hermesHomeFromEnvMap(std.testing.allocator, &env_map);
+    defer std.testing.allocator.free(fallback);
+    try std.testing.expectEqualStrings("/Users/synthetic/.hermes", fallback);
 }
 
 pub fn installFileIfSafe(allocator: std.mem.Allocator, source_path: []const u8, destination_path: []const u8) !bool {

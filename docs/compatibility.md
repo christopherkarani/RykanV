@@ -61,7 +61,7 @@ Reserve marketing “firewall” / “maximum protection” for a **verified** m
 | Process cleanup | active or partial | active | partial |
 | Red-team suite | active | active | active |
 
-`wrapper-only` means Orca-mediated command paths are protected by shims or wrappers (grade **`wrapper`**). It is not transparent OS enforcement.
+`wrapper-only` means Orca-mediated command paths are protected by shims or wrappers (grade **`wrapper`**). It is not transparent OS enforcement. Absolute paths can skip PATH shims; OS filesystem attach and network route-force (when active) still apply to the child process. PATH honesty under attach uses a **denylist** of known package trees plus an optional essentials file-only `.exec` pack (`ORCA_TOOL_PACK`) — see `docs/commands.md`.
 
 **Probe vs session-attach:** Doctor and platform matrices may report sandbox **capability** (`partial` / API present). That is not a live session `active` claim. Trust **`OS-enforced`** filesystem isolation only for a protected agent session that completed child apply-before-exec attach (profile hash present). Use advanced `orca run --os-sandbox on` to fail closed when attach cannot complete.
 

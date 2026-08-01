@@ -127,7 +127,19 @@ In this mode:
 | Fact | Detail |
 |------|--------|
 | Env contract | Public-only constructed child env plus exact session phantoms for granted model keys |
-| Claude / Pi / Codex / OpenCode | Host login remains preferred; Anthropic/OpenAI env-key clients that honor their base-URL variables use the loopback gateway |
+| Claude / Pi / Codex / OpenCode | Host login remains preferred; empty-backpack Seatbelt grants **narrow RW** to known agent config roots (e.g. `~/.claude`, Claude Application Support trees, `~/.codex`) — never bare `$HOME`, bare `~/Library`, `Library/Keychains`, or `~/.ssh`. Anthropic/OpenAI env-key clients that honor their base-URL variables use the loopback gateway. For Claude/Codex non-help launches: **usable login material** (non-empty `~/.claude/.credentials.json` / Codex auth markers) **or** a **host-matched** gateway is required; config dir alone fails closed. **Claude OAuth:** if `claudeAiOauth.expiresAt` is in the past and there is no Anthropic gateway, ryk **fails closed** (clear stderr) instead of blank-hanging after `sandbox=active`. Help/version-only (`--help` / `-h` / `--version`) skips both missing-auth and stale-OAuth preflights so self-contained `--help` still works. Residual hang risk remains when expiry is missing/unparseable, refresh might work but is not relied on, Keychain-only auth is needed, or the host agent hangs for network reasons |
+| FS scope honesty | When host-config grants are active, receipts say `narrow host-config RW, no bare home` (not bare `no home`) |
+| Redirected stdio residual | Seatbelt does **not** grant host `/var/folders` or classic `/tmp` content under production defaults. Redirecting agent stdout/stderr into those paths can trigger Bun `EPERM fstat` / `process.stderr.fd` crashes (exit **1** after attach). Prefer TTY, pipes, or capture files under the workspace (session tmp is `{workspace}/.orca-tmp`). Ryk detects parent stdio paths under classic tmp and prints a **stdio/fstat** tip (not a re-login lead). |
+
+**Empty-backpack help redirect matrix (macOS, production Seatbelt):**
+
+| Capture | Example | Expected exit | Notes |
+|---------|---------|---------------|-------|
+| Workspace file | `ryk claude --help > .orca-tmp/out.txt 2> .orca-tmp/err.txt` | **0** | Paths under workspace are granted |
+| Pipe / TTY | `ryk claude --help 2>&1 \| cat` | **0** | No ungranted file path on stdio |
+| Classic `/tmp` | `ryk claude --help > /tmp/out.txt 2> /tmp/err.txt` | **1** (residual) | Child Bun fstat denied; ryk note + stdio tip after attach |
+| Stale OAuth non-help | `ryk claude -p '…' --print` with expired `expiresAt` | **4** (preflight) | Stale-login message **before** spawn; no “agent exited with code” note |
+| Keychain residual | Empty backpack does **not** grant `~/Library/Keychains`. Claude OAuth is expected via `~/.claude` + Application Support trees (+ optional gateway). If a build requires Keychain FS access, that remains an intentional residual — use host login outside the box or `--with-host-secrets` (loud) |
 | Broker resolve APIs | `source: broker` grants resolve in the parent session store; only the minted phantom reaches the child |
 | Provider gateway | Fixed upstream hosts only; absolute-form/caller-selected destinations and unminted phantoms are denied |
 | Network proxy | CONNECT policy proxy is separate; current route-forced proxy + provider gateway combination fails closed |

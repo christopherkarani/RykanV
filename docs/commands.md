@@ -52,8 +52,36 @@ Interactive Ask mode prompts in plain language: **Once** (this invocation), **Al
 
 ## Shims And Wrappers
 
-PATH shims cover shells, package managers, network tools, Python/Node, SSH/SCP/Netcat, PowerShell, and cmd wrappers. They are wrapper-level coverage, not transparent OS interception.
+PATH shims cover shells, package managers, network tools, Python/Node, SSH/SCP/Netcat, PowerShell, and cmd wrappers. They are **wrapper-level coverage only**, not transparent OS command interception. Absolute paths (for example `/usr/bin/curl`) skip the shim directory; OS filesystem and network attach still apply to those paths when the sandbox is active.
+
+## Session sandbox grade
+
+Protected launches export **`ORCA_SESSION_SANDBOX_GRADE`** and print `Session grade: …` on the session banner:
+
+| Value | When |
+|---|---|
+| `strong-mediated` | OS attach + network route-force (typical `ryk pi` / host alias) |
+| `fs-attached` | OS attach without route-force |
+| `wrapper-only` | No OS attach |
+| `unrestricted-escape` | `--network open` or `ORCA_AGENT_NETWORK_DEFAULT=legacy` |
+
+Doctor reports **capability** only; do not treat doctor “partial” strong-sandbox as a live session claim. See `docs/platform-macos.md` and `./scripts/sandbox-stress-regression.sh` for the P1–4 probe pack.
+
+## PATH honesty and tool packs (OS attach)
+
+When an OS sandbox will attach to the agent child (Seatbelt/Landlock materials prepared):
+
+1. **PATH filter (honesty: denylist)** — well-known ungranted host package trees (Homebrew `/opt/homebrew/...`, linuxbrew, Intel Homebrew Cellar/opt) are removed from child `PATH` so tools do not appear runnable and then fail with EPERM. Safe system prefixes (`/usr/bin`, `/bin`, CLT paths), the session shim dir (first), workspace path entries, and parent directories of pack-granted tools are kept. This is **not** full grant-aligned PATH filtering; residual host dirs outside the denylist may still advertise binaries that OS grants deny. Session labels: `ORCA_PATH_FILTER=denylist`.
+2. **Essentials tool pack** — `ORCA_TOOL_PACK=essentials|none` (default **essentials** under attach; set `none` to disable). When essentials is on, ryk resolves existing host files and adds **file-only** `.exec` grants (link path + realpath, never bare `$HOME` or package trees):
+   - `rg`, `fd`, `jq` (when present on host PATH)
+   - project `./scripts/zig` when present, else `zig` on PATH
+   - `git` (so shim + real binary can exec)
+   - Cap: ≤16 file grants (SBPL size bound)
+
+If a pack tool is not installed on the host, it is simply absent (not granted). Prefer “command not found” after PATH honesty over silent EPERM from an ungranted brew tree.
+
+**Homebrew residual:** binaries under `/opt/homebrew/...` get **file-only** `.exec` plus narrow formula/dylib RO when `otool` is available, but PATH still **drops** brew package dirs (denylist honesty). A brew-linked tool may still fail with dyld/EPERM if invoked by absolute Cellar path and linked libs cannot fully load under Seatbelt’s Data-volume deny. Prefer system or workspace installs of `rg`/`fd`/`jq` when available; pack RO for brew dylibs is best-effort, not a broad brew tree grant.
 
 ## Limitations
 
-Commands that bypass the ryk session, use absolute paths outside shim coverage, or run under privileged bypasses may avoid wrapper mediation unless the platform backend provides stronger enforcement.
+Commands that bypass the ryk session, use absolute paths outside shim coverage, or run under privileged bypasses may avoid **wrapper** mediation. OS attach (FS grants, network route-force) still constrains absolute-path binaries when attach succeeded. Shims are not OS command control.

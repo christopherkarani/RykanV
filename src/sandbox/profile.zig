@@ -1,14 +1,15 @@
 //! OS-filesystem sandbox profile model (P1-U).
 //!
-//! Compiles a deterministic grant list: workspace RW (minus trusted Orca control
-//! roots; control remains readable / write-deny), system RO prefixes, optional
-//! classic tmp when `include_tmp` — never a broad $HOME grant and never automatic
-//! bare `/tmp` on production defaults (session temp is workspace-scoped).
-//! No Landlock/Seatbelt apply lives here; this is the portable grant model only.
+//! Compiles a deterministic grant list: workspace RW (minus trusted control roots
+//! `{workspace}/.orca` and `{workspace}/.git`; control remains readable / write-deny),
+//! system RO prefixes, optional classic tmp when `include_tmp` — never a broad $HOME
+//! grant and never automatic bare `/tmp` on production defaults (session temp is
+//! workspace-scoped). No Landlock/Seatbelt apply lives here; this is the portable
+//! grant model only.
 //!
 //! Grant queries (`isAgentWritable`, `hasGrant`, path math) are pure over the
 //! compiled in-memory model. The sole intentional FS I/O is
-//! `validateControlRootsOnDisk` (symlink / non-directory control-root check),
+//! `validateControlRootsOnDisk` (symlink / non-dir-or-file control-root check),
 //! which is opt-in at apply time — do not treat the module as pure overall.
 
 const std = @import("std");
@@ -37,7 +38,7 @@ pub const CompileOptions = struct {
     /// Absolute workspace root. Relative or empty → fail closed.
     workspace_root: []const u8,
     /// Extra trusted control roots (absolute, or relative to workspace).
-    /// Always combined with `{workspace}/.orca`.
+    /// Always combined with `{workspace}/.orca` and `{workspace}/.git`.
     control_roots: []const []const u8 = &.{},
     /// When true, add explicit RW grants for classic platform temp trees
     /// (`tmp_path` plus `defaultTmpPrefixes`). **Default false:** production
@@ -59,6 +60,15 @@ pub const CompileOptions = struct {
     /// directory trees. `compileProfile` rejects filesystem-root exec (`InvalidExecPath`);
     /// apply layers re-check file-ness (Seatbelt `literal`, Landlock regular-file gate).
     exec_paths: []const []const u8 = &.{},
+    /// Absolute paths granted as `.ro` trees (Seatbelt/Landlock subpath read).
+    /// Optional extra RO trees beyond system prefixes — never bare `$HOME` or `/`.
+    /// `compileProfile` rejects filesystem root (`InvalidRoPath`).
+    ro_paths: []const []const u8 = &.{},
+    /// Absolute paths granted as `.rw` trees for narrow host-agent config roots
+    /// (e.g. `$HOME/.claude`, Application Support Claude). Never bare `$HOME` or `/`.
+    /// `compileProfile` rejects filesystem root (`InvalidRwPath`). Callers must
+    /// filter forbidden paths (`.ssh`, bare home) before compile.
+    host_rw_paths: []const []const u8 = &.{},
     /// Deny workspace `.env` / `.env.*` content at the OS sandbox layer.
     /// Exact safe templates remain readable: `.env.example`, `.env.sample`,
     /// and `.env.template`.
@@ -75,6 +85,9 @@ pub const CompiledProfile = struct {
     control_roots: []const []const u8,
     /// Whether backends must carve workspace secret-form files out of grants.
     protect_workspace_secrets: bool = false,
+    /// True when at least one narrow host-agent config tree was compiled as RW
+    /// (e.g. `$HOME/.claude`). Not bare `$HOME`. Used for FS scope honesty.
+    has_host_config_rw: bool = false,
     /// Deterministic serialization used for hashing (owned).
     canonical_bytes: []const u8,
     /// Lowercase hex SHA-256 of `canonical_bytes`.
@@ -145,39 +158,25 @@ pub const CompiledProfile = struct {
     /// content-readable under the parent workspace grant in the pure model
     /// (Landlock RO expand / Seatbelt write-deny carve-out) — honesty says
     /// "control write-deny (readable)", not full control isolation.
-    /// `landlock`: workspace child RW, root RO, system RO, platform tmp when granted, no home.
-    /// `seatbelt`: workspace RW, system RO, platform tmp when granted, no home, mach-lookup residual.
-    pub fn effectiveFsScopeSummary(self: *const CompiledProfile, backend: enum { landlock, seatbelt }) []const u8 {
+    /// `landlock`: workspace child RW, root RO, system RO, platform tmp when granted, no bare home.
+    /// `seatbelt`: workspace RW, system RO, platform tmp when granted, no bare home, mach-lookup residual.
+    /// When host-config RW trees are granted, summary says
+    /// `narrow host-config RW, no bare home` instead of bare `no home`.
+    pub fn effectiveFsScopeSummary(self: *const CompiledProfile, backend: FsScopeBackend) []const u8 {
         const has_tmp = blk: {
             for (self.grants) |g| {
                 if (g.mode == .rw and isClassicTmpPath(g.path)) break :blk true;
             }
             break :blk false;
         };
-        // Protect-on carves secret-form names (and hardlink aliases on macOS
-        // prepare / Linux FUSE) out of the workspace RW grant — surface that.
-        if (self.protect_workspace_secrets) {
-            return switch (backend) {
-                .landlock => if (has_tmp)
-                    "workspace child RW (env secret forms denied), root RO, system RO, platform tmp RW, no home, control write-deny (readable)"
-                else
-                    "workspace child RW (env secret forms denied), root RO, system RO, no home, control write-deny (readable)",
-                .seatbelt => if (has_tmp)
-                    "workspace RW (env secret forms denied), system RO, platform tmp RW, no home, control write-deny (readable), mach-lookup residual"
-                else
-                    "workspace RW (env secret forms denied), system RO, no home, control write-deny (readable), mach-lookup residual",
-            };
-        }
-        return switch (backend) {
-            .landlock => if (has_tmp)
-                "workspace child RW, root RO, system RO, platform tmp RW, no home, control write-deny (readable)"
-            else
-                "workspace child RW, root RO, system RO, no home, control write-deny (readable)",
-            .seatbelt => if (has_tmp)
-                "workspace RW, system RO, platform tmp RW, no home, control write-deny (readable), mach-lookup residual"
-            else
-                "workspace RW, system RO, no home, control write-deny (readable), mach-lookup residual",
-        };
+        // Static literals keep receipt bytes stable. Single decision helper so
+        // protect × host × tmp × backend cannot desync across copy-pasted trees.
+        return composeEffectiveFsScopeSummary(
+            backend,
+            self.protect_workspace_secrets,
+            self.has_host_config_rw,
+            has_tmp,
+        );
     }
 
     /// True if any grant is exactly `home` (broad HOME). Workspace *under* home is fine.
@@ -189,9 +188,11 @@ pub const CompiledProfile = struct {
         return false;
     }
 
-    /// Fail closed when a control root exists on disk as a symlink or non-directory.
-    /// Missing control roots are allowed (parent may create them later). Path-string
-    /// isolation alone cannot protect a control tree that is an alias into RW space (F-1).
+    /// Fail closed when a control root exists on disk as a symlink or non-dir/file.
+    /// Missing control roots are allowed (parent may create them later). Existing
+    /// regular **files** are allowed (host-config authority paths, gitdir files).
+    /// Path-string isolation alone cannot protect a control tree that is an alias
+    /// into RW space (F-1).
     pub fn validateControlRootsOnDisk(self: *const CompiledProfile, io: std.Io) error{InvalidControlRoot}!void {
         for (self.control_roots) |root| {
             try assertControlRootSafe(io, root);
@@ -207,7 +208,9 @@ pub const CompiledProfile = struct {
     }
 };
 
-/// True when `path` exists and is unsafe as a control root (symlink or non-dir).
+/// True when `path` exists and is unsafe as a control root.
+/// Allowed: missing, existing regular file (not symlink), existing directory (not symlink).
+/// Rejected: symlink, socket/fifo/device/other kinds, open/stat failures.
 fn assertControlRootSafe(io: std.Io, path: []const u8) error{InvalidControlRoot}!void {
     if (path.len == 0) return error.InvalidControlRoot;
 
@@ -217,23 +220,36 @@ fn assertControlRootSafe(io: std.Io, path: []const u8) error{InvalidControlRoot}
     if (std.Io.Dir.readLinkAbsolute(io, path, &link_buf)) |_| {
         return error.InvalidControlRoot;
     } else |err| switch (err) {
-        error.FileNotFound => return, // absent is ok until parent creates a real directory
+        error.FileNotFound => return, // absent is ok (path-based deny intent; parent may create)
         error.NotLink => {},
         // Other errors (access, loop, name too long): fail closed for control safety.
         else => return error.InvalidControlRoot,
     }
 
-    // Existing non-symlink path must be a directory (not a file/socket/etc.).
-    var dir = std.Io.Dir.openDirAbsolute(io, path, .{ .follow_symlinks = false }) catch {
-        return error.InvalidControlRoot;
-    };
-    dir.close(io);
+    // Prefer directory open without following symlinks.
+    if (std.Io.Dir.openDirAbsolute(io, path, .{ .follow_symlinks = false })) |dir| {
+        dir.close(io);
+        return;
+    } else |_| {}
+
+    // Existing regular file is a valid control root (authority config files, gitdir).
+    const file = std.Io.Dir.openFileAbsolute(io, path, .{
+        .path_only = true,
+        .follow_symlinks = false,
+    }) catch return error.InvalidControlRoot;
+    defer file.close(io);
+    const st = file.stat(io) catch return error.InvalidControlRoot;
+    if (st.kind != .file) return error.InvalidControlRoot;
 }
 
 /// Default system read-only prefixes (no home, no /tmp, no broad data volume).
 ///
 /// macOS: never grant bare `/System` (covers `/System/Volumes/Data` homes/secrets)
-/// or bare `/Library` (keychain / host config). Only sealed framework/dyld trees.
+/// or bare `/Library` (keychain / host config). Only sealed framework/dyld trees
+/// plus **narrow** DNS/TLS leaves under `/etc` and `/private/etc` (not bare `/etc`).
+/// Without hosts/resolv/ssl, agent HTTPS dies with getaddrinfo ENOTFOUND and
+/// LibreSSL fopen of openssl.cnf — sockets can be "unrestricted" while name
+/// resolution and cert loading still fail closed on FS.
 /// Linux: include `/lib64`, `/etc`, `/dev`, and narrow `/proc/self` +
 /// `/proc/thread-self` for dynlinker / NSS / devices / self-procfs under Landlock
 /// Never bare `/proc` (same-uid peer environ/cmdline). `/dev` stays
@@ -251,6 +267,17 @@ pub fn defaultSystemRoPrefixes() []const []const u8 {
             // Framework surface only — never bare `/Library` (keychain/config).
             "/Library/Frameworks",
             "/Library/Apple",
+            // DNS: hosts + resolv.conf (symlink → /private/var/run/resolv.conf).
+            // Both Users-form /etc and firmlink /private/etc so open succeeds.
+            "/etc/hosts",
+            "/private/etc/hosts",
+            "/etc/resolv.conf",
+            "/private/etc/resolv.conf",
+            "/var/run/resolv.conf",
+            "/private/var/run/resolv.conf",
+            // TLS: LibreSSL/curl/openssl.cnf + CA bundle (not bare /etc).
+            "/etc/ssl",
+            "/private/etc/ssl",
         },
         else => &[_][]const u8{
             "/usr",
@@ -319,6 +346,70 @@ pub fn defaultTmpPrefixes() []const []const u8 {
         else => &[_][]const u8{
             "/tmp",
             "/var/tmp",
+        },
+    };
+}
+
+/// Backend tag for operator-facing FS scope receipt strings.
+pub const FsScopeBackend = enum { landlock, seatbelt };
+
+/// Compose operator-facing FS scope text from ordered fragments.
+/// Token order is load-bearing for receipt honesty tests — keep stable.
+fn composeEffectiveFsScopeSummary(
+    backend: FsScopeBackend,
+    protect_workspace_secrets: bool,
+    has_host_config_rw: bool,
+    has_tmp: bool,
+) []const u8 {
+    // Fragment keys (backend × protect × host × tmp) — one table, no nested copy-paste trees.
+    // Workspace / system / control are always present; home phrase and optional tokens vary.
+    const protect = protect_workspace_secrets;
+    const host = has_host_config_rw;
+    const tmp = has_tmp;
+    return switch (backend) {
+        .landlock => switch (protect) {
+            true => switch (host) {
+                true => if (tmp)
+                    "workspace child RW (env secret forms denied), root RO, system RO, platform tmp RW, narrow host-config RW, no bare home, control write-deny (readable)"
+                else
+                    "workspace child RW (env secret forms denied), root RO, system RO, narrow host-config RW, no bare home, control write-deny (readable)",
+                false => if (tmp)
+                    "workspace child RW (env secret forms denied), root RO, system RO, platform tmp RW, no home, control write-deny (readable)"
+                else
+                    "workspace child RW (env secret forms denied), root RO, system RO, no home, control write-deny (readable)",
+            },
+            false => switch (host) {
+                true => if (tmp)
+                    "workspace child RW, root RO, system RO, platform tmp RW, narrow host-config RW, no bare home, control write-deny (readable)"
+                else
+                    "workspace child RW, root RO, system RO, narrow host-config RW, no bare home, control write-deny (readable)",
+                false => if (tmp)
+                    "workspace child RW, root RO, system RO, platform tmp RW, no home, control write-deny (readable)"
+                else
+                    "workspace child RW, root RO, system RO, no home, control write-deny (readable)",
+            },
+        },
+        .seatbelt => switch (protect) {
+            true => switch (host) {
+                true => if (tmp)
+                    "workspace RW (env secret forms denied), system RO, platform tmp RW, narrow host-config RW, no bare home, control write-deny (readable), mach-lookup residual"
+                else
+                    "workspace RW (env secret forms denied), system RO, narrow host-config RW, no bare home, control write-deny (readable), mach-lookup residual",
+                false => if (tmp)
+                    "workspace RW (env secret forms denied), system RO, platform tmp RW, no home, control write-deny (readable), mach-lookup residual"
+                else
+                    "workspace RW (env secret forms denied), system RO, no home, control write-deny (readable), mach-lookup residual",
+            },
+            false => switch (host) {
+                true => if (tmp)
+                    "workspace RW, system RO, platform tmp RW, narrow host-config RW, no bare home, control write-deny (readable), mach-lookup residual"
+                else
+                    "workspace RW, system RO, narrow host-config RW, no bare home, control write-deny (readable), mach-lookup residual",
+                false => if (tmp)
+                    "workspace RW, system RO, platform tmp RW, no home, control write-deny (readable), mach-lookup residual"
+                else
+                    "workspace RW, system RO, no home, control write-deny (readable), mach-lookup residual",
+            },
         },
     };
 }
@@ -396,7 +487,21 @@ pub fn compileProfile(allocator: std.mem.Allocator, options: CompileOptions) !Co
         try appendUniqueExecGrant(&grants_list, allocator, raw_exec);
     }
 
-    // Control roots: always workspace/.orca plus any listed roots.
+    // Optional extra RO trees — never bare HOME or `/`.
+    for (options.ro_paths) |raw_ro| {
+        try appendUniqueRoGrant(&grants_list, allocator, raw_ro);
+    }
+
+    // Host-agent config RW trees (e.g. $HOME/.claude) — never bare HOME or `/`.
+    // Dedup against existing workspace RW is handled by appendUniqueHostRwGrant.
+    var has_host_config_rw = false;
+    for (options.host_rw_paths) |raw_rw| {
+        try appendUniqueHostRwGrant(&grants_list, allocator, raw_rw);
+        has_host_config_rw = true;
+    }
+
+    // Control roots: always workspace/.orca and workspace/.git plus any listed roots.
+    // Both match policy/builtin files.write deny; OS attach must not leave .git agent-writable.
     var control_list: std.ArrayList([]const u8) = .empty;
     errdefer {
         for (control_list.items) |c| allocator.free(c);
@@ -404,11 +509,14 @@ pub fn compileProfile(allocator: std.mem.Allocator, options: CompileOptions) !Co
     }
 
     {
-        const default_control = try joinAbsolute(allocator, workspace_root, ".orca");
-        control_list.append(allocator, default_control) catch |err| {
-            allocator.free(default_control);
-            return err;
-        };
+        const default_controls = [_][]const u8{ ".orca", ".git" };
+        for (default_controls) |name| {
+            const default_control = try joinAbsolute(allocator, workspace_root, name);
+            control_list.append(allocator, default_control) catch |err| {
+                allocator.free(default_control);
+                return err;
+            };
+        }
     }
 
     for (options.control_roots) |raw| {
@@ -466,6 +574,7 @@ pub fn compileProfile(allocator: std.mem.Allocator, options: CompileOptions) !Co
         .grants = grants,
         .control_roots = control_roots,
         .protect_workspace_secrets = options.protect_workspace_secrets,
+        .has_host_config_rw = has_host_config_rw,
         .canonical_bytes = canonical_bytes,
         .hash_hex = hash_hex,
     };
@@ -621,6 +730,43 @@ fn appendUniqueExecGrant(
     try grants_list.append(allocator, .{ .path = canon, .mode = .exec });
 }
 
+/// Append a unique `.ro` grant for a directory (or file) tree. Fail closed on `/`.
+/// Does not open the path (pure compile). Callers filter bare HOME / `.ssh` first.
+fn appendUniqueRoGrant(
+    grants_list: *std.ArrayList(PathGrant),
+    allocator: std.mem.Allocator,
+    raw_path: []const u8,
+) !void {
+    const canon = try canonicalizeAbsolute(allocator, raw_path);
+    errdefer allocator.free(canon);
+    if (canon.len == 1 and canon[0] == '/') return error.InvalidRoPath;
+    for (grants_list.items) |g| {
+        if (pathEqual(g.path, canon) and g.mode == .ro) {
+            allocator.free(canon);
+            return;
+        }
+    }
+    try grants_list.append(allocator, .{ .path = canon, .mode = .ro });
+}
+
+/// Append a unique `.rw` grant for a host-agent config tree. Fail closed on `/`.
+fn appendUniqueHostRwGrant(
+    grants_list: *std.ArrayList(PathGrant),
+    allocator: std.mem.Allocator,
+    raw_path: []const u8,
+) !void {
+    const canon = try canonicalizeAbsolute(allocator, raw_path);
+    errdefer allocator.free(canon);
+    if (canon.len == 1 and canon[0] == '/') return error.InvalidRwPath;
+    for (grants_list.items) |g| {
+        if (pathEqual(g.path, canon) and g.mode == .rw) {
+            allocator.free(canon);
+            return;
+        }
+    }
+    try grants_list.append(allocator, .{ .path = canon, .mode = .rw });
+}
+
 fn pathLessThan(_: void, a: []const u8, b: []const u8) bool {
     return std.mem.order(u8, a, b) == .lt;
 }
@@ -731,6 +877,29 @@ fn serializeCanonical(
 
 // --- tests (P1-U) ----------------------------------------------------------------
 
+test "macOS default system RO includes DNS and TLS leaves not bare /etc" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var compiled = try compileProfile(allocator, .{
+        .workspace_root = "/tmp/orca-profile-dns-tls-ws",
+        // null → production defaults
+        .system_ro_prefixes = null,
+    });
+    defer compiled.deinit();
+
+    try std.testing.expect(compiled.hasGrant("/private/etc/ssl", .ro));
+    try std.testing.expect(compiled.hasGrant("/etc/ssl", .ro));
+    try std.testing.expect(compiled.hasGrant("/private/etc/hosts", .ro));
+    try std.testing.expect(compiled.hasGrant("/private/var/run/resolv.conf", .ro));
+    try std.testing.expect(compiled.isGrantedReadable("/private/etc/ssl/cert.pem"));
+    try std.testing.expect(compiled.isGrantedReadable("/private/etc/hosts"));
+    // Never bare /etc content grant.
+    try std.testing.expect(!compiled.hasGrant("/etc", .ro));
+    try std.testing.expect(!compiled.hasGrant("/private/etc", .ro));
+    try std.testing.expect(!compiled.isGrantedReadable("/etc/passwd"));
+    try std.testing.expect(!compiled.isGrantedReadable("/private/etc/passwd"));
+}
+
 test "P1-U-01 workspace grant is RW for absolute workspace" {
     const allocator = std.testing.allocator;
     const ws = "/tmp/orca-profile-ws-unit";
@@ -781,12 +950,39 @@ test "P1-U-04 trusted Orca state carve-out is not agent-writable" {
     try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.orca/policy.yaml"));
     try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.orca/sessions/approvals"));
 
+    // Default workspace/.git is always a control root (parity with policy write deny).
+    try std.testing.expect(profile.isControlPath("/workspace/proj/.git"));
+    try std.testing.expect(profile.isControlPath("/workspace/proj/.git/hooks/pre-commit"));
+    try std.testing.expect(profile.isControlPath("/workspace/proj/.git/config"));
+    try std.testing.expect(profile.isControlPath("/workspace/proj/.git/objects/zz"));
+    try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.git"));
+    try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.git/hooks/pre-commit"));
+    try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.git/config"));
+    try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.git/objects/zz"));
+
     // Extra control root (relative → under workspace).
     try std.testing.expect(profile.isControlPath("/workspace/proj/.orca/extra-control"));
     try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.orca/extra-control/ipc.sock"));
 
     // Ordinary workspace file remains writable.
     try std.testing.expect(profile.isAgentWritable("/workspace/proj/src/app.zig"));
+}
+
+test "default control roots include .orca and .git" {
+    const allocator = std.testing.allocator;
+    var profile = try compileProfile(allocator, .{
+        .workspace_root = "/workspace/proj",
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+    });
+    defer profile.deinit();
+
+    try std.testing.expect(profile.isControlPath("/workspace/proj/.orca"));
+    try std.testing.expect(profile.isControlPath("/workspace/proj/.git"));
+    try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.git/phase2-probe"));
+    try std.testing.expect(profile.isAgentWritable("/workspace/proj/src/foo.zig"));
+    // Control roots stay readable (write-deny only).
+    try std.testing.expect(profile.isGrantedReadable("/workspace/proj/.git/config"));
+    try std.testing.expect(profile.isGrantedReadable("/workspace/proj/.orca/policy.yaml"));
 }
 
 test "P1-U-03 no broad HOME grant" {
@@ -843,6 +1039,89 @@ test "launch exec_paths reject filesystem root" {
         .workspace_root = "/Users/dev/projects/app",
         .system_ro_prefixes = &[_][]const u8{"/usr"},
         .exec_paths = &.{"/"},
+    }));
+}
+
+test "codex system ro_paths compile narrow /etc/codex without bare /etc or HOME" {
+    const allocator = std.testing.allocator;
+    const home = "/Users/dev";
+    const ws = "/Users/dev/projects/app";
+    var compiled = try compileProfile(allocator, .{
+        .workspace_root = ws,
+        .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
+        .ro_paths = &.{ "/etc/codex", "/private/etc/codex" },
+        .host_rw_paths = &.{"/Users/dev/.codex"},
+    });
+    defer compiled.deinit();
+
+    try std.testing.expect(compiled.hasGrant("/etc/codex", .ro));
+    try std.testing.expect(compiled.hasGrant("/private/etc/codex", .ro));
+    try std.testing.expect(compiled.isGrantedReadable("/etc/codex/requirements.toml"));
+    try std.testing.expect(compiled.isGrantedReadable("/private/etc/codex/requirements.toml"));
+    // Not bare /etc content.
+    try std.testing.expect(!compiled.hasGrant("/etc", .ro));
+    try std.testing.expect(!compiled.isGrantedReadable("/etc/passwd"));
+    try std.testing.expect(!compiled.isGrantedReadable("/etc/hosts"));
+    try std.testing.expect(!compiled.grantsHome(home));
+    try std.testing.expect(!compiled.isAgentWritable("/etc/codex"));
+    try std.testing.expect(compiled.hasGrant("/Users/dev/.codex", .rw));
+}
+
+test "host config host_rw_paths compile as RW without HOME or ssh" {
+    const allocator = std.testing.allocator;
+    const home = "/Users/dev";
+    const ws = "/Users/dev/projects/app";
+    const claude_cfg = "/Users/dev/.claude";
+    const claude_share = "/Users/dev/.local/share/claude";
+    const claude_app_support = "/Users/dev/Library/Application Support/Claude";
+    var compiled = try compileProfile(allocator, .{
+        .workspace_root = ws,
+        .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
+        .host_rw_paths = &.{ claude_cfg, claude_share, claude_app_support },
+    });
+    defer compiled.deinit();
+
+    try std.testing.expect(compiled.hasGrant(claude_cfg, .rw));
+    try std.testing.expect(compiled.hasGrant(claude_share, .rw));
+    try std.testing.expect(compiled.hasGrant(claude_app_support, .rw));
+    try std.testing.expect(compiled.isAgentWritable(claude_cfg));
+    try std.testing.expect(compiled.isAgentWritable("/Users/dev/.claude/history.jsonl"));
+    try std.testing.expect(!compiled.grantsHome(home));
+    try std.testing.expect(!compiled.isAgentWritable(home));
+    try std.testing.expect(!compiled.isAgentWritable("/Users/dev/.ssh/id_rsa"));
+    try std.testing.expect(!compiled.isGrantedReadable("/Users/dev/.ssh/id_rsa"));
+    try std.testing.expect(!compiled.isAgentWritable("/Users/dev/Library"));
+    try std.testing.expect(compiled.isGrantedReadable(claude_cfg));
+    try std.testing.expect(compiled.isGrantedReadable("/Users/dev/.claude/settings.json"));
+    try std.testing.expect(compiled.has_host_config_rw);
+    const seatbelt_scope = compiled.effectiveFsScopeSummary(.seatbelt);
+    try std.testing.expect(std.mem.indexOf(u8, seatbelt_scope, "narrow host-config RW, no bare home") != null);
+    try std.testing.expect(std.mem.indexOf(u8, seatbelt_scope, "no home,") == null or
+        std.mem.indexOf(u8, seatbelt_scope, "no bare home") != null);
+    // Bare "no home" without "bare" must not appear as the only home phrase.
+    try std.testing.expect(std.mem.indexOf(u8, seatbelt_scope, "no bare home") != null);
+}
+
+test "effectiveFsScopeSummary without host grants still says no home" {
+    const allocator = std.testing.allocator;
+    var compiled = try compileProfile(allocator, .{
+        .workspace_root = "/Users/dev/projects/app",
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+        .include_tmp = false,
+    });
+    defer compiled.deinit();
+    try std.testing.expect(!compiled.has_host_config_rw);
+    const scope = compiled.effectiveFsScopeSummary(.seatbelt);
+    try std.testing.expect(std.mem.indexOf(u8, scope, "no home") != null);
+    try std.testing.expect(std.mem.indexOf(u8, scope, "narrow host-config RW") == null);
+}
+
+test "host config host_rw_paths reject filesystem root" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(error.InvalidRwPath, compileProfile(allocator, .{
+        .workspace_root = "/Users/dev/projects/app",
+        .system_ro_prefixes = &[_][]const u8{"/usr"},
+        .host_rw_paths = &.{"/"},
     }));
 }
 
@@ -995,6 +1274,7 @@ test "control root real directory is accepted" {
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
     try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".git");
     try ws_tmp.dir.writeFile(io, .{ .sub_path = "neighbor.txt", .data = "ok" });
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
@@ -1007,6 +1287,93 @@ test "control root real directory is accepted" {
     try compiled.validateControlRootsOnDisk(io);
 }
 
+test "control root .git symlink on disk fails closed" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(io, "src");
+    // Real .orca so only the .git symlink fails validation.
+    try ws_tmp.dir.createDirPath(io, ".orca");
+    const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(ws_root);
+
+    const src_path = try std.fs.path.join(allocator, &.{ ws_root, "src" });
+    defer allocator.free(src_path);
+    const git_link = try std.fs.path.join(allocator, &.{ ws_root, ".git" });
+    defer allocator.free(git_link);
+
+    std.Io.Dir.cwd().symLink(io, src_path, git_link, .{}) catch |err| switch (err) {
+        error.PermissionDenied => return error.SkipZigTest,
+        else => return err,
+    };
+
+    var compiled = try compileProfile(allocator, .{
+        .workspace_root = ws_root,
+        .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
+    });
+    defer compiled.deinit();
+
+    try std.testing.expectError(error.InvalidControlRoot, compiled.validateControlRootsOnDisk(io));
+}
+
+// Linked worktrees / some submodules use a gitdir *file* at workspace/.git.
+// Regular files are valid control roots (authority write-deny + gitdir): RO leaf
+// under parent RW expand, not a writable tree. Symlinks still fail closed.
+test "control root .git as gitdir file is accepted" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.writeFile(io, .{ .sub_path = ".git", .data = "gitdir: /tmp/elsewhere/worktrees/wt1\n" });
+    const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(ws_root);
+
+    var compiled = try compileProfile(allocator, .{
+        .workspace_root = ws_root,
+        .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
+    });
+    defer compiled.deinit();
+
+    try compiled.validateControlRootsOnDisk(io);
+}
+
+test "control root regular file (authority path) is accepted" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".git");
+    try ws_tmp.dir.createDirPath(io, ".codex");
+    try ws_tmp.dir.writeFile(io, .{ .sub_path = ".codex/config.toml", .data = "[mcp_servers]\n" });
+    const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(ws_root);
+    const config_path = try std.fs.path.join(allocator, &.{ ws_root, ".codex", "config.toml" });
+    defer allocator.free(config_path);
+
+    var compiled = try compileProfile(allocator, .{
+        .workspace_root = ws_root,
+        .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
+        .control_roots = &[_][]const u8{config_path},
+    });
+    defer compiled.deinit();
+
+    try compiled.validateControlRootsOnDisk(io);
+    try std.testing.expect(compiled.isControlPath(config_path));
+    try std.testing.expect(!compiled.isAgentWritable(config_path));
+}
+
 test "isPathWithin handles filesystem root and prefix boundaries" {
     try std.testing.expect(isPathWithin("/", "/"));
     try std.testing.expect(isPathWithin("/etc", "/"));
@@ -1015,7 +1382,12 @@ test "isPathWithin handles filesystem root and prefix boundaries" {
     try std.testing.expect(!isPathWithin("/workspace2", "/workspace"));
     try std.testing.expect(!isPathWithin("/ws", "/ws/src"));
     try std.testing.expect(!isPathWithin("relative", "/"));
+    // Empty root never matches (including empty path).
     try std.testing.expect(!isPathWithin("/etc", ""));
+    try std.testing.expect(!isPathWithin("", ""));
+    try std.testing.expect(!isPathWithin("", "/"));
+    // Root slash covers absolute descendants only.
+    try std.testing.expect(!isPathWithin("relative/path", "/"));
 }
 
 test "macOS defaults never grant bare /System or data-volume homes" {

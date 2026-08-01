@@ -58,6 +58,42 @@ Use:
 
 Run `orca doctor`. If a feature is `limited`, `wrapper-only`, `observe-only`, or `unavailable`, docs and policies must treat it as weaker than active enforcement.
 
+## Doctor vs session sandbox grade
+
+`ryk doctor` answers **“what can this host do?”** (capability probes). It never means a live agent session is attached (strong sandbox is demoted away from probe-only `active`).
+
+**This session’s** enforcement class is `ORCA_SESSION_SANDBOX_GRADE` / the banner `Session grade:` line (`strong-mediated`, `fs-attached`, `wrapper-only`, `unrestricted-escape`). See `docs/platform-macos.md` and `docs/commands.md`.
+
+## Pi tools fail with malformed JSON / evaluation errors
+
+Protocol failures (timeout, malformed JSON, spawn failure, inconsistent exit) **fail closed for that tool call only**. Pi retries decide/evaluate **once** only for *transient* classes (`timeout`, `malformed_json`, `spawn_failed`, `output_too_large`, `inconsistent_exit`); schema-valid `decision: "error"` is not retried. Messages include a failure **class** token (e.g. `[malformed_json]`). After several consecutive protocol failures, Pi notifies **protocol degraded** once — still fail-closed per call, never silent allow. `allow-with-warning` soft-allows only `spawn_failed` (binary missing); other protocol classes still block. Retry the tool; if it persists, `/ryk-setup` then `/ryk-doctor`. Do not pass blanket `--ci` to interactive decide.
+
+## Sandbox stress regression (P1–4)
+
+After OS sandbox or network changes on a matrix host:
+
+```sh
+./scripts/zig build
+./scripts/sandbox-stress-regression.sh
+# or: ./scripts/sandbox-stress-regression.sh --binary ./zig-out/bin/ryk
+```
+
+Clean **SKIP** (exit 0) when Seatbelt/Landlock attach is unavailable. Exit 1 only on unexpected allows. Safe probes only (no exploit payloads). Distinct from fixture `ryk redteam --ci`.
+
+## Tool not found vs EPERM under OS sandbox
+
+Under attached sessions (`ryk pi`, `ryk claude`, `ryk run --os-sandbox on`, …):
+
+| Symptom | Likely cause | What to do |
+|---|---|---|
+| `command not found` for `rg` / `fd` / `jq` | Tool not on host, or PATH honesty dropped an ungranted package dir | Install the tool, or use a system path; pack only grants files that exist. Set `ORCA_TOOL_PACK=essentials` (default under attach). |
+| `command not found` but tool lives under Homebrew | PATH denylist removed `/opt/homebrew/bin` so the agent does not see a lie | Either install into a kept prefix, rely on essentials pack file grant (pack re-adds the parent of a granted file), or accept absence |
+| EPERM on absolute `/opt/homebrew/bin/...` | Absolute path bypasses shims; OS did not grant that file | Expected — no broad brew tree grants. Use essentials pack or do not invoke absolute brew paths |
+| EPERM on `~/.ssh` / bare `$HOME` | Empty-backpack FS fence | Expected; do not request bare home grants |
+| Shim name works but absolute path differs | Shims are **wrapper-only** | Absolute paths skip PATH shims; OS still enforces FS/network |
+
+Inspect child labels when debugging: `ORCA_PATH_FILTER=denylist`, `ORCA_TOOL_PACK=essentials|none`.
+
 ## MCP Protocol Issues
 
 Ensure server stdout is only newline-delimited JSON-RPC. Send human logs to stderr.

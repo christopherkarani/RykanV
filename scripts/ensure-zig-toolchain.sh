@@ -42,12 +42,17 @@ ZIG_BIN="${INSTALL_ROOT}/${archive}/zig"
 DOWNLOAD_URL="https://ziglang.org/download/${WANTED}/${archive}.tar.xz"
 
 install_zig() {
+  local task_tmp_root tmp
   if [[ -x "${ZIG_BIN}" ]]; then
     return 0
   fi
   echo "Installing Zig ${WANTED} to ${INSTALL_ROOT} ..." >&2
   mkdir -p "${INSTALL_ROOT}"
-  tmp="$(mktemp -d)"
+  # Darwin's bare `mktemp -d` asks confstr for /var/folders even when TMPDIR is
+  # redirected by ryk. An explicit template keeps protected-agent installs on
+  # the workspace session temp that Seatbelt actually grants.
+  task_tmp_root="${TMPDIR:-${TMP:-/tmp}}"
+  tmp="$(mktemp -d "${task_tmp_root%/}/ryk-zig.XXXXXX")"
   trap 'rm -rf "${tmp}"' RETURN
   curl -fsSL "${DOWNLOAD_URL}" -o "${tmp}/zig.tar.xz"
   tar -xJf "${tmp}/zig.tar.xz" -C "${INSTALL_ROOT}"

@@ -162,6 +162,10 @@ fn decideCommandWithPolicy(
     // Parse JSON payload
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, payload_text, .{}) catch |err| {
         try stderr.print("ryk decide: invalid JSON ({s}).\n", .{@errorName(err)});
+        // Machine contract: emit typed fail-closed JSON so Pi can classify/retry.
+        if (!human) {
+            try writeFailClosedJson(stdout, "invalid_json", "ryk decide: invalid JSON payload.");
+        }
         return exit_codes.general;
     };
     defer parsed.deinit();
@@ -171,6 +175,9 @@ fn decideCommandWithPolicy(
     defer allocator.free(root);
     var loaded = core_api.discoverPolicy(io, allocator, explicit_policy_path, root) catch |err| {
         try stderr.print("ryk decide: failed to load policy: {s}\n", .{@errorName(err)});
+        if (!human) {
+            try writeFailClosedJson(stdout, "policy_load_failed", "ryk decide: failed to load policy.");
+        }
         return exit_codes.general;
     };
     defer loaded.deinit();
@@ -178,6 +185,9 @@ fn decideCommandWithPolicy(
     // Evaluate decision
     var result = evaluateDecision(io, allocator, loaded.innerPtr(), kind, parsed.value, ci_mode, root) catch |err| {
         try stderr.print("ryk decide: evaluation failed: {s}\n", .{@errorName(err)});
+        if (!human) {
+            try writeFailClosedJson(stdout, "evaluation_failed", "ryk decide: evaluation failed; fail closed.");
+        }
         return exit_codes.general;
     };
     defer result.deinit(allocator);
@@ -186,7 +196,11 @@ fn decideCommandWithPolicy(
         try writeDecisionHuman(io, allocator, stdout, loaded.mode().toString(), result);
     } else {
         // Frozen machine contract: default output remains byte-identical JSON.
-        try writeDecisionJson(stdout, result);
+        // On encode failure emit a minimal typed error object (never partial garbage).
+        writeDecisionJson(stdout, result) catch {
+            try writeFailClosedJson(stdout, "encode_failed", "ryk decide: failed to encode decision JSON.");
+            return exit_codes.general;
+        };
     }
 
     // Log debug info to stderr only
@@ -507,6 +521,28 @@ fn writeDecisionJson(stdout: anytype, result: DecisionOutput) !void {
         try stdout.writeAll("\n");
     }
     try stdout.writeAll("  ]\n");
+    try stdout.writeAll("}\n");
+}
+
+/// Typed fail-closed JSON for protocol/encode/policy errors (exit general).
+/// Keeps machine consumers schema-valid instead of empty/partial stdout.
+fn writeFailClosedJson(stdout: anytype, error_code: []const u8, message: []const u8) !void {
+    try stdout.writeAll("{\n");
+    try stdout.writeAll("  \"version\": 1,\n");
+    try stdout.writeAll("  \"decision\": \"error\",\n");
+    try stdout.writeAll("  \"risk\": \"unknown\",\n");
+    try stdout.writeAll("  \"category\": \"protocol\",\n");
+    try stdout.writeAll("  \"reason\": ");
+    try writeJsonString(stdout, message);
+    try stdout.writeAll(",\n");
+    try stdout.writeAll("  \"rule\": null,\n");
+    try stdout.writeAll("  \"message\": ");
+    try writeJsonString(stdout, message);
+    try stdout.writeAll(",\n");
+    try stdout.writeAll("  \"error_code\": ");
+    try writeJsonString(stdout, error_code);
+    try stdout.writeAll(",\n");
+    try stdout.writeAll("  \"redactions\": []\n");
     try stdout.writeAll("}\n");
 }
 
@@ -1060,12 +1096,14 @@ test "decide rejects missing required command and file fields" {
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
+    // Typed fail-closed JSON on stdout for machine consumers; human detail on stderr.
     const missing_command = try decideCommand(std.testing.io, .command, &.{
         "--json", "{}",
     }, &stdout_writer, &stderr_writer);
     try std.testing.expect(missing_command != exit_codes.success);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "MissingRequiredField") != null);
-    try std.testing.expectEqualStrings("", stdout_writer.buffered());
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "\"decision\": \"error\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "\"category\": \"protocol\"") != null);
 
     stdout_writer = .fixed(&stdout_buf);
     stderr_writer = .fixed(&stderr_buf);
@@ -1074,7 +1112,7 @@ test "decide rejects missing required command and file fields" {
     }, &stdout_writer, &stderr_writer);
     try std.testing.expect(missing_file_path != exit_codes.success);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "MissingRequiredField") != null);
-    try std.testing.expectEqualStrings("", stdout_writer.buffered());
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "\"decision\": \"error\"") != null);
 
     stdout_writer = .fixed(&stdout_buf);
     stderr_writer = .fixed(&stderr_buf);
@@ -1083,7 +1121,7 @@ test "decide rejects missing required command and file fields" {
     }, &stdout_writer, &stderr_writer);
     try std.testing.expect(missing_tool_name != exit_codes.success);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "MissingRequiredField") != null);
-    try std.testing.expectEqualStrings("", stdout_writer.buffered());
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "\"decision\": \"error\"") != null);
 }
 
 test "decide prompt with fake secret returns warn" {
@@ -1229,7 +1267,7 @@ test "decide ci mode turns ask into block" {
 }
 
 test "decide rejects invalid JSON" {
-    var stdout_buf: [256]u8 = undefined;
+    var stdout_buf: [512]u8 = undefined;
     var stderr_buf: [256]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
@@ -1238,7 +1276,22 @@ test "decide rejects invalid JSON" {
         "--json", "{not json",
     }, &stdout_writer, &stderr_writer);
     try std.testing.expect(code != exit_codes.success);
+    try std.testing.expectEqual(exit_codes.general, code);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "invalid JSON") != null);
+    // Typed fail-closed JSON on stdout (schema-valid for Pi recovery).
+    const out = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"decision\": \"error\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"error_code\": \"invalid_json\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"category\": \"protocol\"") != null);
+}
+
+test "writeFailClosedJson is schema-shaped for machine consumers" {
+    var buf: [512]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try writeFailClosedJson(&writer, "encode_failed", "ryk decide: failed to encode decision JSON.");
+    const out = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"decision\": \"error\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"error_code\": \"encode_failed\"") != null);
 }
 
 test "decide bounded reader rejects oversized payload instead of truncating" {
@@ -1267,6 +1320,7 @@ test "decide rejects inline json payloads over limit" {
 
     const code = try decideCommand(std.testing.io, .prompt, &.{ "--json", payload.items }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.general, code);
+    // Oversize is rejected before evaluation; no typed decision JSON (usage/size guard).
     try std.testing.expectEqualStrings("", stdout_writer.buffered());
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "JSON payload exceeds maximum size") != null);
 }

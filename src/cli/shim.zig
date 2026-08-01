@@ -63,13 +63,13 @@ fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const [
                 .risk_score = 90,
                 .ci_may_proceed = false,
             };
-            var writer = core_api.openAuditWriter(io, allocator, workspace_root, session_id) catch |open_err| {
-                try stderr.print("ryk shim exec: failed to open audit log: {s}\n", .{@errorName(open_err)});
-                return exit_codes.general;
-            };
-            defer writer.deinit();
-            try appendCommandEvent(io, &writer, session_id, .command_attempt, display, null);
-            try appendCommandEvent(io, &writer, session_id, .command_denied, display, decision);
+            // Deny still wins when in-sandbox audit cannot open (control write-deny).
+            var untrusted_audit = openShimAuditBestEffort(io, allocator, workspace_root, session_id, stderr) catch return exit_codes.general;
+            if (untrusted_audit) |*writer| {
+                defer writer.deinit();
+                try appendCommandEvent(io, writer, session_id, .command_attempt, display, null);
+                try appendCommandEvent(io, writer, session_id, .command_denied, display, decision);
+            }
             try stderr.writeAll("ryk shim exec: untrusted ORCA_POLICY_PATH; refusing child-controlled policy override.\n");
             return exit_codes.denial;
         },
@@ -78,6 +78,14 @@ fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const [
     defer selected.deinit();
     const effective_mode = try shimMode(io, allocator, workspace_root, session_id, &selected.policy, env_map);
 
+    // Bind session workspace_root so zigEvaluator does not re-realpath/walk-up
+    // under Seatbelt (second unexpectedErrno residual when audit_options was null).
+    const shim_audit_opts = shell_eval.ShellAuditOptions{
+        .io = io,
+        .workspace_root = workspace_root,
+        .event_source = "shim",
+        .session_id = session_id,
+    };
     var command_decision = try shell_eval.evaluateCommand(
         allocator,
         effective_mode,
@@ -85,7 +93,7 @@ fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const [
         workspace_root,
         shell_evaluator,
         null,
-        null,
+        shim_audit_opts,
         selected.policy.commands.allow,
     );
     defer command_decision.deinit(allocator);
@@ -107,13 +115,13 @@ fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const [
                 .ci_may_proceed = true,
             };
         } else {
-            var writer = core_api.openAuditWriter(io, allocator, workspace_root, session_id) catch |open_err| {
-                try stderr.print("ryk shim exec: failed to open audit log: {s}\n", .{@errorName(open_err)});
-                return exit_codes.general;
-            };
-            defer writer.deinit();
-            try appendCommandEvent(io, &writer, session_id, .command_attempt, display, null);
-            try appendCommandEvent(io, &writer, session_id, .command_denied, display, command_decision.decision);
+            // Deny path: still deny when audit open fails under control write-deny.
+            var deny_audit = openShimAuditBestEffort(io, allocator, workspace_root, session_id, stderr) catch return exit_codes.general;
+            if (deny_audit) |*writer| {
+                defer writer.deinit();
+                try appendCommandEvent(io, writer, session_id, .command_attempt, display, null);
+                try appendCommandEvent(io, writer, session_id, .command_denied, display, command_decision.decision);
+            }
             try stderr.print("ryk shim exec: command denied: {s}\n", .{command_decision.decision.reason});
             const command_display = try intercept.commands.displayArgvRedactedAlloc(allocator, command_argv);
             defer allocator.free(command_display);
@@ -138,13 +146,13 @@ fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const [
     };
     defer allocator.free(real_binary);
 
-    var writer = core_api.openAuditWriter(io, allocator, workspace_root, session_id) catch |open_err| {
-        try stderr.print("ryk shim exec: failed to open audit log: {s}\n", .{@errorName(open_err)});
-        return exit_codes.general;
-    };
-    defer writer.deinit();
-    try appendCommandEvent(io, &writer, session_id, .command_attempt, display, null);
-    try appendCommandEvent(io, &writer, session_id, .command_allowed, display, final_decision);
+    // Allow path: still resolve + spawn when audit cannot open under control write-deny.
+    var allow_audit = openShimAuditBestEffort(io, allocator, workspace_root, session_id, stderr) catch return exit_codes.general;
+    if (allow_audit) |*writer| {
+        defer writer.deinit();
+        try appendCommandEvent(io, writer, session_id, .command_attempt, display, null);
+        try appendCommandEvent(io, writer, session_id, .command_allowed, display, final_decision);
+    }
 
     var child_argv = try allocator.alloc([]const u8, command_argv.len);
     defer allocator.free(child_argv);
@@ -171,6 +179,38 @@ fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const [
     return switch (term) {
         .exited => |code| code,
         .signal, .stopped, .unknown => exit_codes.child_failure,
+    };
+}
+
+/// True when audit open failed because the sandboxed process cannot write the
+/// control root (`workspace/.orca`) — intentional Seatbelt residual, not a
+/// programming error. Do not kill the shim solely for this.
+fn isControlWriteDenyAuditError(err: anyerror) bool {
+    return err == error.PermissionDenied or err == error.AccessDenied;
+}
+
+/// Best-effort session audit open for in-sandbox shims.
+/// - On control write-deny residuals: warn once-style on stderr and return null
+///   (allow path continues; deny path still returns denial).
+/// - On other open failures: message printed; returns `error.ShimAuditOpenFailed`
+///   so callers map to general exit (not silent swallow of OOM/corruption).
+fn openShimAuditBestEffort(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    stderr: anytype,
+) error{ShimAuditOpenFailed}!?core_api.AuditWriter {
+    return core_api.openAuditWriter(io, allocator, workspace_root, session_id) catch |open_err| {
+        if (isControlWriteDenyAuditError(open_err)) {
+            stderr.print(
+                "ryk shim exec: audit append skipped (control write-deny residual: {s}); continuing without in-shim audit.\n",
+                .{@errorName(open_err)},
+            ) catch {};
+            return null;
+        }
+        stderr.print("ryk shim exec: failed to open audit log: {s}\n", .{@errorName(open_err)}) catch {};
+        return error.ShimAuditOpenFailed;
     };
 }
 
@@ -596,6 +636,63 @@ test "shim ignores child ORCA_MODE softening when session mode is strict" {
     try std.testing.expectEqual(exit_codes.denial, code);
 }
 
+test "shim allow continues when audit open is control write-deny" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var fx = try prepareShimExecFixture(.{
+        .mode = "observe",
+        .real_bin = "true",
+        .shim_bin = "true",
+    });
+    defer fx.deinit();
+
+    // Simulate Seatbelt control write-deny: session audit is no longer writable.
+    try makeSessionAuditNotWritable(fx.root, fx.session_id);
+
+    var stderr_buf: [2048]u8 = undefined;
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try execWithEnv(std.testing.io, std.testing.allocator, &.{"true"}, &fx.env_map, &stderr_writer, shell_eval.mockDaemonAllowEvaluator);
+    try std.testing.expectEqual(exit_codes.success, code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "control write-deny") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "failed to open audit log") == null);
+}
+
+test "shim deny still denies when audit open is control write-deny" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var fx = try prepareShimExecFixture(.{
+        .mode = "strict",
+        .real_bin = "rm",
+        .real_script_body = "exit 42\n",
+        .policy_path = "builtin:strict",
+        .record_builtin_policy = true,
+    });
+    defer fx.deinit();
+
+    try makeSessionAuditNotWritable(fx.root, fx.session_id);
+
+    var stderr_buf: [2048]u8 = undefined;
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try execWithEnv(
+        std.testing.io,
+        std.testing.allocator,
+        &.{ "rm", "-rf", "/" },
+        &fx.env_map,
+        &stderr_writer,
+        shell_eval.mockDaemonDenyEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.denial, code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "command denied") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "control write-deny") != null);
+    // Must not surface as a bare "failed to open audit log" general failure.
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "failed to open audit log") == null);
+}
+
+test "isControlWriteDenyAuditError classifies access residuals only" {
+    try std.testing.expect(isControlWriteDenyAuditError(error.PermissionDenied));
+    try std.testing.expect(isControlWriteDenyAuditError(error.AccessDenied));
+    try std.testing.expect(!isControlWriteDenyAuditError(error.FileNotFound));
+    try std.testing.expect(!isControlWriteDenyAuditError(error.OutOfMemory));
+}
+
 test "shim fails closed on daemon evaluate failures" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
 
@@ -831,4 +928,17 @@ fn readSessionEvents(allocator: std.mem.Allocator, root: []const u8, session_id:
     const events_path = try std.fs.path.join(allocator, &.{ root, ".orca", "sessions", session_id, "events.jsonl" });
     defer allocator.free(events_path);
     return try std.Io.Dir.cwd().readFileAlloc(std.testing.io, events_path, allocator, .limited(64 * 1024));
+}
+
+/// Drop write bits on the session events file so openExisting (O_RDWR) fails with
+/// AccessDenied/PermissionDenied — same residual class as Seatbelt control write-deny.
+fn makeSessionAuditNotWritable(root: []const u8, session_id: []const u8) !void {
+    const events_path = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", "sessions", session_id, "events.jsonl" });
+    defer std.testing.allocator.free(events_path);
+    try std.Io.Dir.cwd().setFilePermissions(
+        std.testing.io,
+        events_path,
+        std.Io.File.Permissions.fromMode(0o444),
+        .{},
+    );
 }

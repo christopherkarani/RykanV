@@ -209,7 +209,84 @@ export type OrcaDecision =
 	| { kind: "deny"; reason: string; response: unknown }
 	| { kind: "ask"; reason: string; response: unknown }
 	| { kind: "warn"; reason: string; response: unknown }
-	| { kind: "error"; reason: string; response?: unknown; error?: Error };
+	| {
+			kind: "error";
+			reason: string;
+			response?: unknown;
+			error?: Error;
+			/** Protocol failure class token for recovery UX (never means allow). */
+			failureClass?: ProtocolFailureClass;
+	  };
+
+/** Classify decide/evaluate protocol failures for recovery UX (Phase 5). */
+export type ProtocolFailureClass =
+	| "timeout"
+	| "malformed_json"
+	| "spawn_failed"
+	| "inconsistent_exit"
+	| "output_too_large"
+	| "unexpected";
+
+/** Consecutive protocol failures before one-shot session degraded notify. */
+export const PROTOCOL_DEGRADED_THRESHOLD = 3;
+
+/**
+ * Build a fail-closed reason that always includes a bracketed class token.
+ * Never used to allow; diagnosis only.
+ */
+export function formatProtocolErrorReason(
+	failureClass: ProtocolFailureClass,
+	detail: string,
+): string {
+	const cleaned = sanitizeVisibleText(detail);
+	return `[${failureClass}] ${cleaned}`;
+}
+
+/** Extract class token from a reason string, if present. */
+export function protocolFailureClassFromReason(
+	reason: string,
+): ProtocolFailureClass | undefined {
+	const match = /^\[([a-z_]+)\]/.exec(reason.trim());
+	if (!match) return undefined;
+	const token = match[1];
+	if (
+		token === "timeout" ||
+		token === "malformed_json" ||
+		token === "spawn_failed" ||
+		token === "inconsistent_exit" ||
+		token === "output_too_large" ||
+		token === "unexpected"
+	) {
+		return token;
+	}
+	return undefined;
+}
+
+/**
+ * Transient protocol failures warrant one automatic retry (spawn/JSON glitches).
+ * Deterministic `decision: "error"` / unexpected responses do not retry.
+ */
+export function isTransientProtocolFailure(
+	failureClass: ProtocolFailureClass | undefined,
+): boolean {
+	return (
+		failureClass === "timeout" ||
+		failureClass === "malformed_json" ||
+		failureClass === "spawn_failed" ||
+		failureClass === "output_too_large" ||
+		failureClass === "inconsistent_exit"
+	);
+}
+
+/**
+ * `allow-with-warning` may soft-allow only true binary unavailability.
+ * Protocol corruption / typed decision errors always fail closed (Phase 5).
+ */
+export function allowWithWarningPermitsProtocolClass(
+	failureClass: ProtocolFailureClass | undefined,
+): boolean {
+	return failureClass === "spawn_failed";
+}
 
 type OrcaEvaluateResponse = {
 	decision?: string;
@@ -252,6 +329,10 @@ type SessionState = {
 	bypass: boolean;
 	status: SetupResult["status"];
 	bootstrap?: Promise<SetupResult>;
+	/** Consecutive decide/evaluate protocol failures (reset on non-error decision). */
+	protocolFailures: number;
+	/** True after one-shot degraded notify for this session. */
+	protocolDegradedNotified: boolean;
 };
 
 export type OrcaExtensionOptions = {
@@ -444,7 +525,7 @@ export function resolveToolPath(pathInput: string, ctx: PiContext): string {
 	return resolve(resolveCwd(ctx.cwd), trimmed);
 }
 
-export async function runOrcaEvaluate(
+async function runOrcaEvaluateOnce(
 	request: OrcaEvaluateRequest,
 	options: Required<
 		Pick<OrcaExtensionOptions, "orcaBin" | "spawn" | "timeoutMs">
@@ -461,22 +542,45 @@ export async function runOrcaEvaluate(
 	);
 
 	if (result.timedOut) {
-		return { kind: "error", reason: "ryk evaluation timed out." };
+		return {
+			kind: "error",
+			failureClass: "timeout",
+			reason: formatProtocolErrorReason(
+				"timeout",
+				"ryk evaluation timed out.",
+			),
+		};
 	}
 
 	if (result.error) {
-		const reason =
-			result.error.message === "ryk output exceeded maximum size"
-				? "ryk output exceeded maximum size."
-				: "ryk is unavailable.";
-		return { kind: "error", reason, error: result.error };
+		const oversized =
+			result.error.message === "ryk output exceeded maximum size";
+		const failureClass: ProtocolFailureClass = oversized
+			? "output_too_large"
+			: "spawn_failed";
+		const detail = oversized
+			? "ryk output exceeded maximum size."
+			: "ryk is unavailable.";
+		return {
+			kind: "error",
+			failureClass,
+			reason: formatProtocolErrorReason(failureClass, detail),
+			error: result.error,
+		};
 	}
 
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(result.stdout);
 	} catch {
-		return { kind: "error", reason: "ryk returned malformed JSON." };
+		return {
+			kind: "error",
+			failureClass: "malformed_json",
+			reason: formatProtocolErrorReason(
+				"malformed_json",
+				"ryk returned malformed JSON.",
+			),
+		};
 	}
 
 	const decision = getStringField(parsed, "decision");
@@ -497,16 +601,41 @@ export async function runOrcaEvaluate(
 	if (decision === "error") {
 		return {
 			kind: "error",
-			reason: sanitizeVisibleText(getDecisionReason(parsed)),
+			failureClass: "unexpected",
+			reason: formatProtocolErrorReason(
+				"unexpected",
+				sanitizeVisibleText(getDecisionReason(parsed)),
+			),
 			response: parsed,
 		};
 	}
 
 	return {
 		kind: "error",
-		reason: `ryk returned an unexpected evaluation result (exit ${result.code ?? "unknown"}).`,
+		failureClass: "inconsistent_exit",
+		reason: formatProtocolErrorReason(
+			"inconsistent_exit",
+			`ryk returned an unexpected evaluation result (exit ${result.code ?? "unknown"}).`,
+		),
 		response: parsed,
 	};
+}
+
+/**
+ * Shell evaluate with one automatic retry on *transient* protocol failure.
+ * Fail-closed per call; never allows on error. Non-transient errors (e.g.
+ * schema-valid decision:"error") are not retried.
+ */
+export async function runOrcaEvaluate(
+	request: OrcaEvaluateRequest,
+	options: Required<
+		Pick<OrcaExtensionOptions, "orcaBin" | "spawn" | "timeoutMs">
+	> & { env?: NodeJS.ProcessEnv },
+): Promise<OrcaDecision> {
+	const first = await runOrcaEvaluateOnce(request, options);
+	if (first.kind !== "error") return first;
+	if (!isTransientProtocolFailure(first.failureClass)) return first;
+	return runOrcaEvaluateOnce(request, options);
 }
 
 type DecideRuntimeOptions = Required<
@@ -514,10 +643,10 @@ type DecideRuntimeOptions = Required<
 > & { env?: NodeJS.ProcessEnv; cwd?: string };
 
 /**
- * Shared `orca decide <kind> --json` runner. Fail-closed on timeout, spawn
- * error, malformed JSON, and decision/exit-code mismatch.
+ * Single decide attempt. Fail-closed on timeout, spawn error, malformed JSON,
+ * and decision/exit-code mismatch. Reasons include a class token for recovery UX.
  */
-async function runOrcaDecide(
+async function runOrcaDecideOnce(
 	kind: "file" | "tool",
 	payload: object,
 	options: DecideRuntimeOptions,
@@ -538,21 +667,41 @@ async function runOrcaDecide(
 	);
 
 	if (result.timedOut) {
-		return { kind: "error", reason: "ryk decide timed out." };
+		return {
+			kind: "error",
+			failureClass: "timeout",
+			reason: formatProtocolErrorReason("timeout", "ryk decide timed out."),
+		};
 	}
 	if (result.error) {
-		const reason =
-			result.error.message === "ryk output exceeded maximum size"
-				? "ryk output exceeded maximum size."
-				: "ryk is unavailable.";
-		return { kind: "error", reason, error: result.error };
+		const oversized =
+			result.error.message === "ryk output exceeded maximum size";
+		const failureClass: ProtocolFailureClass = oversized
+			? "output_too_large"
+			: "spawn_failed";
+		const detail = oversized
+			? "ryk output exceeded maximum size."
+			: "ryk is unavailable.";
+		return {
+			kind: "error",
+			failureClass,
+			reason: formatProtocolErrorReason(failureClass, detail),
+			error: result.error,
+		};
 	}
 
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(result.stdout);
 	} catch {
-		return { kind: "error", reason: "ryk decide returned malformed JSON." };
+		return {
+			kind: "error",
+			failureClass: "malformed_json",
+			reason: formatProtocolErrorReason(
+				"malformed_json",
+				"ryk decide returned malformed JSON.",
+			),
+		};
 	}
 
 	const decision = getStringField(parsed, "decision");
@@ -568,7 +717,11 @@ async function runOrcaDecide(
 	) {
 		return {
 			kind: "error",
-			reason: `ryk decide returned an inconsistent result (decision ${decision ?? "missing"}, exit ${result.code ?? "signal"}).`,
+			failureClass: "inconsistent_exit",
+			reason: formatProtocolErrorReason(
+				"inconsistent_exit",
+				`ryk decide returned an inconsistent result (decision ${decision ?? "missing"}, exit ${result.code ?? "signal"}).`,
+			),
 			response: parsed,
 		};
 	}
@@ -600,14 +753,43 @@ async function runOrcaDecide(
 		return { kind: "warn", reason, response: parsed };
 	}
 	if (decision === "error") {
-		return { kind: "error", reason, response: parsed };
+		return {
+			kind: "error",
+			failureClass: "unexpected",
+			reason: formatProtocolErrorReason("unexpected", reason),
+			response: parsed,
+		};
 	}
 
 	return {
 		kind: "error",
-		reason: `ryk decide returned an unexpected result (exit ${result.code ?? "unknown"}).`,
+		failureClass: "unexpected",
+		reason: formatProtocolErrorReason(
+			"unexpected",
+			`ryk decide returned an unexpected result (exit ${result.code ?? "unknown"}).`,
+		),
 		response: parsed,
 	};
+}
+
+/**
+ * Shared `orca decide <kind> --json` runner with one automatic retry on
+ * *transient* protocol failure. Fail-closed per call; never allows on error.
+ */
+async function runOrcaDecide(
+	kind: "file" | "tool",
+	payload: object,
+	options: DecideRuntimeOptions,
+	map: {
+		defaultReason: string;
+		/** File write only: context_only must not allow side effects. */
+		denyContextOnly?: boolean;
+	},
+): Promise<OrcaDecision> {
+	const first = await runOrcaDecideOnce(kind, payload, options, map);
+	if (first.kind !== "error") return first;
+	if (!isTransientProtocolFailure(first.failureClass)) return first;
+	return runOrcaDecideOnce(kind, payload, options, map);
 }
 
 /** Non-shell file tools → Zig `orca decide file` (path only; not daemon Evaluate). */
@@ -688,12 +870,42 @@ export function resolveUnavailableMode(
 	return configured;
 }
 
-function isNoninteractiveSession(ctx: PiContext): boolean {
+/**
+ * Pi subagent / child-agent sessions. Parent-forward approval is out of scope
+ * for Phase 3: policy ask always auto-denies when this is set.
+ */
+export function isSubagentSession(
+	env: NodeJS.ProcessEnv = process.env,
+): boolean {
+	const parent = env.PI_SUBAGENT_PARENT_SESSION;
+	return typeof parent === "string" && parent.trim().length > 0;
+}
+
+/**
+ * Policy `ask` must never silently allow. Auto-deny when the session cannot
+ * present a real human prompt (noninteractive print/json/headless) or when
+ * running as a Pi subagent (even if hasUI is true).
+ */
+export function shouldAutoDenyPolicyAsk(
+	ctx: PiContext,
+	env: NodeJS.ProcessEnv = process.env,
+): boolean {
+	return isNoninteractiveSession(ctx) || isSubagentSession(env);
+}
+
+export function isNoninteractiveSession(ctx: PiContext): boolean {
 	return ctx.hasUI !== true || isNoninteractiveMode(ctx.mode);
 }
 
 function isNoninteractiveMode(mode: string | undefined): boolean {
 	return mode === "print" || mode === "json" || mode === "noninteractive";
+}
+
+function policyAskAutoDenyClass(
+	env: NodeJS.ProcessEnv,
+): "subagent" | "non-interactive" {
+	if (isSubagentSession(env)) return "subagent";
+	return "non-interactive";
 }
 
 export function safeOrcaReason(response: unknown): string {
@@ -730,7 +942,12 @@ export function installOrcaExtension(
 		const key = sessionKey(ctx);
 		const current = sessionState.get(key);
 		if (current) return current;
-		const next = { bypass: false, status: "degraded" as const };
+		const next: SessionState = {
+			bypass: false,
+			status: "degraded",
+			protocolFailures: 0,
+			protocolDegradedNotified: false,
+		};
 		sessionState.set(key, next);
 		return next;
 	};
@@ -747,6 +964,8 @@ export function installOrcaExtension(
 		const state = stateFor(ctx);
 		state.bypass = false;
 		state.status = "degraded";
+		state.protocolFailures = 0;
+		state.protocolDegradedNotified = false;
 		updateStatus(ctx);
 		if (
 			(process.env.RYK_PI_AUTO_SETUP ?? process.env.ORCA_PI_AUTO_SETUP) ===
@@ -840,6 +1059,7 @@ export function installOrcaExtension(
 					unavailableMode,
 					disableSession,
 					runtime.env,
+					stateFor(ctx),
 				);
 			}
 
@@ -869,13 +1089,14 @@ export function installOrcaExtension(
 					decision.kind === "allow" &&
 					BROAD_DISCOVERY_TOOLS.has(event.toolName)
 				) {
-					return handlePolicyAsk(
+					return resolvePolicyAsk(
 						`ryk allowed the ${toolLabel} root, but this broad discovery action may traverse descendant files that were not individually evaluated. Explicit approval is required.`,
 						pi,
 						ctx,
 						toolLabel,
 						{ disableSession },
 						allowOnceBypassEnabled(runtime.env, unavailableMode),
+						runtime.env,
 					);
 				}
 				return applyToolDecision(
@@ -886,6 +1107,7 @@ export function installOrcaExtension(
 					unavailableMode,
 					disableSession,
 					runtime.env,
+					stateFor(ctx),
 				);
 			}
 
@@ -911,6 +1133,7 @@ export function installOrcaExtension(
 				unavailableMode,
 				disableSession,
 				runtime.env,
+				stateFor(ctx),
 			);
 		},
 	);
@@ -1064,17 +1287,21 @@ async function applyToolDecision(
 	unavailableMode: UnavailableMode,
 	disableSession: () => void,
 	env: NodeJS.ProcessEnv = process.env,
+	session?: SessionState,
 ): Promise<ToolCallResult> {
 	if (decision.kind === "allow") {
+		if (session) session.protocolFailures = 0;
 		clearOrcaWidget(ctx);
 		return undefined;
 	}
 	if (decision.kind === "deny") {
+		if (session) session.protocolFailures = 0;
 		const card = buildOrcaDecisionCard(decision.response, "block");
 		showOrcaDecision(pi, ctx, card);
 		return block(formatOrcaDecisionSummary(card, toolLabel));
 	}
 	if (decision.kind === "warn") {
+		if (session) session.protocolFailures = 0;
 		clearOrcaWidget(ctx);
 		notify(
 			ctx,
@@ -1084,14 +1311,31 @@ async function applyToolDecision(
 		return undefined;
 	}
 	if (decision.kind === "ask") {
-		return handlePolicyAsk(
+		if (session) session.protocolFailures = 0;
+		return resolvePolicyAsk(
 			decision.reason,
 			pi,
 			ctx,
 			toolLabel,
 			{ disableSession },
 			allowOnceBypassEnabled(env, unavailableMode),
+			env,
 		);
+	}
+	// Protocol / unavailable: track consecutive failures; never silent-allow.
+	if (session) {
+		session.protocolFailures += 1;
+		if (
+			session.protocolFailures >= PROTOCOL_DEGRADED_THRESHOLD &&
+			!session.protocolDegradedNotified
+		) {
+			session.protocolDegradedNotified = true;
+			notify(
+				ctx,
+				`ryk protocol degraded after ${session.protocolFailures} consecutive evaluation failures (class token in error text). Each tool call still fail-closes; run /ryk-setup then /ryk-doctor. Session is not permanently bricked.`,
+				"warning",
+			);
+		}
 	}
 	return handleUnavailable(
 		decision.reason,
@@ -1102,6 +1346,25 @@ async function applyToolDecision(
 		toolLabel,
 		allowOnceBypassEnabled(env, unavailableMode),
 	);
+}
+
+/**
+ * Single entry for policy ask: interactive human select, or explicit auto-deny
+ * for noninteractive / subagent sessions. Never ask → allow without a choice.
+ */
+async function resolvePolicyAsk(
+	reason: string,
+	pi: PiAPI,
+	ctx: PiContext,
+	toolLabel: string,
+	actions: { disableSession: () => void },
+	allowOnce: boolean,
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<ToolCallResult> {
+	if (shouldAutoDenyPolicyAsk(ctx, env)) {
+		return handlePolicyAskAutoDeny(reason, pi, ctx, toolLabel, env);
+	}
+	return handlePolicyAsk(reason, pi, ctx, toolLabel, actions, allowOnce);
 }
 
 function recordOnceBypass(
@@ -1135,6 +1398,59 @@ function recordOnceBypass(
 	}
 	notify(ctx, `ryk audit: once-bypass used for ${details.tool} (${source}).`, "warning");
 	return true;
+}
+
+/**
+ * Best-effort audit for policy ask auto-deny. Deny does not require audit
+ * success (unlike once-bypass allow); always block either way.
+ */
+function recordAskAutoDeny(
+	pi: PiAPI,
+	toolLabel: string,
+	sessionClass: "subagent" | "non-interactive",
+	reason: string,
+): void {
+	if (!pi.sendMessage) return;
+	const details = {
+		event: "orca_ask_auto_deny",
+		tool: truncate(sanitizeVisibleText(toolLabel), 128),
+		session_class: sessionClass,
+		reason: truncate(sanitizeVisibleText(reason), 256),
+	};
+	try {
+		pi.sendMessage(
+			{
+				customType: "orca.audit",
+				content: `ryk ask auto-deny: ${details.tool} (${sessionClass})`,
+				display: false,
+				details,
+			},
+			{ triggerTurn: false },
+		);
+	} catch {
+		// Deny is fail-closed regardless of audit success.
+	}
+}
+
+async function handlePolicyAskAutoDeny(
+	reason: string,
+	pi: PiAPI,
+	ctx: PiContext,
+	toolLabel: string,
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<ToolCallResult> {
+	const sessionClass = policyAskAutoDenyClass(env);
+	const policyReason = sanitizeVisibleText(reason);
+	const summary = `ryk auto-denied (${sessionClass}): ${policyReason || `${toolLabel} requires approval`}`;
+	const card = {
+		variant: "block" as const,
+		title: "RYK BLOCKED",
+		summary,
+	};
+	// Prefer recording audit before returning the block; still block if audit fails.
+	recordAskAutoDeny(pi, toolLabel, sessionClass, policyReason);
+	showOrcaDecision(pi, ctx, card);
+	return block(summary);
 }
 
 async function handlePolicyAsk(
@@ -1202,6 +1518,7 @@ async function handlePolicyAsk(
 			);
 		case "Block":
 		default:
+			// Timeout / undefined / unknown choice → block only (never allow).
 			clearOrcaWidget(ctx);
 			return block(
 				formatOrcaDecisionSummary(
@@ -1226,7 +1543,13 @@ async function handleUnavailable(
 	allowOnce = true,
 ): Promise<ToolCallResult> {
 	const repair = repairMessage(reason, toolLabel);
-	if (mode === "allow-with-warning") {
+	const failureClass = protocolFailureClassFromReason(reason);
+	// allow-with-warning soft-allows only spawn_failed (binary missing).
+	// Protocol corruption / typed errors always fail closed (Phase 5).
+	if (
+		mode === "allow-with-warning" &&
+		allowWithWarningPermitsProtocolClass(failureClass)
+	) {
 		clearOrcaWidget(ctx);
 		notify(
 			ctx,
@@ -1235,7 +1558,11 @@ async function handleUnavailable(
 		);
 		return undefined;
 	}
-	if (mode === "strict" || mode === "noninteractive-block") {
+	if (
+		mode === "strict" ||
+		mode === "noninteractive-block" ||
+		mode === "allow-with-warning"
+	) {
 		const card = {
 			variant: "block" as const,
 			title: "RYK BLOCKED",
@@ -1768,7 +2095,20 @@ function notify(
 }
 
 function repairMessage(reason: string, toolLabel = "bash"): string {
-	return `ryk could not evaluate this ${toolLabel} action: ${sanitizeVisibleText(reason)}\n\nRun /ryk-setup, then /ryk-doctor. Coverage: ${piCoverageLabel()}.`;
+	const cleaned = sanitizeVisibleText(reason);
+	const klass =
+		protocolFailureClassFromReason(cleaned) ??
+		(cleaned.includes("malformed")
+			? "malformed_json"
+			: cleaned.includes("timed out")
+				? "timeout"
+				: cleaned.includes("unavailable")
+					? "spawn_failed"
+					: cleaned.includes("inconsistent")
+						? "inconsistent_exit"
+						: undefined);
+	const classHint = klass ? ` Failure class: ${klass}.` : "";
+	return `ryk could not evaluate this ${toolLabel} action: ${cleaned}${classHint}\n\nThis call is fail-closed only (not a permanent session brick). Retry the tool, or run /ryk-setup then /ryk-doctor if failures persist. Coverage: ${piCoverageLabel()}.`;
 }
 
 function modeSummary(mode: UnavailableMode, sessionBypass: boolean): string {

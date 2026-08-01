@@ -191,12 +191,27 @@ pub const ParentApplyOutcome = struct {
 pub const PrepareOptions = struct {
     network_route_forcing: ?macos_profile.NetworkRouteForcing = null,
     profile_grade: macos_profile.SeatbeltProfileGrade = macos_profile.SeatbeltProfileGrade.default_grade,
+    write_deny_literals: []const []const u8 = &.{},
 };
 
 /// Parent-side Seatbelt prepare: version gate, symbol check, SBPL render.
 /// Does **not** call sandbox_init (that is child-only). Never reports attach.
 ///
 /// On success (`prepared`), the caller must apply `sbpl_z` in the child before
+/// Map protect-on hardlink scan failures to distinct prepare reason codes.
+/// Walk capacity (`ScanCapacity`) vs post-filter denylist capacity
+/// (`HardlinkAliasDenyCapacity`) must not collapse into the generic failed bucket.
+pub fn hardlinkScanFailureReason(err: anyerror) []const u8 {
+    return switch (err) {
+        error.OutOfMemory => "seatbelt_profile_oom",
+        error.ScanCapacity => "seatbelt_secret_hardlink_scan_capacity",
+        error.ScanDepthExceeded => "seatbelt_secret_hardlink_scan_depth",
+        error.ScanOpenFailed => "seatbelt_secret_hardlink_scan_open",
+        error.HardlinkAliasDenyCapacity => "seatbelt_hardlink_alias_deny_capacity",
+        else => "seatbelt_secret_hardlink_scan_failed",
+    };
+}
+
 /// exec and only then claim session active. Until that child apply succeeds,
 /// production posture remains unavailable/failed.
 pub fn prepareForChildApply(
@@ -251,17 +266,10 @@ pub fn prepareForChildApplyWithOptions(
             io,
             compiled.workspace_root,
         ) catch |err| {
-            const reason: []const u8 = switch (err) {
-                error.OutOfMemory => "seatbelt_profile_oom",
-                error.ScanCapacity => "seatbelt_secret_hardlink_scan_capacity",
-                error.ScanDepthExceeded => "seatbelt_secret_hardlink_scan_depth",
-                error.ScanOpenFailed => "seatbelt_secret_hardlink_scan_open",
-                else => "seatbelt_secret_hardlink_scan_failed",
-            };
             return .{
                 .status = .failed,
                 .mechanism = .none,
-                .reason_code = reason,
+                .reason_code = hardlinkScanFailureReason(err),
             };
         };
     }
@@ -271,6 +279,7 @@ pub fn prepareForChildApplyWithOptions(
         .network_route_forcing = options.network_route_forcing,
         .profile_grade = options.profile_grade,
         .hardlink_alias_denies = hardlink_aliases orelse &.{},
+        .write_deny_literals = options.write_deny_literals,
     }) catch |err| {
         return .{
             .status = .failed,
@@ -559,6 +568,34 @@ test "prepare hardlink scan OOM maps to seatbelt_profile_oom" {
     try std.testing.expectEqualStrings("seatbelt_profile_oom", out.reason_code);
     try std.testing.expect(out.sbpl_z == null);
     try std.testing.expect(failing.has_induced_failure);
+}
+
+test "hardlinkScanFailureReason maps ScanCapacity and alias-deny capacity distinctly" {
+    // m17: capacity paths stay distinct from generic scan_failed.
+    try std.testing.expectEqualStrings(
+        "seatbelt_secret_hardlink_scan_capacity",
+        hardlinkScanFailureReason(error.ScanCapacity),
+    );
+    try std.testing.expectEqualStrings(
+        "seatbelt_hardlink_alias_deny_capacity",
+        hardlinkScanFailureReason(error.HardlinkAliasDenyCapacity),
+    );
+    try std.testing.expectEqualStrings(
+        "seatbelt_secret_hardlink_scan_depth",
+        hardlinkScanFailureReason(error.ScanDepthExceeded),
+    );
+    try std.testing.expectEqualStrings(
+        "seatbelt_secret_hardlink_scan_open",
+        hardlinkScanFailureReason(error.ScanOpenFailed),
+    );
+    try std.testing.expectEqualStrings(
+        "seatbelt_profile_oom",
+        hardlinkScanFailureReason(error.OutOfMemory),
+    );
+    try std.testing.expectEqualStrings(
+        "seatbelt_secret_hardlink_scan_failed",
+        hardlinkScanFailureReason(error.Unexpected),
+    );
 }
 
 test "prepare hardlink scan open failure maps to seatbelt_secret_hardlink_scan_open" {

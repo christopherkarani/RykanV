@@ -19,14 +19,21 @@ import {
 	extractDecideFilePath,
 	installOrcaExtension,
 	isProtectedPiTool,
+	isSubagentSession,
 	piCoverageLabel,
 	resolveOrcaBin,
 	resolveToolPath,
 	resolveUnavailableMode,
+	formatProtocolErrorReason,
+	protocolFailureClassFromReason,
+	isTransientProtocolFailure,
+	allowWithWarningPermitsProtocolClass,
 	runOrcaDecideFile,
 	runOrcaDecideTool,
 	runOrcaEvaluate,
 	safeOrcaReason,
+	shouldAutoDenyPolicyAsk,
+	PROTOCOL_DEGRADED_THRESHOLD,
 	type OrcaEvaluateRequest,
 } from "../extensions/orca.ts";
 
@@ -536,12 +543,16 @@ test("decide file validates decision and exit-code consistency", async () => {
 		{ code: null, stdout: decideJson("allow") },
 		{ code: 0, stdout: "" },
 	]) {
-		const { spawn } = makeSpawn([plan]);
+		// Retry once on protocol error; both attempts fail → still fail-closed.
+		const { spawn } = makeSpawn([plan, plan]);
 		const result = await runOrcaDecideFile(
 			{ path: "./README.md", operation: "read" },
 			{ spawn, orcaBin: "orca", timeoutMs: 1_000, cwd: process.cwd() },
 		);
 		assert.equal(result.kind, "error", JSON.stringify(plan));
+		if (result.kind === "error") {
+			assert.match(result.reason, /\[[a-z_]+\]/);
+		}
 	}
 });
 
@@ -601,7 +612,8 @@ test("custom tool deny blocks with rule id on card", async () => {
 
 test("custom tool unavailable fails closed", async () => {
 	const { pi, handlers } = makePi();
-	const { spawn } = makeSpawn([{ error: new Error("ENOENT") }]);
+	const missing = { error: new Error("ENOENT") };
+	const { spawn } = makeSpawn([missing, missing]);
 	installOrcaExtension(pi, { spawn, orcaBin: "missing-orca" });
 	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
 
@@ -613,12 +625,14 @@ test("custom tool unavailable fails closed", async () => {
 		{},
 	);
 	assert.equal(result?.block, true);
-	assert.match(result?.reason ?? "", /ryk is unavailable/);
+	assert.match(result?.reason ?? "", /ryk is unavailable|spawn_failed/i);
 });
 
 test("session bypass skips decide tool for custom tools", async () => {
 	const { pi, handlers } = makePi();
-	const { spawn, calls } = makeSpawn([{ code: 3, stdout: errorJson() }]);
+	// Typed decision:error is non-transient → single attempt (no retry).
+	const err = { code: 1 as number, stdout: errorJson() };
+	const { spawn, calls } = makeSpawn([err]);
 	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
 	const { ctx, selections } = makeCtx();
 	selections.push("Disable ryk for this Pi session");
@@ -640,6 +654,7 @@ test("session bypass skips decide tool for custom tools", async () => {
 	);
 	assert.equal(first, undefined);
 	assert.equal(second, undefined);
+	// Non-transient error: one spawn, then bypass skips further spawns.
 	assert.equal(calls.length, 1);
 });
 
@@ -686,16 +701,90 @@ test("runOrcaDecideTool maps block to deny and validates exit codes", async () =
 		{ code: 0, stdout: decideBlockJson("tools.deny[0]", "tool") },
 		{ code: 0, stdout: "" },
 	]) {
+		// Two identical plans: protocol path retries once, still fail-closed.
 		const result = await runOrcaDecideTool(
 			{ name: "x" },
 			{
-				spawn: makeSpawn([plan]).spawn,
+				spawn: makeSpawn([plan, plan]).spawn,
 				orcaBin: "orca",
 				timeoutMs: 1_000,
 				cwd: process.cwd(),
 			},
 		);
 		assert.equal(result.kind, "error", JSON.stringify(plan));
+		if (result.kind === "error") {
+			assert.match(result.reason, /\[[a-z_]+\]/);
+			assert.ok(result.failureClass);
+		}
+	}
+});
+
+test("runOrcaDecideTool retries once on malformed JSON then fail-closes", async () => {
+	const bad = { code: 0, stdout: "{not-json" as string };
+	const { spawn, calls } = makeSpawn([bad, bad]);
+	const result = await runOrcaDecideTool(
+		{ name: "x" },
+		{ spawn, orcaBin: "orca", timeoutMs: 1_000, cwd: process.cwd() },
+	);
+	assert.equal(result.kind, "error");
+	assert.equal(calls.length, 2);
+	if (result.kind === "error") {
+		assert.equal(result.failureClass, "malformed_json");
+		assert.match(result.reason, /\[malformed_json\]/);
+	}
+});
+
+test("runOrcaDecideTool recovers when second attempt succeeds", async () => {
+	const { spawn, calls } = makeSpawn([
+		{ code: 0, stdout: "{not-json" },
+		{ code: 0, stdout: decideAllowJson("tool") },
+	]);
+	const result = await runOrcaDecideTool(
+		{ name: "x" },
+		{ spawn, orcaBin: "orca", timeoutMs: 1_000, cwd: process.cwd() },
+	);
+	assert.equal(result.kind, "allow");
+	assert.equal(calls.length, 2);
+});
+
+test("formatProtocolErrorReason includes class token", () => {
+	const reason = formatProtocolErrorReason("timeout", "ryk decide timed out.");
+	assert.equal(protocolFailureClassFromReason(reason), "timeout");
+	assert.match(reason, /\[timeout\]/);
+});
+
+test("isTransientProtocolFailure covers spawn/json glitches only", () => {
+	assert.equal(isTransientProtocolFailure("timeout"), true);
+	assert.equal(isTransientProtocolFailure("malformed_json"), true);
+	assert.equal(isTransientProtocolFailure("spawn_failed"), true);
+	assert.equal(isTransientProtocolFailure("output_too_large"), true);
+	assert.equal(isTransientProtocolFailure("inconsistent_exit"), true);
+	assert.equal(isTransientProtocolFailure("unexpected"), false);
+	assert.equal(isTransientProtocolFailure(undefined), false);
+	assert.equal(allowWithWarningPermitsProtocolClass("spawn_failed"), true);
+	assert.equal(allowWithWarningPermitsProtocolClass("timeout"), false);
+	assert.equal(allowWithWarningPermitsProtocolClass("malformed_json"), false);
+	assert.equal(allowWithWarningPermitsProtocolClass("unexpected"), false);
+});
+
+test("runOrcaDecideTool does not retry non-transient decision error", async () => {
+	const err = {
+		code: 1,
+		stdout: JSON.stringify({
+			decision: "error",
+			reason: "ryk decide: evaluation failed; fail closed.",
+			error_code: "evaluation_failed",
+		}),
+	};
+	const { spawn, calls } = makeSpawn([err, err]);
+	const result = await runOrcaDecideTool(
+		{ name: "x" },
+		{ spawn, orcaBin: "orca", timeoutMs: 1_000, cwd: process.cwd() },
+	);
+	assert.equal(result.kind, "error");
+	assert.equal(calls.length, 1);
+	if (result.kind === "error") {
+		assert.equal(result.failureClass, "unexpected");
 	}
 });
 
@@ -1005,6 +1094,258 @@ test("once-bypass stays blocked when transcript auditing is unavailable", async 
 	);
 });
 
+test("isSubagentSession and shouldAutoDenyPolicyAsk helpers", () => {
+	assert.equal(isSubagentSession({}), false);
+	assert.equal(isSubagentSession({ PI_SUBAGENT_PARENT_SESSION: "" }), false);
+	assert.equal(isSubagentSession({ PI_SUBAGENT_PARENT_SESSION: "   " }), false);
+	assert.equal(
+		isSubagentSession({ PI_SUBAGENT_PARENT_SESSION: "parent-session-1" }),
+		true,
+	);
+
+	assert.equal(
+		shouldAutoDenyPolicyAsk({ hasUI: true, mode: "tui" }, {}),
+		false,
+	);
+	assert.equal(shouldAutoDenyPolicyAsk({ hasUI: false }, {}), true);
+	assert.equal(
+		shouldAutoDenyPolicyAsk({ hasUI: true, mode: "print" }, {}),
+		true,
+	);
+	assert.equal(
+		shouldAutoDenyPolicyAsk({ hasUI: true, mode: "json" }, {}),
+		true,
+	);
+	assert.equal(
+		shouldAutoDenyPolicyAsk({ hasUI: true, mode: "noninteractive" }, {}),
+		true,
+	);
+	assert.equal(
+		shouldAutoDenyPolicyAsk(
+			{ hasUI: true, mode: "tui" },
+			{ PI_SUBAGENT_PARENT_SESSION: "parent-1" },
+		),
+		true,
+	);
+});
+
+test("policy ask auto-denies noninteractive sessions without calling select", async () => {
+	const { pi, handlers, messages } = makePi();
+	const { spawn } = makeSpawn([
+		{ code: 7, stdout: decideJson("ask", "file.write") },
+	]);
+	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
+	let selectCalled = false;
+	(ctx.ui as any).select = async () => {
+		selectCalled = true;
+		return "Run once anyway";
+	};
+
+	const result = await fireToolCall(
+		handlers.get("tool_call")![0],
+		ctx,
+		"",
+		"write",
+		{ path: "src/main.ts", content: "x" },
+	);
+	assert.equal(result?.block, true);
+	assert.equal(selectCalled, false, "select must not be called for auto-deny");
+	assert.match(result?.reason ?? "", /auto-denied/i);
+	assert.match(result?.reason ?? "", /non-interactive/i);
+	assert.notEqual(result, undefined, "auto-deny must never proceed");
+	const audit = messages.find((m) => m.message.customType === "orca.audit");
+	assert.ok(audit, "expected orca.audit transcript event");
+	assert.equal(
+		(audit?.message.details as { event?: string } | undefined)?.event,
+		"orca_ask_auto_deny",
+	);
+});
+
+test("policy ask auto-denies print mode even when hasUI is true", async () => {
+	const { pi, handlers } = makePi();
+	const { spawn } = makeSpawn([
+		{ code: 7, stdout: decideJson("ask", "file.write") },
+	]);
+	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	const { ctx } = makeCtx({ hasUI: true, mode: "print" });
+	let selectCalled = false;
+	(ctx.ui as any).select = async () => {
+		selectCalled = true;
+		return "Run once anyway";
+	};
+
+	const result = await fireToolCall(
+		handlers.get("tool_call")![0],
+		ctx,
+		"",
+		"write",
+		{ path: "src/main.ts", content: "x" },
+	);
+	assert.equal(result?.block, true);
+	assert.equal(selectCalled, false);
+	assert.match(result?.reason ?? "", /auto-denied/i);
+});
+
+test("policy ask auto-denies subagent sessions even when hasUI is true", async () => {
+	const previous = process.env.PI_SUBAGENT_PARENT_SESSION;
+	process.env.PI_SUBAGENT_PARENT_SESSION = "parent-session-stress";
+	try {
+		const { pi, handlers, messages } = makePi();
+		const { spawn } = makeSpawn([
+			{ code: 7, stdout: decideJson("ask", "file.write") },
+		]);
+		installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+		const { ctx } = makeCtx({ hasUI: true, mode: "tui" });
+		let selectCalled = false;
+		(ctx.ui as any).select = async () => {
+			selectCalled = true;
+			return "Run once anyway";
+		};
+
+		const result = await fireToolCall(
+			handlers.get("tool_call")![0],
+			ctx,
+			"",
+			"write",
+			{ path: "src/main.ts", content: "x" },
+		);
+		assert.equal(result?.block, true);
+		assert.equal(
+			selectCalled,
+			false,
+			"subagent must auto-deny even with hasUI",
+		);
+		assert.match(result?.reason ?? "", /auto-denied/i);
+		assert.match(result?.reason ?? "", /subagent/i);
+		assert.notEqual(result, undefined);
+		const audit = messages.find((m) => m.message.customType === "orca.audit");
+		assert.equal(
+			(audit?.message.details as { event?: string } | undefined)?.event,
+			"orca_ask_auto_deny",
+		);
+		assert.equal(
+			(audit?.message.details as { session_class?: string } | undefined)
+				?.session_class,
+			"subagent",
+		);
+	} finally {
+		if (previous === undefined) delete process.env.PI_SUBAGENT_PARENT_SESSION;
+		else process.env.PI_SUBAGENT_PARENT_SESSION = previous;
+	}
+});
+
+test("policy ask still invokes select in interactive parent TUI", async () => {
+	const previous = process.env.PI_SUBAGENT_PARENT_SESSION;
+	delete process.env.PI_SUBAGENT_PARENT_SESSION;
+	try {
+		const { pi, handlers } = makePi();
+		const { spawn } = makeSpawn([
+			{ code: 7, stdout: decideJson("ask", "file.write") },
+		]);
+		installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+		const { ctx } = makeCtx({ hasUI: true, mode: "tui" });
+		let selectCalled = false;
+		(ctx.ui as any).select = async () => {
+			selectCalled = true;
+			return "Block";
+		};
+
+		const result = await fireToolCall(
+			handlers.get("tool_call")![0],
+			ctx,
+			"",
+			"write",
+			{ path: "src/main.ts", content: "x" },
+		);
+		assert.equal(result?.block, true);
+		assert.equal(selectCalled, true, "interactive TUI must call select");
+		assert.ok(
+			!/auto-denied/i.test(result?.reason ?? ""),
+			"interactive block should not use auto-deny wording",
+		);
+	} finally {
+		if (previous === undefined) delete process.env.PI_SUBAGENT_PARENT_SESSION;
+		else process.env.PI_SUBAGENT_PARENT_SESSION = previous;
+	}
+});
+
+test("policy ask auto-deny still blocks when audit is unavailable", async () => {
+	const { pi, handlers, messages } = makePi();
+	delete (pi as { sendMessage?: unknown }).sendMessage;
+	const { spawn } = makeSpawn([
+		{ code: 7, stdout: decideJson("ask", "file.write") },
+	]);
+	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
+	let selectCalled = false;
+	(ctx.ui as any).select = async () => {
+		selectCalled = true;
+		return "Run once anyway";
+	};
+
+	const result = await fireToolCall(
+		handlers.get("tool_call")![0],
+		ctx,
+		"",
+		"write",
+		{ path: "src/main.ts", content: "x" },
+	);
+	assert.equal(result?.block, true);
+	assert.equal(selectCalled, false);
+	assert.match(result?.reason ?? "", /auto-denied/i);
+	assert.equal(messages.length, 0);
+});
+
+test("bash policy ask auto-denies noninteractive sessions", async () => {
+	const { pi, handlers } = makePi();
+	const { spawn } = makeSpawn([{ code: 0, stdout: askJson() }]);
+	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
+	let selectCalled = false;
+	(ctx.ui as any).select = async () => {
+		selectCalled = true;
+		return "Run once anyway";
+	};
+
+	const result = await fireToolCall(
+		handlers.get("tool_call")![0],
+		ctx,
+		"git push --force",
+	);
+	assert.equal(result?.block, true);
+	assert.equal(selectCalled, false);
+	assert.match(result?.reason ?? "", /auto-denied/i);
+});
+
+test("interactive policy ask blocks when select returns undefined (timeout)", async () => {
+	const previous = process.env.PI_SUBAGENT_PARENT_SESSION;
+	delete process.env.PI_SUBAGENT_PARENT_SESSION;
+	try {
+		const { pi, handlers } = makePi();
+		const { spawn } = makeSpawn([
+			{ code: 7, stdout: decideJson("ask", "file.write") },
+		]);
+		installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+		const { ctx } = makeCtx({ hasUI: true, mode: "tui" });
+		(ctx.ui as any).select = async () => undefined;
+
+		const result = await fireToolCall(
+			handlers.get("tool_call")![0],
+			ctx,
+			"",
+			"write",
+			{ path: "src/main.ts", content: "x" },
+		);
+		assert.equal(result?.block, true);
+		assert.notEqual(result, undefined);
+		assert.ok(!/auto-denied/i.test(result?.reason ?? ""));
+	} finally {
+		if (previous === undefined) delete process.env.PI_SUBAGENT_PARENT_SESSION;
+		else process.env.PI_SUBAGENT_PARENT_SESSION = previous;
+	}
+});
+
 test("malformed read tool call fails closed", async () => {
 	const { pi, handlers } = makePi();
 	const { spawn, calls } = makeSpawn();
@@ -1025,9 +1366,8 @@ test("malformed read tool call fails closed", async () => {
 
 test("read tool unavailable path fails closed in noninteractive mode", async () => {
 	const { pi, handlers } = makePi();
-	const { spawn } = makeSpawn([
-		{ error: new Error("spawn ENOENT") },
-	]);
+	const missing = { error: new Error("spawn ENOENT") };
+	const { spawn } = makeSpawn([missing, missing]);
 	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
 	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
 
@@ -1039,7 +1379,7 @@ test("read tool unavailable path fails closed in noninteractive mode", async () 
 		{ path: "README.md" },
 	);
 	assert.equal(result?.block, true);
-	assert.match(result?.reason ?? "", /ryk is unavailable|could not evaluate this read/i);
+	assert.match(result?.reason ?? "", /ryk is unavailable|could not evaluate this read|spawn_failed/i);
 });
 
 test("session bypass skips write and read evaluation", async () => {
@@ -1212,18 +1552,20 @@ test("bash dangerous command with Orca deny blocks even when exit code is not 2"
 
 test("Orca error in non-interactive mode blocks", async () => {
 	const { pi, handlers } = makePi();
-	const { spawn } = makeSpawn([{ code: 3, stdout: errorJson() }]);
+	const err = { code: 3 as number, stdout: errorJson() };
+	const { spawn } = makeSpawn([err, err]);
 	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
 	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(result.block, true);
-	assert.match(result.reason, /Run \/ryk-setup/);
+	assert.match(result.reason, /\/ryk-setup/i);
 });
 
 test("Orca error in interactive mode waits for the user's decision", async () => {
 	const { pi, handlers } = makePi();
-	const { spawn } = makeSpawn([{ code: 3, stdout: errorJson() }]);
+	const err = { code: 3 as number, stdout: errorJson() };
+	const { spawn } = makeSpawn([err, err]);
 	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
 	const { ctx, widgets } = makeCtx();
 	let resolveSelection: (choice: string) => void = () => {};
@@ -1267,18 +1609,20 @@ test("Orca error in interactive mode waits for the user's decision", async () =>
 
 test("auto mode blocks print sessions even when hasUI is true", async () => {
 	const { pi, handlers } = makePi();
-	const { spawn } = makeSpawn([{ code: 3, stdout: errorJson() }]);
+	const err = { code: 3 as number, stdout: errorJson() };
+	const { spawn } = makeSpawn([err, err]);
 	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
 	const { ctx } = makeCtx({ hasUI: true, mode: "print" });
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(result.block, true);
-	assert.match(result.reason, /Run \/ryk-setup/);
+	assert.match(result.reason, /\/ryk-setup/i);
 });
 
 test("strict mode blocks", async () => {
 	const { pi, handlers, commands } = makePi();
-	const { spawn } = makeSpawn([{ code: 3, stdout: errorJson() }]);
+	const err = { code: 3 as number, stdout: errorJson() };
+	const { spawn } = makeSpawn([err, err]);
 	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
 	const { ctx } = makeCtx();
 	await commands.get("orca-mode")!.handler("strict", ctx);
@@ -1287,43 +1631,94 @@ test("strict mode blocks", async () => {
 	assert.equal(result.block, true);
 });
 
-test("allow-with-warning mode allows and warns", async () => {
+test("allow-with-warning allows only spawn_failed unavailability", async () => {
 	const { pi, handlers, commands } = makePi();
-	const { spawn } = makeSpawn([{ code: 3, stdout: errorJson() }]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	const missing = { error: new Error("ENOENT") };
+	// spawn_failed is transient → one retry, then allow-with-warning soft-allows.
+	const { spawn } = makeSpawn([missing, missing]);
+	installOrcaExtension(pi, { spawn, orcaBin: "missing-orca" });
 	const { ctx, notifications } = makeCtx();
 	await commands.get("orca-mode")!.handler("allow-with-warning", ctx);
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(result, undefined);
 	assert.equal(notifications.at(-1)?.type, "warning");
+	assert.match(notifications.at(-1)?.message ?? "", /allowing bash with warning/i);
+});
+
+test("allow-with-warning still fail-closes on protocol decision error", async () => {
+	const { pi, handlers, commands } = makePi();
+	const err = { code: 3 as number, stdout: errorJson() };
+	const { spawn, calls } = makeSpawn([err]);
+	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	const { ctx } = makeCtx();
+	await commands.get("orca-mode")!.handler("allow-with-warning", ctx);
+
+	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
+	assert.equal(result?.block, true);
+	assert.match(result?.reason ?? "", /Failure class|unexpected|daemon/i);
+	// Non-transient: single attempt.
+	assert.equal(calls.length, 1);
 });
 
 test("malformed Orca JSON follows unavailable policy", async () => {
 	const { pi, handlers } = makePi();
-	const { spawn } = makeSpawn([{ code: 0, stdout: "{not-json" }]);
+	// Retry once: both attempts malformed → still fail-closed with class token.
+	const { spawn } = makeSpawn([
+		{ code: 0, stdout: "{not-json" },
+		{ code: 0, stdout: "{not-json" },
+	]);
 	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
 	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(result.block, true);
 	assert.match(result.reason, /malformed JSON/);
+	assert.match(result.reason, /malformed_json|Failure class/i);
 });
 
 test("child process failure follows unavailable policy", async () => {
 	const { pi, handlers } = makePi();
-	const { spawn } = makeSpawn([{ error: new Error("ENOENT") }]);
+	const { spawn } = makeSpawn([
+		{ error: new Error("ENOENT") },
+		{ error: new Error("ENOENT") },
+	]);
 	installOrcaExtension(pi, { spawn, orcaBin: "missing-orca" });
 	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(result.block, true);
-	assert.match(result.reason, /ryk is unavailable/);
+	assert.match(result.reason, /ryk is unavailable|spawn_failed/i);
+});
+
+test("repeated protocol failures notify degraded once without allowing", async () => {
+	const { pi, handlers } = makePi();
+	const plans = Array.from({ length: PROTOCOL_DEGRADED_THRESHOLD * 2 }, () => ({
+		code: 0 as number,
+		stdout: "{not-json",
+	}));
+	const { spawn, calls } = makeSpawn(plans);
+	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	const { ctx, notifications } = makeCtx({ hasUI: false, mode: "print" });
+
+	for (let i = 0; i < PROTOCOL_DEGRADED_THRESHOLD; i++) {
+		const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
+		assert.equal(result.block, true, `call ${i} must fail closed`);
+	}
+	// Two attempts per tool call (retry) × N failures.
+	assert.equal(calls.length, PROTOCOL_DEGRADED_THRESHOLD * 2);
+	const degraded = notifications.filter((n) =>
+		/protocol degraded/i.test(n.message),
+	);
+	assert.equal(degraded.length, 1);
+	assert.equal(degraded[0]?.type, "warning");
 });
 
 test("session bypass allows subsequent bash calls during same session", async () => {
 	const { pi, handlers } = makePi();
-	const { spawn, calls } = makeSpawn([{ code: 3, stdout: errorJson() }]);
+	const err = { code: 3 as number, stdout: errorJson() };
+	// Non-transient decision:error → single spawn, then session bypass.
+	const { spawn, calls } = makeSpawn([err]);
 	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
 	const { ctx, selections } = makeCtx();
 	selections.push("Disable ryk for this Pi session");
@@ -1337,8 +1732,9 @@ test("session bypass allows subsequent bash calls during same session", async ()
 
 test("session bypass does not leak across Pi session ids", async () => {
 	const { pi, handlers } = makePi();
+	const err = { code: 3 as number, stdout: errorJson() };
 	const { spawn, calls } = makeSpawn([
-		{ code: 3, stdout: errorJson() },
+		err,
 		{ code: 0, stdout: allowJson() },
 	]);
 	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
@@ -1354,6 +1750,7 @@ test("session bypass does not leak across Pi session ids", async () => {
 		secondSession.ctx,
 	);
 	assert.equal(result, undefined);
+	// 1 non-transient error on first session + 1 allow on second session.
 	assert.equal(calls.length, 2);
 });
 
@@ -1542,13 +1939,14 @@ test("runOrcaEvaluate maps decision ask exit 0 to kind ask", async () => {
 test("oversized Orca output follows unavailable policy", async () => {
 	const { pi, handlers } = makePi();
 	const huge = "x".repeat(1024 * 1024 + 1);
-	const { spawn } = makeSpawn([{ code: 0, stdout: huge }]);
+	const plan = { code: 0 as number, stdout: huge };
+	const { spawn } = makeSpawn([plan, plan]);
 	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
 	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(result.block, true);
-	assert.match(result.reason, /maximum size/);
+	assert.match(result.reason, /maximum size|output_too_large/i);
 });
 
 test("helpers resolve modes and sanitize reasons", () => {

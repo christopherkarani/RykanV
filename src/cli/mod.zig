@@ -68,6 +68,7 @@ pub const history = @import("history.zig");
 pub const suggestions = @import("suggestions.zig");
 pub const danger_confirmation = @import("danger_confirmation.zig");
 pub const fm_steward_client = @import("fm_steward_client.zig");
+pub const codex_mcp_sandbox = @import("codex_mcp_sandbox.zig");
 
 test {
     _ = brand;
@@ -83,6 +84,7 @@ test {
     _ = pi_install;
     _ = grok_install;
     _ = plugin_install;
+    _ = plugin;
     _ = @import("openclaw_status.zig");
     _ = start;
     _ = setup;
@@ -110,6 +112,7 @@ test {
     _ = rust_legacy_stub;
     _ = rust_visibility;
     _ = evaluate;
+    _ = decide;
     _ = agent_hook;
     _ = daemon_contracts;
     _ = packs;
@@ -120,6 +123,8 @@ test {
     _ = danger_confirmation;
     _ = run_command;
     _ = run_os_sandbox;
+    _ = codex_mcp_sandbox;
+    _ = mcp;
     _ = env_schema_command;
     // Surfaces touched by production-readiness hardening (M1–M4).
     _ = completions;
@@ -797,7 +802,9 @@ test "command-specific help works through help command and command flag" {
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "ryk run") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Examples:") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "ryk run -- <custom-command>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "network mode is ask") != null);
+    // Phase 1 dual contract: host-alias allowlist + non-alias ask.
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "network mode allowlist") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "defaults network mode to ask") != null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 
     stdout_writer = .fixed(&stdout_buf);

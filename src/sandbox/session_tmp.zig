@@ -45,11 +45,22 @@ pub fn ensureWorkspaceSessionTmp(workspace_root: []const u8) bool {
     var io_rt: std.Io.Threaded = .init_single_threaded;
     const io = io_rt.io();
     std.Io.Dir.cwd().createDirPath(io, preferred) catch {};
-    if (std.Io.Dir.openDirAbsolute(io, preferred, .{})) |dir_opened| {
+    if (std.Io.Dir.openDirAbsolute(io, preferred, .{ .follow_symlinks = false })) |dir_opened| {
         var dir = dir_opened;
         dir.close(io);
         return true;
     } else |_| {
         return false;
     }
+}
+
+test "ensureWorkspaceSessionTmp rejects a planted final symlink" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    try tmp.dir.createDir(io, "outside", .default_dir);
+    try tmp.dir.symLink(io, "outside", workspace_session_tmp_name, .{ .is_directory = true });
+    const root = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+    try std.testing.expect(!ensureWorkspaceSessionTmp(root));
 }

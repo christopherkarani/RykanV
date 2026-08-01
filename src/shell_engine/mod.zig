@@ -365,7 +365,15 @@ fn tryAllowOnce(
         cwd,
         now,
         false,
-    ) catch {
+    ) catch |err| {
+        // Seatbelt residual: allow-once lives under XDG/HOME data, often unreadable
+        // under "no bare home". Treat access denials as "no grant" (packs still run),
+        // not as a critical deny of every shell command. Corrupt/IO other errors
+        // still fail closed.
+        if (isSandboxHomeStoreAccessError(err)) {
+            try endOuterStep(options.trace, .{ .message = "allow_once store inaccessible (skipped)" });
+            return null;
+        }
         return try storeFail(allocator, options, started_ms);
     };
     const entry = matched orelse return null;
@@ -400,7 +408,8 @@ fn tryAllowOnce(
         ),
         elapsedMs(started_ms),
     );
-    errdefer eval.deinit(allocator);
+    // No errdefer on eval: fail paths free manually then call storeFail (which may
+    // error). errdefer + manual deinit would double-free if storeFail fails.
 
     // Phase 2: durable consume only after Evaluation is built.
     if (options.consume_allow_once) {
@@ -413,6 +422,7 @@ fn tryAllowOnce(
             now,
             true,
         ) catch {
+            // Peek succeeded then consume failed (including rare access flip) — fail closed.
             eval.deinit(allocator);
             return try storeFail(allocator, options, started_ms);
         };
@@ -426,6 +436,11 @@ fn tryAllowOnce(
     }
 
     return eval;
+}
+
+/// Home/XDG store unreadable under hardened sandbox (no bare home). Not a corrupt store.
+fn isSandboxHomeStoreAccessError(err: anyerror) bool {
+    return err == error.AccessDenied or err == error.PermissionDenied;
 }
 
 /// Plan §4.1 step 2: permanent kind=command exact → FULL ALLOW pre-pack.
@@ -687,7 +702,7 @@ fn commandWordBasename(word: []const u8) []const u8 {
 
 fn isInterpreterBasename(base: []const u8) bool {
     const names = [_][]const u8{
-        "bash", "sh", "zsh", "ksh", "dash", "fish",
+        "bash", "sh",   "zsh",  "ksh", "dash", "fish",
         "ruby", "perl", "node",
     };
     for (names) |n| {
@@ -829,8 +844,9 @@ fn segmentArgv0Kind(segment: []const u8) ?ReceiverKind {
 
 fn isShellReservedWord(base: []const u8) bool {
     const words = [_][]const u8{
-        "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done",
-        "case", "esac", "in", "!", "{", "}", "[[", "]]", "function", "select", "coproc",
+        "if",     "then", "else", "elif", "fi", "for", "while", "until", "do",       "done",
+        "case",   "esac", "in",   "!",    "{",  "}",   "[[",    "]]",    "function", "select",
+        "coproc",
     };
     for (words) |w| {
         if (std.mem.eql(u8, base, w)) return true;
@@ -1965,6 +1981,77 @@ test "s-engine: allow-once exact hit allows before packs and consumes when true"
     defer second.deinit(std.testing.allocator);
     try std.testing.expect(second.decision == .deny);
     try std.testing.expect(second.exception_source == null);
+}
+
+test "s-engine: allow-once AccessDenied skips store and continues packs (seatbelt residual)" {
+    // Hardened Seatbelt cannot open ~/.local/share/orca/allow_once.jsonl.
+    // Must not emit allow-once-store-error critical deny for every command.
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    var tmp = try sEngineTmpRoot();
+    defer {
+        std.testing.allocator.free(tmp.path);
+        tmp.dir.cleanup();
+    }
+    const once_path = try sEngineJoin(tmp.path, allow_once_mod.allow_once_file_name);
+    defer std.testing.allocator.free(once_path);
+
+    // Create path then deny all access so lock/open fails with AccessDenied.
+    {
+        const f = try std.Io.Dir.cwd().createFile(std.testing.io, once_path, .{});
+        f.close(std.testing.io);
+        try std.Io.Dir.cwd().setFilePermissions(
+            std.testing.io,
+            once_path,
+            std.Io.File.Permissions.fromMode(0o000),
+            .{},
+        );
+        // Also lock file path parent dir may still allow createFile for .lock —
+        // chmod the directory write off so StoreLock.acquire fails.
+        try std.Io.Dir.cwd().setFilePermissions(
+            std.testing.io,
+            tmp.path,
+            std.Io.File.Permissions.fromMode(0o555),
+            .{},
+        );
+    }
+    defer {
+        // Restore so tmp cleanup can remove.
+        std.Io.Dir.cwd().setFilePermissions(
+            std.testing.io,
+            tmp.path,
+            std.Io.File.Permissions.fromMode(0o755),
+            .{},
+        ) catch {};
+        std.Io.Dir.cwd().setFilePermissions(
+            std.testing.io,
+            once_path,
+            std.Io.File.Permissions.fromMode(0o644),
+            .{},
+        ) catch {};
+    }
+
+    // Safe command must still allow via packs (not store-error deny).
+    var safe = try evaluateCommand(std.testing.allocator, "git status", .{
+        .cwd = tmp.path,
+        .allow_once_path = once_path,
+        .io = std.testing.io,
+        .now_iso = s_engine_now,
+    });
+    defer safe.deinit(std.testing.allocator);
+    try std.testing.expect(safe.decision == .allow);
+    try std.testing.expect(safe.pattern_name == null or !std.mem.eql(u8, safe.pattern_name.?, "allow-once-store-error"));
+
+    // Dangerous command still denied by packs (not masked by store failure).
+    var danger = try evaluateCommand(std.testing.allocator, "rm -rf /", .{
+        .cwd = tmp.path,
+        .allow_once_path = once_path,
+        .io = std.testing.io,
+        .now_iso = s_engine_now,
+    });
+    defer danger.deinit(std.testing.allocator);
+    try std.testing.expect(danger.decision == .deny);
+    try std.testing.expect(danger.pattern_name == null or !std.mem.eql(u8, danger.pattern_name.?, "allow-once-store-error"));
 }
 
 test "s-engine: consume_allow_once false matches without consuming (explain)" {
