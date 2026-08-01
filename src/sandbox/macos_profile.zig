@@ -228,20 +228,25 @@ pub fn renderSbplWithOptions(
     // fail. Same-tree hardlinks under host-config stay denied (residual; agents
     // rarely need them). Do not re-allow file-link on host_rw roots — that reopens
     // cross-root when both ends match separate allows (spike-proven).
-    try appendCrossRootFileLinkFence(&out, allocator, compiled.workspace_root);
+    // Control roots (.git / .orca / authority) get require-not so the workspace
+    // file-link re-allow does not re-open hardlink plant under write-denied trees
+    // (same carve class as file-write*).
+    try appendCrossRootFileLinkFence(&out, allocator, compiled.workspace_root, compiled.control_roots);
 
     // No broad HOME: assert via absence — never emit $HOME or ~ grants.
     return try out.toOwnedSlice(allocator);
 }
 
 /// Last-match file-link fence (F-03). See spike: `(deny file-link)` then
-/// `(allow file-link (subpath workspace))` blocks host→workspace `ln` while
-/// keeping workspace-only hardlinks. Workspace path uses `sbplEmitPath` (Users-form)
-/// like other grants — no Data-form dual emit (M-28).
+/// `(allow file-link (require-all (subpath workspace) (require-not control)…))`
+/// blocks host→workspace `ln` while keeping workspace-only hardlinks and
+/// preserving control-root isolation. Workspace path uses `sbplEmitPath`
+/// (Users-form) like other grants — no Data-form dual emit (M-28).
 fn appendCrossRootFileLinkFence(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
+    control_roots: []const []const u8,
 ) !void {
     if (workspace_root.len == 0 or !std.fs.path.isAbsolute(workspace_root)) return;
     try out.appendSlice(allocator,
@@ -250,7 +255,39 @@ fn appendCrossRootFileLinkFence(
         \\(deny file-link)
         \\
     );
-    try appendAllowSubpath(out, allocator, "file-link", workspace_root);
+    try appendAllowFileLinkMinusControls(out, allocator, workspace_root, control_roots);
+}
+
+/// Workspace file-link allow with control-root require-not (mirror of write carve-outs).
+fn appendAllowFileLinkMinusControls(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    control_roots: []const []const u8,
+) !void {
+    const emit = sbplEmitPath(workspace_root);
+    // (allow file-link (require-all (subpath "ws") (require-not (subpath "ctrl")) ...))
+    // When no control roots apply under workspace, emit plain subpath allow.
+    var any_control = false;
+    for (control_roots) |root| {
+        if (!profile.isPathWithin(root, workspace_root) and !std.mem.eql(u8, root, workspace_root)) continue;
+        any_control = true;
+        break;
+    }
+    if (!any_control) {
+        try appendAllowSubpath(out, allocator, "file-link", workspace_root);
+        return;
+    }
+    try out.appendSlice(allocator, "(allow file-link (require-all (subpath \"");
+    try appendEscaped(out, allocator, emit);
+    try out.appendSlice(allocator, "\")");
+    for (control_roots) |root| {
+        if (!profile.isPathWithin(root, workspace_root) and !std.mem.eql(u8, root, workspace_root)) continue;
+        try out.appendSlice(allocator, " (require-not (subpath \"");
+        try appendEscaped(out, allocator, sbplEmitPath(root));
+        try out.appendSlice(allocator, "\"))");
+    }
+    try out.appendSlice(allocator, "))\n");
 }
 
 fn appendProcessBaseline(
@@ -1153,12 +1190,31 @@ test "SBPL F-03 file-link fence denies global link then allows workspace only" {
     const sbpl = try renderSbpl(allocator, &compiled);
     defer allocator.free(sbpl);
 
-    // Pathless deny then workspace allow (last-match after file-write* RW grants).
+    // Pathless deny then workspace allow with control require-not (last-match after grants).
     const deny_at = std.mem.indexOf(u8, sbpl, "(deny file-link)") orelse return error.TestUnexpectedResult;
-    const allow_ws = std.mem.indexOf(u8, sbpl, "(allow file-link (subpath \"/Users/dev/projects/app\"))") orelse
-        return error.TestUnexpectedResult;
+    // Default controls (.orca/.git) → require-all form, not bare workspace subpath allow.
+    const allow_ws = std.mem.indexOf(
+        u8,
+        sbpl,
+        "(allow file-link (require-all (subpath \"/Users/dev/projects/app\")",
+    ) orelse return error.TestUnexpectedResult;
     try std.testing.expect(allow_ws > deny_at);
-    // No Data-form workspace grant (M-28).
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        sbpl,
+        "(require-not (subpath \"/Users/dev/projects/app/.git\"))",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        sbpl,
+        "(require-not (subpath \"/Users/dev/projects/app/.orca\"))",
+    ) != null);
+    // No Data-form workspace file-link grant (M-28).
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        sbpl,
+        "(allow file-link (require-all (subpath \"/System/Volumes/Data/Users/dev/projects/app\")",
+    ) == null);
     try std.testing.expect(std.mem.indexOf(
         u8,
         sbpl,
@@ -1180,7 +1236,11 @@ test "SBPL F-03 file-link fence still emitted without host_rw" {
     const sbpl = try renderSbpl(allocator, &compiled);
     defer allocator.free(sbpl);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(deny file-link)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-link (subpath \"/Users/dev/projects/app\"))") != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        sbpl,
+        "(allow file-link (require-all (subpath \"/Users/dev/projects/app\")",
+    ) != null);
 }
 
 test "SBPL protected host config file is readable but write denied after RW grant" {

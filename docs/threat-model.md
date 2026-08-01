@@ -60,4 +60,4 @@ Host-config RW trees (e.g. `~/.codex`), empty-backpack defaults for agent aliase
 
 ## Host-config hardlink smuggle (F-03)
 
-On macOS session-attach, Seatbelt denies `file-link` then re-allows only under the workspace, so a child cannot hard-link host-config grant files into the workspace. Residuals: `cp` while auth is readable; same-tree host hardlinks denied; no Landlock `file-link` twin on Linux; secretless still exposes raw login files for trusted hosts until S1C/gateway (F-04).
+On macOS session-attach, Seatbelt denies `file-link` then re-allows under the workspace with control-root `require-not` (same class as write carve-outs), so a child cannot hard-link host-config grant files into the workspace or plant hardlinks under `.git`/`.orca`. Residuals: `cp` while auth is readable; same-tree host hardlinks denied; no Landlock `file-link` twin on Linux; secretless still exposes raw login files for trusted hosts until S1C/gateway (F-04).
