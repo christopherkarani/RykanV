@@ -1069,18 +1069,36 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     // Empty-backpack: shell wrappers (hermes → venv/python symlink → uv) hit a
     // Seatbelt residual where open/exec of the *symlink path* is denied even when
     // the realpath target is RO-granted. Expand to realpath argv before spawn.
+    //
+    // PATH honesty (before_process_launch) drops denylisted package trees from the
+    // child PATH. Absolute-ize bare argv0 before that filter so spawn does not
+    // re-search PATH for brew-installed host aliases (pi, opencode, codex, …).
     const planned_argv = if (codex_mcp_plan) |plan| plan.argv else options.command_argv;
-    var expanded_argv_owned: ?[]const []const u8 = null;
-    defer if (expanded_argv_owned) |a| sandbox.apply.freeExpandedShellWrapperArgv(allocator, a);
+    var launch_argv_owned: ?[]const []const u8 = null;
+    defer if (launch_argv_owned) |a| sandbox.apply.freeExpandedShellWrapperArgv(allocator, a);
     if (secret_boundary == .empty_backpack and planned_argv.len > 0 and codex_mcp_plan == null) {
-        expanded_argv_owned = sandbox.apply.expandShellWrapperLaunch(
+        launch_argv_owned = sandbox.apply.expandShellWrapperLaunch(
             io,
             allocator,
             planned_argv,
             &filtered_env.env_map, // mutable: may inject ryk-owned PYTHONPATH for venv
         ) catch null;
     }
-    const spawn_argv: []const []const u8 = expanded_argv_owned orelse planned_argv;
+    const post_expand_argv: []const []const u8 = launch_argv_owned orelse planned_argv;
+    // Absoluteize even when codex_mcp_plan is set — plan.argv keeps bare "codex"
+    // and hits the same post-filter PATH miss. Expand stays MCP-plan-skipped above.
+    if (command_guard_context.os_attach_planned and post_expand_argv.len > 0) {
+        if (sandbox.apply.absoluteizeLaunchArgv(
+            io,
+            allocator,
+            post_expand_argv,
+            &filtered_env.env_map,
+        ) catch null) |absolute_argv| {
+            if (launch_argv_owned) |old| sandbox.apply.freeExpandedShellWrapperArgv(allocator, old);
+            launch_argv_owned = absolute_argv;
+        }
+    }
+    const spawn_argv: []const []const u8 = launch_argv_owned orelse planned_argv;
 
     var result = supervisor.run(io, allocator, .{
         .command = spawn_argv[0],

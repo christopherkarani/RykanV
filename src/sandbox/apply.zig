@@ -705,10 +705,53 @@ pub fn expandShellWrapperLaunch(
     return try list.toOwnedSlice(allocator);
 }
 
-/// Free argv from `expandShellWrapperLaunch`.
+/// Free owned launch argv from `expandShellWrapperLaunch` or `absoluteizeLaunchArgv`.
 pub fn freeExpandedShellWrapperArgv(allocator: std.mem.Allocator, argv: []const []const u8) void {
     for (argv) |a| allocator.free(a);
     allocator.free(argv);
+}
+
+/// Resolve bare argv0 to an absolute path **before** PATH honesty filtering.
+///
+/// Under OS attach, `tool_pack.applyPathFilterToEnv` drops ungranted package trees
+/// (e.g. `/opt/homebrew/bin`). Spawn re-resolves argv0 against the filtered child
+/// PATH, so bare host-alias names like `pi` / `opencode` fail with CommandNotFound
+/// even though grant collection already found them on the pre-filter PATH.
+///
+/// Call this while the child env still has the full host PATH (before the filter).
+/// Returns null when argv0 is already absolute, contains a path separator, is empty,
+/// or cannot be resolved (caller keeps the original argv; spawn surfaces not-found).
+/// On success, returns an owned argv slice (absolute argv0 + duped tail); free with
+/// `freeExpandedShellWrapperArgv`.
+pub fn absoluteizeLaunchArgv(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!?[]const []const u8 {
+    if (argv.len == 0) return null;
+    const argv0 = argv[0];
+    if (argv0.len == 0) return null;
+    if (std.fs.path.isAbsolute(argv0)) return null;
+    // Relative with a separator: leave for cwd-relative exec semantics.
+    if (std.mem.indexOfScalar(u8, argv0, '/') != null) return null;
+
+    const resolved = apply_posix.resolveArgv0(io, allocator, argv0, env_map) catch return null;
+    defer if (resolved.owned) allocator.free(resolved.path);
+    if (!std.fs.path.isAbsolute(resolved.path)) return null;
+    // Already the same absolute string (shouldn't happen for bare names).
+    if (std.mem.eql(u8, resolved.path, argv0)) return null;
+
+    var list: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (list.items) |p| allocator.free(p);
+        list.deinit(allocator);
+    }
+    try list.append(allocator, try allocator.dupe(u8, resolved.path));
+    for (argv[1..]) |arg| {
+        try list.append(allocator, try allocator.dupe(u8, arg));
+    }
+    return try list.toOwnedSlice(allocator);
 }
 
 /// If `python_path` is `…/bin/python*`, locate `…/lib/python*/site-packages` and
@@ -2548,6 +2591,66 @@ test "collectLaunchInstallRoPaths rejects package.json planted at HOME" {
     const ro = try collectLaunchInstallRoPaths(io, allocator, script, &env_map);
     defer freeLaunchInstallRoPaths(allocator, ro);
     try std.testing.expectEqual(@as(usize, 0), ro.len);
+}
+
+test "absoluteizeLaunchArgv resolves bare name before PATH honesty filter" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const bin_dir = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(bin_dir);
+
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "fake-agent",
+        .data = "#!/bin/sh\necho ok\n",
+    });
+    try tmp.dir.setFilePermissions(io, "fake-agent", std.Io.File.Permissions.fromMode(0o755), .{});
+    const abs_agent = try std.fs.path.join(allocator, &.{ bin_dir, "fake-agent" });
+    defer allocator.free(abs_agent);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("PATH", bin_dir);
+
+    const argv_in = [_][]const u8{ "fake-agent", "--version" };
+    const absolute = (try absoluteizeLaunchArgv(io, allocator, &argv_in, &env_map)) orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    defer freeExpandedShellWrapperArgv(allocator, absolute);
+    try std.testing.expectEqual(@as(usize, 2), absolute.len);
+    try std.testing.expect(std.fs.path.isAbsolute(absolute[0]));
+    try std.testing.expectEqualStrings("--version", absolute[1]);
+    // realpath of the planted binary (tmp may be under a symlink prefix).
+    var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const expected = realpathInto(abs_agent, &real_buf) orelse abs_agent;
+    try std.testing.expectEqualStrings(expected, absolute[0]);
+
+    // After PATH honesty drops the bin dir, bare name fails but absolute still resolves.
+    try env_map.put("PATH", "/usr/bin:/bin");
+    try std.testing.expectError(error.FileNotFound, apply_posix.resolveArgv0(io, allocator, "fake-agent", &env_map));
+    const still = try apply_posix.resolveArgv0(io, allocator, absolute[0], &env_map);
+    defer if (still.owned) allocator.free(still.path);
+    try std.testing.expectEqualStrings(absolute[0], still.path);
+}
+
+test "absoluteizeLaunchArgv is null for absolute and missing bare names" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const abs_in = [_][]const u8{"/bin/sh"};
+    try std.testing.expect((try absoluteizeLaunchArgv(io, allocator, &abs_in, null)) == null);
+
+    const rel_in = [_][]const u8{"./local-agent"};
+    try std.testing.expect((try absoluteizeLaunchArgv(io, allocator, &rel_in, null)) == null);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("PATH", "/usr/bin:/bin");
+    const missing = [_][]const u8{"ryk-no-such-host-alias-bin"};
+    try std.testing.expect((try absoluteizeLaunchArgv(io, allocator, &missing, &env_map)) == null);
 }
 
 test "expandShellWrapperLaunch rewrites hermes-style exec to realpath python" {
