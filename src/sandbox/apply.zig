@@ -133,6 +133,9 @@ pub const ApplyBoundary = struct {
     /// Empty backpack keeps HOME in env but denies home FS; these narrow subpaths
     /// restore host login/config (+ session write) for known agents without bare `$HOME`.
     launch_host_rw_paths: []const []const u8 = &.{},
+    /// macOS-only exact files inside host RW trees that remain user authority.
+    /// Seatbelt emits last-match literal write denies for these paths.
+    launch_write_deny_literals: []const []const u8 = &.{},
     /// Empty-backpack sessions require OS enforcement for workspace `.env`
     /// and `.env.*` names (safe templates remain readable).
     protect_workspace_secrets: bool = false,
@@ -144,6 +147,18 @@ pub const ApplyBoundary = struct {
     seatbelt_profile: macos_profile.SeatbeltProfileGrade = macos_profile.SeatbeltProfileGrade.default_grade,
     /// When `error.RequireFailed` is returned, set to a static reason code if non-null.
     fail_reason_out: ?*[]const u8 = null,
+};
+
+pub const AttachSessionTmp = struct {
+    allocator: std.mem.Allocator,
+    path: []u8,
+
+    pub fn deinit(self: *AttachSessionTmp) void {
+        var io_rt: std.Io.Threaded = .init_single_threaded;
+        std.Io.Dir.cwd().deleteTree(io_rt.io(), self.path) catch {};
+        self.allocator.free(self.path);
+        self.* = undefined;
+    }
 };
 
 pub const ApplyResult = struct {
@@ -166,6 +181,9 @@ pub const ApplyResult = struct {
     /// Retained fork buffers for the last successful sandboxed spawn.
     /// Freed in `deinit` after the supervisor has waited/reaped the child.
     spawn_lease: ?apply_posix.SpawnLease = null,
+    /// Fresh per-launch temp directory. Removed after the child has been reaped
+    /// and its sandbox materials are no longer needed.
+    session_tmp: ?AttachSessionTmp = null,
 
     pub fn deinit(self: *ApplyResult) void {
         if (self.spawn_lease) |*lease| {
@@ -176,6 +194,10 @@ pub const ApplyResult = struct {
             self.spawn_lease = null;
         }
         self.materials.deinit();
+        if (self.session_tmp) |*owned_tmp| {
+            owned_tmp.deinit();
+            self.session_tmp = null;
+        }
         self.* = undefined;
     }
 
@@ -375,35 +397,126 @@ fn isUngrantedHostTmpdir(path: []const u8) bool {
     return false;
 }
 
-/// Rewrite TMPDIR/TMP/TEMP into the workspace session temp for the attach path.
+const IsolatedToolCache = struct {
+    env_key: []const u8,
+    directory_name: []const u8,
+};
+
+/// Mutable caches used by common stdio MCP launchers. Every path is minted under
+/// the workspace session temp; host caches under HOME remain outside the grant.
+const isolated_tool_caches = [_]IsolatedToolCache{
+    .{ .env_key = "NPM_CONFIG_CACHE", .directory_name = "npm-cache" },
+    .{ .env_key = "UV_CACHE_DIR", .directory_name = "uv-cache" },
+    .{ .env_key = "BUN_INSTALL_CACHE_DIR", .directory_name = "bun-cache" },
+    .{ .env_key = "XDG_CACHE_HOME", .directory_name = "xdg-cache" },
+    .{ .env_key = "PLAYWRIGHT_BROWSERS_PATH", .directory_name = "playwright-browsers" },
+};
+
+pub fn createFreshAttachTmp(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    workspace_tmp: []const u8,
+) error{ OutOfMemory, SessionTmpPrepareFailed }![]u8 {
+    var random_bytes: [12]u8 = undefined;
+    io.randomSecure(&random_bytes) catch return error.SessionTmpPrepareFailed;
+    const suffix = std.fmt.bytesToHex(random_bytes, .lower);
+
+    var attempt: u8 = 0;
+    while (attempt < 8) : (attempt += 1) {
+        const path = try std.fmt.allocPrint(
+            allocator,
+            "{s}/session-{s}-{d}",
+            .{ workspace_tmp, suffix, attempt },
+        );
+        std.Io.Dir.createDirAbsolute(io, path, .default_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {
+                allocator.free(path);
+                continue;
+            },
+            else => {
+                allocator.free(path);
+                return error.SessionTmpPrepareFailed;
+            },
+        };
+        var opened = std.Io.Dir.openDirAbsolute(io, path, .{ .follow_symlinks = false }) catch {
+            std.Io.Dir.cwd().deleteTree(io, path) catch {};
+            allocator.free(path);
+            return error.SessionTmpPrepareFailed;
+        };
+        opened.close(io);
+        return path;
+    }
+    return error.SessionTmpPrepareFailed;
+}
+
+fn applyIsolatedToolCaches(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    env_map: *std.process.Environ.Map,
+    session_root: []const u8,
+) error{ OutOfMemory, SessionTmpPrepareFailed }!void {
+    for (isolated_tool_caches) |cache| {
+        const path = try std.fs.path.join(allocator, &.{ session_root, cache.directory_name });
+        defer allocator.free(path);
+        std.Io.Dir.createDirAbsolute(io, path, .default_dir) catch
+            return error.SessionTmpPrepareFailed;
+        try env_map.put(cache.env_key, path);
+    }
+}
+
+fn applyIsolatedGitConfig(env_map: *std.process.Environ.Map) error{OutOfMemory}!void {
+    try env_map.put("GIT_CONFIG_GLOBAL", "/dev/null");
+    try env_map.put("GIT_CONFIG_COUNT", "1");
+    try env_map.put("GIT_CONFIG_KEY_0", "core.excludesFile");
+    try env_map.put("GIT_CONFIG_VALUE_0", "/dev/null");
+}
+
+/// Prepare temp, tool-cache, and Git environment for the attach path.
 ///
 /// Host macOS TMPDIR under `/var/folders` is intentionally not granted (canary breadth).
-/// Prefer `{workspace}/.orca-tmp` (workspace RW; mkdir so Landlock expand sees it).
+/// Prefer a fresh child of `{workspace}/.orca-tmp` so package-manager caches
+/// cannot consume state planted by an earlier agent launch.
 ///
 /// Production defaults keep `include_tmp=false` (no classic `/tmp` RW grant). Do **not**
 /// silently rewrite to classic `/tmp` when session temp cannot be prepared — that path
 /// is agent-unwritable under the sandbox and misleads operators. Fail closed instead
 /// (`error.SessionTmpPrepareFailed`); callers map to `session_tmp_prepare_failed`.
 ///
-/// Mutates `env_map` in place only on success. Returns the path written into TMPDIR
-/// (map-owned value).
-pub fn rewriteTempEnvForAttach(
+/// Mutates `env_map` in place only on success. Returns ownership of the fresh
+/// session temp; the caller must retain it for the launch and call `deinit`.
+pub fn prepareAttachEnvironment(
     allocator: std.mem.Allocator,
     env_map: *std.process.Environ.Map,
     workspace_root: []const u8,
-) error{ OutOfMemory, SessionTmpPrepareFailed }![]const u8 {
-    const preferred = try workspaceSessionTmpPath(allocator, workspace_root);
-    defer allocator.free(preferred);
+) error{ OutOfMemory, SessionTmpPrepareFailed }!AttachSessionTmp {
+    const workspace_tmp = try workspaceSessionTmpPath(allocator, workspace_root);
+    defer allocator.free(workspace_tmp);
 
     // Create session surface first (shared with Landlock expand precreate).
     // Fail closed: production materials require session tmp under workspace RW.
     if (!ensureWorkspaceSessionTmp(workspace_root)) return error.SessionTmpPrepareFailed;
 
-    // Map put duplicates via map allocator — preferred stack path is free'd after.
-    try env_map.put("TMPDIR", preferred);
-    try env_map.put("TMP", preferred);
-    try env_map.put("TEMP", preferred);
-    return env_map.get("TMPDIR") orelse error.SessionTmpPrepareFailed;
+    var io_rt: std.Io.Threaded = .init_single_threaded;
+    const io = io_rt.io();
+    const preferred = try createFreshAttachTmp(io, allocator, workspace_tmp);
+    var attach_tmp: AttachSessionTmp = .{ .allocator = allocator, .path = preferred };
+    errdefer attach_tmp.deinit();
+
+    var staged = try env_map.clone(env_map.allocator);
+    defer staged.deinit();
+    try applyIsolatedToolCaches(io, allocator, &staged, preferred);
+
+    try staged.put("TMPDIR", preferred);
+    try staged.put("TMP", preferred);
+    try staged.put("TEMP", preferred);
+
+    // Host-global Git configuration can contain credentials and remains denied.
+    // Point Git at inert global config/ignore files so ordinary repository probes
+    // do not turn that deliberate denial into a fatal startup error.
+    try applyIsolatedGitConfig(&staged);
+
+    std.mem.swap(std.process.Environ.Map, env_map, &staged);
+    return attach_tmp;
 }
 
 /// Resolve argv0 into narrow absolute **file** paths for `.exec` profile grants.
@@ -1276,6 +1389,7 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
         &compiled,
         boundary.network_proxy_port,
         boundary.seatbelt_profile,
+        boundary.launch_write_deny_literals,
     );
     defer platform.deinit();
 
@@ -1289,9 +1403,11 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
     // Attach path rewrites TMPDIR into workspace session temp (R2-2) — host /var/folders
     // is not granted, and classic `/tmp` is not RW under production defaults.
     var allowlisted = false;
+    var attach_tmp: ?AttachSessionTmp = null;
+    defer if (attach_tmp) |*owned| owned.deinit();
     if (platform.status == .prepared_child) {
         // Create `{workspace}/.orca-tmp` before Landlock expand enumerates children,
-        // even when env_map is null (rewriteTempEnvForAttach also ensures when env present).
+        // even when env_map is null (prepareAttachEnvironment also ensures when env present).
         // Fail closed when materials require session tmp (M-8): never lie with classic /tmp.
         if (!ensureWorkspaceSessionTmp(boundary.workspace_root)) {
             setFailReason(boundary, "session_tmp_prepare_failed");
@@ -1318,7 +1434,7 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
                 allowlisted = true;
             }
             // After allowlist keeps TMPDIR key, point it at workspace session temp.
-            _ = rewriteTempEnvForAttach(boundary.allocator, env_map, boundary.workspace_root) catch |err| switch (err) {
+            attach_tmp = prepareAttachEnvironment(boundary.allocator, env_map, boundary.workspace_root) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.SessionTmpPrepareFailed => {
                     setFailReason(boundary, "session_tmp_prepare_failed");
@@ -1356,6 +1472,11 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
                         .include_tmp = boundary.include_tmp,
                     } },
                     .network_route_forced = platform.network_route_forced,
+                    .session_tmp = blk: {
+                        const owned = attach_tmp;
+                        attach_tmp = null;
+                        break :blk owned;
+                    },
                 };
             }
             const sbpl_z = platform.takeSeatbeltSbpl() orelse {
@@ -1387,6 +1508,11 @@ pub fn applyBeforeExec(boundary: ApplyBoundary) ApplyError!ApplyResult {
                     .profile_grade = platform.seatbelt_profile_grade,
                 } },
                 .network_route_forced = platform.network_route_forced,
+                .session_tmp = blk: {
+                    const owned = attach_tmp;
+                    attach_tmp = null;
+                    break :blk owned;
+                },
             };
         },
         .unavailable => {
@@ -1425,10 +1551,17 @@ fn tryPlatformApply(
     compiled: *const profile.CompiledProfile,
     network_proxy_port: ?u16,
     seatbelt_profile: macos_profile.SeatbeltProfileGrade,
+    write_deny_literals: []const []const u8,
 ) ApplyError!PlatformApplyOutcome {
     return switch (builtin.os.tag) {
         .linux => tryPlatformApplyLinux(network_proxy_port),
-        .macos => try tryMacOsSeatbelt(allocator, compiled, network_proxy_port, seatbelt_profile),
+        .macos => try tryMacOsSeatbelt(
+            allocator,
+            compiled,
+            network_proxy_port,
+            seatbelt_profile,
+            write_deny_literals,
+        ),
         else => .{
             .status = .unavailable,
             .mechanism = .none,
@@ -1442,6 +1575,7 @@ fn tryMacOsSeatbelt(
     compiled: *const profile.CompiledProfile,
     network_proxy_port: ?u16,
     seatbelt_profile: macos_profile.SeatbeltProfileGrade,
+    write_deny_literals: []const []const u8,
 ) ApplyError!PlatformApplyOutcome {
     const prepared = macos_seatbelt.prepareForChildApplyWithOptions(
         allocator,
@@ -1450,6 +1584,7 @@ fn tryMacOsSeatbelt(
         .{
             .network_route_forcing = if (network_proxy_port) |port| .{ .proxy_port = port } else null,
             .profile_grade = seatbelt_profile,
+            .write_deny_literals = write_deny_literals,
         },
     );
     return switch (prepared.status) {
@@ -1754,6 +1889,28 @@ test "PlatformApplyOutcome deinit frees owned SBPL" {
     };
     outcome2.deinit(); // frees sbpl2
     try std.testing.expect(outcome2.seatbelt_sbpl_z == null);
+}
+
+test "ApplyResult deinit removes its owned attach session temp" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+    var env_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer env_map.deinit();
+    const owned_tmp = try prepareAttachEnvironment(std.testing.allocator, &env_map, root);
+    const retained_path = try std.testing.allocator.dupe(u8, owned_tmp.path);
+    defer std.testing.allocator.free(retained_path);
+    var result: ApplyResult = .{
+        .receipt = posture.disabledReceipt(),
+        .session_tmp = owned_tmp,
+    };
+    result.deinit();
+
+    try std.testing.expectError(
+        error.FileNotFound,
+        std.Io.Dir.openDirAbsolute(std.testing.io, retained_path, .{}),
+    );
 }
 
 test "non-Linux never yields active receipt from apply seam without child spawn" {
@@ -2810,7 +2967,7 @@ test "isUngrantedHostTmpdir detects macOS var/folders shapes" {
     try std.testing.expect(!isUngrantedHostTmpdir("/workspace/.orca-tmp"));
 }
 
-test "rewriteTempEnvForAttach points TMPDIR at workspace session temp" {
+test "prepareAttachEnvironment points TMPDIR at fresh workspace session temp" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
@@ -2823,23 +2980,71 @@ test "rewriteTempEnvForAttach points TMPDIR at workspace session temp" {
     try env_map.put("TMP", "/var/folders/ns/xmz0/T/");
     try env_map.put("TEMP", "/var/folders/ns/xmz0/T/");
 
-    const rewritten = try rewriteTempEnvForAttach(std.testing.allocator, &env_map, root);
+    var prepared = try prepareAttachEnvironment(std.testing.allocator, &env_map, root);
+    defer prepared.deinit();
+    const rewritten = prepared.path;
     try std.testing.expect(!isUngrantedHostTmpdir(rewritten));
     // Production defaults: session temp only — never silent classic /tmp fallback (M-8).
-    try std.testing.expect(std.mem.endsWith(u8, rewritten, "/.orca-tmp"));
+    const workspace_tmp = try workspaceSessionTmpPath(std.testing.allocator, root);
+    defer std.testing.allocator.free(workspace_tmp);
+    try std.testing.expect(std.mem.startsWith(u8, rewritten, workspace_tmp));
     try std.testing.expect(!std.mem.eql(u8, rewritten, classic_tmp_fallback));
     try std.testing.expectEqualStrings(rewritten, env_map.get("TMPDIR").?);
     try std.testing.expectEqualStrings(rewritten, env_map.get("TMP").?);
     try std.testing.expectEqualStrings(rewritten, env_map.get("TEMP").?);
+
+    // MCP package launchers must not fall back to denied host state under HOME.
+    for (isolated_tool_caches) |cache| {
+        const path = env_map.get(cache.env_key) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(std.mem.startsWith(u8, path, rewritten));
+        try std.testing.expect(std.mem.endsWith(u8, path, cache.directory_name));
+    }
+
+    // Git must not fail while probing denied host-global config/ignore files.
+    try std.testing.expectEqualStrings("/dev/null", env_map.get("GIT_CONFIG_GLOBAL").?);
+    try std.testing.expectEqualStrings("1", env_map.get("GIT_CONFIG_COUNT").?);
+    try std.testing.expectEqualStrings("core.excludesFile", env_map.get("GIT_CONFIG_KEY_0").?);
+    try std.testing.expectEqualStrings("/dev/null", env_map.get("GIT_CONFIG_VALUE_0").?);
 
     // Preferred path must exist when rewrite succeeds.
     var io_rt: std.Io.Threaded = .init_single_threaded;
     const io = io_rt.io();
     var dir = try std.Io.Dir.openDirAbsolute(io, rewritten, .{});
     dir.close(io);
+    for (isolated_tool_caches) |cache| {
+        var cache_dir = try std.Io.Dir.openDirAbsolute(io, env_map.get(cache.env_key).?, .{});
+        cache_dir.close(io);
+    }
 }
 
-test "rewriteTempEnvForAttach fails closed when session tmp cannot be prepared" {
+test "prepareAttachEnvironment creates a fresh cache namespace per launch" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var first = std.process.Environ.Map.init(std.testing.allocator);
+    defer first.deinit();
+    var second = std.process.Environ.Map.init(std.testing.allocator);
+    defer second.deinit();
+
+    var first_prepared = try prepareAttachEnvironment(std.testing.allocator, &first, root);
+    defer first_prepared.deinit();
+    var second_prepared = try prepareAttachEnvironment(std.testing.allocator, &second, root);
+    defer second_prepared.deinit();
+    const first_tmp = first_prepared.path;
+    const second_tmp = second_prepared.path;
+    try std.testing.expect(!std.mem.eql(u8, first_tmp, second_tmp));
+    try std.testing.expect(std.mem.startsWith(u8, first_tmp, root));
+    try std.testing.expect(std.mem.startsWith(u8, second_tmp, root));
+    try std.testing.expect(!std.mem.eql(
+        u8,
+        first.get("NPM_CONFIG_CACHE").?,
+        second.get("NPM_CONFIG_CACHE").?,
+    ));
+}
+
+test "prepareAttachEnvironment fails closed when session tmp cannot be prepared" {
     // Empty workspace → ensureWorkspaceSessionTmp returns false; must not rewrite to /tmp.
     var env_map = std.process.Environ.Map.init(std.testing.allocator);
     defer env_map.deinit();
@@ -2849,7 +3054,7 @@ test "rewriteTempEnvForAttach fails closed when session tmp cannot be prepared" 
 
     try std.testing.expectError(
         error.SessionTmpPrepareFailed,
-        rewriteTempEnvForAttach(std.testing.allocator, &env_map, ""),
+        prepareAttachEnvironment(std.testing.allocator, &env_map, ""),
     );
     // Env must remain unchanged (no lying classic /tmp rewrite).
     try std.testing.expectEqualStrings("/var/folders/ns/xmz0/T/", env_map.get("TMPDIR").?);
@@ -2862,9 +3067,65 @@ test "rewriteTempEnvForAttach fails closed when session tmp cannot be prepared" 
     long_root[0] = '/';
     try std.testing.expectError(
         error.SessionTmpPrepareFailed,
-        rewriteTempEnvForAttach(std.testing.allocator, &env_map, long_root[0..]),
+        prepareAttachEnvironment(std.testing.allocator, &env_map, long_root[0..]),
     );
     try std.testing.expectEqualStrings("/var/folders/ns/xmz0/T/", env_map.get("TMPDIR").?);
+}
+
+test "prepareAttachEnvironment rolls back env and session temp on allocation failure" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    const original_tmp = "/var/folders/ns/xmz0/T/";
+    var observed_induced_failure = false;
+    for (0..64) |failure_offset| {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+        const allocator = failing.allocator();
+        var env_map = std.process.Environ.Map.init(allocator);
+        defer env_map.deinit();
+        try env_map.put("TMPDIR", original_tmp);
+        try env_map.put("TMP", original_tmp);
+        try env_map.put("TEMP", original_tmp);
+        try env_map.put("UNCHANGED", "yes");
+        failing.fail_index = failing.alloc_index + failure_offset;
+
+        const prepared = prepareAttachEnvironment(allocator, &env_map, root);
+        if (prepared) |owned_value| {
+            var owned = owned_value;
+            owned.deinit();
+        } else |err| switch (err) {
+            error.OutOfMemory => {
+                if (!failing.has_induced_failure) continue;
+                observed_induced_failure = true;
+                try std.testing.expectEqualStrings(original_tmp, env_map.get("TMPDIR").?);
+                try std.testing.expectEqualStrings(original_tmp, env_map.get("TMP").?);
+                try std.testing.expectEqualStrings(original_tmp, env_map.get("TEMP").?);
+                try std.testing.expectEqualStrings("yes", env_map.get("UNCHANGED").?);
+                for (isolated_tool_caches) |cache| {
+                    try std.testing.expect(env_map.get(cache.env_key) == null);
+                }
+                try std.testing.expect(env_map.get("GIT_CONFIG_GLOBAL") == null);
+
+                const workspace_tmp = try workspaceSessionTmpPath(std.testing.allocator, root);
+                defer std.testing.allocator.free(workspace_tmp);
+                var session_dir = std.Io.Dir.openDirAbsolute(
+                    std.testing.io,
+                    workspace_tmp,
+                    .{ .iterate = true },
+                ) catch |open_err| switch (open_err) {
+                    error.FileNotFound => continue,
+                    else => return open_err,
+                };
+                defer session_dir.close(std.testing.io);
+                var entries = session_dir.iterate();
+                try std.testing.expect(try entries.next(std.testing.io) == null);
+            },
+            error.SessionTmpPrepareFailed => return err,
+        }
+    }
+    try std.testing.expect(observed_induced_failure);
 }
 
 test "attach path rewrites host TMPDIR out of var/folders (R2-2)" {
@@ -2896,7 +3157,10 @@ test "attach path rewrites host TMPDIR out of var/folders (R2-2)" {
         try std.testing.expect(td.len > 0);
         try std.testing.expect(!isUngrantedHostTmpdir(td));
         // Production defaults: session temp under workspace only (M-8; no classic /tmp).
-        try std.testing.expect(std.mem.endsWith(u8, td, "/.orca-tmp"));
+        const workspace_tmp = try workspaceSessionTmpPath(std.testing.allocator, root);
+        defer std.testing.allocator.free(workspace_tmp);
+        try std.testing.expect(std.mem.startsWith(u8, td, workspace_tmp));
+        try std.testing.expect(std.mem.startsWith(u8, td[workspace_tmp.len..], "/session-"));
         try std.testing.expect(!std.mem.eql(u8, td, classic_tmp_fallback));
         // Pure grants: rewritten path must be agent-writable under production model.
         switch (result.materials) {

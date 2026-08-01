@@ -46,6 +46,7 @@ pub const Server = struct {
     transport: Transport,
     command: []const u8,
     args: []const []const u8,
+    cwd: ?[]const u8 = null,
     expected_hash: ?[]const u8,
     env_allow: []const []const u8,
 
@@ -54,6 +55,7 @@ pub const Server = struct {
         allocator.free(self.command);
         for (self.args) |arg| allocator.free(arg);
         if (self.args.len > 0) allocator.free(self.args);
+        if (self.cwd) |cwd| allocator.free(cwd);
         if (self.expected_hash) |hash| allocator.free(hash);
         for (self.env_allow) |name| allocator.free(name);
         if (self.env_allow.len > 0) allocator.free(self.env_allow);
@@ -111,6 +113,7 @@ const Builder = struct {
     server_name: ?[]const u8 = null,
     server_transport: ?Transport = null,
     server_command: ?[]const u8 = null,
+    server_cwd: ?[]const u8 = null,
     server_args: std.ArrayList([]const u8) = .empty,
     expected_hash: ?[]const u8 = null,
     env_allow: std.ArrayList([]const u8) = .empty,
@@ -127,6 +130,7 @@ const Builder = struct {
     fn deinit(self: *Builder) void {
         if (self.server_name) |value| self.allocator.free(value);
         if (self.server_command) |value| self.allocator.free(value);
+        if (self.server_cwd) |value| self.allocator.free(value);
         if (self.expected_hash) |value| self.allocator.free(value);
         for (self.server_args.items) |value| self.allocator.free(value);
         self.server_args.deinit(self.allocator);
@@ -166,21 +170,48 @@ const Builder = struct {
         const command = self.server_command orelse "";
         if (transport == .stdio and command.len == 0) return error.MissingServerCommand;
 
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
+        const owned_command = try self.allocator.dupe(u8, command);
+        errdefer self.allocator.free(owned_command);
+        const owned_args = try self.server_args.toOwnedSlice(self.allocator);
+        errdefer {
+            for (owned_args) |arg| self.allocator.free(arg);
+            self.allocator.free(owned_args);
+        }
+        const owned_cwd = if (self.server_cwd) |cwd| try self.allocator.dupe(u8, cwd) else null;
+        errdefer if (owned_cwd) |cwd| self.allocator.free(cwd);
+        const owned_hash = if (self.expected_hash) |hash| try self.allocator.dupe(u8, hash) else null;
+        errdefer if (owned_hash) |hash| self.allocator.free(hash);
+        const owned_env_allow = try self.env_allow.toOwnedSlice(self.allocator);
+        errdefer {
+            for (owned_env_allow) |entry| self.allocator.free(entry);
+            self.allocator.free(owned_env_allow);
+        }
+        const owned_tools = try self.tools.toOwnedSlice(self.allocator);
+        errdefer {
+            for (owned_tools) |entry| entry.deinit(self.allocator);
+            self.allocator.free(owned_tools);
+        }
+        const owned_source = if (source_path) |path| try self.allocator.dupe(u8, path) else null;
+        errdefer if (owned_source) |path| self.allocator.free(path);
+
         return .{
             .version = self.version,
             .server = .{
-                .name = try self.allocator.dupe(u8, name),
+                .name = owned_name,
                 .transport = transport,
-                .command = try self.allocator.dupe(u8, command),
-                .args = try self.server_args.toOwnedSlice(self.allocator),
-                .expected_hash = if (self.expected_hash) |hash| try self.allocator.dupe(u8, hash) else null,
-                .env_allow = try self.env_allow.toOwnedSlice(self.allocator),
+                .command = owned_command,
+                .args = owned_args,
+                .cwd = owned_cwd,
+                .expected_hash = owned_hash,
+                .env_allow = owned_env_allow,
             },
-            .tools = try self.tools.toOwnedSlice(self.allocator),
+            .tools = owned_tools,
             .resources_default = self.resources_default,
             .prompts_default = self.prompts_default,
             .sampling_default = self.sampling_default,
-            .source_path = if (source_path) |path| try self.allocator.dupe(u8, path) else null,
+            .source_path = owned_source,
         };
     }
 };
@@ -289,6 +320,8 @@ fn applyServerField(builder: *Builder, key: []const u8, value: []const u8, list_
         builder.server_transport = Transport.parse(scalar) orelse return error.UnsupportedTransport;
     } else if (std.mem.eql(u8, key, "command")) {
         replaceOwned(builder.allocator, &builder.server_command, scalar) catch return error.InvalidManifest;
+    } else if (std.mem.eql(u8, key, "cwd")) {
+        replaceOwned(builder.allocator, &builder.server_cwd, scalar) catch return error.InvalidManifest;
     } else if (std.mem.eql(u8, key, "args")) {
         if (std.mem.eql(u8, scalar, "[]")) return;
         if (scalar.len == 0) list_target.* = .server_args else return error.InvalidManifest;

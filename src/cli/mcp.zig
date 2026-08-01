@@ -2,6 +2,7 @@ const std = @import("std");
 
 const env_util = @import("../env_util.zig");
 const orca_mcp = @import("../mcp/mod.zig");
+const sandbox = @import("../sandbox/mod.zig");
 const core = @import("orca_core").core;
 const supervisor = core.supervisor;
 const core_api = @import("orca_core").api;
@@ -55,6 +56,10 @@ const Options = struct {
     server_name: []const u8 = "fake",
     policy_path: ?[]const u8 = null,
     manifest_path: ?[]const u8 = null,
+    audit_dir_name: ?[]const u8 = null,
+    workspace_root: ?[]const u8 = null,
+    codex_inventory_bin: ?[]const u8 = null,
+    codex_inventory_fingerprint: ?[]const u8 = null,
     mode: ?policy.schema.Mode = null,
 
     fn deinit(self: Options, allocator: std.mem.Allocator) void {
@@ -95,18 +100,95 @@ fn parseOptions(allocator: std.mem.Allocator, argv: []const []const u8, stderr: 
             index += 1;
             if (index >= argv.len) return error.Usage;
             options.mode = policy.schema.Mode.parse(argv[index]) orelse return error.Usage;
+        } else if (std.mem.eql(u8, arg, "--audit-dir-name")) {
+            index += 1;
+            if (index >= argv.len or !safeProxyAuditDirName(argv[index])) return error.Usage;
+            options.audit_dir_name = argv[index];
+        } else if (std.mem.eql(u8, arg, "--workspace")) {
+            index += 1;
+            if (index >= argv.len or !std.fs.path.isAbsolute(argv[index])) return error.Usage;
+            options.workspace_root = argv[index];
+        } else if (std.mem.eql(u8, arg, "--codex-inventory-bin")) {
+            index += 1;
+            if (index >= argv.len or argv[index].len == 0) return error.Usage;
+            options.codex_inventory_bin = argv[index];
+        } else if (std.mem.eql(u8, arg, "--codex-inventory-fingerprint")) {
+            index += 1;
+            if (index >= argv.len or argv[index].len != 64) return error.Usage;
+            for (argv[index]) |byte| if (!std.ascii.isHex(byte)) return error.Usage;
+            options.codex_inventory_fingerprint = argv[index];
         } else if (std.mem.eql(u8, arg, "--")) {
             for (argv[index + 1 ..]) |command_arg| try command_parts.append(allocator, command_arg);
             break;
         } else {
-            try suggestions.writeUnknownOption(stderr, "ryk mcp", arg, &.{ "--command", "--server", "--name", "--policy", "--manifest", "--mode" }, "mcp");
+            try suggestions.writeUnknownOption(stderr, "ryk mcp", arg, &.{ "--command", "--server", "--name", "--policy", "--manifest", "--mode", "--audit-dir-name", "--workspace" }, "mcp");
             return error.Usage;
         }
     }
-    if (command_parts.items.len == 0) return error.MissingCommand;
+    const has_codex_inventory = options.codex_inventory_bin != null or options.codex_inventory_fingerprint != null;
+    if (has_codex_inventory and
+        (options.codex_inventory_bin == null or options.codex_inventory_fingerprint == null or
+            command_parts.items.len != 0)) return error.Usage;
+    if (!has_codex_inventory and command_parts.items.len == 0) return error.MissingCommand;
     options.command_argv = try command_parts.toOwnedSlice(allocator);
     options.owns_command_argv = true;
     return options;
+}
+
+const RefreshedCodexLaunch = struct {
+    inventory: sandbox.mcp_runtime_grants.LaunchInventory,
+    argv: []const []const u8,
+    env_map: std.process.Environ.Map,
+
+    fn deinit(self: *RefreshedCodexLaunch, allocator: std.mem.Allocator) void {
+        self.env_map.deinit();
+        allocator.free(self.argv);
+        self.inventory.deinit(allocator);
+        self.* = undefined;
+    }
+};
+
+fn refreshCodexLaunch(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    codex_bin: []const u8,
+    server_name: []const u8,
+    expected_fingerprint: []const u8,
+    workspace: []const u8,
+) !RefreshedCodexLaunch {
+    var process_env = try env_util.createProcessMap(allocator);
+    errdefer process_env.deinit();
+    const result = try std.process.run(allocator, io, .{
+        .argv = &.{ codex_bin, "mcp", "list", "--json" },
+        .cwd = .{ .path = workspace },
+        .environ_map = &process_env,
+        .expand_arg0 = .expand,
+        .stdout_limit = .limited(sandbox.mcp_runtime_grants.max_config_bytes),
+        .stderr_limit = .limited(32 * 1024),
+        .timeout = .{ .duration = .{ .raw = .fromSeconds(10), .clock = .awake } },
+    });
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    switch (result.term) {
+        .exited => |code| if (code != 0) return error.InventoryCommandFailed,
+        else => return error.InventoryCommandFailed,
+    }
+    const home = process_env.get("HOME") orelse "";
+    var inventory = try sandbox.mcp_runtime_grants.parse(allocator, io, result.stdout, home);
+    errdefer inventory.deinit(allocator);
+    const selected = for (inventory.servers) |*server| {
+        if (std.mem.eql(u8, server.name, server_name)) break server;
+    } else return error.InventoryServerMissing;
+    const actual_fingerprint = sandbox.mcp_runtime_grants.fingerprint(selected.*);
+    if (!std.mem.eql(u8, &actual_fingerprint, expected_fingerprint)) return error.InventoryChanged;
+    for (selected.env) |entry| {
+        if (sandbox.env_scrub.shouldScrubKey(entry.name)) return error.InvalidInventoryEnvironment;
+        try process_env.put(entry.name, entry.value);
+    }
+    const launch_argv = try allocator.alloc([]const u8, selected.args.len + 1);
+    launch_argv[0] = selected.command;
+    @memcpy(launch_argv[1..], selected.args);
+    return .{ .inventory = inventory, .argv = launch_argv, .env_map = process_env };
 }
 
 fn inspect(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
@@ -120,6 +202,7 @@ fn inspect(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytyp
 
     const options = parseOptions(allocator, argv, stderr) catch |err| return usageCode(err, stderr);
     defer options.deinit(allocator);
+    if (options.codex_inventory_bin != null) return usageCode(error.Usage, stderr);
     // Schema policy so inspect can read effects.classifier (opaque core_api.Policy cannot).
     var loaded_policy: ?policy.schema.Policy = null;
     defer if (loaded_policy) |*loaded| loaded.deinit();
@@ -243,8 +326,28 @@ fn proxy(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
 
     const options = parseOptions(allocator, argv, stderr) catch |err| return usageCode(err, stderr);
     defer options.deinit(allocator);
-    const workspace = try supervisor.resolveWorkspaceRoot(io, allocator, null, ".");
+    const workspace = if (options.workspace_root) |root|
+        try allocator.dupe(u8, root)
+    else
+        try supervisor.resolveWorkspaceRoot(io, allocator, null, ".");
     defer allocator.free(workspace);
+    var refreshed_launch: ?RefreshedCodexLaunch = null;
+    defer if (refreshed_launch) |*launch| launch.deinit(allocator);
+    if (options.codex_inventory_bin) |codex_bin| {
+        refreshed_launch = refreshCodexLaunch(
+            io,
+            allocator,
+            codex_bin,
+            options.server_name,
+            options.codex_inventory_fingerprint.?,
+            workspace,
+        ) catch |err| {
+            try stderr.print("ryk mcp proxy: Codex MCP inventory changed or is unavailable: {s}\n", .{@errorName(err)});
+            return exit_codes.general;
+        };
+    }
+    const requested_argv = if (refreshed_launch) |launch| launch.argv else options.command_argv;
+    const requested_env: ?*const std.process.Environ.Map = if (refreshed_launch) |*launch| &launch.env_map else null;
     var loaded = core_api.discoverPolicy(io, allocator, options.policy_path, workspace) catch |err| {
         try stderr.print("ryk mcp proxy: invalid policy: {s}\n", .{@errorName(err)});
         return exit_codes.general;
@@ -264,16 +367,30 @@ fn proxy(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
             try stderr.print("ryk mcp proxy: manifest server '{s}' does not match --name '{s}'.\n", .{ loaded_manifest.?.server.name, options.server_name });
             return exit_codes.usage;
         }
-        bound_launch = bindManifestLaunch(io, allocator, loaded_manifest.?, options.command_argv) catch |err| {
+        bound_launch = bindManifestLaunch(
+            io,
+            allocator,
+            loaded_manifest.?,
+            requested_argv,
+            requested_env,
+        ) catch |err| {
             try stderr.print("ryk mcp proxy: manifest does not match launched server: {s}\n", .{@errorName(err)});
             return exit_codes.usage;
         };
     }
-    const spawn_argv = if (bound_launch) |binding| binding.argv else options.command_argv;
-    const spawn_env = if (bound_launch) |*binding| &binding.env_map else null;
+    const spawn_argv = if (bound_launch) |binding| binding.argv else requested_argv;
+    const spawn_env = if (bound_launch) |*binding|
+        &binding.env_map
+    else if (requested_env) |map|
+        map
+    else
+        null;
 
-    const session = try makeSession(io, options.command_argv, workspace, mode);
-    var session_writer = core_api.createAuditWriter(io, allocator, session) catch |err| {
+    const session = try makeSession(io, requested_argv, workspace, mode);
+    var session_writer = (if (options.audit_dir_name) |audit_dir_name|
+        core_api.createAuditWriterWithDirName(io, allocator, session, audit_dir_name)
+    else
+        core_api.createAuditWriter(io, allocator, session)) catch |err| {
         try stderr.print("ryk mcp proxy: audit unavailable: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
@@ -316,7 +433,7 @@ fn proxy(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
 
     orca_mcp.proxy.runWithServer(allocator, .{
         .server_name = options.server_name,
-        .server_command_display = options.command_argv[0],
+        .server_command_display = requested_argv[0],
         .policy = loaded.innerPtr(),
         .mode = mode,
         .audit_writer = &session_writer,
@@ -356,6 +473,16 @@ fn proxy(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
         .product_label = brand.product_display,
     });
     return exit_codes.success;
+}
+
+fn safeProxyAuditDirName(value: []const u8) bool {
+    if (value.len == 0 or value.len > 1024 or std.fs.path.isAbsolute(value)) return false;
+    if (!std.mem.startsWith(u8, value, ".orca-tmp/session-")) return false;
+    var parts = std.mem.splitScalar(u8, value, '/');
+    while (parts.next()) |part| {
+        if (part.len == 0 or std.mem.eql(u8, part, ".") or std.mem.eql(u8, part, "..")) return false;
+    }
+    return true;
 }
 
 fn initializeRequestAlloc(allocator: std.mem.Allocator) ![]u8 {
@@ -573,6 +700,7 @@ fn bindManifestLaunch(
     allocator: std.mem.Allocator,
     manifest: orca_mcp.manifests.Manifest,
     requested_argv: []const []const u8,
+    requested_env: ?*const std.process.Environ.Map,
 ) !BoundManifestLaunch {
     if (manifest.server.transport != .stdio) return error.UnsupportedManifestTransport;
     if (requested_argv.len != manifest.server.args.len + 1) return error.ManifestArgvMismatch;
@@ -581,7 +709,7 @@ fn bindManifestLaunch(
         if (!std.mem.eql(u8, expected, requested_argv[index + 1])) return error.ManifestArgvMismatch;
     }
 
-    const resolved_command = try resolveCommandPath(io, allocator, manifest.server.command);
+    const resolved_command = try resolveCommandPath(io, allocator, manifest.server.command, requested_env);
     errdefer allocator.free(resolved_command);
     if (manifest.server.expected_hash) |expected_hash| {
         try verifyExpectedHash(io, allocator, resolved_command, expected_hash);
@@ -605,6 +733,12 @@ fn bindManifestLaunch(
     errdefer env_map.deinit();
     for (manifest.server.env_allow) |name| {
         if (!safeEnvName(name)) return error.InvalidManifestEnvAllow;
+        if (requested_env) |source| {
+            if (source.get(name)) |value| {
+                try env_map.put(name, value);
+                continue;
+            }
+        }
         if (env_util.getOwned(&process_env, allocator, name) catch null) |value| {
             defer allocator.free(value);
             try env_map.put(name, value);
@@ -614,15 +748,24 @@ fn bindManifestLaunch(
     return .{ .argv = argv, .env_map = env_map };
 }
 
-fn resolveCommandPath(io: std.Io, allocator: std.mem.Allocator, command_name: []const u8) ![]const u8 {
+fn resolveCommandPath(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    command_name: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) ![]const u8 {
     const cwd = std.Io.Dir.cwd();
     if (std.fs.path.isAbsolute(command_name) or std.mem.indexOfAny(u8, command_name, "/\\") != null) {
         return realPathDupe(io, cwd, command_name, allocator) catch try allocator.dupe(u8, command_name);
     }
-    var process_env = try env_util.createProcessMap(allocator);
-    defer process_env.deinit();
-    const path_value = try env_util.getOwned(&process_env, allocator, "PATH") orelse return error.ManifestCommandNotFound;
-    defer allocator.free(path_value);
+    var process_env: ?std.process.Environ.Map = null;
+    defer if (process_env) |*map| map.deinit();
+    const path_value = if (env_map) |map|
+        map.get("PATH") orelse return error.ManifestCommandNotFound
+    else blk: {
+        process_env = try env_util.createProcessMap(allocator);
+        break :blk process_env.?.get("PATH") orelse return error.ManifestCommandNotFound;
+    };
     var parts = std.mem.splitScalar(u8, path_value, std.fs.path.delimiter);
     while (parts.next()) |dir| {
         if (dir.len == 0) continue;
@@ -669,16 +812,69 @@ fn usageCode(err: anyerror, stderr: anytype) !u8 {
 }
 
 fn makeSession(io: std.Io, command_argv: []const []const u8, workspace: []const u8, mode: policy.schema.Mode) !core.session.Session {
+    if (command_argv.len == 0) return error.MissingCommand;
     const now = core.time.Timestamp.now(io);
     return .{
         .id = try core.session.generateSessionId(now),
         .started_at = now,
         .command = "ryk mcp proxy",
-        .args = command_argv,
+        // MCP argv frequently contains inline credentials. Persisting even
+        // "redacted" argv is unsafe because split, low-entropy values evade
+        // heuristic redaction. Keep only the executable identity.
+        .args = command_argv[0..1],
         .workspace_root = workspace,
         .mode = mode.toCoreMode(),
         .platform = core.platform.detectOs(),
     };
+}
+
+test "MCP proxy session metadata omits server arguments" {
+    const session = try makeSession(
+        std.testing.io,
+        &.{ "/usr/bin/server", "--password", "synthetic-low-entropy-secret" },
+        "/tmp/workspace",
+        .strict,
+    );
+    try std.testing.expectEqual(@as(usize, 1), session.args.len);
+    try std.testing.expectEqualStrings("/usr/bin/server", session.args[0]);
+}
+
+test "MCP proxy audit summaries never persist server arguments" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(workspace);
+    const secret = "synthetic-low-entropy-secret";
+    var session = try makeSession(io, &.{ "/usr/bin/server", "--password", secret }, workspace, .strict);
+    session.ended_at = core.time.Timestamp.now(io);
+    var writer = try core_api.createAuditWriterWithDirName(
+        io,
+        allocator,
+        session,
+        ".orca-tmp/session-test/mcp-audit-0",
+    );
+    defer writer.deinit();
+    try core_api.writeAuditSummary(allocator, writer.session_dir_path, .{
+        .session = session,
+        .status = .{ .exited = 0 },
+        .event_count = 0,
+        .final_event_hash = "",
+        .product_label = "ryk MCP",
+    });
+    const json_path = try std.fs.path.join(allocator, &.{ writer.session_dir_path, "summary.json" });
+    defer allocator.free(json_path);
+    const markdown_path = try std.fs.path.join(allocator, &.{ writer.session_dir_path, "summary.md" });
+    defer allocator.free(markdown_path);
+    const json = try std.Io.Dir.cwd().readFileAlloc(io, json_path, allocator, .limited(64 * 1024));
+    defer allocator.free(json);
+    const markdown = try std.Io.Dir.cwd().readFileAlloc(io, markdown_path, allocator, .limited(64 * 1024));
+    defer allocator.free(markdown);
+    try std.testing.expect(std.mem.indexOf(u8, json, secret) == null);
+    try std.testing.expect(std.mem.indexOf(u8, markdown, secret) == null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "--password") == null);
+    try std.testing.expect(std.mem.indexOf(u8, markdown, "--password") == null);
 }
 
 test "mcp command help and invalid subcommands are stable" {
@@ -698,6 +894,33 @@ test "mcp command help and invalid subcommands are stable" {
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "unknown subcommand") != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "Did you mean 'inspect'?") != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help mcp") != null);
+}
+
+test "MCP proxy audit directory is confined to a fresh workspace session" {
+    try std.testing.expect(safeProxyAuditDirName(".orca-tmp/session-abc/mcp-audit-0"));
+    try std.testing.expect(!safeProxyAuditDirName(".orca/sessions"));
+    try std.testing.expect(!safeProxyAuditDirName(".orca-tmp/../.orca"));
+    try std.testing.expect(!safeProxyAuditDirName("/tmp/mcp-audit"));
+}
+
+test "MCP proxy workspace override requires an absolute path" {
+    var stderr_buf: [256]u8 = undefined;
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const options = try parseOptions(
+        std.testing.allocator,
+        &.{ "--workspace", "/workspace", "--command", "/bin/sh" },
+        &stderr_writer,
+    );
+    defer options.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("/workspace", options.workspace_root.?);
+    try std.testing.expectError(
+        error.Usage,
+        parseOptions(
+            std.testing.allocator,
+            &.{ "--workspace", "relative", "--command", "/bin/sh" },
+            &stderr_writer,
+        ),
+    );
 }
 
 test "bare mcp renders grouped help with list as the friendly entry" {
@@ -761,6 +984,74 @@ test "mcp command parsing preserves server argv after --command" {
     try std.testing.expectEqualStrings("node", options.command_argv[0]);
     try std.testing.expectEqualStrings("server.js", options.command_argv[1]);
     try std.testing.expectEqualStrings("--flag", options.command_argv[2]);
+}
+
+test "mcp proxy parsing accepts a complete Codex inventory refresh selector" {
+    var stderr_buf: [256]u8 = undefined;
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const fingerprint = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const options = try parseOptions(
+        std.testing.allocator,
+        &.{ "--codex-inventory-bin", "/usr/bin/codex", "--codex-inventory-fingerprint", fingerprint },
+        &stderr_writer,
+    );
+    defer options.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("/usr/bin/codex", options.codex_inventory_bin.?);
+    try std.testing.expectEqualStrings(fingerprint, options.codex_inventory_fingerprint.?);
+    try std.testing.expectEqual(@as(usize, 0), options.command_argv.len);
+    try std.testing.expectError(
+        error.Usage,
+        parseOptions(
+            std.testing.allocator,
+            &.{ "--codex-inventory-bin", "/usr/bin/codex" },
+            &stderr_writer,
+        ),
+    );
+}
+
+test "Codex inventory refresh restores exact in-memory argv and environment" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(workspace);
+    const inventory_json =
+        "[{\"name\":\"synthetic\",\"enabled\":true,\"transport\":{" ++
+        "\"type\":\"stdio\",\"command\":\"/bin/sh\",\"args\":[\"-c\",\"exit 0\"]," ++
+        "\"env\":{\"MCP_SYNTHETIC\":\"present\"},\"cwd\":null}}]";
+    const script = try std.fmt.allocPrint(allocator, "#!/bin/sh\nprintf '%s\\n' '{s}'\n", .{inventory_json});
+    defer allocator.free(script);
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "codex",
+        .data = script,
+    });
+    var file = try tmp.dir.openFile(io, "codex", .{ .mode = .read_write });
+    defer file.close(io);
+    try file.setPermissions(io, .executable_file);
+    const codex_bin = try tmp.dir.realPathFileAlloc(io, "codex", allocator);
+    defer allocator.free(codex_bin);
+    const expected_server: sandbox.mcp_runtime_grants.Server = .{
+        .name = "synthetic",
+        .command = "/bin/sh",
+        .args = &.{ "-c", "exit 0" },
+        .cwd = null,
+        .env = &.{.{ .name = "MCP_SYNTHETIC", .value = "present" }},
+        .file_args = &.{},
+    };
+    const expected_fingerprint = sandbox.mcp_runtime_grants.fingerprint(expected_server);
+    var launch = try refreshCodexLaunch(
+        io,
+        allocator,
+        codex_bin,
+        "synthetic",
+        &expected_fingerprint,
+        workspace,
+    );
+    defer launch.deinit(allocator);
+    try std.testing.expectEqualStrings("/bin/sh", launch.argv[0]);
+    try std.testing.expectEqualStrings("exit 0", launch.argv[2]);
+    try std.testing.expectEqualStrings("present", launch.env_map.get("MCP_SYNTHETIC").?);
 }
 
 test "mcp initialize request uses build version metadata" {
@@ -988,14 +1279,20 @@ test "manifest binding requires exact argv hash and env allowlist" {
     var manifest = try orca_mcp.manifests.parseFromSlice(std.testing.allocator, manifest_text, "test.yaml");
     defer manifest.deinit(std.testing.allocator);
 
-    var binding = try bindManifestLaunch(std.testing.io, std.testing.allocator, manifest, &.{ server_path, "--stdio" });
+    var binding = try bindManifestLaunch(
+        std.testing.io,
+        std.testing.allocator,
+        manifest,
+        &.{ server_path, "--stdio" },
+        null,
+    );
     defer binding.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings(server_path, binding.argv[0]);
     try std.testing.expectEqualStrings("--stdio", binding.argv[1]);
     try std.testing.expect(binding.env_map.get("PATH") != null);
 
-    try std.testing.expectError(error.ManifestCommandMismatch, bindManifestLaunch(std.testing.io, std.testing.allocator, manifest, &.{ "/different", "--stdio" }));
-    try std.testing.expectError(error.ManifestArgvMismatch, bindManifestLaunch(std.testing.io, std.testing.allocator, manifest, &.{ server_path, "--other" }));
+    try std.testing.expectError(error.ManifestCommandMismatch, bindManifestLaunch(std.testing.io, std.testing.allocator, manifest, &.{ "/different", "--stdio" }, null));
+    try std.testing.expectError(error.ManifestArgvMismatch, bindManifestLaunch(std.testing.io, std.testing.allocator, manifest, &.{ server_path, "--other" }, null));
 
     const bad_manifest_text = try std.fmt.allocPrint(std.testing.allocator,
         \\version: 1
@@ -1009,7 +1306,7 @@ test "manifest binding requires exact argv hash and env allowlist" {
     defer std.testing.allocator.free(bad_manifest_text);
     var bad_manifest = try orca_mcp.manifests.parseFromSlice(std.testing.allocator, bad_manifest_text, "bad.yaml");
     defer bad_manifest.deinit(std.testing.allocator);
-    try std.testing.expectError(error.ManifestExpectedHashMismatch, bindManifestLaunch(std.testing.io, std.testing.allocator, bad_manifest, &.{server_path}));
+    try std.testing.expectError(error.ManifestExpectedHashMismatch, bindManifestLaunch(std.testing.io, std.testing.allocator, bad_manifest, &.{server_path}, null));
 }
 
 test "mcp manifest check list trust and generate commands are safe" {

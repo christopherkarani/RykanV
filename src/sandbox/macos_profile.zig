@@ -55,6 +55,9 @@ pub const RenderOptions = struct {
     /// Internal-only hardlink groups (e.g. cargo `target/` object graphs) are
     /// not included. Caller owns the slices.
     hardlink_alias_denies: []const []const u8 = &.{},
+    /// Exact host-owned configuration files that stay readable under a wider
+    /// host-config RW grant but must not be changed by the sandboxed agent.
+    write_deny_literals: []const []const u8 = &.{},
 };
 
 /// Honest network_scope string for receipts/banners after child attach.
@@ -215,6 +218,14 @@ pub fn renderSbplWithOptions(
     try out.appendSlice(allocator, ";; path-walk Data-form ancestor metadata (after Data deny; metadata only)\n");
     for (compiled.grants) |g| {
         try appendPathAncestorMetadataLiteralsDataForm(&out, allocator, g.path);
+    }
+
+    if (options.write_deny_literals.len > 0) {
+        try out.appendSlice(allocator, ";; host configuration authority write-deny\n");
+        for (options.write_deny_literals) |path| {
+            if (!std.fs.path.isAbsolute(path) or path.len <= 1) return error.InvalidWriteDenyLiteral;
+            try appendDenyLiteralWithDataAlias(&out, allocator, "file-write*", path);
+        }
     }
 
     if (compiled.protect_workspace_secrets) {
@@ -752,6 +763,34 @@ fn appendDenySubpath(
     try out.appendSlice(allocator, "\"))\n");
 }
 
+fn appendDenyLiteralWithDataAlias(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    op: []const u8,
+    path: []const u8,
+) !void {
+    const emit = sbplEmitPath(path);
+    try appendDenyLiteralForEmit(out, allocator, op, emit);
+    if (!std.mem.eql(u8, emit, "/Users") and !std.mem.startsWith(u8, emit, "/Users/")) return;
+
+    const data_path = try std.fmt.allocPrint(allocator, "{s}{s}", .{ data_volume_prefix, emit });
+    defer allocator.free(data_path);
+    try appendDenyLiteralForEmit(out, allocator, op, data_path);
+}
+
+fn appendDenyLiteralForEmit(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    op: []const u8,
+    emit: []const u8,
+) !void {
+    try out.appendSlice(allocator, "(deny ");
+    try out.appendSlice(allocator, op);
+    try out.appendSlice(allocator, " (literal \"");
+    try appendEscaped(out, allocator, emit);
+    try out.appendSlice(allocator, "\"))\n");
+}
+
 fn appendAllowWriteMinusControls(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
@@ -1042,6 +1081,31 @@ test "SBPL host config host_rw_paths emit subpath RW without bare HOME" {
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev\"))") == null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/.ssh\"))") == null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/Library\"))") == null);
+}
+
+test "SBPL protected host config file is readable but write denied after RW grant" {
+    var compiled = try profile.compileProfile(std.testing.allocator, .{
+        .workspace_root = "/Users/dev/work",
+        .host_rw_paths = &.{"/Users/dev/.codex"},
+    });
+    defer compiled.deinit();
+    const config_path = "/Users/dev/.codex/config.toml";
+    const sbpl = try renderSbplWithOptions(std.testing.allocator, &compiled, .{
+        .write_deny_literals = &.{config_path},
+    });
+    defer std.testing.allocator.free(sbpl);
+
+    const allow = std.mem.indexOf(
+        u8,
+        sbpl,
+        "(allow file-write* (require-all (subpath \"/Users/dev/.codex\")",
+    ) orelse return error.TestUnexpectedResult;
+    const deny = std.mem.indexOf(
+        u8,
+        sbpl,
+        "(deny file-write* (literal \"/Users/dev/.codex/config.toml\"))",
+    ) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(deny > allow);
 }
 
 test "SBPL codex system ro_paths emit narrow /etc/codex without bare /etc" {

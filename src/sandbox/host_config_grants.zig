@@ -38,6 +38,9 @@ pub const host_config_table = [_]HostConfigSpec{
     .{
         .host = "claude",
         .home_rel_dirs = &.{
+            // Claude stores user/project MCP registrations in this HOME-level
+            // JSON file, outside the `.claude` directory.
+            ".claude.json",
             ".claude",
             // Install tree for updates/assets next to the self-contained binary.
             ".local/share/claude",
@@ -104,6 +107,12 @@ pub const host_config_table = [_]HostConfigSpec{
             &.{ "/etc/hermes", "/private/etc/hermes" }
         else
             &.{"/etc/hermes"},
+    },
+    .{
+        .host = "grok",
+        // Grok Build loads hooks, skills, and session state from this root;
+        // its canonical user settings path is installed by grok_install.zig.
+        .home_rel_dirs = &.{".grok"},
     },
 };
 
@@ -874,6 +883,26 @@ test "collectHostConfigPaths grants pi lens and opencode roots when present" {
     try std.testing.expect(saw_dot);
 }
 
+test "collectHostConfigPaths grants the existing Grok config root only" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    const home = try home_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+    try home_tmp.dir.createDirPath(io, ".grok");
+    try home_tmp.dir.writeFile(io, .{
+        .sub_path = ".grok/user-settings.json",
+        .data = "{}\n",
+    });
+
+    const paths = try collectHostConfigPaths(io, allocator, "grok", home);
+    defer freeHostConfigPaths(allocator, paths);
+    try std.testing.expectEqual(@as(usize, 1), paths.len);
+    try std.testing.expect(std.mem.endsWith(u8, paths[0], "/.grok"));
+    try std.testing.expect(!std.mem.eql(u8, paths[0], home));
+}
+
 test "isForbiddenHostConfigPath rejects root home and ssh" {
     const home = "/Users/dev";
     try std.testing.expect(isForbiddenHostConfigPath("/", home));
@@ -895,18 +924,22 @@ test "collectHostConfigPaths grants existing claude roots and skips missing" {
 
     try home_tmp.dir.createDirPath(io, ".claude");
     try home_tmp.dir.writeFile(io, .{ .sub_path = ".claude/settings.json", .data = "{}\n" });
+    try home_tmp.dir.writeFile(io, .{ .sub_path = ".claude.json", .data = "{\"mcpServers\":{}}\n" });
     // No .local/share/claude — must be skipped.
 
     const want_claude = try std.fs.path.join(allocator, &.{ home, ".claude" });
     defer allocator.free(want_claude);
+    const want_claude_json = try std.fs.path.join(allocator, &.{ home, ".claude.json" });
+    defer allocator.free(want_claude_json);
     // Prove the fixture is visible before collect (isolates collector bugs).
     try std.testing.expect(pathExists(io, want_claude));
 
     const paths = try collectHostConfigPaths(io, allocator, "claude", home);
     defer freeHostConfigPaths(allocator, paths);
 
-    try std.testing.expectEqual(@as(usize, 1), paths.len);
-    try std.testing.expectEqualStrings(want_claude, paths[0]);
+    try std.testing.expectEqual(@as(usize, 2), paths.len);
+    try std.testing.expectEqualStrings(want_claude_json, paths[0]);
+    try std.testing.expectEqualStrings(want_claude, paths[1]);
 
     // Sibling secret tree never granted even if present.
     try home_tmp.dir.createDirPath(io, ".ssh");

@@ -20,6 +20,7 @@ pub const SessionWriter = struct {
     }
 
     pub fn initWithDirName(io: std.Io, allocator: std.mem.Allocator, session: core.session.Session, audit_dir_name: []const u8) !SessionWriter {
+        if (!safeAuditDirName(audit_dir_name)) return error.InvalidAuditDirName;
         const orca_dir = try std.fs.path.join(allocator, &.{ session.workspace_root, audit_dir_name });
         defer allocator.free(orca_dir);
         const sessions_dir = try std.fs.path.join(allocator, &.{ orca_dir, "sessions" });
@@ -50,6 +51,7 @@ pub const SessionWriter = struct {
 
     pub fn openExistingWithDirName(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8, session_id_text: []const u8, audit_dir_name: []const u8) !SessionWriter {
         try core.session.validateSessionIdText(session_id_text);
+        if (!safeAuditDirName(audit_dir_name)) return error.InvalidAuditDirName;
         const orca_dir = try std.fs.path.join(allocator, &.{ workspace_root, audit_dir_name });
         defer allocator.free(orca_dir);
         const sessions_dir = try std.fs.path.join(allocator, &.{ orca_dir, "sessions" });
@@ -144,6 +146,17 @@ pub const SessionWriter = struct {
     }
 };
 
+fn safeAuditDirName(value: []const u8) bool {
+    if (value.len == 0 or value.len > 1024 or std.fs.path.isAbsolute(value)) return false;
+    if (std.mem.indexOfScalar(u8, value, '\\') != null) return false;
+    var parts = std.mem.splitScalar(u8, value, '/');
+    while (parts.next()) |part| {
+        if (part.len == 0 or std.mem.eql(u8, part, ".") or std.mem.eql(u8, part, "..")) return false;
+        for (part) |byte| if (byte < 0x20 or byte == 0x7f) return false;
+    }
+    return true;
+}
+
 const ExistingState = struct {
     previous_hash: ?hash_chain.HashHex,
     event_count: usize,
@@ -224,6 +237,27 @@ test "session writer creates directory and writes deterministic JSONL" {
     try std.testing.expect(std.mem.indexOf(u8, events, "\"type\":\"session_start\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, events, "\"event_hash\"") != null);
     try std.testing.expectEqual(@as(usize, 1), session_writer.event_count);
+}
+
+test "session writer rejects audit directory traversal at the storage boundary" {
+    const ts = core.time.Timestamp.fromUnixSeconds(1_777_983_130);
+    const session: core.session.Session = .{
+        .id = try core.session.generateSessionId(ts),
+        .started_at = ts,
+        .command = "test",
+        .args = &.{},
+        .workspace_root = "/tmp/synthetic-workspace",
+        .mode = .strict,
+        .platform = core.platform.detectOs(),
+    };
+    try std.testing.expectError(
+        error.InvalidAuditDirName,
+        SessionWriter.initWithDirName(std.testing.io, std.testing.allocator, session, "../escape"),
+    );
+    try std.testing.expectError(
+        error.InvalidAuditDirName,
+        SessionWriter.initWithDirName(std.testing.io, std.testing.allocator, session, ".orca/../escape"),
+    );
 }
 
 test "session writer persists redacted synthetic secrets before JSONL write" {

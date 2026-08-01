@@ -133,6 +133,17 @@ pub const launch_allow_exact = [_][]const u8{
     // /usr/bin/git and friends do not hit a false “install developer tools” dialog.
     // Value is only set by ryk to allowlisted paths (or a pre-set allowlisted parent value).
     "DEVELOPER_DIR",
+    // Codex configuration root. The run boundary canonicalizes it, restricts it
+    // beneath HOME, and grants only that exact tree before this value survives.
+    "CODEX_HOME",
+    // Host-specific configuration selectors. The run boundary canonicalizes
+    // these paths and only grants host-scoped roots beneath HOME. Inline
+    // configuration blobs stay stripped because they may contain credentials.
+    "CLAUDE_CONFIG_DIR",
+    "PI_CODING_AGENT_DIR",
+    "OPENCODE_CONFIG",
+    "OPENCODE_CONFIG_DIR",
+    "HERMES_HOME",
     // Ryk-owned provider gateway endpoints. Empty-backpack filtering rejects
     // host-supplied values; run injects loopback values only after binding.
     "ANTHROPIC_BASE_URL",
@@ -631,6 +642,15 @@ test "keep class and scrub class are disjoint for documented names" {
 test "launch allowlist keeps runtime keys and strips secrets" {
     try std.testing.expect(isLaunchAllowlisted("PATH"));
     try std.testing.expect(isLaunchAllowlisted("HOME"));
+    try std.testing.expect(isLaunchAllowlisted("CODEX_HOME"));
+    try std.testing.expect(isLaunchAllowlisted("CLAUDE_CONFIG_DIR"));
+    try std.testing.expect(isLaunchAllowlisted("PI_CODING_AGENT_DIR"));
+    try std.testing.expect(isLaunchAllowlisted("OPENCODE_CONFIG"));
+    try std.testing.expect(isLaunchAllowlisted("OPENCODE_CONFIG_DIR"));
+    try std.testing.expect(isLaunchAllowlisted("HERMES_HOME"));
+    // Inline OpenCode config can contain provider and MCP credentials. A file
+    // path can be narrowly granted; an arbitrary inherited blob cannot.
+    try std.testing.expect(!isLaunchAllowlisted("OPENCODE_CONFIG_CONTENT"));
     try std.testing.expect(isLaunchAllowlisted("ORCA_SESSION_ID"));
     try std.testing.expect(isLaunchAllowlisted("LC_ALL"));
     try std.testing.expect(isLaunchAllowlisted("XDG_RUNTIME_DIR"));

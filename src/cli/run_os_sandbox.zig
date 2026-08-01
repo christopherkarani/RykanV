@@ -153,6 +153,339 @@ fn freeMergedPathList(allocator: std.mem.Allocator, paths: []const []const u8) v
     allocator.free(paths);
 }
 
+/// Same dedup semantics as `mergeOwnedPathLists`, but leaves both inputs owned
+/// by their callers. Used when MCP parser results and top-level launch grants
+/// have independent lifetimes.
+fn copyMergedPathLists(
+    allocator: std.mem.Allocator,
+    a: []const []const u8,
+    b: []const []const u8,
+) error{OutOfMemory}![]const []const u8 {
+    const a_copy = try clonePathList(allocator, a);
+    errdefer freeMergedPathList(allocator, a_copy);
+    const b_copy = try clonePathList(allocator, b);
+    errdefer freeMergedPathList(allocator, b_copy);
+    return mergeOwnedPathLists(allocator, a_copy, b_copy);
+}
+
+fn clonePathList(
+    allocator: std.mem.Allocator,
+    paths: []const []const u8,
+) error{OutOfMemory}![]const []const u8 {
+    var list: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (list.items) |path| allocator.free(path);
+        list.deinit(allocator);
+    }
+    for (paths) |path| {
+        const owned = try allocator.dupe(u8, path);
+        list.append(allocator, owned) catch |err| {
+            allocator.free(owned);
+            return err;
+        };
+    }
+    return try list.toOwnedSlice(allocator);
+}
+
+fn collectHostConfigWriteDenies(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    argv0: []const u8,
+    workspace_root: []const u8,
+    env_map: *const std.process.Environ.Map,
+) error{ OutOfMemory, UnsafeHostConfigHardlink }![]const []const u8 {
+    if (builtin.os.tag != .macos) {
+        return allocator.alloc([]const u8, 0);
+    }
+    const host = sandbox.host_config_grants.hostBasename(argv0);
+    if (sandbox.host_config_grants.specForHost(host) == null) return allocator.alloc([]const u8, 0);
+
+    var paths: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (paths.items) |path| allocator.free(path);
+        paths.deinit(allocator);
+    }
+    const home = env_map.get("HOME") orelse "";
+    if (std.mem.eql(u8, host, "codex")) {
+        if (std.fs.path.isAbsolute(home)) try appendConfigPath(allocator, &paths, &.{ home, ".codex", "config.toml" });
+        if (env_map.get("CODEX_HOME")) |root| {
+            if (std.fs.path.isAbsolute(root)) try appendConfigPath(allocator, &paths, &.{ root, "config.toml" });
+        }
+    } else if (std.mem.eql(u8, host, "claude")) {
+        if (std.fs.path.isAbsolute(home)) {
+            try appendConfigPath(allocator, &paths, &.{ home, ".claude.json" });
+            try appendConfigPath(allocator, &paths, &.{ home, ".claude", "settings.json" });
+            try appendConfigPath(allocator, &paths, &.{ home, ".claude", "settings.local.json" });
+        }
+        if (env_map.get("CLAUDE_CONFIG_DIR")) |root| if (std.fs.path.isAbsolute(root)) {
+            try appendConfigPath(allocator, &paths, &.{ root, "settings.json" });
+            try appendConfigPath(allocator, &paths, &.{ root, "settings.local.json" });
+        };
+    } else if (std.mem.eql(u8, host, "opencode")) {
+        if (std.fs.path.isAbsolute(home)) {
+            try appendConfigPath(allocator, &paths, &.{ home, ".config", "opencode", "opencode.json" });
+            try appendConfigPath(allocator, &paths, &.{ home, ".config", "opencode", "opencode.jsonc" });
+        }
+        if (env_map.get("OPENCODE_CONFIG")) |path| if (std.fs.path.isAbsolute(path)) {
+            try appendConfigPath(allocator, &paths, &.{path});
+        };
+        if (env_map.get("OPENCODE_CONFIG_DIR")) |root| if (std.fs.path.isAbsolute(root)) {
+            try appendConfigPath(allocator, &paths, &.{ root, "opencode.json" });
+            try appendConfigPath(allocator, &paths, &.{ root, "opencode.jsonc" });
+        };
+    } else if (std.mem.eql(u8, host, "hermes")) {
+        const root = env_map.get("HERMES_HOME") orelse if (std.fs.path.isAbsolute(home)) blk: {
+            break :blk try std.fs.path.join(allocator, &.{ home, ".hermes" });
+        } else null;
+        defer if (root) |path| if (env_map.get("HERMES_HOME") == null) allocator.free(path);
+        if (root) |path| if (std.fs.path.isAbsolute(path)) try appendConfigPath(allocator, &paths, &.{ path, "config.yaml" });
+    } else if (std.mem.eql(u8, host, "pi")) {
+        const root = env_map.get("PI_CODING_AGENT_DIR") orelse if (std.fs.path.isAbsolute(home)) blk: {
+            break :blk try std.fs.path.join(allocator, &.{ home, ".pi", "agent" });
+        } else null;
+        defer if (root) |path| if (env_map.get("PI_CODING_AGENT_DIR") == null) allocator.free(path);
+        if (root) |path| if (std.fs.path.isAbsolute(path)) try appendConfigPath(allocator, &paths, &.{ path, "settings.json" });
+    } else if (std.mem.eql(u8, host, "grok")) {
+        if (std.fs.path.isAbsolute(home)) {
+            try appendConfigPath(allocator, &paths, &.{ home, ".grok", "user-settings.json" });
+        }
+    }
+
+    // Project configuration is writable through the workspace grant. Protect
+    // every candidate authority file, including missing files, so a running
+    // agent cannot add a direct MCP launch path for this or the next session.
+    if (std.fs.path.isAbsolute(workspace_root)) {
+        var current = workspace_root;
+        while (true) {
+            if (std.mem.eql(u8, host, "codex"))
+                try appendConfigPath(allocator, &paths, &.{ current, ".codex", "config.toml" })
+            else if (std.mem.eql(u8, host, "opencode")) {
+                try appendConfigPath(allocator, &paths, &.{ current, "opencode.json" });
+                try appendConfigPath(allocator, &paths, &.{ current, "opencode.jsonc" });
+                try appendConfigPath(allocator, &paths, &.{ current, ".opencode", "opencode.json" });
+                try appendConfigPath(allocator, &paths, &.{ current, ".opencode", "opencode.jsonc" });
+            } else if (std.mem.eql(u8, host, "claude")) {
+                try appendConfigPath(allocator, &paths, &.{ current, ".mcp.json" });
+                try appendConfigPath(allocator, &paths, &.{ current, ".claude", "settings.json" });
+                try appendConfigPath(allocator, &paths, &.{ current, ".claude", "settings.local.json" });
+            } else if (std.mem.eql(u8, host, "pi"))
+                try appendConfigPath(allocator, &paths, &.{ current, ".pi", "settings.json" });
+            const parent = std.fs.path.dirname(current) orelse break;
+            if (std.mem.eql(u8, parent, current)) break;
+            current = parent;
+        }
+    }
+
+    // Also deny an existing symlink target so lexical aliases cannot retain
+    // configuration-write authority through the broader host RW grant.
+    const original_count = paths.items.len;
+    for (paths.items[0..original_count]) |path| {
+        const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch continue;
+        const stat = file.stat(io) catch {
+            file.close(io);
+            continue;
+        };
+        file.close(io);
+        if (stat.nlink > 1) return error.UnsafeHostConfigHardlink;
+        const canonical_z = std.Io.Dir.cwd().realPathFileAlloc(io, path, allocator) catch continue;
+        defer allocator.free(canonical_z);
+        if (!containsPath(paths.items, canonical_z)) try appendConfigPath(allocator, &paths, &.{canonical_z});
+    }
+    return paths.toOwnedSlice(allocator);
+}
+
+fn appendConfigPath(
+    allocator: std.mem.Allocator,
+    paths: *std.ArrayList([]const u8),
+    components: []const []const u8,
+) error{OutOfMemory}!void {
+    const path = try std.fs.path.join(allocator, components);
+    if (containsPath(paths.items, path)) {
+        allocator.free(path);
+        return;
+    }
+    paths.append(allocator, path) catch |err| {
+        allocator.free(path);
+        return err;
+    };
+}
+
+fn containsPath(paths: []const []const u8, candidate: []const u8) bool {
+    for (paths) |path| if (std.mem.eql(u8, path, candidate)) return true;
+    return false;
+}
+
+fn collectCustomCodexHome(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    argv0: []const u8,
+    home: []const u8,
+    env_map: *const std.process.Environ.Map,
+) error{OutOfMemory}![]const []const u8 {
+    if (!std.mem.eql(u8, sandbox.host_config_grants.hostBasename(argv0), "codex")) {
+        return allocator.alloc([]const u8, 0);
+    }
+    const custom = env_map.get("CODEX_HOME") orelse return allocator.alloc([]const u8, 0);
+    if (!std.fs.path.isAbsolute(custom)) {
+        return allocator.alloc([]const u8, 0);
+    }
+    var dir = std.Io.Dir.openDirAbsolute(io, custom, .{ .follow_symlinks = false }) catch
+        return allocator.alloc([]const u8, 0);
+    dir.close(io);
+    const canonical = std.Io.Dir.cwd().realPathFileAlloc(io, custom, allocator) catch
+        return allocator.alloc([]const u8, 0);
+    defer allocator.free(canonical);
+    const normalized_home = normalizeMacosUsersPath(home);
+    const normalized_custom = normalizeMacosUsersPath(canonical);
+    if (sandbox.host_config_grants.isForbiddenHostConfigPath(normalized_custom, normalized_home) or
+        !isApprovedCodexHome(normalized_custom, normalized_home))
+    {
+        return allocator.alloc([]const u8, 0);
+    }
+    const paths = try allocator.alloc([]const u8, 1);
+    errdefer allocator.free(paths);
+    paths[0] = try allocator.dupe(u8, canonical);
+    return paths;
+}
+
+fn withoutDefaultCodexHome(
+    allocator: std.mem.Allocator,
+    paths: []const []const u8,
+    home: []const u8,
+    custom_home_active: bool,
+) error{OutOfMemory}![]const []const u8 {
+    if (!custom_home_active or home.len == 0 or !std.fs.path.isAbsolute(home)) {
+        return clonePathList(allocator, paths);
+    }
+    const default_root = try std.fs.path.join(allocator, &.{ home, ".codex" });
+    defer allocator.free(default_root);
+    var filtered: std.ArrayList([]const u8) = .empty;
+    errdefer freeOwnedList(allocator, &filtered);
+    for (paths) |path| {
+        if (std.mem.eql(u8, normalizeMacosUsersPath(path), normalizeMacosUsersPath(default_root))) continue;
+        const owned = try allocator.dupe(u8, path);
+        errdefer allocator.free(owned);
+        try filtered.append(allocator, owned);
+    }
+    return filtered.toOwnedSlice(allocator);
+}
+
+fn freeOwnedList(allocator: std.mem.Allocator, list: *std.ArrayList([]const u8)) void {
+    for (list.items) |item| allocator.free(item);
+    list.deinit(allocator);
+}
+
+fn isApprovedCodexHome(path: []const u8, home: []const u8) bool {
+    if (!isPathWithin(path, home) or std.mem.eql(u8, path, home)) return false;
+    const relative = path[home.len + 1 ..];
+    return std.mem.eql(u8, relative, ".codex") or
+        std.mem.startsWith(u8, relative, ".codex-") or
+        std.mem.eql(u8, relative, ".config/codex");
+}
+
+fn isApprovedCustomHostConfigPath(host: []const u8, path: []const u8, home: []const u8) bool {
+    if (!isPathWithin(path, home) or std.mem.eql(u8, path, home)) return false;
+    if (sandbox.host_config_grants.isForbiddenHostConfigPath(path, home)) return false;
+    const relative = path[home.len + 1 ..];
+    if (std.mem.eql(u8, host, "claude")) {
+        return isWithinRelativeRoot(relative, ".claude") or
+            isWithinRelativeRoot(relative, ".config/claude") or
+            hasTopLevelVariant(relative, ".claude-");
+    }
+    if (std.mem.eql(u8, host, "pi")) {
+        return isWithinRelativeRoot(relative, ".pi") or
+            isWithinRelativeRoot(relative, ".config/pi") or
+            hasTopLevelVariant(relative, ".pi-");
+    }
+    if (std.mem.eql(u8, host, "opencode")) {
+        return isWithinRelativeRoot(relative, ".opencode") or
+            isWithinRelativeRoot(relative, ".config/opencode") or
+            hasTopLevelVariant(relative, ".opencode-");
+    }
+    if (std.mem.eql(u8, host, "hermes")) {
+        return isWithinRelativeRoot(relative, ".hermes") or
+            isWithinRelativeRoot(relative, ".config/hermes") or
+            hasTopLevelVariant(relative, ".hermes-");
+    }
+    return false;
+}
+
+fn isWithinRelativeRoot(path: []const u8, root: []const u8) bool {
+    return std.mem.eql(u8, path, root) or
+        (path.len > root.len and std.mem.startsWith(u8, path, root) and path[root.len] == '/');
+}
+
+fn hasTopLevelVariant(path: []const u8, prefix: []const u8) bool {
+    if (!std.mem.startsWith(u8, path, prefix) or path.len == prefix.len) return false;
+    const first_component = std.mem.indexOfScalar(u8, path, '/') orelse path.len;
+    return first_component > prefix.len;
+}
+
+fn customConfigEnvKeys(host: []const u8) []const []const u8 {
+    if (std.mem.eql(u8, host, "claude")) return &.{"CLAUDE_CONFIG_DIR"};
+    if (std.mem.eql(u8, host, "pi")) return &.{"PI_CODING_AGENT_DIR"};
+    if (std.mem.eql(u8, host, "opencode")) return &.{ "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR" };
+    if (std.mem.eql(u8, host, "hermes")) return &.{"HERMES_HOME"};
+    return &.{};
+}
+
+fn collectCustomHostConfigPaths(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    argv0: []const u8,
+    home: []const u8,
+    env_map: *std.process.Environ.Map,
+) error{OutOfMemory}![]const []const u8 {
+    const host = sandbox.host_config_grants.hostBasename(argv0);
+    if (home.len == 0 or !std.fs.path.isAbsolute(home)) return allocator.alloc([]const u8, 0);
+
+    var paths: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (paths.items) |path| allocator.free(path);
+        paths.deinit(allocator);
+    }
+    for (customConfigEnvKeys(host)) |key| {
+        const configured = env_map.get(key) orelse continue;
+        if (!std.fs.path.isAbsolute(configured)) {
+            _ = env_map.swapRemove(key);
+            continue;
+        }
+        const canonical_z = std.Io.Dir.cwd().realPathFileAlloc(io, configured, allocator) catch {
+            _ = env_map.swapRemove(key);
+            continue;
+        };
+        defer allocator.free(canonical_z);
+        const normalized_home = normalizeMacosUsersPath(home);
+        const normalized = normalizeMacosUsersPath(canonical_z);
+        if (!isApprovedCustomHostConfigPath(host, normalized, normalized_home)) {
+            _ = env_map.swapRemove(key);
+            continue;
+        }
+        try env_map.put(key, canonical_z);
+        if (containsPath(paths.items, canonical_z)) continue;
+        const canonical = try allocator.dupe(u8, canonical_z);
+        errdefer allocator.free(canonical);
+        try paths.append(allocator, canonical);
+    }
+    return paths.toOwnedSlice(allocator);
+}
+
+fn normalizeMacosUsersPath(path: []const u8) []const u8 {
+    const data_prefix = "/System/Volumes/Data";
+    if (std.mem.startsWith(u8, path, data_prefix) and path.len > data_prefix.len and
+        path[data_prefix.len] == '/' and std.mem.startsWith(u8, path[data_prefix.len..], "/Users/"))
+    {
+        return path[data_prefix.len..];
+    }
+    return path;
+}
+
+fn isPathWithin(path: []const u8, root: []const u8) bool {
+    if (root.len == 0) return false;
+    if (std.mem.eql(u8, path, root)) return true;
+    return path.len > root.len and std.mem.startsWith(u8, path, root) and path[root.len] == '/';
+}
+
 /// Apply OS sandbox for the production run path.
 ///
 /// `progress` is the TTY stream for prepare activity (typically stdout, same as
@@ -182,6 +515,8 @@ pub fn applyForRun(
     progress: anytype,
     stderr: anytype,
     launch_argv0: ?[]const u8,
+    extra_exec_paths: []const []const u8,
+    extra_ro_paths: []const []const u8,
 ) !ApplyForRunOutcome {
     const label: []const u8 = if (protect_workspace_secrets)
         "Preparing OS sandbox (scanning workspace secrets)"
@@ -201,11 +536,38 @@ pub fn applyForRun(
     var fail_reason: []const u8 = "unknown";
     var io_rt: std.Io.Threaded = .init_single_threaded;
     const launch_io = io_rt.io();
-    const launch_exec_paths: []const []const u8 = if (launch_argv0) |argv0|
+    const home_for_config: []const u8 = if (env_map.get("HOME")) |h| h else "";
+    const config_write_denies = if (mode != .off and launch_argv0 != null)
+        collectHostConfigWriteDenies(
+            launch_io,
+            allocator,
+            launch_argv0.?,
+            workspace_root,
+            env_map,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.UnsafeHostConfigHardlink => {
+                activity.clear();
+                try stderr.writeAll(
+                    "ryk run: host configuration has a hardlink alias; refusing an incomplete write boundary.\n",
+                );
+                return .{ .require_failed = exit_codes.unsupported };
+            },
+        }
+    else
+        try allocator.alloc([]const u8, 0);
+    defer freeMergedPathList(allocator, config_write_denies);
+    const agent_exec_paths: []const []const u8 = if (launch_argv0) |argv0|
         try sandbox.apply.collectLaunchExecPaths(launch_io, allocator, argv0, env_map)
     else
-        &.{};
-    defer if (launch_argv0 != null) sandbox.apply.freeLaunchExecPaths(allocator, launch_exec_paths);
+        try allocator.alloc([]const u8, 0);
+    defer sandbox.apply.freeLaunchExecPaths(allocator, agent_exec_paths);
+    const launch_exec_paths = try copyMergedPathLists(
+        allocator,
+        agent_exec_paths,
+        extra_exec_paths,
+    );
+    defer freeMergedPathList(allocator, launch_exec_paths);
 
     // Node/npm agents: RO package root so nested optional deps + vendor binaries
     // are readable after empty-backpack Seatbelt (file-only .exec is not enough).
@@ -213,7 +575,7 @@ pub fn applyForRun(
     // macOS: Apple developer toolchains (CLT / Xcode Developer) so /usr/bin/git
     // libxcselect stubs work for every agent (opencode, hermes, …) without a
     // false “install developer tools” dialog — never bare /Applications.
-    const launch_ro_paths: []const []const u8 = blk: {
+    const base_launch_ro_paths: []const []const u8 = blk: {
         const install_system: []const []const u8 = if (launch_argv0) |argv0| inner: {
             const install_ro = try sandbox.apply.collectLaunchInstallRoPaths(launch_io, allocator, argv0, env_map);
             errdefer sandbox.apply.freeLaunchInstallRoPaths(allocator, install_ro);
@@ -232,6 +594,12 @@ pub fn applyForRun(
         // mergeOwnedPathLists consumes both inputs on success.
         break :blk try mergeOwnedPathLists(allocator, install_system, toolchain_ro);
     };
+    defer freeMergedPathList(allocator, base_launch_ro_paths);
+    const launch_ro_paths = try copyMergedPathLists(
+        allocator,
+        base_launch_ro_paths,
+        extra_ro_paths,
+    );
     defer freeMergedPathList(allocator, launch_ro_paths);
 
     // Pin DEVELOPER_DIR for the child (prefer CLT). Stops libxcselect from
@@ -249,14 +617,45 @@ pub fn applyForRun(
                 try env_map.put("DEVELOPER_DIR", preferred);
             }
         }
+        // Keep PATH identical to the environment used by MCP inventory
+        // preflight. DEVELOPER_DIR is enough for libxcselect; prepending a
+        // toolchain here could change a bare MCP command after approval.
     }
 
-    const home_for_config: []const u8 = if (env_map.get("HOME")) |h| h else "";
-    const launch_host_rw_paths: []const []const u8 = if (launch_argv0) |argv0|
+    const base_host_rw_paths_unfiltered: []const []const u8 = if (launch_argv0) |argv0|
         try sandbox.host_config_grants.collectHostConfigPaths(launch_io, allocator, argv0, home_for_config)
     else
-        &.{};
-    defer if (launch_argv0 != null) sandbox.host_config_grants.freeHostConfigPaths(allocator, launch_host_rw_paths);
+        try allocator.alloc([]const u8, 0);
+    defer sandbox.host_config_grants.freeHostConfigPaths(allocator, base_host_rw_paths_unfiltered);
+    const custom_codex_home = if (launch_argv0) |argv0|
+        try collectCustomCodexHome(launch_io, allocator, argv0, home_for_config, env_map)
+    else
+        try allocator.alloc([]const u8, 0);
+    defer freeMergedPathList(allocator, custom_codex_home);
+    const base_host_rw_paths = try withoutDefaultCodexHome(
+        allocator,
+        base_host_rw_paths_unfiltered,
+        home_for_config,
+        custom_codex_home.len > 0,
+    );
+    defer freeMergedPathList(allocator, base_host_rw_paths);
+    const base_and_codex_rw_paths = try copyMergedPathLists(
+        allocator,
+        base_host_rw_paths,
+        custom_codex_home,
+    );
+    defer freeMergedPathList(allocator, base_and_codex_rw_paths);
+    const custom_host_config = if (launch_argv0) |argv0|
+        try collectCustomHostConfigPaths(launch_io, allocator, argv0, home_for_config, env_map)
+    else
+        try allocator.alloc([]const u8, 0);
+    defer freeMergedPathList(allocator, custom_host_config);
+    const launch_host_rw_paths = try copyMergedPathLists(
+        allocator,
+        base_and_codex_rw_paths,
+        custom_host_config,
+    );
+    defer freeMergedPathList(allocator, launch_host_rw_paths);
 
     const result = sandbox.apply.applyBeforeExec(.{
         .allocator = allocator,
@@ -268,6 +667,7 @@ pub fn applyForRun(
         .launch_exec_paths = launch_exec_paths,
         .launch_ro_paths = launch_ro_paths,
         .launch_host_rw_paths = launch_host_rw_paths,
+        .launch_write_deny_literals = config_write_denies,
         .network_proxy_port = network_proxy_port,
         .require_network_route_forcing = require_network_route_forcing,
         .seatbelt_profile = seatbelt_profile,
@@ -480,6 +880,237 @@ test "PrepareActivity start/clear is idempotent without residual success glyph" 
     try std.testing.expect(!activity.active);
     try std.testing.expect(activity.spinner == null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "✓") == null);
+}
+
+test "Codex config write denies cover user and project authority files" {
+    var env_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", "/Users/synthetic");
+
+    const paths = try collectHostConfigWriteDenies(
+        std.testing.io,
+        std.testing.allocator,
+        "codex",
+        "/Users/synthetic/project",
+        &env_map,
+    );
+    defer freeMergedPathList(std.testing.allocator, paths);
+    if (builtin.os.tag != .macos) {
+        try std.testing.expectEqual(@as(usize, 0), paths.len);
+        return;
+    }
+    try std.testing.expect(containsPath(paths, "/Users/synthetic/.codex/config.toml"));
+    try std.testing.expect(containsPath(
+        paths,
+        "/Users/synthetic/project/.codex/config.toml",
+    ));
+    try std.testing.expect(containsPath(
+        paths,
+        "/Users/synthetic/.codex/config.toml",
+    ));
+    try std.testing.expect(containsPath(paths, "/.codex/config.toml"));
+}
+
+test "Codex config write denies honor custom CODEX_HOME" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "home/.codex-work");
+    const home = try tmp.dir.realPathFileAlloc(std.testing.io, "home", std.testing.allocator);
+    defer std.testing.allocator.free(home);
+    const codex_home = try tmp.dir.realPathFileAlloc(std.testing.io, "home/.codex-work", std.testing.allocator);
+    defer std.testing.allocator.free(codex_home);
+    var env_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+    try env_map.put("CODEX_HOME", codex_home);
+
+    const paths = try collectHostConfigWriteDenies(
+        std.testing.io,
+        std.testing.allocator,
+        "codex",
+        home,
+        &env_map,
+    );
+    defer freeMergedPathList(std.testing.allocator, paths);
+    if (builtin.os.tag != .macos) {
+        try std.testing.expectEqual(@as(usize, 0), paths.len);
+        return;
+    }
+    const expected = try std.fs.path.join(std.testing.allocator, &.{ codex_home, "config.toml" });
+    defer std.testing.allocator.free(expected);
+    try std.testing.expect(containsPath(paths, expected));
+    const default_expected = try std.fs.path.join(std.testing.allocator, &.{ home, ".codex", "config.toml" });
+    defer std.testing.allocator.free(default_expected);
+    try std.testing.expect(containsPath(paths, default_expected));
+}
+
+test "custom CODEX_HOME removes default auth root but retains shared skills" {
+    const allocator = std.testing.allocator;
+    const input = try allocator.alloc([]const u8, 2);
+    input[0] = try allocator.dupe(u8, "/Users/synthetic/.codex");
+    input[1] = try allocator.dupe(u8, "/Users/synthetic/.agents");
+    defer freeMergedPathList(allocator, input);
+    const filtered = try withoutDefaultCodexHome(
+        allocator,
+        input,
+        "/Users/synthetic",
+        true,
+    );
+    defer freeMergedPathList(allocator, filtered);
+    try std.testing.expectEqual(@as(usize, 1), filtered.len);
+    try std.testing.expectEqualStrings("/Users/synthetic/.agents", filtered[0]);
+}
+
+test "host config write denies fail closed on hardlink aliases" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, ".codex");
+    try tmp.dir.writeFile(io, .{ .sub_path = ".codex/config.toml", .data = "[mcp_servers]\n" });
+    tmp.dir.hardLink(".codex/config.toml", tmp.dir, ".codex/config-alias.toml", io, .{}) catch
+        return error.SkipZigTest;
+    const home = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(home);
+    var env_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+    try std.testing.expectError(
+        error.UnsafeHostConfigHardlink,
+        collectHostConfigWriteDenies(io, std.testing.allocator, "codex", home, &env_map),
+    );
+}
+
+test "host MCP configuration authority is write denied on macOS" {
+    var env_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", "/Users/synthetic");
+    try env_map.put("HERMES_HOME", "/Users/synthetic/.hermes/profiles/work");
+    try env_map.put("PI_CODING_AGENT_DIR", "/Users/synthetic/.pi/agent");
+    try env_map.put("OPENCODE_CONFIG", "/Users/synthetic/.config/opencode/company.jsonc");
+
+    const cases = [_]struct { host: []const u8, expected: []const u8 }{
+        .{ .host = "claude", .expected = "/Users/synthetic/.claude.json" },
+        .{ .host = "opencode", .expected = "/Users/synthetic/.config/opencode/company.jsonc" },
+        .{ .host = "hermes", .expected = "/Users/synthetic/.hermes/profiles/work/config.yaml" },
+        .{ .host = "pi", .expected = "/Users/synthetic/.pi/agent/settings.json" },
+    };
+    for (cases) |case| {
+        const paths = try collectHostConfigWriteDenies(
+            std.testing.io,
+            std.testing.allocator,
+            case.host,
+            "/Users/synthetic/project",
+            &env_map,
+        );
+        defer freeMergedPathList(std.testing.allocator, paths);
+        if (builtin.os.tag == .macos)
+            try std.testing.expect(containsPath(paths, case.expected))
+        else
+            try std.testing.expectEqual(@as(usize, 0), paths.len);
+    }
+}
+
+test "custom CODEX_HOME normalizes macOS Data aliases before forbidden checks" {
+    try std.testing.expectEqualStrings(
+        "/Users/synthetic/.ssh",
+        normalizeMacosUsersPath("/System/Volumes/Data/Users/synthetic/.ssh"),
+    );
+    const normalized_home = normalizeMacosUsersPath("/System/Volumes/Data/Users/synthetic");
+    const normalized_secret = normalizeMacosUsersPath("/System/Volumes/Data/Users/synthetic/.ssh");
+    try std.testing.expect(sandbox.host_config_grants.isForbiddenHostConfigPath(
+        normalized_secret,
+        normalized_home,
+    ));
+    try std.testing.expect(!isApprovedCodexHome("/Users/synthetic/Documents", "/Users/synthetic"));
+    try std.testing.expect(isApprovedCodexHome("/Users/synthetic/.codex-work", "/Users/synthetic"));
+    try std.testing.expect(isApprovedCodexHome("/Users/synthetic/.config/codex", "/Users/synthetic"));
+}
+
+test "custom agent config roots stay inside host-scoped home locations" {
+    const home = "/Users/synthetic";
+    try std.testing.expect(isApprovedCustomHostConfigPath(
+        "claude",
+        "/Users/synthetic/.claude-team",
+        home,
+    ));
+    try std.testing.expect(isApprovedCustomHostConfigPath(
+        "pi",
+        "/Users/synthetic/.config/pi",
+        home,
+    ));
+    try std.testing.expect(isApprovedCustomHostConfigPath(
+        "opencode",
+        "/Users/synthetic/.config/opencode/company.jsonc",
+        home,
+    ));
+    try std.testing.expect(isApprovedCustomHostConfigPath(
+        "hermes",
+        "/Users/synthetic/.hermes/profiles/work",
+        home,
+    ));
+    try std.testing.expect(!isApprovedCustomHostConfigPath(
+        "claude",
+        "/Users/synthetic/.ssh",
+        home,
+    ));
+    try std.testing.expect(!isApprovedCustomHostConfigPath(
+        "opencode",
+        "/Users/synthetic/Documents/opencode.json",
+        home,
+    ));
+    try std.testing.expect(!isApprovedCustomHostConfigPath(
+        "hermes",
+        "/Users/other/.hermes",
+        home,
+    ));
+}
+
+test "custom host config collector canonicalizes documented env paths" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "home/.hermes/profiles/work");
+    const home = try tmp.dir.realPathFileAlloc(std.testing.io, "home", std.testing.allocator);
+    defer std.testing.allocator.free(home);
+    const hermes_home = try tmp.dir.realPathFileAlloc(
+        std.testing.io,
+        "home/.hermes/profiles/work",
+        std.testing.allocator,
+    );
+    defer std.testing.allocator.free(hermes_home);
+    var env_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+    try env_map.put("HERMES_HOME", hermes_home);
+
+    const paths = try collectCustomHostConfigPaths(
+        std.testing.io,
+        std.testing.allocator,
+        "hermes",
+        home,
+        &env_map,
+    );
+    defer freeMergedPathList(std.testing.allocator, paths);
+    try std.testing.expectEqual(@as(usize, 1), paths.len);
+    try std.testing.expectEqualStrings(hermes_home, paths[0]);
+    try std.testing.expectEqualStrings(hermes_home, env_map.get("HERMES_HOME").?);
+}
+
+test "custom host config collector strips unsafe selectors" {
+    var env_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", "/Users/synthetic");
+    try env_map.put("OPENCODE_CONFIG", "/Users/synthetic/.ssh/config");
+    const paths = try collectCustomHostConfigPaths(
+        std.testing.io,
+        std.testing.allocator,
+        "opencode",
+        "/Users/synthetic",
+        &env_map,
+    );
+    defer freeMergedPathList(std.testing.allocator, paths);
+    try std.testing.expectEqual(@as(usize, 0), paths.len);
+    try std.testing.expect(env_map.get("OPENCODE_CONFIG") == null);
 }
 
 test "isSandboxSpawnFailure classifies ApplyFailed ForkFailed Unsupported ExecFailed; not FileNotFound" {

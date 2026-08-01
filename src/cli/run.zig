@@ -19,6 +19,7 @@ const tui = @import("../tui/mod.zig");
 const build_options = @import("build_options");
 const suggestions = @import("suggestions.zig");
 const run_os_sandbox = @import("run_os_sandbox.zig");
+const codex_mcp_sandbox = @import("codex_mcp_sandbox.zig");
 
 const RunOptions = struct {
     workspace: ?[]const u8 = null,
@@ -329,6 +330,33 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     // Pass argv0 so agents installed under $HOME (e.g. ~/.local/share/claude) get
     // narrow .exec grants — without this, child preflight fails with child_apply_failed.
     const launch_argv0: ?[]const u8 = if (options.command_argv.len > 0) options.command_argv[0] else null;
+    var codex_mcp_plan: ?codex_mcp_sandbox.Plan = if (effective_os_sandbox != .off)
+        codex_mcp_sandbox.prepare(
+            io,
+            allocator,
+            options.command_argv,
+            workspace_root_for_policy,
+            loaded_policy.path,
+            effective_policy_mode.toString(),
+            &filtered_env.env_map,
+        ) catch |err| {
+            try stderr.print(
+                "ryk run: cannot build protected Codex MCP launch plan ({s}); refusing direct MCP execution.\n",
+                .{@errorName(err)},
+            );
+            return exit_codes.unsupported;
+        }
+    else
+        null;
+    defer if (codex_mcp_plan) |*plan| plan.deinit(io);
+    if (codex_mcp_plan) |plan| {
+        if (plan.disabled_server_names.len > 0) {
+            try stderr.print(
+                "ryk run: disabled {d} MCP server(s) that could not be policy-mediated; external scripts need a matching .orca/mcp manifest and HTTP MCP remains unsupported.\n",
+                .{plan.disabled_server_names.len},
+            );
+        }
+    }
     const minted_env_lookup: ?sandbox.env_scrub.MintedEnvLookup = if (secret_store) |*store| .{
         .context = store,
         .containsFn = intercept.session_secrets.Store.mintedEnvContains,
@@ -348,6 +376,8 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         stdout,
         stderr,
         launch_argv0,
+        if (codex_mcp_plan) |plan| plan.exec_paths else &.{},
+        if (codex_mcp_plan) |plan| plan.ro_paths else &.{},
     )) {
         .require_failed => |code| return code,
         .ok => |r| r,
@@ -922,17 +952,18 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     // Empty-backpack: shell wrappers (hermes → venv/python symlink → uv) hit a
     // Seatbelt residual where open/exec of the *symlink path* is denied even when
     // the realpath target is RO-granted. Expand to realpath argv before spawn.
+    const planned_argv = if (codex_mcp_plan) |plan| plan.argv else options.command_argv;
     var expanded_argv_owned: ?[]const []const u8 = null;
     defer if (expanded_argv_owned) |a| sandbox.apply.freeExpandedShellWrapperArgv(allocator, a);
-    if (secret_boundary == .empty_backpack and options.command_argv.len > 0) {
+    if (secret_boundary == .empty_backpack and planned_argv.len > 0 and codex_mcp_plan == null) {
         expanded_argv_owned = sandbox.apply.expandShellWrapperLaunch(
             io,
             allocator,
-            options.command_argv,
+            planned_argv,
             &filtered_env.env_map, // mutable: may inject ryk-owned PYTHONPATH for venv
         ) catch null;
     }
-    const spawn_argv: []const []const u8 = expanded_argv_owned orelse options.command_argv;
+    const spawn_argv: []const []const u8 = expanded_argv_owned orelse planned_argv;
 
     var result = supervisor.run(io, allocator, .{
         .command = spawn_argv[0],

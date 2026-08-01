@@ -191,6 +191,7 @@ pub const ParentApplyOutcome = struct {
 pub const PrepareOptions = struct {
     network_route_forcing: ?macos_profile.NetworkRouteForcing = null,
     profile_grade: macos_profile.SeatbeltProfileGrade = macos_profile.SeatbeltProfileGrade.default_grade,
+    write_deny_literals: []const []const u8 = &.{},
 };
 
 /// Parent-side Seatbelt prepare: version gate, symbol check, SBPL render.
@@ -271,6 +272,7 @@ pub fn prepareForChildApplyWithOptions(
         .network_route_forcing = options.network_route_forcing,
         .profile_grade = options.profile_grade,
         .hardlink_alias_denies = hardlink_aliases orelse &.{},
+        .write_deny_literals = options.write_deny_literals,
     }) catch |err| {
         return .{
             .status = .failed,

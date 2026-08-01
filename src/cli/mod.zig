@@ -68,6 +68,7 @@ pub const history = @import("history.zig");
 pub const suggestions = @import("suggestions.zig");
 pub const danger_confirmation = @import("danger_confirmation.zig");
 pub const fm_steward_client = @import("fm_steward_client.zig");
+pub const codex_mcp_sandbox = @import("codex_mcp_sandbox.zig");
 
 test {
     _ = brand;
@@ -83,6 +84,7 @@ test {
     _ = pi_install;
     _ = grok_install;
     _ = plugin_install;
+    _ = plugin;
     _ = @import("openclaw_status.zig");
     _ = start;
     _ = setup;
@@ -120,6 +122,8 @@ test {
     _ = danger_confirmation;
     _ = run_command;
     _ = run_os_sandbox;
+    _ = codex_mcp_sandbox;
+    _ = mcp;
     _ = env_schema_command;
     // Surfaces touched by production-readiness hardening (M1–M4).
     _ = completions;
