@@ -688,12 +688,42 @@ export function resolveUnavailableMode(
 	return configured;
 }
 
-function isNoninteractiveSession(ctx: PiContext): boolean {
+/**
+ * Pi subagent / child-agent sessions. Parent-forward approval is out of scope
+ * for Phase 3: policy ask always auto-denies when this is set.
+ */
+export function isSubagentSession(
+	env: NodeJS.ProcessEnv = process.env,
+): boolean {
+	const parent = env.PI_SUBAGENT_PARENT_SESSION;
+	return typeof parent === "string" && parent.trim().length > 0;
+}
+
+/**
+ * Policy `ask` must never silently allow. Auto-deny when the session cannot
+ * present a real human prompt (noninteractive print/json/headless) or when
+ * running as a Pi subagent (even if hasUI is true).
+ */
+export function shouldAutoDenyPolicyAsk(
+	ctx: PiContext,
+	env: NodeJS.ProcessEnv = process.env,
+): boolean {
+	return isNoninteractiveSession(ctx) || isSubagentSession(env);
+}
+
+export function isNoninteractiveSession(ctx: PiContext): boolean {
 	return ctx.hasUI !== true || isNoninteractiveMode(ctx.mode);
 }
 
 function isNoninteractiveMode(mode: string | undefined): boolean {
 	return mode === "print" || mode === "json" || mode === "noninteractive";
+}
+
+function policyAskAutoDenyClass(
+	env: NodeJS.ProcessEnv,
+): "subagent" | "non-interactive" {
+	if (isSubagentSession(env)) return "subagent";
+	return "non-interactive";
 }
 
 export function safeOrcaReason(response: unknown): string {
@@ -869,13 +899,14 @@ export function installOrcaExtension(
 					decision.kind === "allow" &&
 					BROAD_DISCOVERY_TOOLS.has(event.toolName)
 				) {
-					return handlePolicyAsk(
+					return resolvePolicyAsk(
 						`ryk allowed the ${toolLabel} root, but this broad discovery action may traverse descendant files that were not individually evaluated. Explicit approval is required.`,
 						pi,
 						ctx,
 						toolLabel,
 						{ disableSession },
 						allowOnceBypassEnabled(runtime.env, unavailableMode),
+						runtime.env,
 					);
 				}
 				return applyToolDecision(
@@ -1084,13 +1115,14 @@ async function applyToolDecision(
 		return undefined;
 	}
 	if (decision.kind === "ask") {
-		return handlePolicyAsk(
+		return resolvePolicyAsk(
 			decision.reason,
 			pi,
 			ctx,
 			toolLabel,
 			{ disableSession },
 			allowOnceBypassEnabled(env, unavailableMode),
+			env,
 		);
 	}
 	return handleUnavailable(
@@ -1102,6 +1134,25 @@ async function applyToolDecision(
 		toolLabel,
 		allowOnceBypassEnabled(env, unavailableMode),
 	);
+}
+
+/**
+ * Single entry for policy ask: interactive human select, or explicit auto-deny
+ * for noninteractive / subagent sessions. Never ask → allow without a choice.
+ */
+async function resolvePolicyAsk(
+	reason: string,
+	pi: PiAPI,
+	ctx: PiContext,
+	toolLabel: string,
+	actions: { disableSession: () => void },
+	allowOnce: boolean,
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<ToolCallResult> {
+	if (shouldAutoDenyPolicyAsk(ctx, env)) {
+		return handlePolicyAskAutoDeny(reason, pi, ctx, toolLabel, env);
+	}
+	return handlePolicyAsk(reason, pi, ctx, toolLabel, actions, allowOnce);
 }
 
 function recordOnceBypass(
@@ -1135,6 +1186,59 @@ function recordOnceBypass(
 	}
 	notify(ctx, `ryk audit: once-bypass used for ${details.tool} (${source}).`, "warning");
 	return true;
+}
+
+/**
+ * Best-effort audit for policy ask auto-deny. Deny does not require audit
+ * success (unlike once-bypass allow); always block either way.
+ */
+function recordAskAutoDeny(
+	pi: PiAPI,
+	toolLabel: string,
+	sessionClass: "subagent" | "non-interactive",
+	reason: string,
+): void {
+	if (!pi.sendMessage) return;
+	const details = {
+		event: "orca_ask_auto_deny",
+		tool: truncate(sanitizeVisibleText(toolLabel), 128),
+		session_class: sessionClass,
+		reason: truncate(sanitizeVisibleText(reason), 256),
+	};
+	try {
+		pi.sendMessage(
+			{
+				customType: "orca.audit",
+				content: `ryk ask auto-deny: ${details.tool} (${sessionClass})`,
+				display: false,
+				details,
+			},
+			{ triggerTurn: false },
+		);
+	} catch {
+		// Deny is fail-closed regardless of audit success.
+	}
+}
+
+async function handlePolicyAskAutoDeny(
+	reason: string,
+	pi: PiAPI,
+	ctx: PiContext,
+	toolLabel: string,
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<ToolCallResult> {
+	const sessionClass = policyAskAutoDenyClass(env);
+	const policyReason = sanitizeVisibleText(reason);
+	const summary = `ryk auto-denied (${sessionClass}): ${policyReason || `${toolLabel} requires approval`}`;
+	const card = {
+		variant: "block" as const,
+		title: "RYK BLOCKED",
+		summary,
+	};
+	// Prefer recording audit before returning the block; still block if audit fails.
+	recordAskAutoDeny(pi, toolLabel, sessionClass, policyReason);
+	showOrcaDecision(pi, ctx, card);
+	return block(summary);
 }
 
 async function handlePolicyAsk(
@@ -1202,6 +1306,7 @@ async function handlePolicyAsk(
 			);
 		case "Block":
 		default:
+			// Timeout / undefined / unknown choice → block only (never allow).
 			clearOrcaWidget(ctx);
 			return block(
 				formatOrcaDecisionSummary(

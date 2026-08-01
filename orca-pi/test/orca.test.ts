@@ -19,6 +19,7 @@ import {
 	extractDecideFilePath,
 	installOrcaExtension,
 	isProtectedPiTool,
+	isSubagentSession,
 	piCoverageLabel,
 	resolveOrcaBin,
 	resolveToolPath,
@@ -27,6 +28,7 @@ import {
 	runOrcaDecideTool,
 	runOrcaEvaluate,
 	safeOrcaReason,
+	shouldAutoDenyPolicyAsk,
 	type OrcaEvaluateRequest,
 } from "../extensions/orca.ts";
 
@@ -1003,6 +1005,258 @@ test("once-bypass stays blocked when transcript auditing is unavailable", async 
 			/transcript auditing is unavailable/i.test(notification.message),
 		),
 	);
+});
+
+test("isSubagentSession and shouldAutoDenyPolicyAsk helpers", () => {
+	assert.equal(isSubagentSession({}), false);
+	assert.equal(isSubagentSession({ PI_SUBAGENT_PARENT_SESSION: "" }), false);
+	assert.equal(isSubagentSession({ PI_SUBAGENT_PARENT_SESSION: "   " }), false);
+	assert.equal(
+		isSubagentSession({ PI_SUBAGENT_PARENT_SESSION: "parent-session-1" }),
+		true,
+	);
+
+	assert.equal(
+		shouldAutoDenyPolicyAsk({ hasUI: true, mode: "tui" }, {}),
+		false,
+	);
+	assert.equal(shouldAutoDenyPolicyAsk({ hasUI: false }, {}), true);
+	assert.equal(
+		shouldAutoDenyPolicyAsk({ hasUI: true, mode: "print" }, {}),
+		true,
+	);
+	assert.equal(
+		shouldAutoDenyPolicyAsk({ hasUI: true, mode: "json" }, {}),
+		true,
+	);
+	assert.equal(
+		shouldAutoDenyPolicyAsk({ hasUI: true, mode: "noninteractive" }, {}),
+		true,
+	);
+	assert.equal(
+		shouldAutoDenyPolicyAsk(
+			{ hasUI: true, mode: "tui" },
+			{ PI_SUBAGENT_PARENT_SESSION: "parent-1" },
+		),
+		true,
+	);
+});
+
+test("policy ask auto-denies noninteractive sessions without calling select", async () => {
+	const { pi, handlers, messages } = makePi();
+	const { spawn } = makeSpawn([
+		{ code: 7, stdout: decideJson("ask", "file.write") },
+	]);
+	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
+	let selectCalled = false;
+	(ctx.ui as any).select = async () => {
+		selectCalled = true;
+		return "Run once anyway";
+	};
+
+	const result = await fireToolCall(
+		handlers.get("tool_call")![0],
+		ctx,
+		"",
+		"write",
+		{ path: "src/main.ts", content: "x" },
+	);
+	assert.equal(result?.block, true);
+	assert.equal(selectCalled, false, "select must not be called for auto-deny");
+	assert.match(result?.reason ?? "", /auto-denied/i);
+	assert.match(result?.reason ?? "", /non-interactive/i);
+	assert.notEqual(result, undefined, "auto-deny must never proceed");
+	const audit = messages.find((m) => m.message.customType === "orca.audit");
+	assert.ok(audit, "expected orca.audit transcript event");
+	assert.equal(
+		(audit?.message.details as { event?: string } | undefined)?.event,
+		"orca_ask_auto_deny",
+	);
+});
+
+test("policy ask auto-denies print mode even when hasUI is true", async () => {
+	const { pi, handlers } = makePi();
+	const { spawn } = makeSpawn([
+		{ code: 7, stdout: decideJson("ask", "file.write") },
+	]);
+	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	const { ctx } = makeCtx({ hasUI: true, mode: "print" });
+	let selectCalled = false;
+	(ctx.ui as any).select = async () => {
+		selectCalled = true;
+		return "Run once anyway";
+	};
+
+	const result = await fireToolCall(
+		handlers.get("tool_call")![0],
+		ctx,
+		"",
+		"write",
+		{ path: "src/main.ts", content: "x" },
+	);
+	assert.equal(result?.block, true);
+	assert.equal(selectCalled, false);
+	assert.match(result?.reason ?? "", /auto-denied/i);
+});
+
+test("policy ask auto-denies subagent sessions even when hasUI is true", async () => {
+	const previous = process.env.PI_SUBAGENT_PARENT_SESSION;
+	process.env.PI_SUBAGENT_PARENT_SESSION = "parent-session-stress";
+	try {
+		const { pi, handlers, messages } = makePi();
+		const { spawn } = makeSpawn([
+			{ code: 7, stdout: decideJson("ask", "file.write") },
+		]);
+		installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+		const { ctx } = makeCtx({ hasUI: true, mode: "tui" });
+		let selectCalled = false;
+		(ctx.ui as any).select = async () => {
+			selectCalled = true;
+			return "Run once anyway";
+		};
+
+		const result = await fireToolCall(
+			handlers.get("tool_call")![0],
+			ctx,
+			"",
+			"write",
+			{ path: "src/main.ts", content: "x" },
+		);
+		assert.equal(result?.block, true);
+		assert.equal(
+			selectCalled,
+			false,
+			"subagent must auto-deny even with hasUI",
+		);
+		assert.match(result?.reason ?? "", /auto-denied/i);
+		assert.match(result?.reason ?? "", /subagent/i);
+		assert.notEqual(result, undefined);
+		const audit = messages.find((m) => m.message.customType === "orca.audit");
+		assert.equal(
+			(audit?.message.details as { event?: string } | undefined)?.event,
+			"orca_ask_auto_deny",
+		);
+		assert.equal(
+			(audit?.message.details as { session_class?: string } | undefined)
+				?.session_class,
+			"subagent",
+		);
+	} finally {
+		if (previous === undefined) delete process.env.PI_SUBAGENT_PARENT_SESSION;
+		else process.env.PI_SUBAGENT_PARENT_SESSION = previous;
+	}
+});
+
+test("policy ask still invokes select in interactive parent TUI", async () => {
+	const previous = process.env.PI_SUBAGENT_PARENT_SESSION;
+	delete process.env.PI_SUBAGENT_PARENT_SESSION;
+	try {
+		const { pi, handlers } = makePi();
+		const { spawn } = makeSpawn([
+			{ code: 7, stdout: decideJson("ask", "file.write") },
+		]);
+		installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+		const { ctx } = makeCtx({ hasUI: true, mode: "tui" });
+		let selectCalled = false;
+		(ctx.ui as any).select = async () => {
+			selectCalled = true;
+			return "Block";
+		};
+
+		const result = await fireToolCall(
+			handlers.get("tool_call")![0],
+			ctx,
+			"",
+			"write",
+			{ path: "src/main.ts", content: "x" },
+		);
+		assert.equal(result?.block, true);
+		assert.equal(selectCalled, true, "interactive TUI must call select");
+		assert.ok(
+			!/auto-denied/i.test(result?.reason ?? ""),
+			"interactive block should not use auto-deny wording",
+		);
+	} finally {
+		if (previous === undefined) delete process.env.PI_SUBAGENT_PARENT_SESSION;
+		else process.env.PI_SUBAGENT_PARENT_SESSION = previous;
+	}
+});
+
+test("policy ask auto-deny still blocks when audit is unavailable", async () => {
+	const { pi, handlers, messages } = makePi();
+	delete (pi as { sendMessage?: unknown }).sendMessage;
+	const { spawn } = makeSpawn([
+		{ code: 7, stdout: decideJson("ask", "file.write") },
+	]);
+	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
+	let selectCalled = false;
+	(ctx.ui as any).select = async () => {
+		selectCalled = true;
+		return "Run once anyway";
+	};
+
+	const result = await fireToolCall(
+		handlers.get("tool_call")![0],
+		ctx,
+		"",
+		"write",
+		{ path: "src/main.ts", content: "x" },
+	);
+	assert.equal(result?.block, true);
+	assert.equal(selectCalled, false);
+	assert.match(result?.reason ?? "", /auto-denied/i);
+	assert.equal(messages.length, 0);
+});
+
+test("bash policy ask auto-denies noninteractive sessions", async () => {
+	const { pi, handlers } = makePi();
+	const { spawn } = makeSpawn([{ code: 0, stdout: askJson() }]);
+	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
+	let selectCalled = false;
+	(ctx.ui as any).select = async () => {
+		selectCalled = true;
+		return "Run once anyway";
+	};
+
+	const result = await fireToolCall(
+		handlers.get("tool_call")![0],
+		ctx,
+		"git push --force",
+	);
+	assert.equal(result?.block, true);
+	assert.equal(selectCalled, false);
+	assert.match(result?.reason ?? "", /auto-denied/i);
+});
+
+test("interactive policy ask blocks when select returns undefined (timeout)", async () => {
+	const previous = process.env.PI_SUBAGENT_PARENT_SESSION;
+	delete process.env.PI_SUBAGENT_PARENT_SESSION;
+	try {
+		const { pi, handlers } = makePi();
+		const { spawn } = makeSpawn([
+			{ code: 7, stdout: decideJson("ask", "file.write") },
+		]);
+		installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+		const { ctx } = makeCtx({ hasUI: true, mode: "tui" });
+		(ctx.ui as any).select = async () => undefined;
+
+		const result = await fireToolCall(
+			handlers.get("tool_call")![0],
+			ctx,
+			"",
+			"write",
+			{ path: "src/main.ts", content: "x" },
+		);
+		assert.equal(result?.block, true);
+		assert.notEqual(result, undefined);
+		assert.ok(!/auto-denied/i.test(result?.reason ?? ""));
+	} finally {
+		if (previous === undefined) delete process.env.PI_SUBAGENT_PARENT_SESSION;
+		else process.env.PI_SUBAGENT_PARENT_SESSION = previous;
+	}
 });
 
 test("malformed read tool call fails closed", async () => {
