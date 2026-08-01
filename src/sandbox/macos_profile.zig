@@ -16,8 +16,11 @@
 //!
 //! Path form (M-28): Seatbelt `subpath` filters on product majors match the
 //! normalized `/Users/…` firmlink form. Realpath often returns
-//! `/System/Volumes/Data/Users/…`; we strip the Data prefix for SBPL emission
-//! so grants are live-effective. Data-form path strings are not dual-emitted.
+//! `/System/Volumes/Data/Users/…`; we strip the Data prefix for *content* grant
+//! emission so grants are live-effective. After the Data deny, we also emit
+//! **metadata-only** Data-form ancestor literals (`/System/Volumes/Data/Users…`)
+//! so firmlink-backed `lstat` of path components is not last-match denied.
+//! Content grants on bare Users / Data Users stay off.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -936,6 +939,16 @@ test "SBPL path-walk ancestor metadata literals for Users-form grants" {
     // Data-form twins after Data deny (firmlink lstat residual).
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/System/Volumes/Data/Users\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/System/Volumes/Data/Users/dev\"))") != null);
+    // Last-match: Data deny before Data-form metadata re-allow.
+    const deny_data = std.mem.indexOf(u8, sbpl, "(deny file-read-metadata (subpath \"/System/Volumes/Data\"))") orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    const data_form_meta = std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/System/Volumes/Data/Users\"))") orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    try std.testing.expect(deny_data < data_form_meta);
     // Still no content grant on bare Users / Data Users.
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/System/Volumes/Data/Users\"))") == null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/System/Volumes/Data/Users\"))") == null);
@@ -977,9 +990,23 @@ test "SBPL path-walk ancestor metadata for Data-volume Users workspace (M-28)" {
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/Users\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/Users/dev\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/Users/dev/projects\"))") != null);
+    // Data-form metadata twins after Data deny (same residual as Users-form grants).
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/System/Volumes/Data/Users\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read-metadata (literal \"/System/Volumes/Data/Users/dev\"))") != null);
+    // Last-match order: Data deny, then Data-form metadata re-allow (no content).
+    const deny_idx = std.mem.indexOf(u8, sbpl, "(deny file-read-metadata (subpath \"/System/Volumes/Data\"))") orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    const data_meta_idx = std.mem.indexOf(u8, sbpl, ";; path-walk Data-form ancestor metadata") orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    try std.testing.expect(deny_idx < data_meta_idx);
     // Must not emit content on Data-form or Users ancestors.
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users\"))") == null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/System/Volumes/Data/Users\"))") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (literal \"/System/Volumes/Data/Users\"))") == null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl, "(allow file-read* (subpath \"/Users/dev/projects/app\"))") != null);
 }
 

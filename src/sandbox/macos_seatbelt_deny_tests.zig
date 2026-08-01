@@ -1351,9 +1351,10 @@ test "real FS: path-walk lstat of grant ancestors succeeds; outside still denied
 // Codex/Node residual: resolveMainPath realpathSync walks install path components
 // under $HOME/.local/... (and lstats /Users first). Product must grant file-only
 // .exec on the entry script and metadata on every ancestor so Seatbelt does not
-// EPERM mid-walk.
+// EPERM mid-walk. Also lstats Data-form `/System/Volumes/Data/Users` when present
+// (firmlink residual after Data deny).
 // Exit: 0=ok, 2=apply fail, 3=/Users lstat EPERM, 4=codex component lstat EPERM,
-// 5=codex.js open fail (content/exec residual).
+// 5=codex.js open fail (content/exec residual), 6=Data-form Users lstat EPERM.
 test "real FS: Users path-walk + codex npm install realpath chain" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
     if (!sandboxInitAvailable()) return error.SkipZigTest;
@@ -1416,9 +1417,15 @@ test "real FS: Users path-walk + codex npm install realpath chain" {
     try std.testing.expectEqual(.prepared, prepared.status);
     const sbpl_z = prepared.sbpl_z.?;
 
-    // Model: exec file + Users ancestors must appear.
+    // Model: exec file + Users + Data-form Users ancestors must appear.
     try std.testing.expect(std.mem.indexOf(u8, sbpl_z, "(allow file-read-metadata (literal \"/Users\"))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sbpl_z, "(allow file-read-metadata (literal \"/System/Volumes/Data/Users\"))") != null);
     try std.testing.expect(std.mem.indexOf(u8, sbpl_z, "file-read*") != null);
+    // No content grant on bare Data Users.
+    try std.testing.expect(std.mem.indexOf(u8, sbpl_z, "(allow file-read* (subpath \"/System/Volumes/Data/Users\"))") == null);
+
+    const data_users_z = try allocator.dupeZ(u8, "/System/Volumes/Data/Users");
+    defer allocator.free(data_users_z);
 
     const pid = std.c.fork();
     if (pid < 0) return error.SkipZigTest;
@@ -1430,6 +1437,14 @@ test "real FS: Users path-walk + codex npm install realpath chain" {
         }.lstat;
         var st: std.c.Stat = undefined;
         if (lstat_fn(users_z.ptr, &st) != 0) std.c._exit(3);
+
+        // Firmlink residual: Data-form vnode for /Users after Data deny.
+        // Skip if the path is absent on this host (non-standard layout).
+        if (lstat_fn(data_users_z.ptr, &st) != 0) {
+            const e = std.c.errno(-1);
+            // Only treat EPERM/EACCES as residual failure; ENOENT is skip-in-child.
+            if (e == .PERM or e == .ACCES) std.c._exit(6);
+        }
 
         // Component walk of codex install path (Node realpath shape).
         const path = codex_z;
@@ -1460,6 +1475,7 @@ test "real FS: Users path-walk + codex npm install realpath chain" {
         3 => return error.UsersLstatDenied,
         4 => return error.CodexInstallPathWalkDenied,
         5 => return error.CodexJsUnreadable,
+        6 => return error.DataFormUsersLstatDenied,
         else => return error.UnexpectedSandboxChildExit,
     }
 }
