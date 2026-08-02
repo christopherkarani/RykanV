@@ -132,11 +132,14 @@ eval "$(./scripts/ensure-zig-toolchain.sh --export)"   # or: direnv allow
 
 ### Work, Zig skills, and end-of-task review
 
-Mandatory control loop for non-trivial code work. Details: [`docs/agents/work-and-review.md`](docs/agents/work-and-review.md).
+Mandatory control loop for non-trivial code work. Details: [`docs/agents/work-and-review.md`](docs/agents/work-and-review.md).  
+**Implement floor (canonical):** [`docs/agents/implement-floor.md`](docs/agents/implement-floor.md) — **correctness and complete working features over cost.** Align multi-unit paths here; do not invent a softer process.
 
+- **Correctness first:** do not drop review lanes, switch to lite, or rubber-stamp PASS to save agent-minutes. Incomplete product wiring, hollow stubs, and missing tests for claimed acceptance are **FAIL**, not optional residuals. If budget is too low for required lanes → escalate / re-launch with higher budget; never silently thin.
 - **Zig skill packs (when touching Zig):** load before writing or reviewing. At minimum `zig-best-practices` for implement/style; add `zig-memory-safety` for alloc/IO/lifetime; `zig-abstractions` for API design; build-system skill for `build.zig` / `build.zig.zon`. Review lanes load code-review / memory-safety / thermo-nuclear as the tier requires.
 - **Instruct every sub-agent** which skill paths to read first. Missing skill → fail/pause; do not improvise “Zig vibes.”
-- **End-of-task review (substantive code only):** spawn real review sub-agents (no self-review cosplay). Tier ladder:
+- **Multi-unit implement:** use `orchestrate-implement` or `implementor` workflow with **on-disk** handoffs + VERDICT gates (see implement-floor). Hand prompts must cite the same floor. Sub-agent output stays **advisory** until main agent / disk gate re-checks tree, tests, and product rules.
+- **End-of-task review (substantive code only):** spawn real review sub-agents (no self-review cosplay). Tier ladder on the **integrated** final diff:
   - **T1 (default):** Behavior/Correctness + Style/Idioms
   - **T2 (risk / multi-module / implement-subagent work):** T1 + Safety/Hardening
   - **T3 (large or architectural):** T2 + Thermo-nuclear code quality
