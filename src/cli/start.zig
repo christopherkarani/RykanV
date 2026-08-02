@@ -444,10 +444,9 @@ fn softRefreshStartDiscovery(
     append_key(&keys_buf, &keys_len, "pi");
     append_key(&keys_buf, &keys_len, "opencode");
 
-    refreshManagedDiscovery(io, allocator, workspace_root, home, keys_buf[0..keys_len]) catch |err| {
-        // Soft warning only — start still succeeds (DIS-1).
-        std.debug.print("ryk start: discovery refresh soft-skipped ({s})\n", .{@errorName(err)});
-    };
+    // Soft-skip errors — start still succeeds (DIS-1). Warning is logged by
+    // callers that have stderr when needed; silent here to avoid wrong stream.
+    refreshManagedDiscovery(io, allocator, workspace_root, home, keys_buf[0..keys_len]) catch {};
 }
 
 fn runChild(allocator: std.mem.Allocator, argv: []const []const u8) !u8 {

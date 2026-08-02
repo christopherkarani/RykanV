@@ -3783,6 +3783,12 @@ test "applyNetworkOverlayWithHostKey P3 class tokens never land in allow; privat
             \\    sources: [pi:discover]
             \\  - host: direct-ip
             \\    sources: [pi:discover]
+            \\  - host: metadata.google.internal
+            \\    sources: [pi:discover]
+            \\  - host: localhost
+            \\    sources: [pi:discover]
+            \\  - host: pastebin.com
+            \\    sources: [pi:discover]
             \\
         );
     }
@@ -3795,7 +3801,12 @@ test "applyNetworkOverlayWithHostKey P3 class tokens never land in allow; privat
         \\    "type": "api",
         \\    "key": "sk-fixture-hostile-class-NOT-REAL",
         \\    "baseUrl": "https://private/",
-        \\    "tokenEndpoint": "https://metadata/"
+        \\    "tokenEndpoint": "https://metadata.google.internal/"
+        \\  },
+        \\  "local": {
+        \\    "type": "api",
+        \\    "key": "sk-fixture-local-NOT-REAL",
+        \\    "baseUrl": "http://localhost:9/"
         \\  }
         \\}
     ;
@@ -3820,9 +3831,14 @@ test "applyNetworkOverlayWithHostKey P3 class tokens never land in allow; privat
     try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "metadata"));
     try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "cloud-metadata"));
     try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "direct-ip"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "metadata.google.internal"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "localhost"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "pastebin.com"));
     // Class destinations still deny under allowlist (no class-wide grant).
     try p3LaunchExpectNetworkResult(allocator, &pol, "http://10.0.0.1/", .deny);
     try p3LaunchExpectNetworkResult(allocator, &pol, "http://169.254.169.254/latest/meta-data/", .deny);
+    try p3LaunchExpectNetworkResult(allocator, &pol, "http://metadata.google.internal/", .deny);
+    try p3LaunchExpectNetworkResult(allocator, &pol, "http://127.0.0.1:1/", .deny);
 }
 
 test "applyNetworkOverlayWithHostKey P3 soft-skips missing managed and empty home still seeds pack floor" {

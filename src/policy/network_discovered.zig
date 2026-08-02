@@ -33,6 +33,7 @@ const schema = @import("schema.zig");
 const inference_hostname = @import("inference_hostname.zig");
 const agent_inference_hosts = @import("agent_inference_hosts.zig");
 const inference_discover = @import("inference_discover.zig");
+const network_eval = @import("network_eval.zig");
 
 // ---------------------------------------------------------------------------
 // Bounds — fail-closed soft skip on oversize / hostile (never panic launch)
@@ -88,12 +89,17 @@ pub fn writeManaged(
 ) !void {
     const orca_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".orca" });
     defer allocator.free(orca_dir);
+
+    // Refuse parent `.orca` symlink escape (component must not be a link).
+    if (try pathIsSymlink(allocator, orca_dir)) return error.ManagedPathIsSymlink;
     try std.Io.Dir.cwd().createDirPath(io, orca_dir);
+    // Re-check after create: race / pre-existing link.
+    if (try pathIsSymlink(allocator, orca_dir)) return error.ManagedPathIsSymlink;
 
     const path = try managedPath(allocator, workspace_root);
     defer allocator.free(path);
 
-    // Refuse writing through a symlink (integrity: product path must not be a link).
+    // Refuse writing through a leaf symlink (integrity: product path must not be a link).
     if (try pathIsSymlink(allocator, path)) return error.ManagedPathIsSymlink;
 
     var buf: std.ArrayList(u8) = .empty;
@@ -135,7 +141,7 @@ pub fn writeManaged(
 }
 
 /// Load managed store from workspace_root. Soft-empty on missing / corrupt /
-/// empty / oversize (do not fail launch). Only OOM is a hard error.
+/// empty / oversize / symlink product path (do not fail launch). Only OOM hard-fails.
 pub fn loadManaged(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -143,6 +149,9 @@ pub fn loadManaged(
 ) !ManagedStore {
     const path = try managedPath(allocator, workspace_root);
     defer allocator.free(path);
+
+    // Soft-empty on symlink leaf (write refuses; load must not follow hostile content).
+    if (try pathIsSymlink(allocator, path)) return emptyStore();
 
     const text = std.Io.Dir.cwd().readFileAlloc(
         io,
@@ -192,8 +201,12 @@ pub fn managedEntryMatchesHostKey(entry: ManagedHost, host_key: []const u8) bool
 
 /// Run adapters for `host_keys` under `home`; regenerate managed store under
 /// `workspace_root`. Hostnames + source tags only. Never edits policy.yaml.
-/// Soft success when host_keys/home empty or adapters soft-empty (no hard fail).
-/// Empty rediscovery leaves any existing managed file untouched.
+///
+/// Merge-by-source contract:
+/// - Non-empty adapter result **replaces** that host_key's prior contributions.
+/// - Soft-empty adapter **preserves** existing entries tagged for that key.
+/// - Shared hostnames **union** source tags (no first-wins tag drop).
+/// - All requested keys soft-empty → leave file untouched.
 pub fn refreshManagedDiscovery(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -203,63 +216,154 @@ pub fn refreshManagedDiscovery(
 ) !void {
     if (host_keys.len == 0) return;
 
+    // Load prior store for soft-empty preservation.
+    var prior = try loadManaged(io, allocator, workspace_root);
+    defer prior.deinit(allocator);
+
+    // Track which keys produced non-empty discovery.
+    var non_empty_keys: [8][]const u8 = undefined;
+    var non_empty_len: usize = 0;
+
+    // collected hosts with owned host strings + owned source slices.
     var collected: std.ArrayList(ManagedHost) = .empty;
-    errdefer freeRefreshManagedHosts(allocator, &collected);
+    errdefer freeRefreshManagedHostsOwnedSources(allocator, &collected);
 
     for (host_keys) |key| {
         if (key.len == 0) continue;
         const discovered = try inference_discover.discoverForHost(io, allocator, key, home);
         defer schema.freeStringList(allocator, discovered);
 
-        const sources = refreshSourceTag(key);
+        if (discovered.len == 0) continue; // soft-empty: preserve prior below
+
+        if (non_empty_len < non_empty_keys.len) {
+            non_empty_keys[non_empty_len] = key;
+            non_empty_len += 1;
+        }
+
         for (discovered) |host| {
             if (host.len == 0) continue;
-            if (refreshListContainsHost(collected.items, host)) continue;
-            const owned = try allocator.dupe(u8, host);
-            errdefer allocator.free(owned);
-            try collected.append(allocator, .{
-                .host = owned,
-                .sources = sources,
-            });
+            try refreshUpsertHost(allocator, &collected, host, key);
+        }
+    }
+
+    // Preserve prior entries for host_keys that soft-emptied (and any other
+    // prior keys not in this refresh request).
+    for (prior.hosts) |entry| {
+        var keep = false;
+        // Keep if entry is tagged for a key that soft-emptied this round.
+        for (host_keys) |key| {
+            if (key.len == 0) continue;
+            var key_was_non_empty = false;
+            for (non_empty_keys[0..non_empty_len]) |nek| {
+                if (std.mem.eql(u8, nek, key)) {
+                    key_was_non_empty = true;
+                    break;
+                }
+            }
+            if (key_was_non_empty) continue; // replaced by live discovery
+            if (managedEntryMatchesHostKey(entry, key)) {
+                keep = true;
+                break;
+            }
+        }
+        // Also keep entries whose sources don't match any requested key
+        // (foreign tags from hand-edit or older adapters).
+        if (!keep) {
+            var matches_any_requested = false;
+            for (host_keys) |key| {
+                if (key.len == 0) continue;
+                if (managedEntryMatchesHostKey(entry, key)) {
+                    matches_any_requested = true;
+                    break;
+                }
+            }
+            if (!matches_any_requested) keep = true;
+        }
+        if (!keep) continue;
+
+        for (entry.sources) |src| {
+            // Re-derive host_key from first source prefix for upsert.
+            const key = sourceTagHostKey(src) orelse "discover";
+            try refreshUpsertHost(allocator, &collected, entry.host, key);
+        }
+        if (entry.sources.len == 0) {
+            try refreshUpsertHost(allocator, &collected, entry.host, "discover");
         }
     }
 
     if (collected.items.len == 0) {
-        freeRefreshManagedHosts(allocator, &collected);
+        freeRefreshManagedHostsOwnedSources(allocator, &collected);
         return;
     }
 
     try writeManaged(io, allocator, workspace_root, collected.items);
-    freeRefreshManagedHosts(allocator, &collected);
+    freeRefreshManagedHostsOwnedSources(allocator, &collected);
 }
 
 // ---------------------------------------------------------------------------
 // Internals
 // ---------------------------------------------------------------------------
 
-const refresh_source_pi = [_][]const u8{"pi:discover"};
-const refresh_source_opencode = [_][]const u8{"opencode:discover"};
-const refresh_source_generic = [_][]const u8{"discover"};
-
-fn refreshSourceTag(host_key: []const u8) []const []const u8 {
-    if (std.mem.eql(u8, host_key, "pi")) return &refresh_source_pi;
-    if (std.mem.eql(u8, host_key, "opencode")) return &refresh_source_opencode;
-    return &refresh_source_generic;
+fn refreshSourceTagString(host_key: []const u8) []const u8 {
+    if (std.mem.eql(u8, host_key, "pi")) return "pi:discover";
+    if (std.mem.eql(u8, host_key, "opencode")) return "opencode:discover";
+    return "discover";
 }
 
-fn freeRefreshManagedHosts(allocator: std.mem.Allocator, hosts: *std.ArrayList(ManagedHost)) void {
+fn sourceTagHostKey(src: []const u8) ?[]const u8 {
+    if (std.mem.indexOfScalar(u8, src, ':')) |colon| {
+        if (colon == 0) return null;
+        return src[0..colon];
+    }
+    if (src.len == 0) return null;
+    return src;
+}
+
+/// Upsert host into collected list; union source tags on collision (owned sources).
+fn refreshUpsertHost(
+    allocator: std.mem.Allocator,
+    collected: *std.ArrayList(ManagedHost),
+    host: []const u8,
+    host_key: []const u8,
+) !void {
+    const tag = refreshSourceTagString(host_key);
+    // Find existing host (exact match).
+    for (collected.items) |*entry| {
+        if (!std.mem.eql(u8, entry.host, host)) continue;
+        // Already has this source tag?
+        for (entry.sources) |s| {
+            if (std.mem.eql(u8, s, tag)) return;
+        }
+        // Union: grow sources slice.
+        const old = entry.sources;
+        var next = try allocator.alloc([]const u8, old.len + 1);
+        errdefer allocator.free(next);
+        for (old, 0..) |s, i| next[i] = s;
+        next[old.len] = try allocator.dupe(u8, tag);
+        if (old.len > 0) allocator.free(old);
+        entry.sources = next;
+        return;
+    }
+    // New host entry.
+    const owned_host = try allocator.dupe(u8, host);
+    errdefer allocator.free(owned_host);
+    const owned_tag = try allocator.dupe(u8, tag);
+    errdefer allocator.free(owned_tag);
+    const sources = try allocator.alloc([]const u8, 1);
+    errdefer allocator.free(sources);
+    sources[0] = owned_tag;
+    try collected.append(allocator, .{
+        .host = owned_host,
+        .sources = sources,
+    });
+}
+
+fn freeRefreshManagedHostsOwnedSources(allocator: std.mem.Allocator, hosts: *std.ArrayList(ManagedHost)) void {
     for (hosts.items) |entry| {
         allocator.free(entry.host);
-        // sources are static slices — do not free.
+        schema.freeStringList(allocator, entry.sources);
     }
     hosts.deinit(allocator);
-}
-
-fn refreshListContainsHost(hosts: []const ManagedHost, needle: []const u8) bool {
-    for (hosts) |entry| {
-        if (std.mem.eql(u8, entry.host, needle)) return true;
-    }
-    return false;
 }
 
 fn emptyStore() ManagedStore {
@@ -360,9 +464,13 @@ fn parseManagedYaml(allocator: std.mem.Allocator, text: []const u8) !ManagedStor
                 continue;
             }
             if (try inference_hostname.extractHostname(allocator, val)) |normalized| {
-                cur_host = normalized;
+                if (network_eval.isExfilSinkHostname(normalized)) {
+                    allocator.free(normalized);
+                } else {
+                    cur_host = normalized;
+                }
             }
-            // Invalid / reserved / wildcard → soft-drop (cur_host stays null).
+            // Invalid / reserved / wildcard / sink → soft-drop (cur_host stays null).
             continue;
         }
 
@@ -386,13 +494,20 @@ fn parseManagedYaml(allocator: std.mem.Allocator, text: []const u8) !ManagedStor
                 in_sources_block = false;
                 continue;
             }
-            const new_host = (try inference_hostname.extractHostname(allocator, val)) orelse {
-                // Soft-drop invalid host; free prior if any.
+            const new_host = blk: {
+                const n = (try inference_hostname.extractHostname(allocator, val)) orelse break :blk null;
+                if (network_eval.isExfilSinkHostname(n)) {
+                    allocator.free(n);
+                    break :blk null;
+                }
+                break :blk n;
+            };
+            if (new_host == null) {
                 if (cur_host) |old| allocator.free(old);
                 cur_host = null;
                 in_sources_block = false;
                 continue;
-            };
+            }
             if (cur_host) |old| allocator.free(old);
             cur_host = new_host;
             in_sources_block = false;
@@ -1234,4 +1349,134 @@ test "network_discovered refreshManagedDiscovery writes hostnames for pi/opencod
     defer schema.freeStringList(std.testing.allocator, hosts);
     try std.testing.expect(listContainsExact(hosts, "auth.x.ai"));
     try std.testing.expect(listContainsExact(hosts, "api.x.ai"));
+}
+
+test "network_discovered refresh unions source tags when both adapters emit same host" {
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    const workspace_root = try workspaceAbs(&ws_tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    try home_tmp.dir.createDirPath(std.testing.io, ".pi/agent");
+    try home_tmp.dir.createDirPath(std.testing.io, ".local/share/opencode");
+    {
+        const f = try home_tmp.dir.createFile(std.testing.io, ".pi/agent/auth.json", .{});
+        defer f.close(std.testing.io);
+        try f.writeStreamingAll(std.testing.io,
+            \\{"xai-oauth":{"type":"oauth","tokenEndpoint":"https://auth.x.ai/oauth2/token","baseUrl":"https://api.x.ai/v1","access":"a","refresh":"b"}}
+        );
+    }
+    {
+        const f = try home_tmp.dir.createFile(std.testing.io, ".local/share/opencode/auth.json", .{});
+        defer f.close(std.testing.io);
+        try f.writeStreamingAll(std.testing.io,
+            \\{"xai":{"type":"oauth","access":"c","refresh":"d"}}
+        );
+    }
+    const home = try workspaceAbs(&home_tmp);
+    defer std.testing.allocator.free(home);
+
+    try refreshManagedDiscovery(
+        std.testing.io,
+        std.testing.allocator,
+        workspace_root,
+        home,
+        &.{ "pi", "opencode" },
+    );
+
+    var store = try loadManaged(std.testing.io, std.testing.allocator, workspace_root);
+    defer store.deinit(std.testing.allocator);
+
+    var found_api = false;
+    for (store.hosts) |entry| {
+        if (!std.mem.eql(u8, entry.host, "api.x.ai") and !std.mem.eql(u8, entry.host, "auth.x.ai")) continue;
+        found_api = true;
+        // Shared catalog host must match both keys when both adapters emit it.
+        try std.testing.expect(managedEntryMatchesHostKey(entry, "pi") or managedEntryMatchesHostKey(entry, "opencode"));
+    }
+    try std.testing.expect(found_api);
+    // At least one shared host should carry both source tags.
+    var dual = false;
+    for (store.hosts) |entry| {
+        if (managedEntryMatchesHostKey(entry, "pi") and managedEntryMatchesHostKey(entry, "opencode")) {
+            dual = true;
+            break;
+        }
+    }
+    try std.testing.expect(dual);
+}
+
+test "network_discovered refresh soft-empty adapter preserves prior host_key entries" {
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    const workspace_root = try workspaceAbs(&ws_tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    // Seed opencode-only managed host.
+    try writeManaged(std.testing.io, std.testing.allocator, workspace_root, &.{
+        .{ .host = "opencode.ai", .sources = &.{"opencode:discover"} },
+        .{ .host = "models.opencode.ai", .sources = &.{"opencode:discover"} },
+    });
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    // Only pi auth present — opencode soft-empty.
+    try home_tmp.dir.createDirPath(std.testing.io, ".pi/agent");
+    {
+        const f = try home_tmp.dir.createFile(std.testing.io, ".pi/agent/auth.json", .{});
+        defer f.close(std.testing.io);
+        try f.writeStreamingAll(std.testing.io,
+            \\{"xai-oauth":{"type":"oauth","tokenEndpoint":"https://auth.x.ai/oauth2/token","baseUrl":"https://api.x.ai/v1","access":"a","refresh":"b"}}
+        );
+    }
+    const home = try workspaceAbs(&home_tmp);
+    defer std.testing.allocator.free(home);
+
+    try refreshManagedDiscovery(
+        std.testing.io,
+        std.testing.allocator,
+        workspace_root,
+        home,
+        &.{ "pi", "opencode" },
+    );
+
+    var store = try loadManaged(std.testing.io, std.testing.allocator, workspace_root);
+    defer store.deinit(std.testing.allocator);
+    const hosts = try storeHostnames(std.testing.allocator, store);
+    defer schema.freeStringList(std.testing.allocator, hosts);
+
+    // Pi hosts added.
+    try std.testing.expect(listContainsExact(hosts, "auth.x.ai"));
+    // Opencode soft-empty: prior opencode-tagged hosts retained.
+    try std.testing.expect(listContainsExact(hosts, "opencode.ai"));
+    try std.testing.expect(listContainsExact(hosts, "models.opencode.ai"));
+}
+
+test "network_discovered loadManaged soft-drops pastebin sink hosts" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    {
+        const f = try tmp.dir.createFile(std.testing.io, managed_rel, .{});
+        defer f.close(std.testing.io);
+        try f.writeStreamingAll(std.testing.io,
+            \\version: 1
+            \\hosts:
+            \\  - host: pastebin.com
+            \\    sources: [pi:discover]
+            \\  - host: auth.x.ai
+            \\    sources: [pi:discover]
+            \\
+        );
+    }
+    const root = try workspaceAbs(&tmp);
+    defer std.testing.allocator.free(root);
+    var store = try loadManaged(std.testing.io, std.testing.allocator, root);
+    defer store.deinit(std.testing.allocator);
+    const hosts = try storeHostnames(std.testing.allocator, store);
+    defer schema.freeStringList(std.testing.allocator, hosts);
+    try std.testing.expect(listContainsExact(hosts, "auth.x.ai"));
+    try std.testing.expect(!listContainsExact(hosts, "pastebin.com"));
 }

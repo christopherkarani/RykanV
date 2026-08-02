@@ -93,19 +93,6 @@ pub fn catalogForProvider(provider_id: []const u8) []const []const u8 {
     return &.{};
 }
 
-/// True when `host` appears in the static core pack, any overlay family, or any
-/// provider catalog (exact match). Used by discovery to document known floor hosts.
-pub fn isKnownInferenceHost(host: []const u8) bool {
-    if (listContains(&CORE_PACK, host)) return true;
-    if (listContains(&HOSTS_GROK, host)) return true;
-    if (listContains(&HOSTS_ANTHROPIC, host)) return true;
-    if (listContains(&HOSTS_OPENAI, host)) return true;
-    if (listContains(&HOSTS_XAI, host)) return true;
-    if (listContains(&HOSTS_OPENROUTER, host)) return true;
-    if (listContains(&HOSTS_OPENCODE, host)) return true;
-    return false;
-}
-
 /// Merge `existing ∪ corePack ∪ overlay` (null host_key → core only). See file header.
 pub fn mergeAllowList(
     allocator: std.mem.Allocator,

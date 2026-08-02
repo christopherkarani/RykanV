@@ -802,6 +802,18 @@ fn isTunnelingService(host: []const u8) bool {
     return hostMatchesAny(host, &.{ "*.ngrok.io", "*.ngrok-free.app", "*.trycloudflare.com", "*.loca.lt", "*.localtunnel.me", "*.serveo.net" });
 }
 
+/// Public: cloud metadata class hostnames (IMDS / GCE metadata).
+/// Shared with discovery extract so allowlist cannot short-circuit class deny.
+pub fn isCloudMetadataHostname(host: []const u8) bool {
+    return isCloudMetadataHost(host);
+}
+
+/// Public: paste / webhook / tunnel exfil sinks. Shared with discovery soft-drop
+/// so agent-writable auth cannot self-grant sinks that eval would flag.
+pub fn isExfilSinkHostname(host: []const u8) bool {
+    return isPasteSite(host) or isWebhookOrRequestBin(host) or isTunnelingService(host);
+}
+
 fn hostMatchesAny(host: []const u8, patterns: []const []const u8) bool {
     for (patterns) |pattern| {
         if (matchers.matchesDomain(pattern, host)) return true;

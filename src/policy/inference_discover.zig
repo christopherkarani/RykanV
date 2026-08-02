@@ -27,6 +27,7 @@ const std = @import("std");
 const schema = @import("schema.zig");
 const agent_inference_hosts = @import("agent_inference_hosts.zig");
 const inference_hostname = @import("inference_hostname.zig");
+const network_eval = @import("network_eval.zig");
 
 // ---------------------------------------------------------------------------
 // Bounds (plan §3.3 / §3.6 — fail-closed soft skip, never panic)
@@ -250,8 +251,9 @@ fn appendOwnedHost(
     list: *std.ArrayList([]const u8),
     owned_host: []u8,
 ) !void {
-    // Agent-writable auth residual: never auto-grant known exfil sinks.
-    if (isExfilSinkHost(owned_host)) {
+    // Agent-writable auth residual: never auto-grant known exfil sinks
+    // (single table in network_eval — no dual-path drift).
+    if (network_eval.isExfilSinkHostname(owned_host)) {
         allocator.free(owned_host);
         return;
     }
@@ -261,34 +263,6 @@ fn appendOwnedHost(
     }
     errdefer allocator.free(owned_host);
     try list.append(allocator, owned_host);
-}
-
-/// Known paste / webhook / tunnel sinks that must not auto-merge from discovery.
-/// Aligns with network_eval paste/exfil host classes (hostname only).
-fn isExfilSinkHost(host: []const u8) bool {
-    const sinks = [_][]const u8{
-        "pastebin.com",
-        "gist.github.com",
-        "hastebin.com",
-        "requestbin.net",
-        "webhook.site",
-        "pipedream.net",
-        "ngrok.io",
-        "ngrok-free.app",
-        "trycloudflare.com",
-        "loca.lt",
-        "localtunnel.me",
-        "serveo.net",
-    };
-    for (sinks) |sink| {
-        if (std.ascii.eqlIgnoreCase(host, sink)) return true;
-        // suffix match for multi-label (e.g. eu.pastebin.com, abc.ngrok.io)
-        if (host.len > sink.len + 1 and
-            host[host.len - sink.len - 1] == '.' and
-            std.ascii.eqlIgnoreCase(host[host.len - sink.len ..], sink))
-            return true;
-    }
-    return false;
 }
 
 fn listContainsExactOwned(hosts: []const []const u8, needle: []const u8) bool {

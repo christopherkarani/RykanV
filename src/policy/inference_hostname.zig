@@ -7,10 +7,14 @@
 //! Intentionally does **not** call `network_eval.parseDestination` (that helper
 //! strip-accepts userinfo; discovery must reject credential-bearing authorities).
 //! Also rejects `network_eval` class/metapattern tokens (`private`, `metadata`,
-//! `cloud-metadata`, `direct-ip`) so discovery cannot widen class-wide allows.
+//! `cloud-metadata`, `direct-ip`, bare `localhost`) and cloud-metadata hostnames
+//! (`metadata.google.internal`) so discovery cannot widen class-wide allows.
+//! Loopback residual is exact IP only (`127.0.0.1` / `::1`) — never the class
+//! token `localhost`, which `matchesHostPattern` expands to all loopback.
 //! Re-exported from `src/policy/mod.zig` for monopath / test-core discovery.
 
 const std = @import("std");
+const network_eval = @import("network_eval.zig");
 
 /// Maximum adapter field length considered for host extract (fail-closed oversize).
 const max_field_len: usize = 8192;
@@ -22,6 +26,7 @@ const reserved_policy_tokens = [_][]const u8{
     "metadata",
     "cloud-metadata",
     "direct-ip",
+    "localhost", // class-wide: matches entire host_class.localhost
 };
 
 /// Extract a normalized inference hostname from an adapter-approved field
@@ -31,8 +36,9 @@ const reserved_policy_tokens = [_][]const u8{
 ///   query, fragment, or port). Caller frees with `allocator.free`.
 /// - Reject (`null`): empty/whitespace, path-only, credential-bearing
 ///   (userinfo), invalid UTF-8/NUL, bare wildcards not product-tested,
-///   non-loopback IP literals, reserved policy class tokens. Loopback
-///   (`localhost` / `127.0.0.1` / `::1`) accepted for local Ollama residual (spec §8).
+///   non-loopback IP literals, reserved policy class tokens (incl. bare
+///   `localhost`), cloud-metadata hostnames. Loopback residual: exact
+///   `127.0.0.1` / `::1` only (not class token `localhost` — SEC class deny).
 /// - Errors: allocator failures only (`error.OutOfMemory`).
 pub fn extractHostname(
     allocator: std.mem.Allocator,
@@ -154,7 +160,15 @@ fn parseHostFromAuthority(authority: []const u8) ?[]const u8 {
 
 fn isAcceptableHost(host: []const u8) bool {
     if (isReservedPolicyToken(host)) return false;
+    // Never emit cloud-metadata class hosts (exact `metadata` is already a
+    // reserved token; multi-label `metadata.google.internal` needs this path).
+    if (network_eval.isCloudMetadataHostname(host)) return false;
+    // Bare localhost / *.localhost are class tokens/patterns — reject.
+    // Exact 127.0.0.1 / ::1 remain the only loopback residual (Ollama).
+    if (std.ascii.eqlIgnoreCase(host, "localhost")) return false;
+    if (std.ascii.endsWithIgnoreCase(host, ".localhost")) return false;
     if (parseIpv4(host)) |ip| {
+        if (isCloudMetadataIpv4(ip)) return false;
         return isLocalhostIp(ip);
     }
     if (isIpv6Literal(host)) {
@@ -163,9 +177,12 @@ fn isAcceptableHost(host: []const u8) bool {
     return validDomain(host);
 }
 
+fn isCloudMetadataIpv4(ip: [4]u8) bool {
+    return ip[0] == 169 and ip[1] == 254 and ip[2] == 169 and ip[3] == 254;
+}
+
 fn isLoopbackHost(host: []const u8) bool {
-    if (std.ascii.eqlIgnoreCase(host, "localhost")) return true;
-    if (std.ascii.endsWithIgnoreCase(host, ".localhost")) return true;
+    // Used only for scheme-less path disambiguation — IP loopback only.
     if (parseIpv4(host)) |ip| return isLocalhostIp(ip);
     if (isIpv6Loopback(host)) return true;
     return false;
@@ -406,23 +423,44 @@ test "inference_hostname bare non-loopback IPv4 rejected" {
     try std.testing.expect(host == null);
 }
 
-test "inference_hostname loopback residual accepts localhost bare host" {
-    // Spec §8: local Ollama may be discovered via explicit baseUrl; loopback residual.
+test "inference_hostname rejects bare localhost class token" {
+    // Bare "localhost" is a network_eval class pattern (all loopback), not a scoped residual.
     const allocator = std.testing.allocator;
-    const host = try extractHostname(allocator, "localhost");
-    defer if (host) |h| allocator.free(h);
-
-    try std.testing.expect(host != null);
-    try std.testing.expectEqualStrings("localhost", host.?);
+    for ([_][]const u8{ "localhost", "LOCALHOST", "http://localhost:11434/v1", "foo.localhost" }) |field| {
+        const host = try extractHostname(allocator, field);
+        defer if (host) |h| allocator.free(h);
+        try std.testing.expect(host == null);
+    }
 }
 
-test "inference_hostname loopback residual accepts 127.0.0.1 URL host" {
+test "inference_hostname loopback residual accepts 127.0.0.1 URL host only" {
+    // Spec §8 Ollama residual: exact IP, not class token localhost.
     const allocator = std.testing.allocator;
     const host = try extractHostname(allocator, "http://127.0.0.1:11434/v1");
     defer if (host) |h| allocator.free(h);
 
     try std.testing.expect(host != null);
     try std.testing.expectEqualStrings("127.0.0.1", host.?);
+}
+
+test "inference_hostname rejects metadata.google.internal cloud metadata host" {
+    const allocator = std.testing.allocator;
+    for ([_][]const u8{
+        "metadata.google.internal",
+        "https://metadata.google.internal/computeMetadata/v1/",
+        "METADATA.GOOGLE.INTERNAL",
+    }) |field| {
+        const host = try extractHostname(allocator, field);
+        defer if (host) |h| allocator.free(h);
+        try std.testing.expect(host == null);
+    }
+}
+
+test "inference_hostname rejects 169.254.169.254 IMDS IP" {
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "http://169.254.169.254/latest/meta-data/");
+    defer if (host) |h| allocator.free(h);
+    try std.testing.expect(host == null);
 }
 
 test "inference_hostname trims surrounding whitespace before parse" {

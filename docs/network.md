@@ -146,11 +146,11 @@ Managed store path: `<workspace>/.orca/network-discovered.yaml` (optional; soft-
 
 Adapters emit **hostnames only**. They prefer literal hosts from approved URL fields (`baseUrl`, `tokenEndpoint`, discovery endpoints), else map provider **ids** through a static catalog (unknown ids skipped). They **never** harvest MCP, marketplace, plugins, or full-tree URL regexes.
 
-**Hard rejects on extract/load:** reserved policy class tokens, bare wildcards, credential-bearing URLs, non-loopback IP literals.
+**Hard rejects on extract/load:** reserved policy class tokens (`private`, `metadata`, `direct-ip`, bare `localhost`), cloud-metadata hostnames (`metadata.google.internal`), bare wildcards, credential-bearing URLs, non-loopback IP literals. Loopback residual is exact `127.0.0.1` / `::1` only — never the class token `localhost` (which would allow all loopback destinations).
 
-**Soft-drop sinks:** known paste/webhook/tunnel hosts (pastebin, hastebin, requestbin, ngrok tunnels, …) never auto-grant even when planted in agent-writable auth.
+**Soft-drop sinks:** paste/webhook/tunnel hosts from the shared `network_eval` table never auto-grant (live adapter and managed load).
 
-**Residual (auth trust):** pi/opencode config dirs remain agent-writable for OAuth refresh. Discovery therefore trusts parent-HOME auth contents at launch. Operators who need a stricter model can authority write-deny auth paths or pin allows only via `policy.yaml`. Novel multi-label non-sink hosts from custom `baseUrl` still auto-merge (intentional URL-divergence support); catalog is the id-only floor, not a URL ceiling.
+**Residual (auth trust):** pi/opencode config dirs remain agent-writable for OAuth refresh. Discovery trusts parent-HOME auth at launch, subject to the rejects above. Operators who need stricter control can authority write-deny auth paths or pin allows only via `policy.yaml`. Novel multi-label non-sink hosts from custom `baseUrl` still auto-merge (URL-divergence support).
 
 **Deferred residuals:** interactive post-refresh host summary on `ryk start` (DIS-6 optional P1); pi `models.json` / models-store URL harvest (follow-up unit).
 
