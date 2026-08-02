@@ -8,6 +8,12 @@ dist/
 dist/work/
 dist-dry-run/
 
+# Local agent harness instructions (repo root). Keep personal/toolchain notes out of git.
+# Case variants for case-sensitive clones; macOS may treat these as one path.
+/AGENTS.md
+/Agents.md
+/agents.md
+
 # Release build artifacts (toolchain, clean tree snapshots, npm cache)
 .release-zig/
 .release-clean-*
