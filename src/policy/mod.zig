@@ -13,6 +13,8 @@ pub const risk_card = @import("risk_card.zig");
 pub const agent_inference_hosts = @import("agent_inference_hosts.zig");
 pub const inference_hostname = @import("inference_hostname.zig");
 pub const inference_discover = @import("inference_discover.zig");
+// Surgical monopath attach for AINA P3 managed store (p3-managed).
+pub const network_discovered = @import("network_discovered.zig");
 
 pub const phase = "07-policy-engine";
 
@@ -34,4 +36,5 @@ test {
     _ = agent_inference_hosts;
     _ = inference_hostname;
     _ = inference_discover;
+    _ = network_discovered;
 }
