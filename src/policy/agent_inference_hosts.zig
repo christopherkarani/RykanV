@@ -11,11 +11,13 @@
 //! - Never removes entries present in `existing`; dedupes by exact string equality.
 //! - Merge order: existing, then core pack, then optional host overlay (first wins).
 //!
-//! Ownership contract for `catalogForProvider` / `hostsForProviderId`:
+//! Ownership contract for `catalogForProvider`:
 //! - Returns borrowed static host slices (process-long; do not free).
 //! - Unknown / empty provider id → empty slice (no invented hosts).
 //!
 //! Do not invent cloud wildcards (no bare `*.amazonaws.com`) or paste sinks.
+//! Overlay and catalog share the same canonical hostname arrays per family
+//! (single source of truth — no dual-table drift).
 
 const std = @import("std");
 
@@ -29,47 +31,28 @@ const CORE_PACK = [_][]const u8{
     "api.x.ai",
 };
 
-// Not launch-reachable at P1 (`host_launch` excludes "grok"); kept for merge API.
-const OVERLAY_GROK = [_][]const u8{
-    "cli-chat-proxy.grok.com",
-    "auth.x.ai",
-};
-
-const OVERLAY_OPENCODE = [_][]const u8{
-    "opencode.ai",
-    "models.opencode.ai",
-};
-
-const OVERLAY_PI = [_][]const u8{
-    "openrouter.ai",
-};
-
-// ---------------------------------------------------------------------------
-// Provider id catalog (§5.3 / DIS-4 / A-P3-4) — pure, static, FS-free.
-// Adapters map auth keys / provider ids through this table. Unknown → empty.
-// Borrowed host slices are process-long (do not free). No secrets; hostnames only.
-// ---------------------------------------------------------------------------
-
-const CATALOG_ANTHROPIC = [_][]const u8{
+// Canonical hostname arrays (single SoT). Overlay + catalog both point here.
+const HOSTS_ANTHROPIC = [_][]const u8{
     "api.anthropic.com",
 };
-
-const CATALOG_OPENAI = [_][]const u8{
+const HOSTS_OPENAI = [_][]const u8{
     "api.openai.com",
 };
-
-const CATALOG_XAI = [_][]const u8{
+const HOSTS_XAI = [_][]const u8{
     "api.x.ai",
     "auth.x.ai",
 };
-
-const CATALOG_OPENROUTER = [_][]const u8{
+const HOSTS_OPENROUTER = [_][]const u8{
     "openrouter.ai",
 };
-
-const CATALOG_OPENCODE = [_][]const u8{
+const HOSTS_OPENCODE = [_][]const u8{
     "opencode.ai",
     "models.opencode.ai",
+};
+// Not launch-reachable at P1 (`host_launch` excludes "grok"); kept for merge API.
+const HOSTS_GROK = [_][]const u8{
+    "cli-chat-proxy.grok.com",
+    "auth.x.ai",
 };
 
 /// Static core hosts; borrowed, process-long (do not free).
@@ -79,9 +62,9 @@ pub fn corePack() []const []const u8 {
 
 /// Host overlay; empty for core-only / unknown keys. Borrowed (do not free).
 pub fn overlayForHost(host_key: []const u8) []const []const u8 {
-    if (std.mem.eql(u8, host_key, "grok")) return &OVERLAY_GROK;
-    if (std.mem.eql(u8, host_key, "opencode")) return &OVERLAY_OPENCODE;
-    if (std.mem.eql(u8, host_key, "pi")) return &OVERLAY_PI;
+    if (std.mem.eql(u8, host_key, "grok")) return &HOSTS_GROK;
+    if (std.mem.eql(u8, host_key, "opencode")) return &HOSTS_OPENCODE;
+    if (std.mem.eql(u8, host_key, "pi")) return &HOSTS_OPENROUTER;
     return &.{};
 }
 
@@ -98,22 +81,29 @@ pub fn overlayForHost(host_key: []const u8) []const []const u8 {
 pub fn catalogForProvider(provider_id: []const u8) []const []const u8 {
     if (provider_id.len == 0) return &.{};
 
-    if (std.mem.eql(u8, provider_id, "anthropic")) return &CATALOG_ANTHROPIC;
+    if (std.mem.eql(u8, provider_id, "anthropic")) return &HOSTS_ANTHROPIC;
     if (std.mem.eql(u8, provider_id, "openai") or std.mem.eql(u8, provider_id, "openai-codex"))
-        return &CATALOG_OPENAI;
+        return &HOSTS_OPENAI;
     if (std.mem.eql(u8, provider_id, "xai") or std.mem.eql(u8, provider_id, "xai-oauth"))
-        return &CATALOG_XAI;
-    if (std.mem.eql(u8, provider_id, "openrouter")) return &CATALOG_OPENROUTER;
+        return &HOSTS_XAI;
+    if (std.mem.eql(u8, provider_id, "openrouter")) return &HOSTS_OPENROUTER;
     if (std.mem.eql(u8, provider_id, "opencode") or std.mem.eql(u8, provider_id, "opencode-go"))
-        return &CATALOG_OPENCODE;
+        return &HOSTS_OPENCODE;
 
     return &.{};
 }
 
-/// Alias for consumers that prefer the ownership contract name `hostsForProviderId`.
-/// Same semantics and lifetime as `catalogForProvider`.
-pub fn hostsForProviderId(provider_id: []const u8) []const []const u8 {
-    return catalogForProvider(provider_id);
+/// True when `host` appears in the static core pack, any overlay family, or any
+/// provider catalog (exact match). Used by discovery to document known floor hosts.
+pub fn isKnownInferenceHost(host: []const u8) bool {
+    if (listContains(&CORE_PACK, host)) return true;
+    if (listContains(&HOSTS_GROK, host)) return true;
+    if (listContains(&HOSTS_ANTHROPIC, host)) return true;
+    if (listContains(&HOSTS_OPENAI, host)) return true;
+    if (listContains(&HOSTS_XAI, host)) return true;
+    if (listContains(&HOSTS_OPENROUTER, host)) return true;
+    if (listContains(&HOSTS_OPENCODE, host)) return true;
+    return false;
 }
 
 /// Merge `existing ∪ corePack ∪ overlay` (null host_key → core only). See file header.
@@ -135,6 +125,28 @@ pub fn mergeAllowList(
     try appendUniqueOwned(allocator, &list, pack);
     try appendUniqueOwned(allocator, &list, overlay);
 
+    return try list.toOwnedSlice(allocator);
+}
+
+/// `a ∪ b` with exact-host dedupe; first-wins order. Owned outer + strings;
+/// free with `schema.freeStringList`. Empty result is `&.{}`.
+/// Shared by pack merge and managed preserve paths (single security-critical union).
+pub fn unionOwnedStringLists(
+    allocator: std.mem.Allocator,
+    first: []const []const u8,
+    second: []const []const u8,
+) ![]const []const u8 {
+    var list: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (list.items) |entry| allocator.free(entry);
+        list.deinit(allocator);
+    }
+    try appendUniqueOwned(allocator, &list, first);
+    try appendUniqueOwned(allocator, &list, second);
+    if (list.items.len == 0) {
+        list.deinit(allocator);
+        return &.{};
+    }
     return try list.toOwnedSlice(allocator);
 }
 

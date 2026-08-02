@@ -1755,9 +1755,7 @@ fn applyNetworkOverlayWithHostKey(
     agent_net_default: AgentNetworkDefault,
     trusted_agent_host: bool,
     host_key: ?[]const u8,
-    // anytype: accepts null, DiscoveryLaunchContext, or anonymous struct with
-    // {io, workspace_root, home} (tests often bind an anonymous struct first).
-    discovery: anytype,
+    discovery: ?DiscoveryLaunchContext,
 ) !void {
     selected_policy.network.mode = cliNetworkMode(options, agent_net_default, trusted_agent_host);
     if (wantsMediatedAgentNetwork(options, agent_net_default, trusted_agent_host)) {
@@ -1776,7 +1774,7 @@ fn applyNetworkOverlayWithHostKey(
         selected_policy.network.allow = merged;
 
         // P3: ∪ managed ∪ launch-time adapter (soft skip; never wipe user allows).
-        if (resolveDiscoveryLaunchContext(discovery)) |ctx| {
+        if (discovery) |ctx| {
             try mergeDiscoveryIntoAllow(allocator, selected_policy, host_key, ctx);
         }
     } else if (options.network_backend) |backend| {
@@ -1809,23 +1807,9 @@ fn applyNetworkOverlayWithHostKey(
     selected_policy.network.allow = next;
 }
 
-/// Normalize discovery arg: null → null; DiscoveryLaunchContext or matching
-/// anonymous struct → owned-by-value context (fields borrowed).
-fn resolveDiscoveryLaunchContext(discovery: anytype) ?DiscoveryLaunchContext {
-    const T = @TypeOf(discovery);
-    if (T == @TypeOf(null)) return null;
-    if (T == DiscoveryLaunchContext) return discovery;
-    if (T == ?DiscoveryLaunchContext) return discovery;
-    // Anonymous struct / tuple-like with the three fields (test call sites).
-    return DiscoveryLaunchContext{
-        .io = discovery.io,
-        .workspace_root = discovery.workspace_root,
-        .home = discovery.home,
-    };
-}
-
 /// Merge managed store + launch-time adapter hosts into `network.allow`.
 /// Soft-skip missing/corrupt managed and empty/unknown adapter results.
+/// Managed entries are filtered by host_key source tags (no cross-host bleed).
 /// Preserves every pre-existing allow entry (A-P3-3 / EFF-4). Hostnames only (SEC-3).
 fn mergeDiscoveryIntoAllow(
     allocator: std.mem.Allocator,
@@ -1837,44 +1821,44 @@ fn mergeDiscoveryIntoAllow(
     var store = try policy.network_discovered.loadManaged(ctx.io, allocator, ctx.workspace_root);
     defer store.deinit(allocator);
 
-    // Borrow hostnames from store for merge (mergePreserveUserAllows dupes).
-    var managed_buf: [256][]const u8 = undefined;
-    const managed_len = @min(store.hosts.len, managed_buf.len);
-    for (store.hosts[0..managed_len], 0..) |entry, i| {
-        managed_buf[i] = entry.host;
+    // Collect managed∪live into one contribution, then a single preserve merge.
+    var contrib: std.ArrayList([]const u8) = .empty;
+    defer {
+        // Borrowed hostnames from store + owned from discover — free only owned.
+        contrib.deinit(allocator);
     }
-    const managed_hosts = managed_buf[0..managed_len];
 
-    if (managed_hosts.len > 0) {
-        const old_allow = selected_policy.network.allow;
-        const next = try policy.network_discovered.mergePreserveUserAllows(
-            allocator,
-            old_allow,
-            managed_hosts,
-        );
-        policy.schema.freeStringList(allocator, old_allow);
-        selected_policy.network.allow = next;
+    const key = host_key orelse "";
+    // Host-scoped managed grant: only entries tagged for this host_key.
+    if (key.len > 0) {
+        for (store.hosts) |entry| {
+            if (!policy.network_discovered.managedEntryMatchesHostKey(entry, key)) continue;
+            try contrib.append(allocator, entry.host);
+        }
     }
 
     // Launch-time adapter (parent HOME; soft-empty on missing/corrupt/empty home).
-    const key = host_key orelse return;
-    if (key.len == 0) return;
+    var discovered: []const []const u8 = &.{};
+    defer if (discovered.len > 0) policy.schema.freeStringList(allocator, discovered);
+    if (key.len > 0) {
+        discovered = try policy.inference_discover.discoverForHost(
+            ctx.io,
+            allocator,
+            key,
+            ctx.home,
+        );
+        for (discovered) |h| {
+            try contrib.append(allocator, h);
+        }
+    }
 
-    const discovered = try policy.inference_discover.discoverForHost(
-        ctx.io,
-        allocator,
-        key,
-        ctx.home,
-    );
-    defer policy.schema.freeStringList(allocator, discovered);
-
-    if (discovered.len == 0) return;
+    if (contrib.items.len == 0) return;
 
     const old_allow = selected_policy.network.allow;
     const next = try policy.network_discovered.mergePreserveUserAllows(
         allocator,
         old_allow,
-        discovered,
+        contrib.items,
     );
     policy.schema.freeStringList(allocator, old_allow);
     selected_policy.network.allow = next;
@@ -3455,33 +3439,7 @@ test "applyNetworkOverlay non-alias with CLI --allow-network still does not seed
     try expectNoAgentInferencePackOrOverlay(pol.network.allow);
 }
 
-// ---------------------------------------------------------------------------
-// AINA P3 launch wire — discovery merge into applyNetworkOverlayWithHostKey
-// Spec: A-P3-*, DIS-*, SEC-3/7, EFF-4/5; plan §3.1/§3.6 S4.
-//
-// Expected production API extension (implementer lands; tests are RED until then):
-//
-//   pub const DiscoveryLaunchContext = struct {
-//       io: std.Io,
-//       workspace_root: []const u8, // abs; managed path under <root>/.orca/
-//       home: []const u8,           // parent HOME for discoverForHost (may be "")
-//   };
-//
-//   fn applyNetworkOverlayWithHostKey(
-//       allocator, selected_policy, options, agent_net_default,
-//       trusted_agent_host, host_key,
-//       discovery: ?DiscoveryLaunchContext = null,
-//   ) !void
-//
-// When discovery is non-null AND wantsMediatedAgentNetwork:
-//   effective allow = existing policy ∪ core ∪ host_overlay
-//                   ∪ managed hosts (loadManaged, soft-empty)
-//                   ∪ launch-time adapter (discoverForHost, soft-empty)
-//                   then CLI --allow-network (unchanged)
-// Soft skip: missing/corrupt managed, empty/unknown home, adapter empty → pack floor
-// still applied; never fail launch for discovery. Null discovery = P1 pack-only path.
-// Ownership: freeStringList before replace; no secrets in allow entries.
-// ---------------------------------------------------------------------------
+// AINA P3 launch wire — discovery merge into applyNetworkOverlayWithHostKey (S4).
 
 /// Synthetic pi auth.json shape (fake tokens only). xai-oauth URL hosts + openrouter id.
 const p3_launch_pi_auth_json =
@@ -3607,8 +3565,8 @@ test "applyNetworkOverlayWithHostKey P3 managed hosts merge for pi with pack flo
     defer allocator.free(workspace_root);
 
     const managed_entries = [_]policy.network_discovered.ManagedHost{
-        .{ .host = "auth.x.ai", .sources = &.{"fixture:managed:tokenEndpoint"} },
-        .{ .host = "launch-managed-only.invalid", .sources = &.{"fixture:managed:custom"} },
+        .{ .host = "auth.x.ai", .sources = &.{"pi:discover"} },
+        .{ .host = "launch-managed-only.invalid", .sources = &.{"pi:discover"} },
     };
     try policy.network_discovered.writeManaged(io, allocator, workspace_root, &managed_entries);
 
@@ -3722,7 +3680,7 @@ test "applyNetworkOverlayWithHostKey P3 managed union adapter for pi URL-diverge
     defer allocator.free(workspace_root);
 
     const managed_entries = [_]policy.network_discovered.ManagedHost{
-        .{ .host = "managed-from-start.invalid", .sources = &.{"fixture:start-refresh"} },
+        .{ .host = "managed-from-start.invalid", .sources = &.{"pi:discover"} },
     };
     try policy.network_discovered.writeManaged(io, allocator, workspace_root, &managed_entries);
 
@@ -3766,7 +3724,7 @@ test "applyNetworkOverlayWithHostKey P3 pastebin and example.com still deny unde
     defer allocator.free(workspace_root);
 
     const managed_entries = [_]policy.network_discovered.ManagedHost{
-        .{ .host = "auth.x.ai", .sources = &.{"fixture:managed"} },
+        .{ .host = "auth.x.ai", .sources = &.{"pi:discover"} },
     };
     try policy.network_discovered.writeManaged(io, allocator, workspace_root, &managed_entries);
 
@@ -3799,6 +3757,72 @@ test "applyNetworkOverlayWithHostKey P3 pastebin and example.com still deny unde
     try p3LaunchExpectNetworkResult(allocator, &pol, "pastebin.com", .deny);
     try p3LaunchExpectNetworkResult(allocator, &pol, "https://example.com/", .deny);
     try p3LaunchExpectNetworkResult(allocator, &pol, "example.com", .deny);
+}
+
+test "applyNetworkOverlayWithHostKey P3 class tokens never land in allow; private/IMDS still deny" {
+    // Blocker residual: hostile baseUrl private/metadata must not class-widen allow.
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    const workspace_root = try p3LaunchAbsPath(&ws_tmp);
+    defer allocator.free(workspace_root);
+
+    // Poison managed file with class tokens (load must soft-drop).
+    try ws_tmp.dir.createDirPath(io, ".orca");
+    {
+        const f = try ws_tmp.dir.createFile(io, ".orca/network-discovered.yaml", .{});
+        defer f.close(io);
+        try f.writeStreamingAll(io,
+            \\version: 1
+            \\hosts:
+            \\  - host: private
+            \\    sources: [pi:discover]
+            \\  - host: metadata
+            \\    sources: [pi:discover]
+            \\  - host: direct-ip
+            \\    sources: [pi:discover]
+            \\
+        );
+    }
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    const hostile_auth =
+        \\{
+        \\  "hostile": {
+        \\    "type": "api",
+        \\    "key": "sk-fixture-hostile-class-NOT-REAL",
+        \\    "baseUrl": "https://private/",
+        \\    "tokenEndpoint": "https://metadata/"
+        \\  }
+        \\}
+    ;
+    try p3LaunchPlantPiHome(home_tmp.dir, hostile_auth, null);
+    const home = try p3LaunchAbsPath(&home_tmp);
+    defer allocator.free(home);
+
+    var pol: policy.schema.Policy = .{ .allocator = allocator };
+    defer pol.network.deinit(allocator);
+
+    try applyNetworkOverlayWithHostKey(
+        allocator,
+        &pol,
+        .{ .command_argv = &.{"pi"} },
+        .mediated,
+        true,
+        "pi",
+        .{ .io = io, .workspace_root = workspace_root, .home = home },
+    );
+
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "private"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "metadata"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "cloud-metadata"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "direct-ip"));
+    // Class destinations still deny under allowlist (no class-wide grant).
+    try p3LaunchExpectNetworkResult(allocator, &pol, "http://10.0.0.1/", .deny);
+    try p3LaunchExpectNetworkResult(allocator, &pol, "http://169.254.169.254/latest/meta-data/", .deny);
 }
 
 test "applyNetworkOverlayWithHostKey P3 soft-skips missing managed and empty home still seeds pack floor" {
@@ -3863,7 +3887,7 @@ test "applyNetworkOverlayWithHostKey P3 does not merge discovery when not mediat
     const workspace_root = try p3LaunchAbsPath(&ws_tmp);
     defer allocator.free(workspace_root);
     try policy.network_discovered.writeManaged(io, allocator, workspace_root, &.{
-        .{ .host = "should-not-merge.invalid", .sources = &.{"fixture"} },
+        .{ .host = "should-not-merge.invalid", .sources = &.{"pi:discover"} },
     });
 
     var home_tmp = std.testing.tmpDir(.{});
@@ -3872,7 +3896,7 @@ test "applyNetworkOverlayWithHostKey P3 does not merge discovery when not mediat
     const home = try p3LaunchAbsPath(&home_tmp);
     defer allocator.free(home);
 
-    const discovery = .{ .io = io, .workspace_root = workspace_root, .home = home };
+    const discovery: DiscoveryLaunchContext = .{ .io = io, .workspace_root = workspace_root, .home = home };
 
     {
         var pol: policy.schema.Policy = .{ .allocator = allocator };
@@ -3931,7 +3955,7 @@ test "applyNetworkOverlayWithHostKey P3 CLI --allow-network composes after disco
     const workspace_root = try p3LaunchAbsPath(&ws_tmp);
     defer allocator.free(workspace_root);
     try policy.network_discovered.writeManaged(io, allocator, workspace_root, &.{
-        .{ .host = "auth.x.ai", .sources = &.{"fixture"} },
+        .{ .host = "auth.x.ai", .sources = &.{"pi:discover"} },
     });
 
     var pol: policy.schema.Policy = .{ .allocator = allocator };
@@ -3976,7 +4000,7 @@ test "applyNetworkOverlayWithHostKey P3 managed path is workspace_root/.orca/net
 
     // Write via managed API then launch-merge must observe the same file.
     try policy.network_discovered.writeManaged(io, allocator, workspace_root, &.{
-        .{ .host = "path-parity-host.invalid", .sources = &.{"fixture:path"} },
+        .{ .host = "path-parity-host.invalid", .sources = &.{"pi:discover"} },
     });
     // Direct load parity (writer↔loader).
     var store = try policy.network_discovered.loadManaged(io, allocator, workspace_root);
@@ -4019,7 +4043,7 @@ test "applyNetworkOverlayWithHostKey P3 nested-cwd managed write still merges fr
 
     // Product write under abs workspace root (independent of cwd).
     try policy.network_discovered.writeManaged(io, allocator, workspace_root, &.{
-        .{ .host = "workspace-root-managed.invalid", .sources = &.{"fixture:root"} },
+        .{ .host = "workspace-root-managed.invalid", .sources = &.{"opencode:discover"} },
     });
 
     var pol: policy.schema.Policy = .{ .allocator = allocator };
@@ -4042,18 +4066,36 @@ test "applyNetworkOverlayWithHostKey P3 nested-cwd managed write still merges fr
     try std.testing.expect(testNetworkAllowContains(pol.network.allow, "opencode.ai"));
 }
 
-test "applyNetworkOverlayWithHostKey P3 monopath policy.network_discovered and inference_discover are linked" {
-    // Composition / monopath: launch module can reach managed + discover via orca_core policy.
-    _ = policy.network_discovered;
-    _ = policy.inference_discover;
-    _ = policy.agent_inference_hosts;
-    // Public seams must exist for implementer wire (compile-linked).
-    _ = policy.network_discovered.managedPath;
-    _ = policy.network_discovered.loadManaged;
-    _ = policy.network_discovered.writeManaged;
-    _ = policy.network_discovered.mergePreserveUserAllows;
-    _ = policy.inference_discover.discoverForHost;
-    try std.testing.expect(true);
+test "applyNetworkOverlayWithHostKey P3 host_key scopes managed grants (no cross-adapter bleed)" {
+    // opencode-tagged managed hosts must not appear on pi launch allow.
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    const workspace_root = try p3LaunchAbsPath(&ws_tmp);
+    defer allocator.free(workspace_root);
+
+    try policy.network_discovered.writeManaged(io, allocator, workspace_root, &.{
+        .{ .host = "auth.x.ai", .sources = &.{"pi:discover"} },
+        .{ .host = "opencode-only-managed.invalid", .sources = &.{"opencode:discover"} },
+    });
+
+    var pol: policy.schema.Policy = .{ .allocator = allocator };
+    defer pol.network.deinit(allocator);
+
+    try applyNetworkOverlayWithHostKey(
+        allocator,
+        &pol,
+        .{ .command_argv = &.{"pi"} },
+        .mediated,
+        true,
+        "pi",
+        .{ .io = io, .workspace_root = workspace_root, .home = "" },
+    );
+
+    try std.testing.expect(testNetworkAllowContains(pol.network.allow, "auth.x.ai"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "opencode-only-managed.invalid"));
 }
 
 test "applyNetworkOverlayWithHostKey P3 ORCA_NETWORK_ALLOW includes discovered hosts after installNetworkEnvironment" {
@@ -4067,7 +4109,7 @@ test "applyNetworkOverlayWithHostKey P3 ORCA_NETWORK_ALLOW includes discovered h
     const workspace_root = try p3LaunchAbsPath(&ws_tmp);
     defer allocator.free(workspace_root);
     try policy.network_discovered.writeManaged(io, allocator, workspace_root, &.{
-        .{ .host = "auth.x.ai", .sources = &.{"fixture:oauth"} },
+        .{ .host = "auth.x.ai", .sources = &.{"opencode:discover"} },
     });
 
     var home_tmp = std.testing.tmpDir(.{});

@@ -6,12 +6,23 @@
 //! SEC-3: never emit secrets, userinfo, tokens, or credential material.
 //! Intentionally does **not** call `network_eval.parseDestination` (that helper
 //! strip-accepts userinfo; discovery must reject credential-bearing authorities).
+//! Also rejects `network_eval` class/metapattern tokens (`private`, `metadata`,
+//! `cloud-metadata`, `direct-ip`) so discovery cannot widen class-wide allows.
 //! Re-exported from `src/policy/mod.zig` for monopath / test-core discovery.
 
 const std = @import("std");
 
 /// Maximum adapter field length considered for host extract (fail-closed oversize).
 const max_field_len: usize = 8192;
+
+/// `network_eval.matchesHostPattern` class tokens — never emit as allow hosts.
+const reserved_policy_tokens = [_][]const u8{
+    "private",
+    "private:*",
+    "metadata",
+    "cloud-metadata",
+    "direct-ip",
+};
 
 /// Extract a normalized inference hostname from an adapter-approved field
 /// (`baseUrl`, `tokenEndpoint`, discovery URLs, or bare host).
@@ -20,8 +31,8 @@ const max_field_len: usize = 8192;
 ///   query, fragment, or port). Caller frees with `allocator.free`.
 /// - Reject (`null`): empty/whitespace, path-only, credential-bearing
 ///   (userinfo), invalid UTF-8/NUL, bare wildcards not product-tested,
-///   non-loopback IP literals. Loopback (`localhost` / `127.0.0.1` / `::1`)
-///   accepted for local Ollama residual (spec §8).
+///   non-loopback IP literals, reserved policy class tokens. Loopback
+///   (`localhost` / `127.0.0.1` / `::1`) accepted for local Ollama residual (spec §8).
 /// - Errors: allocator failures only (`error.OutOfMemory`).
 pub fn extractHostname(
     allocator: std.mem.Allocator,
@@ -68,8 +79,9 @@ pub fn extractHostname(
     host = std.mem.trim(u8, host, " \t\r\n");
     if (host.len == 0 or host.len > 253) return null;
 
-    // Plan §3.3 #4: reject bare wildcards not already product-tested.
+    // Plan §3.3 #4: reject bare wildcards / single-char globs not product-tested.
     if (std.mem.indexOfScalar(u8, host, '*') != null) return null;
+    if (std.mem.indexOfScalar(u8, host, '?') != null) return null;
 
     // Scheme-less `oauth2/token`-style path segments: not an unambiguous host.
     // Prefer extract only when authority looks like a hostname (multi-label /
@@ -87,6 +99,15 @@ pub fn extractHostname(
         owned[i] = std.ascii.toLower(c);
     }
     return owned;
+}
+
+/// True when `host` is a reserved `network_eval` class/metapattern token
+/// (case-insensitive). Used by managed load revalidation and tests.
+pub fn isReservedPolicyToken(host: []const u8) bool {
+    for (reserved_policy_tokens) |token| {
+        if (std.ascii.eqlIgnoreCase(host, token)) return true;
+    }
+    return false;
 }
 
 fn isPlausibleScheme(scheme: []const u8) bool {
@@ -132,6 +153,7 @@ fn parseHostFromAuthority(authority: []const u8) ?[]const u8 {
 }
 
 fn isAcceptableHost(host: []const u8) bool {
+    if (isReservedPolicyToken(host)) return false;
     if (parseIpv4(host)) |ip| {
         return isLocalhostIp(ip);
     }
@@ -457,4 +479,48 @@ test "inference_hostname rejects bare userinfo without host emission of secrets"
         try std.testing.expect(std.mem.indexOf(u8, h, "sk-fixture-bare-userinfo") == null);
         try std.testing.expect(false); // acceptance: must be null
     }
+}
+
+// ---------------------------------------------------------------------------
+// Reserved network_eval class tokens must never emit (SEC-1 / SEC-6 bypass)
+// ---------------------------------------------------------------------------
+
+test "inference_hostname rejects reserved policy token private" {
+    const allocator = std.testing.allocator;
+    for ([_][]const u8{ "private", "PRIVATE", "http://private/", "https://private/v1" }) |field| {
+        const host = try extractHostname(allocator, field);
+        defer if (host) |h| allocator.free(h);
+        try std.testing.expect(host == null);
+    }
+}
+
+test "inference_hostname rejects reserved policy token metadata and cloud-metadata" {
+    const allocator = std.testing.allocator;
+    for ([_][]const u8{
+        "metadata",
+        "https://metadata/",
+        "cloud-metadata",
+        "https://cloud-metadata/",
+        "METADATA",
+    }) |field| {
+        const host = try extractHostname(allocator, field);
+        defer if (host) |h| allocator.free(h);
+        try std.testing.expect(host == null);
+    }
+}
+
+test "inference_hostname rejects reserved policy token direct-ip" {
+    const allocator = std.testing.allocator;
+    for ([_][]const u8{ "direct-ip", "https://direct-ip/", "Direct-IP" }) |field| {
+        const host = try extractHostname(allocator, field);
+        defer if (host) |h| allocator.free(h);
+        try std.testing.expect(host == null);
+    }
+}
+
+test "inference_hostname rejects question-mark wildcard host" {
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "api?.example.com");
+    defer if (host) |h| allocator.free(h);
+    try std.testing.expect(host == null);
 }

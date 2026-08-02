@@ -6,26 +6,16 @@
 //!
 //! Public seams:
 //!
-//!   managedPath(allocator, workspace_root) → ![]u8
-//!     Product path: `<workspace_root>/.orca/network-discovered.yaml`.
-//!     Allocator-owned; caller frees. Independent of process cwd.
+//!   managedPath / writeManaged / loadManaged / mergePreserveUserAllows
+//!   refreshManagedDiscovery / managedEntryMatchesHostKey
 //!
-//!   writeManaged(io, allocator, workspace_root, hosts) → !void
-//!     Regenerable YAML: `version` + `hosts[{host, sources[]}]` only.
-//!     Hostnames + source tags — never tokens/keys/refresh (A-P3-2 / SEC-3).
-//!     Creates `.orca/` under workspace_root as needed. Full-file regenerate
-//!     on re-write (DIS-7 managed replace; never touches policy.yaml).
+//!   loadManaged re-validates every host through `extractHostname` (soft-drop
+//!   wildcards, class tokens, non-loopback IPs). writeManaged is atomic
+//!   (temp+rename), refuses symlink targets, and only emits validated hosts.
 //!
-//!   loadManaged(io, allocator, workspace_root) → !ManagedStore
-//!     Soft empty on missing / corrupt / empty file (do not fail launch).
-//!     Hosts + source tags allocator-owned; free with `store.deinit(allocator)`.
-//!
-//!   mergePreserveUserAllows(allocator, user_allows, managed_hosts)
-//!     → ![]const []const u8
-//!     `user ∪ managed` with exact-host dedupe; **every** pre-existing user
-//!     allow is preserved (A-P3-3 / EFF-4 / DIS-7). First-wins order:
-//!     user entries first, then managed. Owned outer + strings; free with
-//!     `schema.freeStringList`.
+//!   mergePreserveUserAllows uses the shared `unionOwnedStringLists` helper.
+//!   refreshManagedDiscovery lives here (not in CLI init) so start/init stay
+//!   thin callers without CLI layering inversion.
 //!
 //! Preferred YAML shape (plan §3.5):
 //!
@@ -33,15 +23,16 @@
 //! version: 1
 //! hosts:
 //!   - host: auth.x.ai
-//!     sources: [pi:auth.json:tokenEndpoint]
-//!   - host: openrouter.ai
-//!     sources: [pi:auth.json:provider_id]
+//!     sources: [pi:discover]
 //! ```
 //!
-//! Re-export from `src/policy/mod.zig` (surgical monopath attach).
+//! Re-export from `src/policy/mod.zig`.
 
 const std = @import("std");
 const schema = @import("schema.zig");
+const inference_hostname = @import("inference_hostname.zig");
+const agent_inference_hosts = @import("agent_inference_hosts.zig");
+const inference_discover = @import("inference_discover.zig");
 
 // ---------------------------------------------------------------------------
 // Bounds — fail-closed soft skip on oversize / hostile (never panic launch)
@@ -87,7 +78,8 @@ pub fn managedPath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]
 
 /// Full-file regenerate of managed discovery YAML under workspace_root.
 /// Writes hostnames + source tags only (A-P3-2 / SEC-3). Never tokens/keys/refresh.
-/// Creates `.orca/` as needed. Replaces any previous file contents (DIS-7).
+/// Creates `.orca/` as needed. Atomic temp+rename; refuses symlink product path.
+/// Soft-skips invalid hosts / sources on write (never panics).
 pub fn writeManaged(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -101,28 +93,45 @@ pub fn writeManaged(
     const path = try managedPath(allocator, workspace_root);
     defer allocator.free(path);
 
+    // Refuse writing through a symlink (integrity: product path must not be a link).
+    if (try pathIsSymlink(allocator, path)) return error.ManagedPathIsSymlink;
+
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(allocator);
 
     try buf.appendSlice(allocator, "version: 1\n");
     try buf.appendSlice(allocator, "hosts:\n");
     for (hosts) |entry| {
-        // Host field only — never scheme, userinfo, path, or credential material.
+        const normalized = (try inference_hostname.extractHostname(allocator, entry.host)) orelse continue;
+        defer allocator.free(normalized);
+
         try buf.appendSlice(allocator, "  - host: ");
-        try buf.appendSlice(allocator, entry.host);
+        try buf.appendSlice(allocator, normalized);
         try buf.appendSlice(allocator, "\n    sources: [");
-        for (entry.sources, 0..) |src, i| {
-            if (i > 0) try buf.appendSlice(allocator, ", ");
+        var first_src = true;
+        for (entry.sources) |src| {
+            if (!isSafeSourceTag(src)) continue;
+            if (!first_src) try buf.appendSlice(allocator, ", ");
+            first_src = false;
             try buf.appendSlice(allocator, src);
         }
         try buf.appendSlice(allocator, "]\n");
     }
 
-    // Truncating create: full-file replace drops any hand-corrupted secret lines.
-    const file = try std.Io.Dir.createFileAbsolute(io, path, .{});
-    defer file.close(io);
-    try file.writeStreamingAll(io, buf.items);
-    try file.sync(io);
+    // Atomic same-directory temp write + rename (mirrors allowlist_store).
+    const pid = std.c.getpid();
+    const nonce = std.Io.Clock.Timestamp.now(io, .awake).raw.nanoseconds;
+    const temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp.{d}.{d}", .{ path, pid, nonce });
+    defer allocator.free(temp_path);
+    errdefer std.Io.Dir.cwd().deleteFile(io, temp_path) catch {};
+
+    {
+        const file = try std.Io.Dir.createFileAbsolute(io, temp_path, .{ .exclusive = true });
+        defer file.close(io);
+        try file.writeStreamingAll(io, buf.items);
+        try file.sync(io);
+    }
+    try std.Io.Dir.renameAbsolute(temp_path, path, io);
 }
 
 /// Load managed store from workspace_root. Soft-empty on missing / corrupt /
@@ -164,25 +173,94 @@ pub fn mergePreserveUserAllows(
     user_allows: []const []const u8,
     managed_hosts: []const []const u8,
 ) ![]const []const u8 {
-    var list: std.ArrayList([]const u8) = .empty;
-    errdefer {
-        for (list.items) |entry| allocator.free(entry);
-        list.deinit(allocator);
+    return agent_inference_hosts.unionOwnedStringLists(allocator, user_allows, managed_hosts);
+}
+
+/// True when a managed entry's source tags are scoped to `host_key`
+/// (prefix `host_key:` or exact `host_key`). Empty sources → no match.
+pub fn managedEntryMatchesHostKey(entry: ManagedHost, host_key: []const u8) bool {
+    if (host_key.len == 0) return false;
+    for (entry.sources) |src| {
+        if (std.mem.eql(u8, src, host_key)) return true;
+        if (src.len > host_key.len and
+            std.mem.startsWith(u8, src, host_key) and
+            src[host_key.len] == ':')
+            return true;
+    }
+    return false;
+}
+
+/// Run adapters for `host_keys` under `home`; regenerate managed store under
+/// `workspace_root`. Hostnames + source tags only. Never edits policy.yaml.
+/// Soft success when host_keys/home empty or adapters soft-empty (no hard fail).
+/// Empty rediscovery leaves any existing managed file untouched.
+pub fn refreshManagedDiscovery(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    home: []const u8,
+    host_keys: []const []const u8,
+) !void {
+    if (host_keys.len == 0) return;
+
+    var collected: std.ArrayList(ManagedHost) = .empty;
+    errdefer freeRefreshManagedHosts(allocator, &collected);
+
+    for (host_keys) |key| {
+        if (key.len == 0) continue;
+        const discovered = try inference_discover.discoverForHost(io, allocator, key, home);
+        defer schema.freeStringList(allocator, discovered);
+
+        const sources = refreshSourceTag(key);
+        for (discovered) |host| {
+            if (host.len == 0) continue;
+            if (refreshListContainsHost(collected.items, host)) continue;
+            const owned = try allocator.dupe(u8, host);
+            errdefer allocator.free(owned);
+            try collected.append(allocator, .{
+                .host = owned,
+                .sources = sources,
+            });
+        }
     }
 
-    try appendUniqueOwned(allocator, &list, user_allows);
-    try appendUniqueOwned(allocator, &list, managed_hosts);
-
-    if (list.items.len == 0) {
-        list.deinit(allocator);
-        return &.{};
+    if (collected.items.len == 0) {
+        freeRefreshManagedHosts(allocator, &collected);
+        return;
     }
-    return try list.toOwnedSlice(allocator);
+
+    try writeManaged(io, allocator, workspace_root, collected.items);
+    freeRefreshManagedHosts(allocator, &collected);
 }
 
 // ---------------------------------------------------------------------------
 // Internals
 // ---------------------------------------------------------------------------
+
+const refresh_source_pi = [_][]const u8{"pi:discover"};
+const refresh_source_opencode = [_][]const u8{"opencode:discover"};
+const refresh_source_generic = [_][]const u8{"discover"};
+
+fn refreshSourceTag(host_key: []const u8) []const []const u8 {
+    if (std.mem.eql(u8, host_key, "pi")) return &refresh_source_pi;
+    if (std.mem.eql(u8, host_key, "opencode")) return &refresh_source_opencode;
+    return &refresh_source_generic;
+}
+
+fn freeRefreshManagedHosts(allocator: std.mem.Allocator, hosts: *std.ArrayList(ManagedHost)) void {
+    for (hosts.items) |entry| {
+        allocator.free(entry.host);
+        // sources are static slices — do not free.
+    }
+    hosts.deinit(allocator);
+}
+
+fn refreshListContainsHost(hosts: []const ManagedHost, needle: []const u8) bool {
+    for (hosts) |entry| {
+        if (std.mem.eql(u8, entry.host, needle)) return true;
+    }
+    return false;
+}
 
 fn emptyStore() ManagedStore {
     return .{ .version = 1, .hosts = &.{} };
@@ -193,24 +271,29 @@ fn freeOwnedHost(allocator: std.mem.Allocator, entry: ManagedHost) void {
     schema.freeStringList(allocator, entry.sources);
 }
 
-fn listContainsHost(list: []const []const u8, needle: []const u8) bool {
-    for (list) |entry| {
-        if (std.mem.eql(u8, entry, needle)) return true;
+/// Source tags are opaque path/field markers — reject whitespace / YAML metacharacters.
+/// Colon is allowed (`pi:discover`); spaces, brackets, quotes, control chars are not.
+fn isSafeSourceTag(src: []const u8) bool {
+    if (src.len == 0 or src.len > 256) return false;
+    for (src) |c| {
+        if (c == ' ' or c == '\t' or c == '\n' or c == '\r') return false;
+        if (c == '[' or c == ']' or c == '{' or c == '}' or c == ',' or c == '#' or c == '"' or c == '\'')
+            return false;
+        if (c < 0x20) return false;
     }
-    return false;
+    return true;
 }
 
-fn appendUniqueOwned(
-    allocator: std.mem.Allocator,
-    list: *std.ArrayList([]const u8),
-    source: []const []const u8,
-) !void {
-    for (source) |entry| {
-        if (listContainsHost(list.items, entry)) continue;
-        const owned = try allocator.dupe(u8, entry);
-        errdefer allocator.free(owned);
-        try list.append(allocator, owned);
+fn pathIsSymlink(allocator: std.mem.Allocator, path: []const u8) !bool {
+    const path_z = try allocator.dupeZ(u8, path);
+    defer allocator.free(path_z);
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const n = std.c.readlink(path_z.ptr, &buf, buf.len);
+    if (n < 0) {
+        // EINVAL / not a symlink, ENOENT, etc. → treat as non-symlink.
+        return false;
     }
+    return true;
 }
 
 /// Minimal YAML parse for product shape (version + hosts[{host, sources}]).
@@ -266,14 +349,20 @@ fn parseManagedYaml(allocator: std.mem.Allocator, text: []const u8) !ManagedStor
             continue;
         }
 
-        // New list item: `- host: …`
+        // New list item: `- host: …` — re-validate via extractHostname (soft-drop).
         if (std.mem.startsWith(u8, trimmed, "- host:")) {
             try flushHost(allocator, &hosts_list, &cur_host, &cur_sources);
             in_sources_block = false;
             if (hosts_list.items.len >= max_managed_hosts) return error.InvalidManaged;
             const val = std.mem.trim(u8, trimmed["- host:".len..], " \t\"'");
-            if (val.len == 0) return error.InvalidManaged;
-            cur_host = try allocator.dupe(u8, val);
+            if (val.len == 0) {
+                // Soft-drop empty host (keep parsing subsequent entries).
+                continue;
+            }
+            if (try inference_hostname.extractHostname(allocator, val)) |normalized| {
+                cur_host = normalized;
+            }
+            // Invalid / reserved / wildcard → soft-drop (cur_host stays null).
             continue;
         }
 
@@ -291,8 +380,19 @@ fn parseManagedYaml(allocator: std.mem.Allocator, text: []const u8) !ManagedStor
         // dangling so OOM on dupe would double-free via function errdefer.
         if (std.mem.startsWith(u8, trimmed, "host:")) {
             const val = std.mem.trim(u8, trimmed["host:".len..], " \t\"'");
-            if (val.len == 0) return error.InvalidManaged;
-            const new_host = try allocator.dupe(u8, val);
+            if (val.len == 0) {
+                if (cur_host) |old| allocator.free(old);
+                cur_host = null;
+                in_sources_block = false;
+                continue;
+            }
+            const new_host = (try inference_hostname.extractHostname(allocator, val)) orelse {
+                // Soft-drop invalid host; free prior if any.
+                if (cur_host) |old| allocator.free(old);
+                cur_host = null;
+                in_sources_block = false;
+                continue;
+            };
             if (cur_host) |old| allocator.free(old);
             cur_host = new_host;
             in_sources_block = false;
@@ -999,14 +1099,139 @@ test "network_discovered load then mergePreserveUserAllows preserves user and ad
 }
 
 // ---------------------------------------------------------------------------
-// Monopath / filter discovery
+// Load-side revalidation — poisoned / class-token / wildcard soft-drop
 // ---------------------------------------------------------------------------
 
-test "network_discovered monopath module is linked for test-core filter" {
-    // Structural: name prefix + mod.zig re-export attach the suite so
-    // `./scripts/zig build test-core -Dtest-filter=network_discovered` type-checks
-    // this file (honest compile-RED on undeclared production seams until GREEN).
-    // Product behavior is locked by the other network_discovered tests.
-    try std.testing.expectEqualStrings(managed_filename, "network-discovered.yaml");
-    try std.testing.expectEqualStrings(managed_rel, ".orca/network-discovered.yaml");
+test "network_discovered loadManaged soft-drops reserved class tokens and wildcards" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    {
+        const polluted =
+            \\version: 1
+            \\hosts:
+            \\  - host: private
+            \\    sources: [poison]
+            \\  - host: metadata
+            \\    sources: [poison]
+            \\  - host: cloud-metadata
+            \\    sources: [poison]
+            \\  - host: direct-ip
+            \\    sources: [poison]
+            \\  - host: "*"
+            \\    sources: [poison]
+            \\  - host: "*.amazonaws.com"
+            \\    sources: [poison]
+            \\  - host: auth.x.ai
+            \\    sources: [pi:discover]
+            \\
+        ;
+        const f = try tmp.dir.createFile(std.testing.io, managed_rel, .{});
+        defer f.close(std.testing.io);
+        try f.writeStreamingAll(std.testing.io, polluted);
+    }
+    const root = try workspaceAbs(&tmp);
+    defer std.testing.allocator.free(root);
+
+    var store = try loadManaged(std.testing.io, std.testing.allocator, root);
+    defer store.deinit(std.testing.allocator);
+
+    const hosts = try storeHostnames(std.testing.allocator, store);
+    defer schema.freeStringList(std.testing.allocator, hosts);
+
+    try std.testing.expect(listContainsExact(hosts, "auth.x.ai"));
+    try std.testing.expect(!listContainsExact(hosts, "private"));
+    try std.testing.expect(!listContainsExact(hosts, "metadata"));
+    try std.testing.expect(!listContainsExact(hosts, "cloud-metadata"));
+    try std.testing.expect(!listContainsExact(hosts, "direct-ip"));
+    try std.testing.expect(!listContainsExact(hosts, "*"));
+    try std.testing.expect(!listContainsExact(hosts, "*.amazonaws.com"));
+}
+
+test "network_discovered writeManaged refuses symlink product path" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try workspaceAbs(&tmp);
+    defer std.testing.allocator.free(root);
+
+    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    // Target outside .orca; product path is a symlink to it.
+    {
+        const target = try tmp.dir.createFile(std.testing.io, "outside-target.txt", .{});
+        defer target.close(std.testing.io);
+        try target.writeStreamingAll(std.testing.io, "pre-existing\n");
+    }
+    // Create symlink at managed path → outside-target.txt (relative).
+    // Create symlink at managed path → outside-target.txt (relative under tmp root).
+    tmp.dir.symLink(std.testing.io, "outside-target.txt", managed_rel, .{}) catch |err| switch (err) {
+        // Some CI environments block symlink creation — soft-skip test.
+        error.AccessDenied, error.PermissionDenied => return,
+        else => return err,
+    };
+
+    const entries = [_]ManagedHost{
+        .{ .host = "auth.x.ai", .sources = &.{"pi:discover"} },
+    };
+    try std.testing.expectError(
+        error.ManagedPathIsSymlink,
+        writeManaged(std.testing.io, std.testing.allocator, root, &entries),
+    );
+
+    // Target must be untouched.
+    const bytes = try tmp.dir.readFileAlloc(
+        std.testing.io,
+        "outside-target.txt",
+        std.testing.allocator,
+        .limited(64),
+    );
+    defer std.testing.allocator.free(bytes);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "pre-existing") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "auth.x.ai") == null);
+}
+
+test "network_discovered managedEntryMatchesHostKey scopes by source prefix" {
+    const pi_entry = ManagedHost{ .host = "auth.x.ai", .sources = &.{"pi:discover"} };
+    const oc_entry = ManagedHost{ .host = "opencode.ai", .sources = &.{"opencode:discover"} };
+    const bare = ManagedHost{ .host = "x.invalid", .sources = &.{} };
+    try std.testing.expect(managedEntryMatchesHostKey(pi_entry, "pi"));
+    try std.testing.expect(!managedEntryMatchesHostKey(pi_entry, "opencode"));
+    try std.testing.expect(managedEntryMatchesHostKey(oc_entry, "opencode"));
+    try std.testing.expect(!managedEntryMatchesHostKey(oc_entry, "pi"));
+    try std.testing.expect(!managedEntryMatchesHostKey(bare, "pi"));
+}
+
+test "network_discovered refreshManagedDiscovery writes hostnames for pi/opencode" {
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    const workspace_root = try workspaceAbs(&ws_tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    // Minimal pi auth with xai-oauth URLs (catalog hosts).
+    try home_tmp.dir.createDirPath(std.testing.io, ".pi/agent");
+    {
+        const f = try home_tmp.dir.createFile(std.testing.io, ".pi/agent/auth.json", .{});
+        defer f.close(std.testing.io);
+        try f.writeStreamingAll(std.testing.io,
+            \\{"xai-oauth":{"type":"oauth","tokenEndpoint":"https://auth.x.ai/oauth2/token","baseUrl":"https://api.x.ai/v1","access":"fixture-refresh-NOT-REAL","refresh":"fixture-refresh2-NOT-REAL"}}
+        );
+    }
+    const home = try workspaceAbs(&home_tmp);
+    defer std.testing.allocator.free(home);
+
+    try refreshManagedDiscovery(
+        std.testing.io,
+        std.testing.allocator,
+        workspace_root,
+        home,
+        &.{"pi"},
+    );
+
+    var store = try loadManaged(std.testing.io, std.testing.allocator, workspace_root);
+    defer store.deinit(std.testing.allocator);
+    const hosts = try storeHostnames(std.testing.allocator, store);
+    defer schema.freeStringList(std.testing.allocator, hosts);
+    try std.testing.expect(listContainsExact(hosts, "auth.x.ai"));
+    try std.testing.expect(listContainsExact(hosts, "api.x.ai"));
 }

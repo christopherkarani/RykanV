@@ -3,10 +3,7 @@
 //! Normative: planning/2026-08-02-aina-p3-discovery-plan.md §3.4–3.6;
 //! SoT: A-P3-1…A-P3-4, DIS-2/4, SEC-3/7.
 //!
-//! Public seam (implementer locks production body; TEST phase leaves it undeclared
-//! so the pack is compile-RED until GREEN):
-//!
-//!   discoverForHost(io, allocator, host_key, home) → ![]const []const u8
+//! Public seam: `discoverForHost(io, allocator, host_key, home) → ![]const []const u8`
 //!
 //! - `host_key`: mediated alias (`pi`, `opencode`, …). Unknown → soft empty.
 //! - `home`: synthetic or real HOME root (parent process; never empty-backpack scrub).
@@ -15,12 +12,16 @@
 //! - Prefer literal hosts from approved URL fields (`baseUrl`, `tokenEndpoint`,
 //!   discovery.* endpoints); else map provider **ids** via `catalogForProvider`.
 //! - Hostnames only — never tokens/keys/refresh; never MCP/marketplace harvest.
+//! - Exfil-sink hostnames (pastebin, hastebin, requestbin, ngrok tunnels, …)
+//!   are soft-dropped so agent-writable auth cannot self-grant known sinks.
+//! - OOM always propagates; other parse/IO errors soft-skip.
 //!
 //! Documented paths (DIS-2):
 //! - pi: `{home}/.pi/agent/auth.json`, `{home}/.pi/agent/settings.json`
+//!   (models.json / models-store URLs deferred — residual tracked in docs/network.md)
 //! - opencode: `{home}/.local/share/opencode/auth.json`
 //!
-//! Re-exported from `src/policy/mod.zig` for monopath / test-core discovery.
+//! Re-exported from `src/policy/mod.zig`.
 
 const std = @import("std");
 const schema = @import("schema.zig");
@@ -130,13 +131,13 @@ fn collectFromAuthJson(
     path: []const u8,
     list: *std.ArrayList([]const u8),
 ) !void {
-    const text = readBoundedFile(io, allocator, path) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return, // soft skip
-    } orelse return;
+    const text = (try readBoundedFile(io, allocator, path)) orelse return;
     defer allocator.free(text);
 
-    var parsed = std.json.parseFromSlice(std.json.Value, allocator, text, .{}) catch return;
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, text, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return, // soft skip corrupt / invalid JSON
+    };
     defer parsed.deinit();
 
     const root = switch (parsed.value) {
@@ -167,13 +168,13 @@ fn collectFromPiSettings(
     path: []const u8,
     list: *std.ArrayList([]const u8),
 ) !void {
-    const text = readBoundedFile(io, allocator, path) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return,
-    } orelse return;
+    const text = (try readBoundedFile(io, allocator, path)) orelse return;
     defer allocator.free(text);
 
-    var parsed = std.json.parseFromSlice(std.json.Value, allocator, text, .{}) catch return;
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, text, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return,
+    };
     defer parsed.deinit();
 
     const root = switch (parsed.value) {
@@ -243,18 +244,51 @@ fn appendCatalogHosts(
     }
 }
 
-/// Takes ownership of `owned_host` (frees on dupe/cap).
+/// Takes ownership of `owned_host` (frees on dupe/cap/sink reject).
 fn appendOwnedHost(
     allocator: std.mem.Allocator,
     list: *std.ArrayList([]const u8),
     owned_host: []u8,
 ) !void {
+    // Agent-writable auth residual: never auto-grant known exfil sinks.
+    if (isExfilSinkHost(owned_host)) {
+        allocator.free(owned_host);
+        return;
+    }
     if (list.items.len >= max_discovered_hosts or listContainsExactOwned(list.items, owned_host)) {
         allocator.free(owned_host);
         return;
     }
     errdefer allocator.free(owned_host);
     try list.append(allocator, owned_host);
+}
+
+/// Known paste / webhook / tunnel sinks that must not auto-merge from discovery.
+/// Aligns with network_eval paste/exfil host classes (hostname only).
+fn isExfilSinkHost(host: []const u8) bool {
+    const sinks = [_][]const u8{
+        "pastebin.com",
+        "gist.github.com",
+        "hastebin.com",
+        "requestbin.net",
+        "webhook.site",
+        "pipedream.net",
+        "ngrok.io",
+        "ngrok-free.app",
+        "trycloudflare.com",
+        "loca.lt",
+        "localtunnel.me",
+        "serveo.net",
+    };
+    for (sinks) |sink| {
+        if (std.ascii.eqlIgnoreCase(host, sink)) return true;
+        // suffix match for multi-label (e.g. eu.pastebin.com, abc.ngrok.io)
+        if (host.len > sink.len + 1 and
+            host[host.len - sink.len - 1] == '.' and
+            std.ascii.eqlIgnoreCase(host[host.len - sink.len ..], sink))
+            return true;
+    }
+    return false;
 }
 
 fn listContainsExactOwned(hosts: []const []const u8, needle: []const u8) bool {
@@ -776,18 +810,74 @@ test "inference_discover owned host list is independent of fixture file contents
 }
 
 // ---------------------------------------------------------------------------
-// Monopath / filter discoverability
-// (mod.zig re-export + test name prefix `inference_discover` make
-// `test-core -Dtest-filter=inference_discover` select this suite.)
+// Agent-writable auth residual — known exfil sinks never auto-grant
 // ---------------------------------------------------------------------------
 
-test "inference_discover monopath module is linked for test-core filter" {
-    // Structural: this test's name matches -Dtest-filter=inference_discover and the
-    // module is re-exported from policy/mod.zig. Behavioral RED still comes from
-    // undeclared discoverForHost in the rest of the suite until implementer lands it.
-    // Compile-visible surface: fixture embeds and helpers above must link.
-    try std.testing.expect(pi_auth_json.len > 0);
-    try std.testing.expect(oc_auth_json.len > 0);
-    try std.testing.expect(oc_urls_auth_json.len > 0);
-    try std.testing.expect(std.mem.indexOf(u8, oc_urls_auth_json, url_only_host_oauth_edge) != null);
+test "inference_discover rejects pastebin baseUrl planted in agent-writable auth" {
+    // Production residual: auth.json is agent-writable under empty-backpack RW.
+    // Discovery must not auto-allow known exfil sinks even when present as baseUrl.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const plant =
+        \\{
+        \\  "xai": {
+        \\    "type": "oauth",
+        \\    "access": "fixture-sink-access-NOT-REAL",
+        \\    "refresh": "fixture-sink-refresh-NOT-REAL",
+        \\    "tokenEndpoint": "https://auth.x.ai/oauth2/token",
+        \\    "baseUrl": "https://pastebin.com/raw/abc"
+        \\  },
+        \\  "evil-sink": {
+        \\    "type": "api",
+        \\    "key": "sk-fixture-sink-NOT-REAL",
+        \\    "baseUrl": "https://webhook.site/abc"
+        \\  }
+        \\}
+    ;
+    try plantPiHome(tmp.dir, plant, null);
+    const home = try homeAbs(&tmp);
+    defer std.testing.allocator.free(home);
+
+    const hosts = try discoverForHost(std.testing.io, std.testing.allocator, "pi", home);
+    defer freeHosts(std.testing.allocator, hosts);
+
+    // Catalog/known hosts from xai still allowed; sinks soft-dropped.
+    try std.testing.expect(listContainsExact(hosts, "auth.x.ai"));
+    try std.testing.expect(listContainsExact(hosts, "api.x.ai"));
+    try std.testing.expect(!listContainsExact(hosts, "pastebin.com"));
+    try std.testing.expect(!listContainsExact(hosts, "webhook.site"));
+    for (hosts) |h| {
+        try std.testing.expect(std.mem.indexOf(u8, h, "pastebin") == null);
+        try std.testing.expect(std.mem.indexOf(u8, h, "webhook") == null);
+    }
+}
+
+test "inference_discover rejects reserved class-token hosts planted as baseUrl" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const plant =
+        \\{
+        \\  "hostile": {
+        \\    "type": "api",
+        \\    "key": "sk-fixture-class-token-NOT-REAL",
+        \\    "baseUrl": "https://private/",
+        \\    "tokenEndpoint": "https://metadata/"
+        \\  },
+        \\  "xai": {
+        \\    "type": "api",
+        \\    "key": "sk-fixture-xai-ok-NOT-REAL",
+        \\    "baseUrl": "https://api.x.ai/v1"
+        \\  }
+        \\}
+    ;
+    try plantPiHome(tmp.dir, plant, null);
+    const home = try homeAbs(&tmp);
+    defer std.testing.allocator.free(home);
+
+    const hosts = try discoverForHost(std.testing.io, std.testing.allocator, "pi", home);
+    defer freeHosts(std.testing.allocator, hosts);
+
+    try std.testing.expect(listContainsExact(hosts, "api.x.ai"));
+    try std.testing.expect(!listContainsExact(hosts, "private"));
+    try std.testing.expect(!listContainsExact(hosts, "metadata"));
 }

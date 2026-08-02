@@ -127,82 +127,44 @@ URLs are redacted before audit persistence when they contain secret-like materia
 
 Fail closed to the open web; **fail open to the user’s already-configured model providers.**
 
-Mediated agent launches (`ryk pi`, `ryk opencode`, other trusted host aliases) do not rely only on static tables. Orca **discovers** inference hostnames from the agent’s real config files (read-only) and merges them into the effective network allow list. Discovery **adds** hosts; it never replaces the static floor or removes user-authored policy allows.
-
-### Managed store path
-
-Discovered hosts may be persisted under the workspace as a product-managed sidecar:
-
-```text
-<workspace>/.orca/network-discovered.yaml
-```
-
-Shape (hostnames + source tags only — regenerable):
-
-```yaml
-# .orca/network-discovered.yaml  (managed — regenerable)
-version: 1
-hosts:
-  - host: auth.x.ai
-    sources: [pi:discover]
-  - host: api.x.ai
-    sources: [pi:discover]
-```
-
-- Path is always under the **workspace root** (cwd-independent).
-- File is optional: launch still works if it is missing or corrupt (soft skip; see below).
-- Contents are **hostnames and opaque source tags only**. Discovery never writes tokens, API keys, refresh material, or credential-bearing URLs.
+Mediated agent launches (`ryk pi`, `ryk opencode`, other trusted host aliases) **discover** inference hostnames from the agent’s real config files (read-only under parent `HOME`) and **add** them to the effective network allow list. Discovery never replaces the static core/overlay floor and never removes user-authored `policy.yaml` allows.
 
 ### Effective allow merge order
 
-For a mediated trusted host launch, the effective allow list is the deterministic union (exact-host dedupe; first wins on string identity):
+Deterministic union (exact-host dedupe; first wins):
 
-1. **User policy** allow entries (`policy.yaml` / loaded policy)
-2. **Core pack** — static first-party inference hosts (minimum floor)
-3. **Host overlay** — static hosts for that host key (e.g. pi, opencode)
-4. **Discovered** — managed file (if present) ∪ **launch-time adapter** for that host key (reads real agent auth/settings under parent `HOME` before empty-backpack scrub)
-5. **CLI** `--allow-network` (and related run flags)
+1. User policy allow (`policy.yaml`)
+2. Core pack + host overlay (static floor)
+3. Managed file (workspace-scoped, **host_key-filtered** by source tags) ∪ launch-time adapter for that host key
+4. CLI `--allow-network`
 
-Documented as set-union language:
+**effective allow = user policy ∪ core ∪ overlay ∪ discovered(managed∩host_key + live adapter) ∪ CLI**
 
-**effective allow = core ∪ host overlay ∪ discovered (managed + live adapter) ∪ user policy allow ∪ CLI `--allow-network`**
+Managed store path: `<workspace>/.orca/network-discovered.yaml` (optional; soft-skip when missing/corrupt). Contents are hostnames + source tags only — never tokens, keys, or credential-bearing URLs. Load re-validates every host (rejects wildcards, `network_eval` class tokens such as `private` / `metadata` / `direct-ip`, non-loopback IPs). Writes are atomic (temp+rename) and refuse symlink product paths.
 
-Order of merge for dedupe is policy → core → overlay → managed → adapter → CLI. User-authored allows are never removed by rediscovery or pack refresh.
+### What discovery reads (and does not)
 
-### Hostnames only (no secrets)
+Adapters emit **hostnames only**. They prefer literal hosts from approved URL fields (`baseUrl`, `tokenEndpoint`, discovery endpoints), else map provider **ids** through a static catalog (unknown ids skipped). They **never** harvest MCP, marketplace, plugins, or full-tree URL regexes.
 
-Discovery adapters emit **hostnames only** (plus source tags for operators). They:
+**Hard rejects on extract/load:** reserved policy class tokens, bare wildcards, credential-bearing URLs, non-loopback IP literals.
 
-- Prefer literal hosts from approved URL fields when present (`baseUrl`, `tokenEndpoint`, `base_url`, `token_endpoint`, discovery token/authorization endpoints).
-- Else map provider **ids** through a static catalog; unknown ids are **skipped** (no invented hosts, no cloud wildcards).
-- Never persist or log raw API keys, OAuth tokens, refresh tokens, or userinfo from URLs.
+**Soft-drop sinks:** known paste/webhook/tunnel hosts (pastebin, hastebin, requestbin, ngrok tunnels, …) never auto-grant even when planted in agent-writable auth.
 
-### No MCP / marketplace harvest
+**Residual (auth trust):** pi/opencode config dirs remain agent-writable for OAuth refresh. Discovery therefore trusts parent-HOME auth contents at launch. Operators who need a stricter model can authority write-deny auth paths or pin allows only via `policy.yaml`. Novel multi-label non-sink hosts from custom `baseUrl` still auto-merge (intentional URL-divergence support); catalog is the id-only floor, not a URL ceiling.
 
-Discovery does **not** auto-allow:
-
-- MCP server URLs from agent or MCP config lists
-- Plugin / marketplace / session-history hosts
-- Full-tree URL regex over config or caches
-
-Only adapter-approved paths and fields (documented per host) plus the provider id catalog contribute hosts. MCP network remains a separate policy concern.
+**Deferred residuals:** interactive post-refresh host summary on `ryk start` (DIS-6 optional P1); pi `models.json` / models-store URL harvest (follow-up unit).
 
 ### Soft skip on errors
 
-Missing or corrupt `.orca/network-discovered.yaml`, empty `HOME`, unknown host key, or adapter IO/parse failure does **not** fail launch. Those sources soft-skip to empty; the **static core pack + host overlay floor** still applies, along with any user policy allows. Launch-time discovery is bounded (size caps per file / host count).
-
-### Static pack remains the floor
-
-Core pack + per-host overlays are a **minimum floor**. Discovery **adds** hosts implied by the user’s configs; it does **not** replace or remove the floor, and it never deletes user-authored `policy.yaml` allow entries.
+Missing/corrupt managed file, empty `HOME`, unknown host key, or adapter IO/parse failure does **not** fail launch — those sources soft-skip; the static floor and user allows remain. OOM hard-fails. Launch-time discovery is size-bounded.
 
 ### Start / init refresh
 
-`ryk start` and `ryk init` refresh managed discovery for detected (or floor) adapters — currently **pi** and **opencode**:
+`ryk start` and `ryk init` refresh managed discovery for **pi ∪ opencode** (start always unions selected + detected + floor so partial selection does not clobber the other adapter):
 
-- Read agent configs under parent `HOME` (read-only).
-- Write/refresh `<workspace>/.orca/network-discovered.yaml` with hostnames + source tags only.
-- **Never** edit `policy.yaml`; rediscovery refreshes managed entries only (user allows untouched).
-- Empty discovery leaves an existing managed file untouched (does not wipe on empty HOME).
-- Product paths soft-swallow discovery refresh errors so init/start still succeed.
+- Read agent configs under parent `HOME` (process environ map, not libc-only getenv).
+- Regenerate managed YAML (hostnames + source tags); never edit `policy.yaml`.
+- Empty rediscovery leaves the existing managed file untouched.
+- Refresh errors soft-warn and do not fail init/start.
 
 Mediated `ryk <host>` also runs the launch-time adapter for that host key, so OAuth/API hosts work even if start/init was never re-run after a config change.

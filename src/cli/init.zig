@@ -97,91 +97,42 @@ pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: an
 
     // AINA P3 S5: soft-refresh managed discovery for known adapters (pi/opencode).
     // Never fails init; never touches policy.yaml (DIS-1 / DIS-7).
-    if (std.c.getenv("HOME")) |home_z| {
-        const home = std.mem.span(home_z);
-        refreshManagedDiscovery(io, allocator, workspace_root, home, &.{ "pi", "opencode" }) catch {};
-    }
+    // Prefer process Environ.Map over libc getenv (Zig 0.16 product path).
+    softRefreshInitDiscovery(io, allocator, workspace_root, options.quiet, stderr) catch {};
 
     return exit_codes.success;
 }
 
 // ---------------------------------------------------------------------------
-// AINA P3 S5 — managed discovery refresh (shared by init + start)
-// Spec: DIS-1 / DIS-7 / A-P3-2 / A-P3-3. Plan §3.6 S5.
+// AINA P3 S5 — managed discovery refresh lives in policy.network_discovered
+// (CLI init/start are thin callers — no layering inversion).
 // ---------------------------------------------------------------------------
 
-/// Static source tags (hostnames+sources shape; never secrets — SEC-3).
-const refresh_source_pi = [_][]const u8{"pi:discover"};
-const refresh_source_opencode = [_][]const u8{"opencode:discover"};
-const refresh_source_generic = [_][]const u8{"discover"};
+/// Re-export for tests and start.zig composition (product API is network_discovered).
+pub const refreshManagedDiscovery = orca_policy.network_discovered.refreshManagedDiscovery;
 
-fn refreshSourceTag(host_key: []const u8) []const []const u8 {
-    if (std.mem.eql(u8, host_key, "pi")) return &refresh_source_pi;
-    if (std.mem.eql(u8, host_key, "opencode")) return &refresh_source_opencode;
-    return &refresh_source_generic;
-}
-
-fn freeRefreshManagedHosts(allocator: std.mem.Allocator, hosts: *std.ArrayList(orca_policy.network_discovered.ManagedHost)) void {
-    for (hosts.items) |entry| {
-        allocator.free(entry.host);
-        // sources are static slices — do not free.
-    }
-    hosts.deinit(allocator);
-}
-
-fn refreshListContainsHost(hosts: []const orca_policy.network_discovered.ManagedHost, needle: []const u8) bool {
-    for (hosts) |entry| {
-        if (std.mem.eql(u8, entry.host, needle)) return true;
-    }
-    return false;
-}
-
-/// Run adapters for `host_keys` under `home`; regenerate managed store under
-/// `workspace_root`. Hostnames + source tags only. Never edits policy.yaml.
-/// Soft success when host_keys/home empty or adapters soft-empty (no hard fail).
-/// When discovery yields zero hosts, leaves any existing managed file untouched
-/// (start/init never wipe managed on empty rediscovery). Non-empty discovery
-/// full-file replaces managed contribution only (DIS-7).
-pub fn refreshManagedDiscovery(
+fn softRefreshInitDiscovery(
     io: std.Io,
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
-    home: []const u8,
-    host_keys: []const []const u8,
+    quiet: bool,
+    stderr: anytype,
 ) !void {
-    if (host_keys.len == 0) return;
+    const env_util = @import("../env_util.zig");
+    var env_map = try env_util.createProcessMap(allocator);
+    defer env_map.deinit();
+    const home = (try env_util.getOwned(&env_map, allocator, "HOME")) orelse return;
+    defer allocator.free(home);
+    if (home.len == 0) return;
 
-    var collected: std.ArrayList(orca_policy.network_discovered.ManagedHost) = .empty;
-    errdefer freeRefreshManagedHosts(allocator, &collected);
-
-    for (host_keys) |key| {
-        if (key.len == 0) continue;
-        // discoverForHost soft-empties on missing/corrupt/unknown; only OOM hard-fails.
-        const discovered = try orca_policy.inference_discover.discoverForHost(io, allocator, key, home);
-        defer orca_policy.schema.freeStringList(allocator, discovered);
-
-        const sources = refreshSourceTag(key);
-        for (discovered) |host| {
-            if (host.len == 0) continue;
-            if (refreshListContainsHost(collected.items, host)) continue;
-            const owned = try allocator.dupe(u8, host);
-            errdefer allocator.free(owned);
-            try collected.append(allocator, .{
-                .host = owned,
-                .sources = sources,
-            });
+    refreshManagedDiscovery(io, allocator, workspace_root, home, &.{ "pi", "opencode" }) catch |err| {
+        if (!quiet) {
+            stderr.print(
+                "ryk init: discovery refresh soft-skipped ({s})\n",
+                .{@errorName(err)},
+            ) catch {};
         }
-    }
-
-    // Empty discovery: leave existing managed store alone (do not wipe).
-    if (collected.items.len == 0) {
-        freeRefreshManagedHosts(allocator, &collected);
-        return;
-    }
-
-    // Full-file regenerate of managed contribution only — never policy.yaml.
-    try orca_policy.network_discovered.writeManaged(io, allocator, workspace_root, collected.items);
-    freeRefreshManagedHosts(allocator, &collected);
+    };
 }
 
 fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !InitOptions {
