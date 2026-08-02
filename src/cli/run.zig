@@ -1734,23 +1734,20 @@ fn applyNetworkOverlayWithHostKey(
         // Host aliases: always force proxy (overrides decision-only) so labels are not theater.
         selected_policy.network.backend = .proxy;
 
-        // Seed core_pack ∪ host_overlay even when CLI --allow-network is absent
-        // (must not early-return past this). Existing policy allows are preserved.
+        // Seed even when CLI --allow-network is empty (must not early-return past this).
         const old_seed_allow = selected_policy.network.allow;
         const merged = try policy.agent_inference_hosts.mergeAllowList(
             allocator,
             host_key,
             old_seed_allow,
         );
-        // mergeAllowList dups every string; free prior list fully (strings + outer).
         policy.schema.freeStringList(allocator, old_seed_allow);
         selected_policy.network.allow = merged;
     } else if (options.network_backend) |backend| {
         selected_policy.network.backend = backend;
     }
 
-    // Compose session CLI --allow-network after seed (EFF-3). No-op when empty so
-    // seed-only paths keep the merged list.
+    // CLI --allow-network after seed (EFF-3); no-op when empty keeps seed-only list.
     const runtime_allow = options.allowNetwork();
     if (runtime_allow.len == 0) return;
 
@@ -1772,7 +1769,6 @@ fn applyNetworkOverlayWithHostKey(
         }
         copied += 1;
     }
-    // Transfer string ownership into `next`; free only the previous outer slice.
     if (old_allow.len > 0) allocator.free(old_allow);
     selected_policy.network.allow = next;
 }

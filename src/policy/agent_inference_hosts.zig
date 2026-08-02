@@ -18,61 +18,41 @@ const core = @import("../core/mod.zig");
 const network_eval = @import("network_eval.zig");
 const schema = @import("schema.zig");
 
-// ---------------------------------------------------------------------------
-// Static tables — FS-free product pack (spec §5.1 / §5.2)
-// ---------------------------------------------------------------------------
-
-/// Spec §5.1: always-on core inference hosts for mediated agent sessions.
 const CORE_PACK = [_][]const u8{
     "api.anthropic.com",
     "api.openai.com",
     "api.x.ai",
 };
 
-/// Spec §5.2: grok overlay table (merge API / future host-launch alias).
-/// Not product-reachable via mediated seed at P1 — `host_launch` excludes `"grok"`
-/// (grants-only); keep the table for pure merge and when the alias lands.
+// Not launch-reachable at P1 (`host_launch` excludes "grok"); kept for merge API.
 const OVERLAY_GROK = [_][]const u8{
     "cli-chat-proxy.grok.com",
     "auth.x.ai",
 };
 
-/// Spec §5.2: opencode launch overlay (exact hosts only at P1).
 const OVERLAY_OPENCODE = [_][]const u8{
     "opencode.ai",
     "models.opencode.ai",
 };
 
-/// Spec §5.2: pi launch overlay (exact host only at P1).
 const OVERLAY_PI = [_][]const u8{
     "openrouter.ai",
 };
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-/// Product-static core inference hosts (spec §5.1). Exact hostnames preferred.
-/// Lifetime: static / process-long (borrowed; do not free).
+/// Static core hosts; borrowed, process-long (do not free).
 pub fn corePack() []const []const u8 {
     return &CORE_PACK;
 }
 
-/// Host-key overlay hosts (spec §5.2). Unknown / core-only keys return empty.
-/// Lifetime: static / process-long (borrowed; do not free).
+/// Host overlay; empty for core-only / unknown keys. Borrowed (do not free).
 pub fn overlayForHost(host_key: []const u8) []const []const u8 {
     if (std.mem.eql(u8, host_key, "grok")) return &OVERLAY_GROK;
     if (std.mem.eql(u8, host_key, "opencode")) return &OVERLAY_OPENCODE;
     if (std.mem.eql(u8, host_key, "pi")) return &OVERLAY_PI;
-    // claude / codex / openclaw / hermes / unknown → core-only at P1.
     return &.{};
 }
 
-/// Merge `existing ∪ corePack ∪ overlayForHost(host_key?)` into a new allow list.
-/// - Dedupes exact string matches (first occurrence wins).
-/// - Never drops an entry that was present in `existing`.
-/// - `host_key == null` → core pack only (no overlay).
-/// Caller owns the result via `schema.freeStringList(allocator, result)`.
+/// Merge `existing ∪ corePack ∪ overlay` (null host_key → core only). See file header.
 pub fn mergeAllowList(
     allocator: std.mem.Allocator,
     host_key: ?[]const u8,
@@ -113,11 +93,6 @@ fn appendUniqueOwned(
         try list.append(allocator, owned);
     }
 }
-
-// ---------------------------------------------------------------------------
-// Test helpers
-// ---------------------------------------------------------------------------
-
 
 fn countExact(list: []const []const u8, needle: []const u8) usize {
     var n: usize = 0;
