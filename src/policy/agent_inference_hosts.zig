@@ -1,9 +1,8 @@
 //! Agent-inference network allow — static core pack (§5.1) and host overlays (§5.2).
 //!
 //! Pure, FS-free tables + deterministic merge into `network.allow`. Launch seeding
-//! (`applyNetworkOverlay`) is owned by s-ain-run-wire; this module only owns pack data
-//! and merge. Normative SoT: planning/2026-08-02-agent-inference-network-allow-spec.md
-//! (AINA-2026-08-02).
+//! lives in `cli/run.zig` (`applyNetworkOverlayWithHostKey`); this module owns pack
+//! data and merge only. Normative SoT id: **AINA-2026-08-02**.
 //!
 //! Ownership contract for `mergeAllowList`:
 //! - Returned outer slice is allocator-owned (free with `schema.freeStringList`).
@@ -30,7 +29,9 @@ const CORE_PACK = [_][]const u8{
     "api.x.ai",
 };
 
-/// Spec §5.2: grok launch overlay.
+/// Spec §5.2: grok overlay table (merge API / future host-launch alias).
+/// Not product-reachable via mediated seed at P1 — `host_launch` excludes `"grok"`
+/// (grants-only); keep the table for pure merge and when the alias lands.
 const OVERLAY_GROK = [_][]const u8{
     "cli-chat-proxy.grok.com",
     "auth.x.ai",
@@ -86,7 +87,6 @@ pub fn mergeAllowList(
         list.deinit(allocator);
     }
 
-    // Deterministic order: existing → core → overlay; exact-string dedupe.
     try appendUniqueOwned(allocator, &list, existing);
     try appendUniqueOwned(allocator, &list, pack);
     try appendUniqueOwned(allocator, &list, overlay);
@@ -94,7 +94,7 @@ pub fn mergeAllowList(
     return try list.toOwnedSlice(allocator);
 }
 
-fn listContainsExact(list: []const []const u8, needle: []const u8) bool {
+fn listContains(list: []const []const u8, needle: []const u8) bool {
     for (list) |entry| {
         if (std.mem.eql(u8, entry, needle)) return true;
     }
@@ -107,7 +107,7 @@ fn appendUniqueOwned(
     source: []const []const u8,
 ) !void {
     for (source) |entry| {
-        if (listContainsExact(list.items, entry)) continue;
+        if (listContains(list.items, entry)) continue;
         const owned = try allocator.dupe(u8, entry);
         errdefer allocator.free(owned);
         try list.append(allocator, owned);
@@ -118,12 +118,6 @@ fn appendUniqueOwned(
 // Test helpers
 // ---------------------------------------------------------------------------
 
-fn listContains(list: []const []const u8, needle: []const u8) bool {
-    for (list) |entry| {
-        if (std.mem.eql(u8, entry, needle)) return true;
-    }
-    return false;
-}
 
 fn countExact(list: []const []const u8, needle: []const u8) usize {
     var n: usize = 0;
@@ -165,13 +159,6 @@ fn expectNetworkResult(
 // ---------------------------------------------------------------------------
 // Table / overlay content (A-P1 data)
 // ---------------------------------------------------------------------------
-
-test "agent_inference A-P1-1 corePack contains anthropic openai xai hosts" {
-    const pack = corePack();
-    try std.testing.expect(listContains(pack, "api.anthropic.com"));
-    try std.testing.expect(listContains(pack, "api.openai.com"));
-    try std.testing.expect(listContains(pack, "api.x.ai"));
-}
 
 test "agent_inference A-P1-4 grok overlay hosts are scoped to grok key" {
     const grok = overlayForHost("grok");
@@ -238,10 +225,8 @@ test "agent_inference A-P1-6 merge into stale github-only allow keeps existing a
     const merged = try mergeAllowList(allocator, null, &stale);
     defer schema.freeStringList(allocator, merged);
 
-    // Existing entries preserved.
     try std.testing.expect(listContains(merged, "api.github.com"));
     try std.testing.expect(listContains(merged, "registry.npmjs.org"));
-    // Core pack added.
     try std.testing.expect(listContains(merged, "api.anthropic.com"));
     try std.testing.expect(listContains(merged, "api.openai.com"));
     try std.testing.expect(listContains(merged, "api.x.ai"));
