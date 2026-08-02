@@ -12,6 +12,7 @@ pub const sticky = @import("sticky.zig");
 pub const risk_card = @import("risk_card.zig");
 pub const agent_inference_hosts = @import("agent_inference_hosts.zig");
 pub const inference_hostname = @import("inference_hostname.zig");
+pub const inference_discover = @import("inference_discover.zig");
 
 pub const phase = "07-policy-engine";
 
@@ -32,4 +33,5 @@ test {
     _ = risk_card;
     _ = agent_inference_hosts;
     _ = inference_hostname;
+    _ = inference_discover;
 }
