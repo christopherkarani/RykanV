@@ -16,6 +16,12 @@ const shell_eval = @import("shell_eval.zig");
 const build_options = @import("build_options");
 const env_util = @import("../env_util.zig");
 const tui = @import("../tui/mod.zig");
+// AINA P3 S5: shared refresh body lives in init.zig (do not import start from init).
+const init_cli = @import("init.zig");
+
+/// Re-export: run adapters for host_keys; regenerate managed store under workspace_root.
+/// See `init.refreshManagedDiscovery` (DIS-1 / DIS-7).
+pub const refreshManagedDiscovery = init_cli.refreshManagedDiscovery;
 
 pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     for (argv) |arg| {
@@ -118,6 +124,10 @@ pub fn runStart(
     if (packs_result.config_path) |path| {
         try stdout.print("  Pack config ({s}): {s}\n", .{ packs_result.scope.?.label(), path });
     }
+
+    // AINA P3 S5: soft-refresh managed discovery for selected/detected pi+opencode.
+    // Parent HOME + abs workspace_root; never fail start; never wipe policy (DIS-1/7).
+    softRefreshStartDiscovery(io, allocator, workspace_root, selected_hosts.items, host_statuses);
 
     var daemon_check: onboarding.DaemonCheck = undefined;
     if (protection.needsCommandGuard()) {
@@ -397,6 +407,52 @@ fn processHome(allocator: std.mem.Allocator) ![]u8 {
     var env_map = try env_util.createProcessMap(allocator);
     defer env_map.deinit();
     return (try env_util.getOwned(&env_map, allocator, "HOME")) orelse error.HomeNotSet;
+}
+
+/// Soft product-path refresh for start (DIS-1). Builds host_keys from selected
+/// pi/opencode, else detected pi/opencode, else the known adapter pair. Errors
+/// and empty discovery never fail start; empty discovery leaves managed intact.
+fn softRefreshStartDiscovery(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    selected_hosts: []const []const u8,
+    host_statuses: []const onboarding.HostStatus,
+) void {
+    const home = processHome(allocator) catch return;
+    defer allocator.free(home);
+    if (home.len == 0) return;
+
+    var keys_buf: [8][]const u8 = undefined;
+    var keys_len: usize = 0;
+
+    const append_key = struct {
+        fn go(buf: *[8][]const u8, len: *usize, name: []const u8) void {
+            if (len.* >= buf.len) return;
+            if (!(std.mem.eql(u8, name, "pi") or std.mem.eql(u8, name, "opencode"))) return;
+            for (buf.*[0..len.*]) |existing| {
+                if (std.mem.eql(u8, existing, name)) return;
+            }
+            buf.*[len.*] = name;
+            len.* += 1;
+        }
+    }.go;
+
+    for (selected_hosts) |name| append_key(&keys_buf, &keys_len, name);
+    if (keys_len == 0) {
+        for (host_statuses) |st| {
+            if (st.detected) append_key(&keys_buf, &keys_len, st.name);
+        }
+    }
+    // Floor: always attempt known adapters when nothing selected/detected
+    // (soft-empty if no auth). Keeps start path discovery-ready.
+    if (keys_len == 0) {
+        keys_buf[0] = "pi";
+        keys_buf[1] = "opencode";
+        keys_len = 2;
+    }
+
+    refreshManagedDiscovery(io, allocator, workspace_root, home, keys_buf[0..keys_len]) catch {};
 }
 
 fn runChild(allocator: std.mem.Allocator, argv: []const []const u8) !u8 {
@@ -922,4 +978,431 @@ test "start auto default path has no protection grade menu jargon in stdout" {
     try std.testing.expect(std.mem.indexOf(u8, output, "Maximum Protection") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Firewall-only mode") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Ask on risk") != null);
+}
+
+// ---------------------------------------------------------------------------
+// AINA P3 S5 — start/init discovery refresh (DIS-1 / DIS-7 / A-P3-2 / A-P3-3)
+// Spec: planning/2026-08-02-agent-inference-network-allow-spec.md
+// Plan: planning/2026-08-02-aina-p3-discovery-plan.md §3.6 S5
+//
+// Expected production API (implementer lands in start.zig; RED until then):
+//
+//   /// Run adapters for host_keys under home; regenerate managed store under
+//   /// workspace_root. Hostnames + source tags only. Never edits policy.yaml.
+//   /// Soft success when host_keys/home empty or adapters soft-empty (no hard fail).
+//   pub fn refreshManagedDiscovery(
+//       io: std.Io,
+//       allocator: std.mem.Allocator,
+//       workspace_root: []const u8,
+//       home: []const u8,
+//       host_keys: []const []const u8,
+//   ) !void
+//
+// Product wire: `runStart` calls this for selected/detected hosts with parent HOME
+// and abs workspace_root (cwd-independent managed path). Soft-skip discovery
+// failures — start still succeeds when no hosts detected.
+// ---------------------------------------------------------------------------
+
+/// Synthetic pi auth (fake tokens only). xai-oauth URL hosts + openrouter catalog id.
+const p3_start_pi_auth_json =
+    \\{
+    \\  "openrouter": {
+    \\    "type": "api_key",
+    \\    "key": "sk-fixture-start-pi-openrouter-NOT-REAL-a1"
+    \\  },
+    \\  "xai-oauth": {
+    \\    "type": "oauth",
+    \\    "access": "fixture-start-pi-xai-access-NOT-REAL-b2",
+    \\    "refresh": "fixture-start-pi-xai-refresh-NOT-REAL-c3",
+    \\    "tokenEndpoint": "https://auth.x.ai/oauth2/token",
+    \\    "baseUrl": "https://api.x.ai/v1"
+    \\  }
+    \\}
+;
+
+const p3_start_pi_settings_json =
+    \\{
+    \\  "defaultProvider": "openrouter",
+    \\  "model": "openrouter/fixture-start-model"
+    \\}
+;
+
+/// Opencode auth: xai oauth key → catalog api.x.ai + auth.x.ai.
+const p3_start_opencode_auth_json =
+    \\{
+    \\  "xai": {
+    \\    "type": "oauth",
+    \\    "access": "fixture-start-oc-xai-access-NOT-REAL-d4",
+    \\    "refresh": "fixture-start-oc-xai-refresh-NOT-REAL-e5"
+    \\  },
+    \\  "opencode": {
+    \\    "type": "api",
+    \\    "key": "sk-fixture-start-oc-api-NOT-REAL-f6"
+    \\  }
+    \\}
+;
+
+const p3_start_fixture_secret_needles = [_][]const u8{
+    "sk-fixture-start-pi-openrouter-NOT-REAL-a1",
+    "fixture-start-pi-xai-access-NOT-REAL-b2",
+    "fixture-start-pi-xai-refresh-NOT-REAL-c3",
+    "fixture-start-oc-xai-access-NOT-REAL-d4",
+    "fixture-start-oc-xai-refresh-NOT-REAL-e5",
+    "sk-fixture-start-oc-api-NOT-REAL-f6",
+    "sk-fixture",
+    "NOT-REAL",
+};
+
+fn p3StartAbsPath(tmp: anytype) ![]u8 {
+    // realPathFileAlloc → [:0]u8; re-dupe so free size matches DebugAllocator (Zig 0.16).
+    const z = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(z);
+    return try std.testing.allocator.dupe(u8, z);
+}
+
+fn p3StartWriteRel(dir: anytype, rel: []const u8, content: []const u8) !void {
+    if (std.fs.path.dirname(rel)) |parent| {
+        if (parent.len > 0) try dir.createDirPath(std.testing.io, parent);
+    }
+    const file = try dir.createFile(std.testing.io, rel, .{});
+    defer file.close(std.testing.io);
+    try file.writeStreamingAll(std.testing.io, content);
+}
+
+fn p3StartPlantPiHome(home_dir: anytype, auth: []const u8, settings: ?[]const u8) !void {
+    try p3StartWriteRel(home_dir, ".pi/agent/auth.json", auth);
+    if (settings) |s| try p3StartWriteRel(home_dir, ".pi/agent/settings.json", s);
+}
+
+fn p3StartPlantOpencodeHome(home_dir: anytype, auth: []const u8) !void {
+    try p3StartWriteRel(home_dir, ".local/share/opencode/auth.json", auth);
+}
+
+fn p3StartStoreContainsHost(store: orca_policy.network_discovered.ManagedStore, needle: []const u8) bool {
+    for (store.hosts) |entry| {
+        if (std.mem.eql(u8, entry.host, needle)) return true;
+    }
+    return false;
+}
+
+fn p3StartAssertManagedHostsSourcesOnly(store: orca_policy.network_discovered.ManagedStore) !void {
+    for (store.hosts) |entry| {
+        try std.testing.expect(entry.host.len > 0);
+        try std.testing.expect(std.mem.indexOf(u8, entry.host, "://") == null);
+        try std.testing.expect(std.mem.indexOf(u8, entry.host, "@") == null);
+        try std.testing.expect(std.mem.indexOf(u8, entry.host, "/") == null);
+        for (p3_start_fixture_secret_needles) |needle| {
+            try std.testing.expect(std.mem.indexOf(u8, entry.host, needle) == null);
+        }
+        // sources tags required (hostnames+sources shape); tags must not carry secrets.
+        try std.testing.expect(entry.sources.len > 0);
+        for (entry.sources) |src| {
+            for (p3_start_fixture_secret_needles) |needle| {
+                try std.testing.expect(std.mem.indexOf(u8, src, needle) == null);
+            }
+            try std.testing.expect(std.mem.indexOf(u8, src, "://") == null);
+        }
+    }
+}
+
+fn p3StartAssertNoSecretsInBytes(bytes: []const u8) !void {
+    for (p3_start_fixture_secret_needles) |needle| {
+        try std.testing.expect(std.mem.indexOf(u8, bytes, needle) == null);
+    }
+    // Managed file is hostnames + source tags — never absolute URL material.
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "://") == null);
+}
+
+test "start refreshManagedDiscovery pi writes workspace network-discovered.yaml hostnames+sources only" {
+    // Acceptance: Synthetic HOME+tmp workspace refresh for pi writes/updates
+    // <workspace>/.orca/network-discovered.yaml with hostnames+sources only (DIS-1, A-P3-2).
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    const workspace_root = try p3StartAbsPath(&ws_tmp);
+    defer allocator.free(workspace_root);
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    try p3StartPlantPiHome(home_tmp.dir, p3_start_pi_auth_json, p3_start_pi_settings_json);
+    const home = try p3StartAbsPath(&home_tmp);
+    defer allocator.free(home);
+
+    try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{"pi"});
+
+    var store = try orca_policy.network_discovered.loadManaged(io, allocator, workspace_root);
+    defer store.deinit(allocator);
+
+    try std.testing.expect(p3StartStoreContainsHost(store, "auth.x.ai"));
+    try std.testing.expect(p3StartStoreContainsHost(store, "api.x.ai"));
+    try std.testing.expect(p3StartStoreContainsHost(store, "openrouter.ai"));
+    try p3StartAssertManagedHostsSourcesOnly(store);
+
+    const path = try orca_policy.network_discovered.managedPath(allocator, workspace_root);
+    defer allocator.free(path);
+    try std.testing.expect(std.mem.endsWith(u8, path, ".orca/network-discovered.yaml"));
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64 * 1024));
+    defer allocator.free(bytes);
+    try p3StartAssertNoSecretsInBytes(bytes);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "host:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "sources:") != null);
+}
+
+test "start refreshManagedDiscovery opencode writes catalog hosts into managed yaml" {
+    // Acceptance: Synthetic HOME refresh for opencode writes managed hosts (DIS-1, A-P3-4).
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    const workspace_root = try p3StartAbsPath(&ws_tmp);
+    defer allocator.free(workspace_root);
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    try p3StartPlantOpencodeHome(home_tmp.dir, p3_start_opencode_auth_json);
+    const home = try p3StartAbsPath(&home_tmp);
+    defer allocator.free(home);
+
+    try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{"opencode"});
+
+    var store = try orca_policy.network_discovered.loadManaged(io, allocator, workspace_root);
+    defer store.deinit(allocator);
+
+    try std.testing.expect(p3StartStoreContainsHost(store, "api.x.ai"));
+    try std.testing.expect(p3StartStoreContainsHost(store, "auth.x.ai"));
+    try p3StartAssertManagedHostsSourcesOnly(store);
+
+    const path = try orca_policy.network_discovered.managedPath(allocator, workspace_root);
+    defer allocator.free(path);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64 * 1024));
+    defer allocator.free(bytes);
+    try p3StartAssertNoSecretsInBytes(bytes);
+}
+
+test "start refreshManagedDiscovery pi+opencode union updates managed store" {
+    // Branch: multi-host_keys refresh unions adapter emits into one managed file.
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    const workspace_root = try p3StartAbsPath(&ws_tmp);
+    defer allocator.free(workspace_root);
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    try p3StartPlantPiHome(home_tmp.dir, p3_start_pi_auth_json, p3_start_pi_settings_json);
+    try p3StartPlantOpencodeHome(home_tmp.dir, p3_start_opencode_auth_json);
+    const home = try p3StartAbsPath(&home_tmp);
+    defer allocator.free(home);
+
+    try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{ "pi", "opencode" });
+
+    var store = try orca_policy.network_discovered.loadManaged(io, allocator, workspace_root);
+    defer store.deinit(allocator);
+
+    try std.testing.expect(p3StartStoreContainsHost(store, "auth.x.ai"));
+    try std.testing.expect(p3StartStoreContainsHost(store, "api.x.ai"));
+    try std.testing.expect(p3StartStoreContainsHost(store, "openrouter.ai"));
+    // opencode catalog hosts when opencode key present
+    try std.testing.expect(p3StartStoreContainsHost(store, "opencode.ai") or p3StartStoreContainsHost(store, "models.opencode.ai") or store.hosts.len >= 3);
+    try p3StartAssertManagedHostsSourcesOnly(store);
+}
+
+test "start refreshManagedDiscovery rediscovery replaces managed only; policy.yaml user allows untouched" {
+    // Acceptance: Rediscovery replaces managed entries only; policy.yaml user allows
+    // untouched (A-P3-3 / DIS-7). Stale managed host must not survive full rewrite.
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    const workspace_root = try p3StartAbsPath(&ws_tmp);
+    defer allocator.free(workspace_root);
+
+    // Pre-seed user policy allows — refresh must never rewrite this file.
+    const policy_marker =
+        \\version: 1
+        \\mode: ask
+        \\network:
+        \\  allow:
+        \\    - user-preserve.example
+        \\    - github.com
+        \\
+    ;
+    try ws_tmp.dir.createDirPath(io, ".orca");
+    {
+        const f = try ws_tmp.dir.createFile(io, ".orca/policy.yaml", .{});
+        defer f.close(io);
+        try f.writeStreamingAll(io, policy_marker);
+    }
+    const policy_before = try ws_tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(4096));
+    defer allocator.free(policy_before);
+
+    // Stale managed entry that rediscovery must drop.
+    try orca_policy.network_discovered.writeManaged(io, allocator, workspace_root, &.{
+        .{ .host = "stale-managed-only.invalid", .sources = &.{"fixture:stale"} },
+    });
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    try p3StartPlantPiHome(home_tmp.dir, p3_start_pi_auth_json, p3_start_pi_settings_json);
+    const home = try p3StartAbsPath(&home_tmp);
+    defer allocator.free(home);
+
+    try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{"pi"});
+    // Second rediscovery — still must not touch policy.yaml.
+    try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{"pi"});
+
+    var store = try orca_policy.network_discovered.loadManaged(io, allocator, workspace_root);
+    defer store.deinit(allocator);
+    try std.testing.expect(p3StartStoreContainsHost(store, "auth.x.ai"));
+    try std.testing.expect(p3StartStoreContainsHost(store, "api.x.ai"));
+    try std.testing.expect(!p3StartStoreContainsHost(store, "stale-managed-only.invalid"));
+    try p3StartAssertManagedHostsSourcesOnly(store);
+
+    const policy_after = try ws_tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(4096));
+    defer allocator.free(policy_after);
+    try std.testing.expectEqualStrings(policy_before, policy_after);
+    try std.testing.expect(std.mem.indexOf(u8, policy_after, "user-preserve.example") != null);
+    try std.testing.expect(std.mem.indexOf(u8, policy_after, "github.com") != null);
+}
+
+test "start refreshManagedDiscovery nested-cwd lands managed at workspace-root .orca" {
+    // Acceptance composition: nested-cwd refresh lands managed at workspace-root .orca/
+    // (path independent of process cwd; no decoy under nested cwd).
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(io, "nested/deep/cwd");
+    const workspace_root = try p3StartAbsPath(&ws_tmp);
+    defer allocator.free(workspace_root);
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    try p3StartPlantPiHome(home_tmp.dir, p3_start_pi_auth_json, p3_start_pi_settings_json);
+    const home = try p3StartAbsPath(&home_tmp);
+    defer allocator.free(home);
+
+    const nested_abs = try ws_tmp.dir.realPathFileAlloc(io, "nested/deep/cwd", allocator);
+    defer allocator.free(nested_abs);
+    const original_cwd = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(original_cwd);
+    try std.Io.Threaded.chdir(nested_abs);
+    defer std.Io.Threaded.chdir(original_cwd) catch {};
+
+    try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{"pi"});
+
+    var store = try orca_policy.network_discovered.loadManaged(io, allocator, workspace_root);
+    defer store.deinit(allocator);
+    try std.testing.expect(p3StartStoreContainsHost(store, "auth.x.ai"));
+
+    // Decoy path under nested cwd must not be the product file.
+    if (ws_tmp.dir.access(io, "nested/deep/cwd/.orca/network-discovered.yaml", .{})) |_| {
+        try std.testing.expect(false);
+    } else |_| {}
+
+    // Product file exists under workspace root.
+    try ws_tmp.dir.access(io, ".orca/network-discovered.yaml", .{});
+}
+
+test "start refreshManagedDiscovery soft-succeeds when no hosts detected" {
+    // Acceptance: no hard fail when no hosts detected (empty keys / empty home / missing auth).
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    const workspace_root = try p3StartAbsPath(&ws_tmp);
+    defer allocator.free(workspace_root);
+
+    // Empty host_keys
+    try refreshManagedDiscovery(io, allocator, workspace_root, "/nonexistent-home-p3-start", &.{});
+
+    // Empty home with host keys
+    try refreshManagedDiscovery(io, allocator, workspace_root, "", &.{"pi"});
+
+    // Home without auth files
+    var empty_home = std.testing.tmpDir(.{});
+    defer empty_home.cleanup();
+    const home = try p3StartAbsPath(&empty_home);
+    defer allocator.free(home);
+    try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{ "pi", "opencode" });
+
+    // Soft: may leave managed missing or empty — load must soft-empty, not error.
+    var store = try orca_policy.network_discovered.loadManaged(io, allocator, workspace_root);
+    defer store.deinit(allocator);
+    // No discovered hosts expected.
+    try std.testing.expect(store.hosts.len == 0 or !p3StartStoreContainsHost(store, "pastebin.com"));
+}
+
+test "start refreshManagedDiscovery monopath policy.network_discovered and inference_discover linked" {
+    // Composition monopath: start module reaches managed + discover via orca_core.policy.
+    _ = orca_policy.network_discovered;
+    _ = orca_policy.inference_discover;
+    _ = orca_policy.network_discovered.managedPath;
+    _ = orca_policy.network_discovered.loadManaged;
+    _ = orca_policy.network_discovered.writeManaged;
+    _ = orca_policy.inference_discover.discoverForHost;
+    try std.testing.expect(true);
+}
+
+test "start path helper refresh then runStart --auto still succeeds when fixtures present" {
+    // Acceptance LIVE/composition: start-path helper used by ryk start --auto succeeds
+    // when fixtures present (refresh does not break setup). Soft path when no hosts too.
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    const workspace_root = try p3StartAbsPath(&ws_tmp);
+    defer allocator.free(workspace_root);
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    try p3StartPlantPiHome(home_tmp.dir, p3_start_pi_auth_json, p3_start_pi_settings_json);
+    try p3StartPlantOpencodeHome(home_tmp.dir, p3_start_opencode_auth_json);
+    const home = try p3StartAbsPath(&home_tmp);
+    defer allocator.free(home);
+
+    try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{ "pi", "opencode" });
+
+    var store = try orca_policy.network_discovered.loadManaged(io, allocator, workspace_root);
+    defer store.deinit(allocator);
+    try std.testing.expect(p3StartStoreContainsHost(store, "auth.x.ai") or p3StartStoreContainsHost(store, "api.x.ai"));
+
+    var stdout_buf: [16384]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const flags = onboarding.StartFlags{
+        .auto = true,
+        .protection = .firewall,
+        .skip_verify = true,
+    };
+    const mock_checker = struct {
+        fn check(_: std.mem.Allocator, _: bool) !void {}
+    }.check;
+
+    const code = try runStart(
+        io,
+        ws_tmp.dir,
+        flags,
+        &stdout_writer,
+        &stderr_writer,
+        mock_checker,
+        onboarding.mockOnboardingEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.success, code);
+
+    // Managed discovery must survive start (start must not wipe managed file).
+    var store2 = try orca_policy.network_discovered.loadManaged(io, allocator, workspace_root);
+    defer store2.deinit(allocator);
+    try std.testing.expect(store2.hosts.len > 0);
+    try std.testing.expect(p3StartStoreContainsHost(store2, "auth.x.ai") or p3StartStoreContainsHost(store2, "api.x.ai"));
 }

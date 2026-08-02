@@ -94,7 +94,94 @@ pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: an
             "  ryk run -- <command>\n" ++
             "\n");
     }
+
+    // AINA P3 S5: soft-refresh managed discovery for known adapters (pi/opencode).
+    // Never fails init; never touches policy.yaml (DIS-1 / DIS-7).
+    if (std.c.getenv("HOME")) |home_z| {
+        const home = std.mem.span(home_z);
+        refreshManagedDiscovery(io, allocator, workspace_root, home, &.{ "pi", "opencode" }) catch {};
+    }
+
     return exit_codes.success;
+}
+
+// ---------------------------------------------------------------------------
+// AINA P3 S5 — managed discovery refresh (shared by init + start)
+// Spec: DIS-1 / DIS-7 / A-P3-2 / A-P3-3. Plan §3.6 S5.
+// ---------------------------------------------------------------------------
+
+/// Static source tags (hostnames+sources shape; never secrets — SEC-3).
+const refresh_source_pi = [_][]const u8{"pi:discover"};
+const refresh_source_opencode = [_][]const u8{"opencode:discover"};
+const refresh_source_generic = [_][]const u8{"discover"};
+
+fn refreshSourceTag(host_key: []const u8) []const []const u8 {
+    if (std.mem.eql(u8, host_key, "pi")) return &refresh_source_pi;
+    if (std.mem.eql(u8, host_key, "opencode")) return &refresh_source_opencode;
+    return &refresh_source_generic;
+}
+
+fn freeRefreshManagedHosts(allocator: std.mem.Allocator, hosts: *std.ArrayList(orca_policy.network_discovered.ManagedHost)) void {
+    for (hosts.items) |entry| {
+        allocator.free(entry.host);
+        // sources are static slices — do not free.
+    }
+    hosts.deinit(allocator);
+}
+
+fn refreshListContainsHost(hosts: []const orca_policy.network_discovered.ManagedHost, needle: []const u8) bool {
+    for (hosts) |entry| {
+        if (std.mem.eql(u8, entry.host, needle)) return true;
+    }
+    return false;
+}
+
+/// Run adapters for `host_keys` under `home`; regenerate managed store under
+/// `workspace_root`. Hostnames + source tags only. Never edits policy.yaml.
+/// Soft success when host_keys/home empty or adapters soft-empty (no hard fail).
+/// When discovery yields zero hosts, leaves any existing managed file untouched
+/// (start/init never wipe managed on empty rediscovery). Non-empty discovery
+/// full-file replaces managed contribution only (DIS-7).
+pub fn refreshManagedDiscovery(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    home: []const u8,
+    host_keys: []const []const u8,
+) !void {
+    if (host_keys.len == 0) return;
+
+    var collected: std.ArrayList(orca_policy.network_discovered.ManagedHost) = .empty;
+    errdefer freeRefreshManagedHosts(allocator, &collected);
+
+    for (host_keys) |key| {
+        if (key.len == 0) continue;
+        // discoverForHost soft-empties on missing/corrupt/unknown; only OOM hard-fails.
+        const discovered = try orca_policy.inference_discover.discoverForHost(io, allocator, key, home);
+        defer orca_policy.schema.freeStringList(allocator, discovered);
+
+        const sources = refreshSourceTag(key);
+        for (discovered) |host| {
+            if (host.len == 0) continue;
+            if (refreshListContainsHost(collected.items, host)) continue;
+            const owned = try allocator.dupe(u8, host);
+            errdefer allocator.free(owned);
+            try collected.append(allocator, .{
+                .host = owned,
+                .sources = sources,
+            });
+        }
+    }
+
+    // Empty discovery: leave existing managed store alone (do not wipe).
+    if (collected.items.len == 0) {
+        freeRefreshManagedHosts(allocator, &collected);
+        return;
+    }
+
+    // Full-file regenerate of managed contribution only — never policy.yaml.
+    try orca_policy.network_discovered.writeManaged(io, allocator, workspace_root, collected.items);
+    freeRefreshManagedHosts(allocator, &collected);
 }
 
 fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !InitOptions {
@@ -315,4 +402,312 @@ test "init rejects invalid preset names clearly" {
     const code = try command(std.testing.io, tmp.dir, &.{ "--preset", "not-real" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.usage, code);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "invalid --preset value 'not-real'") != null);
+}
+
+// ---------------------------------------------------------------------------
+// AINA P3 S5 — init path discovery refresh (DIS-1 / DIS-7)
+// Plan §3.6: `ryk init` runs adapters for detected hosts and refreshes managed file.
+//
+// Expected production API (implementer lands in init.zig; may share body with
+// start.zig via `@import("init.zig")` from start — do NOT import start from init):
+//
+//   pub fn refreshManagedDiscovery(
+//       io: std.Io,
+//       allocator: std.mem.Allocator,
+//       workspace_root: []const u8,
+//       home: []const u8,
+//       host_keys: []const []const u8,
+//   ) !void
+//
+// Product wire: after policy write, call refresh for known adapter keys
+// (pi/opencode minimum) using parent HOME + abs workspace_root. Soft-skip when
+// no auth configs. Never wipe user policy allows on rediscovery.
+// ---------------------------------------------------------------------------
+
+const p3_init_pi_auth_json =
+    \\{
+    \\  "openrouter": {
+    \\    "type": "api_key",
+    \\    "key": "sk-fixture-init-pi-openrouter-NOT-REAL-i1"
+    \\  },
+    \\  "xai-oauth": {
+    \\    "type": "oauth",
+    \\    "access": "fixture-init-pi-xai-access-NOT-REAL-i2",
+    \\    "refresh": "fixture-init-pi-xai-refresh-NOT-REAL-i3",
+    \\    "tokenEndpoint": "https://auth.x.ai/oauth2/token",
+    \\    "baseUrl": "https://api.x.ai/v1"
+    \\  }
+    \\}
+;
+
+const p3_init_pi_settings_json =
+    \\{
+    \\  "defaultProvider": "openrouter"
+    \\}
+;
+
+const p3_init_opencode_auth_json =
+    \\{
+    \\  "xai": {
+    \\    "type": "oauth",
+    \\    "access": "fixture-init-oc-xai-access-NOT-REAL-i4",
+    \\    "refresh": "fixture-init-oc-xai-refresh-NOT-REAL-i5"
+    \\  }
+    \\}
+;
+
+const p3_init_fixture_secret_needles = [_][]const u8{
+    "sk-fixture-init-pi-openrouter-NOT-REAL-i1",
+    "fixture-init-pi-xai-access-NOT-REAL-i2",
+    "fixture-init-pi-xai-refresh-NOT-REAL-i3",
+    "fixture-init-oc-xai-access-NOT-REAL-i4",
+    "fixture-init-oc-xai-refresh-NOT-REAL-i5",
+    "sk-fixture",
+    "NOT-REAL",
+};
+
+fn p3InitAbsPath(tmp: anytype) ![]u8 {
+    const z = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(z);
+    return try std.testing.allocator.dupe(u8, z);
+}
+
+fn p3InitWriteRel(dir: anytype, rel: []const u8, content: []const u8) !void {
+    if (std.fs.path.dirname(rel)) |parent| {
+        if (parent.len > 0) try dir.createDirPath(std.testing.io, parent);
+    }
+    const file = try dir.createFile(std.testing.io, rel, .{});
+    defer file.close(std.testing.io);
+    try file.writeStreamingAll(std.testing.io, content);
+}
+
+fn p3InitPlantPiHome(home_dir: anytype) !void {
+    try p3InitWriteRel(home_dir, ".pi/agent/auth.json", p3_init_pi_auth_json);
+    try p3InitWriteRel(home_dir, ".pi/agent/settings.json", p3_init_pi_settings_json);
+}
+
+fn p3InitPlantOpencodeHome(home_dir: anytype) !void {
+    try p3InitWriteRel(home_dir, ".local/share/opencode/auth.json", p3_init_opencode_auth_json);
+}
+
+fn p3InitStoreContainsHost(store: orca_policy.network_discovered.ManagedStore, needle: []const u8) bool {
+    for (store.hosts) |entry| {
+        if (std.mem.eql(u8, entry.host, needle)) return true;
+    }
+    return false;
+}
+
+fn p3InitAssertNoSecretsInBytes(bytes: []const u8) !void {
+    for (p3_init_fixture_secret_needles) |needle| {
+        try std.testing.expect(std.mem.indexOf(u8, bytes, needle) == null);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "://") == null);
+}
+
+test "init refreshManagedDiscovery pi/opencode writes managed yaml hostnames+sources only" {
+    // Acceptance: Synthetic HOME+tmp workspace refresh for pi/opencode writes
+    // <workspace>/.orca/network-discovered.yaml with hostnames+sources only.
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    const workspace_root = try p3InitAbsPath(&ws_tmp);
+    defer allocator.free(workspace_root);
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    try p3InitPlantPiHome(home_tmp.dir);
+    try p3InitPlantOpencodeHome(home_tmp.dir);
+    const home = try p3InitAbsPath(&home_tmp);
+    defer allocator.free(home);
+
+    try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{ "pi", "opencode" });
+
+    var store = try orca_policy.network_discovered.loadManaged(io, allocator, workspace_root);
+    defer store.deinit(allocator);
+
+    try std.testing.expect(p3InitStoreContainsHost(store, "auth.x.ai"));
+    try std.testing.expect(p3InitStoreContainsHost(store, "api.x.ai"));
+    try std.testing.expect(store.hosts.len > 0);
+    for (store.hosts) |entry| {
+        try std.testing.expect(entry.sources.len > 0);
+        try std.testing.expect(std.mem.indexOf(u8, entry.host, "://") == null);
+    }
+
+    const path = try orca_policy.network_discovered.managedPath(allocator, workspace_root);
+    defer allocator.free(path);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64 * 1024));
+    defer allocator.free(bytes);
+    try p3InitAssertNoSecretsInBytes(bytes);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "sources:") != null);
+}
+
+test "init refreshManagedDiscovery rediscovery leaves policy.yaml user allows untouched" {
+    // Acceptance: Rediscovery replaces managed only; policy.yaml user allows untouched (DIS-7).
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    const workspace_root = try p3InitAbsPath(&ws_tmp);
+    defer allocator.free(workspace_root);
+
+    // Create policy via init first.
+    var stdout_buf: [2048]u8 = undefined;
+    var stderr_buf: [512]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const init_code = try command(io, ws_tmp.dir, &.{ "--mode", "ask", "--force", "--quiet" }, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, init_code);
+
+    // Append a user allow to policy.yaml (user-authored).
+    const user_policy =
+        \\version: 1
+        \\mode: ask
+        \\network:
+        \\  allow:
+        \\    - user-init-preserve.example
+        \\    - registry.npmjs.org
+        \\
+    ;
+    {
+        const f = try ws_tmp.dir.createFile(io, ".orca/policy.yaml", .{});
+        defer f.close(io);
+        try f.writeStreamingAll(io, user_policy);
+    }
+    const policy_before = try ws_tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(4096));
+    defer allocator.free(policy_before);
+
+    try orca_policy.network_discovered.writeManaged(io, allocator, workspace_root, &.{
+        .{ .host = "stale-init-managed.invalid", .sources = &.{"fixture:stale"} },
+    });
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    try p3InitPlantPiHome(home_tmp.dir);
+    const home = try p3InitAbsPath(&home_tmp);
+    defer allocator.free(home);
+
+    try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{"pi"});
+    try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{"pi"});
+
+    var store = try orca_policy.network_discovered.loadManaged(io, allocator, workspace_root);
+    defer store.deinit(allocator);
+    try std.testing.expect(p3InitStoreContainsHost(store, "auth.x.ai"));
+    try std.testing.expect(!p3InitStoreContainsHost(store, "stale-init-managed.invalid"));
+
+    const policy_after = try ws_tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(4096));
+    defer allocator.free(policy_after);
+    try std.testing.expectEqualStrings(policy_before, policy_after);
+    try std.testing.expect(std.mem.indexOf(u8, policy_after, "user-init-preserve.example") != null);
+}
+
+test "init refreshManagedDiscovery nested-cwd lands at workspace-root .orca" {
+    // Composition: nested-cwd refresh → managed at workspace-root (not under nested).
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    try ws_tmp.dir.createDirPath(io, "nested/cwd");
+    const workspace_root = try p3InitAbsPath(&ws_tmp);
+    defer allocator.free(workspace_root);
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    try p3InitPlantOpencodeHome(home_tmp.dir);
+    const home = try p3InitAbsPath(&home_tmp);
+    defer allocator.free(home);
+
+    const nested_abs = try ws_tmp.dir.realPathFileAlloc(io, "nested/cwd", allocator);
+    defer allocator.free(nested_abs);
+    const original_cwd = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(original_cwd);
+    try std.Io.Threaded.chdir(nested_abs);
+    defer std.Io.Threaded.chdir(original_cwd) catch {};
+
+    try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{"opencode"});
+
+    var store = try orca_policy.network_discovered.loadManaged(io, allocator, workspace_root);
+    defer store.deinit(allocator);
+    try std.testing.expect(p3InitStoreContainsHost(store, "api.x.ai"));
+    try std.testing.expect(p3InitStoreContainsHost(store, "auth.x.ai"));
+
+    if (ws_tmp.dir.access(io, "nested/cwd/.orca/network-discovered.yaml", .{})) |_| {
+        try std.testing.expect(false);
+    } else |_| {}
+}
+
+test "init command succeeds and refresh soft-succeeds when no hosts detected" {
+    // Acceptance: ryk init succeeds; refresh soft-succeeds with no hosts detected.
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+
+    var stdout_buf: [2048]u8 = undefined;
+    var stderr_buf: [512]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try command(io, ws_tmp.dir, &.{ "--mode", "observe", "--force", "--quiet" }, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, code);
+
+    const workspace_root = try p3InitAbsPath(&ws_tmp);
+    defer allocator.free(workspace_root);
+
+    // Soft paths: empty keys, empty home, empty auth home.
+    try refreshManagedDiscovery(io, allocator, workspace_root, "", &.{});
+    try refreshManagedDiscovery(io, allocator, workspace_root, "", &.{"pi"});
+    var empty_home = std.testing.tmpDir(.{});
+    defer empty_home.cleanup();
+    const home = try p3InitAbsPath(&empty_home);
+    defer allocator.free(home);
+    try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{ "pi", "opencode" });
+
+    // Policy created by init must still exist and be readable.
+    const policy = try ws_tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(16 * 1024));
+    defer allocator.free(policy);
+    try std.testing.expect(std.mem.indexOf(u8, policy, "mode: observe") != null);
+}
+
+test "init force still succeeds after refreshManagedDiscovery with fixtures" {
+    // LIVE/composition: init + refresh with fixtures present → managed hosts + policy OK.
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    const workspace_root = try p3InitAbsPath(&ws_tmp);
+    defer allocator.free(workspace_root);
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    try p3InitPlantPiHome(home_tmp.dir);
+    try p3InitPlantOpencodeHome(home_tmp.dir);
+    const home = try p3InitAbsPath(&home_tmp);
+    defer allocator.free(home);
+
+    var stdout_buf: [2048]u8 = undefined;
+    var stderr_buf: [512]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try command(io, ws_tmp.dir, &.{ "--mode", "ask", "--force", "--quiet" }, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, code);
+
+    try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{ "pi", "opencode" });
+
+    var store = try orca_policy.network_discovered.loadManaged(io, allocator, workspace_root);
+    defer store.deinit(allocator);
+    try std.testing.expect(p3InitStoreContainsHost(store, "auth.x.ai"));
+    try std.testing.expect(p3InitStoreContainsHost(store, "api.x.ai"));
+
+    const policy = try ws_tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(16 * 1024));
+    defer allocator.free(policy);
+    try std.testing.expect(std.mem.indexOf(u8, policy, "mode: ask") != null);
+    // Managed secrets must not leak into policy.
+    for (p3_init_fixture_secret_needles) |needle| {
+        try std.testing.expect(std.mem.indexOf(u8, policy, needle) == null);
+    }
 }
