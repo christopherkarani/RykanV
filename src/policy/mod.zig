@@ -10,6 +10,7 @@ pub const presets = @import("presets.zig");
 pub const effects = @import("effects/mod.zig");
 pub const sticky = @import("sticky.zig");
 pub const risk_card = @import("risk_card.zig");
+pub const agent_inference_hosts = @import("agent_inference_hosts.zig");
 
 pub const phase = "07-policy-engine";
 
@@ -28,4 +29,5 @@ test {
     _ = effects;
     _ = sticky;
     _ = risk_card;
+    _ = agent_inference_hosts;
 }
