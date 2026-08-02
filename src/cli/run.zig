@@ -254,7 +254,15 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         );
     }
 
-    try applyNetworkOverlay(allocator, loaded_policy.innerMutPtr(), options, agent_net_default, trusted_agent_host);
+    // Product path: pass trusted host key so overlays select on real identity (not basename spoof).
+    try applyNetworkOverlayWithHostKey(
+        allocator,
+        loaded_policy.innerMutPtr(),
+        options,
+        agent_net_default,
+        trusted_agent_host,
+        if (trusted_host_key.len > 0) trusted_host_key else null,
+    );
 
     var project_env_schema = intercept.env_schema.loadOptional(
         io,
@@ -1679,6 +1687,16 @@ fn effectiveSecretBoundary(options: RunOptions, trusted_agent_host: bool) interc
     return .off;
 }
 
+/// Basename of argv0 for unit-test / fallback overlay selection when the product
+/// call site has not supplied a resolved trusted host key.
+fn hostKeyFromCommandArgv(options: RunOptions) ?[]const u8 {
+    if (options.command_argv.len == 0) return null;
+    const base = std.fs.path.basename(options.command_argv[0]);
+    if (base.len == 0) return null;
+    return base;
+}
+
+/// Test-facing entry: overlay host key is derived from `command_argv[0]` basename.
 fn applyNetworkOverlay(
     allocator: std.mem.Allocator,
     selected_policy: *policy.schema.Policy,
@@ -1686,13 +1704,50 @@ fn applyNetworkOverlay(
     agent_net_default: AgentNetworkDefault,
     trusted_agent_host: bool,
 ) !void {
+    try applyNetworkOverlayWithHostKey(
+        allocator,
+        selected_policy,
+        options,
+        agent_net_default,
+        trusted_agent_host,
+        hostKeyFromCommandArgv(options),
+    );
+}
+
+/// Product + test implementation. When `host_key` is non-null it selects the host
+/// overlay (EFF-2); null seeds core pack only. Seed runs only under mediated +
+/// trusted host-alias (`wantsMediatedAgentNetwork`); never under legacy/open/untrusted.
+///
+/// Ownership: after seed, `network.allow` is fully allocator-owned (every string +
+/// outer slice). CLI `--allow-network` appends transfer prior string ownership into
+/// a new outer slice and free only the previous outer pointer.
+fn applyNetworkOverlayWithHostKey(
+    allocator: std.mem.Allocator,
+    selected_policy: *policy.schema.Policy,
+    options: RunOptions,
+    agent_net_default: AgentNetworkDefault,
+    trusted_agent_host: bool,
+    host_key: ?[]const u8,
+) !void {
     selected_policy.network.mode = cliNetworkMode(options, agent_net_default, trusted_agent_host);
     if (wantsMediatedAgentNetwork(options, agent_net_default, trusted_agent_host)) {
         // Host aliases: always force proxy (overrides decision-only) so labels are not theater.
         selected_policy.network.backend = .proxy;
+
+        // Seed even when CLI --allow-network is empty (must not early-return past this).
+        const old_seed_allow = selected_policy.network.allow;
+        const merged = try policy.agent_inference_hosts.mergeAllowList(
+            allocator,
+            host_key,
+            old_seed_allow,
+        );
+        policy.schema.freeStringList(allocator, old_seed_allow);
+        selected_policy.network.allow = merged;
     } else if (options.network_backend) |backend| {
         selected_policy.network.backend = backend;
     }
+
+    // CLI --allow-network after seed (EFF-3); no-op when empty keeps seed-only list.
     const runtime_allow = options.allowNetwork();
     if (runtime_allow.len == 0) return;
 
@@ -3033,6 +3088,261 @@ test "applyNetworkOverlay trusted host-alias defaults force proxy backend and al
     try applyNetworkOverlay(std.testing.allocator, &pol, .{ .command_argv = &.{"/bin/true"} }, .mediated, false);
     try std.testing.expectEqual(policy.schema.NetworkMode.ask, pol.network.mode.?);
     try std.testing.expect(pol.network.backend == null);
+}
+
+// ---------------------------------------------------------------------------
+// Agent-inference allow seed (AINA-2026-08-02)
+// Mediated + trusted host-alias launches seed core_pack ∪ host_overlay into
+// network.allow; legacy / open / non-alias / untrusted must not seed.
+// Production passes resolved trusted_host_key into applyNetworkOverlayWithHostKey.
+// Basename-derived applyNetworkOverlay is test-only convenience.
+// ---------------------------------------------------------------------------
+
+fn testNetworkAllowContains(allow: []const []const u8, host: []const u8) bool {
+    for (allow) |entry| {
+        if (std.mem.eql(u8, entry, host)) return true;
+    }
+    return false;
+}
+
+/// Spec §5.1 core pack minima (independent of pack module implementation).
+fn expectCorePackOnAllow(allow: []const []const u8) !void {
+    try std.testing.expect(testNetworkAllowContains(allow, "api.anthropic.com"));
+    try std.testing.expect(testNetworkAllowContains(allow, "api.openai.com"));
+    try std.testing.expect(testNetworkAllowContains(allow, "api.x.ai"));
+}
+
+/// No agent pack or any §5.2 overlay host may appear (no-seed / fail-closed paths).
+fn expectNoAgentInferencePackOrOverlay(allow: []const []const u8) !void {
+    try std.testing.expect(!testNetworkAllowContains(allow, "api.anthropic.com"));
+    try std.testing.expect(!testNetworkAllowContains(allow, "api.openai.com"));
+    try std.testing.expect(!testNetworkAllowContains(allow, "api.x.ai"));
+    try std.testing.expect(!testNetworkAllowContains(allow, "openrouter.ai"));
+    try std.testing.expect(!testNetworkAllowContains(allow, "opencode.ai"));
+    try std.testing.expect(!testNetworkAllowContains(allow, "models.opencode.ai"));
+    try std.testing.expect(!testNetworkAllowContains(allow, "cli-chat-proxy.grok.com"));
+    try std.testing.expect(!testNetworkAllowContains(allow, "auth.x.ai"));
+}
+
+test "applyNetworkOverlay seeds core pack and pi overlay on mediated trusted host-alias with empty allow and no CLI --allow-network" {
+    // Must not early-return past seed when CLI --allow-network is absent.
+    const allocator = std.testing.allocator;
+    var pol: policy.schema.Policy = .{ .allocator = allocator };
+    defer pol.network.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), pol.network.allow.len);
+    try std.testing.expectEqual(@as(usize, 0), (@as(RunOptions, .{})).allow_network_count);
+
+    const opts: RunOptions = .{ .command_argv = &.{"pi"} };
+    try applyNetworkOverlay(allocator, &pol, opts, .mediated, true);
+
+    try std.testing.expectEqual(policy.schema.NetworkMode.allowlist, pol.network.mode.?);
+    try std.testing.expectEqual(policy.schema.NetworkBackend.proxy, pol.network.backend.?);
+    try expectCorePackOnAllow(pol.network.allow);
+    try std.testing.expect(testNetworkAllowContains(pol.network.allow, "openrouter.ai"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "models.opencode.ai"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "opencode.ai"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "cli-chat-proxy.grok.com"));
+}
+
+test "applyNetworkOverlayWithHostKey seeds pi overlay when host_key differs from argv basename" {
+    // Product path: trusted_host_key drives overlay, not argv leaf (node/script wrappers).
+    const allocator = std.testing.allocator;
+    var pol: policy.schema.Policy = .{ .allocator = allocator };
+    defer pol.network.deinit(allocator);
+
+    try applyNetworkOverlayWithHostKey(
+        allocator,
+        &pol,
+        .{ .command_argv = &.{"/usr/local/bin/cli.js"} },
+        .mediated,
+        true,
+        "pi",
+    );
+
+    try expectCorePackOnAllow(pol.network.allow);
+    try std.testing.expect(testNetworkAllowContains(pol.network.allow, "openrouter.ai"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "models.opencode.ai"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "opencode.ai"));
+}
+
+test "applyNetworkOverlayWithHostKey seeds opencode overlay when host_key differs from argv basename" {
+    const allocator = std.testing.allocator;
+    var pol: policy.schema.Policy = .{ .allocator = allocator };
+    defer pol.network.deinit(allocator);
+
+    try applyNetworkOverlayWithHostKey(
+        allocator,
+        &pol,
+        .{ .command_argv = &.{"/opt/node"} },
+        .mediated,
+        true,
+        "opencode",
+    );
+
+    try expectCorePackOnAllow(pol.network.allow);
+    try std.testing.expect(testNetworkAllowContains(pol.network.allow, "opencode.ai"));
+    try std.testing.expect(testNetworkAllowContains(pol.network.allow, "models.opencode.ai"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "openrouter.ai"));
+}
+
+test "applyNetworkOverlayWithHostKey null host_key seeds core pack only" {
+    const allocator = std.testing.allocator;
+    var pol: policy.schema.Policy = .{ .allocator = allocator };
+    defer pol.network.deinit(allocator);
+
+    try applyNetworkOverlayWithHostKey(
+        allocator,
+        &pol,
+        .{ .command_argv = &.{"claude"} },
+        .mediated,
+        true,
+        null,
+    );
+
+    try expectCorePackOnAllow(pol.network.allow);
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "openrouter.ai"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "opencode.ai"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "models.opencode.ai"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "cli-chat-proxy.grok.com"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "auth.x.ai"));
+}
+
+test "applyNetworkOverlay seeds core pack and opencode overlay on mediated trusted host-alias" {
+    const allocator = std.testing.allocator;
+    var pol: policy.schema.Policy = .{ .allocator = allocator };
+    defer pol.network.deinit(allocator);
+
+    try applyNetworkOverlay(allocator, &pol, .{ .command_argv = &.{"opencode"} }, .mediated, true);
+
+    try expectCorePackOnAllow(pol.network.allow);
+    try std.testing.expect(testNetworkAllowContains(pol.network.allow, "opencode.ai"));
+    try std.testing.expect(testNetworkAllowContains(pol.network.allow, "models.opencode.ai"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "openrouter.ai"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "cli-chat-proxy.grok.com"));
+}
+
+test "applyNetworkOverlay seeds core and overlay into stale github-only policy allow without dropping existing" {
+    // A-seed / EFF-3/4/5: stale workspace allow (github/npm) still gains pack; existing kept.
+    const allocator = std.testing.allocator;
+    var pol: policy.schema.Policy = .{ .allocator = allocator };
+    defer pol.network.deinit(allocator);
+    pol.network.allow = try policy.schema.duplicateStringList(allocator, &.{
+        "github.com",
+        "registry.npmjs.org",
+    });
+
+    try applyNetworkOverlay(allocator, &pol, .{ .command_argv = &.{"pi"} }, .mediated, true);
+
+    try std.testing.expect(testNetworkAllowContains(pol.network.allow, "github.com"));
+    try std.testing.expect(testNetworkAllowContains(pol.network.allow, "registry.npmjs.org"));
+    try expectCorePackOnAllow(pol.network.allow);
+    try std.testing.expect(testNetworkAllowContains(pol.network.allow, "openrouter.ai"));
+}
+
+test "applyNetworkOverlay seed composes CLI --allow-network after pack without removing policy allows" {
+    // A-composition / EFF-3: policy ∪ pack/overlay ∪ CLI --allow-network.
+    const allocator = std.testing.allocator;
+    var pol: policy.schema.Policy = .{ .allocator = allocator };
+    defer pol.network.deinit(allocator);
+    pol.network.allow = try policy.schema.duplicateStringList(allocator, &.{"github.com"});
+
+    var opts: RunOptions = .{ .command_argv = &.{"opencode"} };
+    opts.allow_network_values[0] = "api.custom-provider.example";
+    opts.allow_network_count = 1;
+
+    try applyNetworkOverlay(allocator, &pol, opts, .mediated, true);
+
+    try std.testing.expect(testNetworkAllowContains(pol.network.allow, "github.com"));
+    try expectCorePackOnAllow(pol.network.allow);
+    try std.testing.expect(testNetworkAllowContains(pol.network.allow, "opencode.ai"));
+    try std.testing.expect(testNetworkAllowContains(pol.network.allow, "models.opencode.ai"));
+    try std.testing.expect(testNetworkAllowContains(pol.network.allow, "api.custom-provider.example"));
+}
+
+test "applyNetworkOverlay core-only host-alias seeds core pack without foreign host overlays" {
+    // A-seed / PKG-2: claude is core-only at P1 (no pi/opencode/grok overlay pollution).
+    const allocator = std.testing.allocator;
+    var pol: policy.schema.Policy = .{ .allocator = allocator };
+    defer pol.network.deinit(allocator);
+
+    try applyNetworkOverlay(allocator, &pol, .{ .command_argv = &.{"claude"} }, .mediated, true);
+
+    try expectCorePackOnAllow(pol.network.allow);
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "openrouter.ai"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "opencode.ai"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "models.opencode.ai"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "cli-chat-proxy.grok.com"));
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "auth.x.ai"));
+}
+
+test "applyNetworkOverlay does not seed agent pack when agent_net_default is legacy" {
+    // A-no-seed: ORCA_AGENT_NETWORK_DEFAULT=legacy kill switch — no pack theater.
+    const allocator = std.testing.allocator;
+    var pol: policy.schema.Policy = .{ .allocator = allocator };
+    defer pol.network.deinit(allocator);
+    pol.network.allow = try policy.schema.duplicateStringList(allocator, &.{"github.com"});
+
+    try applyNetworkOverlay(allocator, &pol, .{ .command_argv = &.{"pi"} }, .legacy, true);
+
+    try std.testing.expectEqual(policy.schema.NetworkMode.ask, pol.network.mode.?);
+    try std.testing.expect(pol.network.backend == null);
+    try std.testing.expect(testNetworkAllowContains(pol.network.allow, "github.com"));
+    try expectNoAgentInferencePackOrOverlay(pol.network.allow);
+}
+
+test "applyNetworkOverlay does not seed agent pack when network_mode is open" {
+    // A-no-seed: --network open escape — unrestricted; no pack seed / no allowlist theater.
+    const allocator = std.testing.allocator;
+    var pol: policy.schema.Policy = .{ .allocator = allocator };
+    defer pol.network.deinit(allocator);
+
+    try applyNetworkOverlay(allocator, &pol, .{
+        .command_argv = &.{"pi"},
+        .network_mode = .open,
+    }, .mediated, true);
+
+    try std.testing.expectEqual(policy.schema.NetworkMode.open, pol.network.mode.?);
+    try expectNoAgentInferencePackOrOverlay(pol.network.allow);
+}
+
+test "applyNetworkOverlay does not seed agent pack when trusted_agent_host is false (basename spoof)" {
+    // A-no-seed / F-02: untrusted / basename spoof — command looks like pi but not trusted.
+    const allocator = std.testing.allocator;
+    var pol: policy.schema.Policy = .{ .allocator = allocator };
+    defer pol.network.deinit(allocator);
+
+    try applyNetworkOverlay(allocator, &pol, .{ .command_argv = &.{"pi"} }, .mediated, false);
+
+    try std.testing.expectEqual(policy.schema.NetworkMode.ask, pol.network.mode.?);
+    try expectNoAgentInferencePackOrOverlay(pol.network.allow);
+}
+
+test "applyNetworkOverlay does not seed agent pack for non-alias command even under mediated default" {
+    // A-no-seed / PKG-3: generic ryk run -- <cmd> must not silently gain agent overlays.
+    const allocator = std.testing.allocator;
+    var pol: policy.schema.Policy = .{ .allocator = allocator };
+    defer pol.network.deinit(allocator);
+
+    try applyNetworkOverlay(allocator, &pol, .{ .command_argv = &.{"/bin/true"} }, .mediated, false);
+
+    try std.testing.expectEqual(policy.schema.NetworkMode.ask, pol.network.mode.?);
+    try expectNoAgentInferencePackOrOverlay(pol.network.allow);
+}
+
+test "applyNetworkOverlay non-alias with CLI --allow-network still does not seed agent pack" {
+    // A-no-seed + composition: CLI allow alone must not pull core pack/overlays for non-alias.
+    const allocator = std.testing.allocator;
+    var pol: policy.schema.Policy = .{ .allocator = allocator };
+    defer pol.network.deinit(allocator);
+
+    var opts: RunOptions = .{ .command_argv = &.{"/bin/true"} };
+    opts.allow_network_values[0] = "api.example.com";
+    opts.allow_network_count = 1;
+
+    try applyNetworkOverlay(allocator, &pol, opts, .mediated, false);
+
+    try std.testing.expect(testNetworkAllowContains(pol.network.allow, "api.example.com"));
+    try expectNoAgentInferencePackOrOverlay(pol.network.allow);
 }
 
 test "parseAgentNetworkDefault only legacy opts out" {

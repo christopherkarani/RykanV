@@ -207,6 +207,27 @@ pub fn build(b: *std.Build) void {
     // Independent run steps for focused test targets (do not inherit lib test dependency).
     const run_core_package_tests_only = addRunTestTerminal(b, core_package_tests);
 
+    // Deep `src/policy/*` unit tests: package re-exports do not attach nested module
+    // tests under Zig 0.16 monopath/orca_core roots. Root at core_engine so
+    // agent_inference_hosts is discoverable under test-core/test-policy with
+    // `-Dtest-filter=…`. Dedicated module (not orca_core_engine_mod) — reusing the
+    // package import as test root fails nested audit/core compile under 0.16.
+    //
+    // Not on test-fast / compile-test-fast: unfiltered core_engine still hits
+    // pre-existing Zig 0.16 API breakages in audit/load/supervisor/effects tests
+    // (~29 errors). Product seed path is covered on monopath via cli/run.zig;
+    // pure pack suite: `./scripts/zig build test-core -Dtest-filter=agent_inference`.
+    const core_engine_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core_engine.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .filters = test_filters,
+    });
+    // Focused run only (not on test-fast / full test serial chain — see addTest comment).
+    const run_core_engine_tests_only = addRunTestTerminal(b, core_engine_tests);
+
     const core_contract_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("packages/core/tests/contract.zig"),
@@ -493,6 +514,7 @@ pub fn build(b: *std.Build) void {
     compile_test_lib_step.dependOn(&lib_tests.step);
 
     // Keep membership identical to `test-fast` (lib + orca_core package + core contract).
+    // core_engine_tests is test-core/test-policy only (see comment at addTest) — not fast.
     // daemon_ipc_hardening is full-suite only (`test` step), not the fast gate.
     const compile_test_fast_step = b.step("compile-test-fast", "Compile test-fast artifacts without running");
     compile_test_fast_step.dependOn(&lib_tests.step);
@@ -502,8 +524,9 @@ pub fn build(b: *std.Build) void {
     const test_lib_step = b.step("test-lib", "Run orca lib inline tests only");
     test_lib_step.dependOn(&run_lib_tests.step);
 
-    const test_core_step = b.step("test-core", "Run orca_core package tests only");
+    const test_core_step = b.step("test-core", "Run orca_core package + core_engine (policy/audit) unit tests");
     test_core_step.dependOn(&run_core_package_tests_only.step);
+    test_core_step.dependOn(&run_core_engine_tests_only.step);
 
     const test_core_contract_step = b.step("test-core-contract", "Run packages/core contract tests only");
     test_core_contract_step.dependOn(&run_core_contract_tests_only.step);
@@ -511,11 +534,11 @@ pub fn build(b: *std.Build) void {
     const test_sandbox_step = b.step("test-sandbox", "Run sandbox domain unit tests only (sliced root)");
     test_sandbox_step.dependOn(&run_sandbox_tests.step);
 
-    // Policy domain: deep `src/policy/*` unit tests currently share Zig 0.16 API debt with
-    // core helpers when rooted outside the monopath. Map `test-policy` to the stable
-    // orca_core package + contract gates (agent-facing "policy/core" slice).
-    const test_policy_step = b.step("test-policy", "Run policy/core package gates (test-core + test-core-contract)");
+    // Policy domain: deep `src/policy/*` lives under core_engine (not package re-exports).
+    // Map `test-policy` to package + core_engine + contract (agent-facing "policy/core" slice).
+    const test_policy_step = b.step("test-policy", "Run policy/core gates (test-core package + core_engine + contract)");
     test_policy_step.dependOn(&run_core_package_tests_only.step);
+    test_policy_step.dependOn(&run_core_engine_tests_only.step);
     test_policy_step.dependOn(&run_core_contract_tests_only.step);
 
     const test_intercept_step = b.step("test-intercept", "Run intercept domain unit tests only (sliced root)");
@@ -533,12 +556,13 @@ pub fn build(b: *std.Build) void {
     const compile_test_shell_engine_step = b.step("compile-test-shell-engine", "Compile shell_engine tests without running");
     compile_test_shell_engine_step.dependOn(&shell_engine_tests.step);
 
-    // Serialize runs so local `zig build test-fast` does not launch three heavy test
+    // Serialize runs so local `zig build test-fast` does not launch heavy test
     // binaries at once (parallel runs have hung with no output on some hosts).
+    // core_engine_tests deliberately omitted from this chain (see addTest comment).
     run_core_package_tests.step.dependOn(&run_lib_tests.step);
     run_core_contract_tests.step.dependOn(&run_core_package_tests.step);
 
-    const test_fast_step = b.step("test-fast", "Run fast unit tests (orca lib + orca_core)");
+    const test_fast_step = b.step("test-fast", "Run fast unit tests (orca lib + orca_core package + contract)");
     test_fast_step.dependOn(&run_core_contract_tests.step);
 
     const test_step = b.step("test", "Run unit tests");
@@ -547,6 +571,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_lib_tests.step);
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_core_package_tests.step);
+    // core_engine_tests: test-core/test-policy only until Zig 0.16 suite bitrot is fixed.
     test_step.dependOn(&run_core_contract_tests.step);
     test_step.dependOn(&run_cli_package_tests.step);
     test_step.dependOn(&run_cli_contract_tests.step);

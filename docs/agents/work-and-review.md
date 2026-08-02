@@ -2,12 +2,16 @@
 
 Hard rules live in [`AGENTS.md`](../../AGENTS.md). This file is the full SOP for how agents work, load Zig skills, and gate “done” with adversarial review.
 
+**Implement floor (canonical alignment):** [`implement-floor.md`](implement-floor.md).  
+**Priority:** correctness and **complete, working features** over cost. Never thin review, switch to lite, or soft-PASS to save agent-minutes.
+
 ## 1. Goals
 
 1. **Act when you can** — clear tasks move without waiting for approval on local work.
 2. **Use sub-agents** for non-trivial multi-step work, parallelism, isolation, and specialist Zig lanes.
 3. **Load Zig skills** for implementation, style, and review — and force the same on sub-agents via prompts.
 4. **End substantive code work** with a tiered adversarial multi-agent review before claiming complete.
+5. **Ship complete acceptance** — product paths wired, tested, and fail-closed where required; hollow units that only pass isolated checks are not done.
 
 ## 2. Work mode
 
@@ -142,9 +146,10 @@ Small but security-critical → **T2**, not T3, unless architecture/size signals
 ## 7. Review cadence
 
 1. **Default:** one **end-of-task** tiered review on the **full task diff**. This is the mandatory done gate for substantive code.
-2. **Orchestrated multi-unit work:** light per-unit review (e.g. Behavior + Safety, or T1 minimum) so units do not merge garbage — **and** still run end-of-task tiered review on the integrated result. Promote T2/T3 from the **total** integrated diff.
-3. **Never** run full T3 on every tiny unit unless that unit alone meets T3 criteria.
+2. **Orchestrated multi-unit work:** per-unit **hard** dual review (Behavior + Safety on disk; implementor: min four code lanes) so units do not merge garbage — **and** still run end-of-task tiered review on the integrated result. Promote T2/T3 from the **total** integrated diff. Prefer **more** review when risk is high; never drop required lanes for cost (see [`implement-floor.md`](implement-floor.md)).
+3. **Do not** skip dual/integration disk gates on “small” multi-unit work. Full T3 on every tiny unit is optional only when that unit alone fails T3 size criteria — dual PASS is still required for orchestrated units.
 4. Implementer self-checks (load Zig skills, run L0/L0.5) are not a substitute for the end gate.
+5. **Reuse:** unit/integration VERDICT files may satisfy end-of-task lane coverage when they match the tier; **top up** missing lanes (e.g. Style, Thermo) rather than claiming done with soft monologue.
 
 ## 8. How to run lanes
 
@@ -185,21 +190,25 @@ User-facing summary: one line per lane (`PASS` / `FAIL` + top blockers). No nove
 
 All of the following:
 
-1. Requested work is implemented (or an explicit blocker is reported).
-2. Narrowest useful verification gate from `AGENTS.md` is green for the change.
-3. If review was mandatory: all launched lanes report **no open blockers** (or the user waived them).
+1. Requested work is implemented **and works** for in-scope acceptance (or an explicit blocker is reported) — not stubs, not “residual later” for product paths.
+2. Narrowest useful verification gate from `AGENTS.md` is green for the change; composition / cross-unit contracts are covered when the task spans units (see implement-floor §5–6).
+3. If review was mandatory: all launched lanes report **no open blockers** (or the user waived them), with **on-disk** evidence when multi-unit / orchestrated.
 4. Review evidence exists (§9) when review ran.
 5. No irreversible/shared action was taken without approval.
+6. Recurring defect classes (ownership/`errdefer`, flock, cwd/realpath, project-path contracts, fail-closed honesty) checked when in scope — see implement-floor §6.
 
 ## 11. Relationship to other skills
 
 | Skill / flow | Relationship |
 |--------------|--------------|
-| `orchestrate-implement` | Per-unit implement + light review; this playbook still requires end-of-task tiered review on the integrated result |
+| [`implement-floor.md`](implement-floor.md) | **Canonical** multi-path alignment + correctness-first floor |
+| `orchestrate-implement` | Multi-unit state machine: handoff → dual VERDICT → path commit → dual integration; this playbook still requires end-of-task tiered review on the integrated result |
+| `implementor` (`.grok/workflows/implementor.rhai`) | Automated TDD multi-unit path; min 4 code lanes + integration security; same complete gates |
+| Hand prompts in `planning/` | Must cite implement-floor; hard VERDICT language required for multi-unit claims |
 | `multi-agent-code-review` / `multi-agent-pr-review` | Can satisfy or top up end-of-task tiers when coverage matches |
 | `check-work` / `/verify` | Complements verification; does not replace adversarial lanes |
 | `tdd` | Required for non-trivial implement; Behavior lane audits TDD honesty |
-| Thermo-nuclear skill | T3 lane only by default |
+| Thermo-nuclear skill | T3 lane; also implementor `full` mode per-unit thermo |
 
 ## 12. Quick checklist (paste into sub-agent prompts)
 
