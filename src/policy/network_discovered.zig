@@ -150,7 +150,10 @@ pub fn loadManaged(
     const path = try managedPath(allocator, workspace_root);
     defer allocator.free(path);
 
-    // Soft-empty on symlink leaf (write refuses; load must not follow hostile content).
+    // Soft-empty on parent `.orca` or leaf symlink (write refuses both; load must not follow).
+    const orca_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".orca" });
+    defer allocator.free(orca_dir);
+    if (try pathIsSymlink(allocator, orca_dir)) return emptyStore();
     if (try pathIsSymlink(allocator, path)) return emptyStore();
 
     const text = std.Io.Dir.cwd().readFileAlloc(
@@ -202,10 +205,11 @@ pub fn managedEntryMatchesHostKey(entry: ManagedHost, host_key: []const u8) bool
 /// Run adapters for `host_keys` under `home`; regenerate managed store under
 /// `workspace_root`. Hostnames + source tags only. Never edits policy.yaml.
 ///
-/// Merge-by-source contract:
-/// - Non-empty adapter result **replaces** that host_key's prior contributions.
-/// - Soft-empty adapter **preserves** existing entries tagged for that key.
-/// - Shared hostnames **union** source tags (no first-wins tag drop).
+/// Merge-by-source (tag-scoped) contract:
+/// - Non-empty adapter **replaces** that host_key's source tags.
+/// - Soft-empty adapter **preserves** only prior tags for that host_key.
+/// - Shared hostnames **union** remaining tags.
+/// - Unrequested / foreign tags preserved.
 /// - All requested keys soft-empty → leave file untouched.
 pub fn refreshManagedDiscovery(
     io: std.Io,
@@ -216,15 +220,12 @@ pub fn refreshManagedDiscovery(
 ) !void {
     if (host_keys.len == 0) return;
 
-    // Load prior store for soft-empty preservation.
     var prior = try loadManaged(io, allocator, workspace_root);
     defer prior.deinit(allocator);
 
-    // Track which keys produced non-empty discovery.
-    var non_empty_keys: [8][]const u8 = undefined;
-    var non_empty_len: usize = 0;
+    var non_empty: std.ArrayList([]const u8) = .empty;
+    defer non_empty.deinit(allocator);
 
-    // collected hosts with owned host strings + owned source slices.
     var collected: std.ArrayList(ManagedHost) = .empty;
     errdefer freeRefreshManagedHostsOwnedSources(allocator, &collected);
 
@@ -233,61 +234,28 @@ pub fn refreshManagedDiscovery(
         const discovered = try inference_discover.discoverForHost(io, allocator, key, home);
         defer schema.freeStringList(allocator, discovered);
 
-        if (discovered.len == 0) continue; // soft-empty: preserve prior below
+        if (discovered.len == 0) continue;
 
-        if (non_empty_len < non_empty_keys.len) {
-            non_empty_keys[non_empty_len] = key;
-            non_empty_len += 1;
-        }
-
+        try non_empty.append(allocator, key);
         for (discovered) |host| {
             if (host.len == 0) continue;
             try refreshUpsertHost(allocator, &collected, host, key);
         }
     }
 
-    // Preserve prior entries for host_keys that soft-emptied (and any other
-    // prior keys not in this refresh request).
+    // Tag-scoped preserve: keep prior tags only when that host_key soft-emptied
+    // (or was not requested). Never re-apply tags for keys replaced by live discovery.
     for (prior.hosts) |entry| {
-        var keep = false;
-        // Keep if entry is tagged for a key that soft-emptied this round.
-        for (host_keys) |key| {
-            if (key.len == 0) continue;
-            var key_was_non_empty = false;
-            for (non_empty_keys[0..non_empty_len]) |nek| {
-                if (std.mem.eql(u8, nek, key)) {
-                    key_was_non_empty = true;
-                    break;
-                }
-            }
-            if (key_was_non_empty) continue; // replaced by live discovery
-            if (managedEntryMatchesHostKey(entry, key)) {
-                keep = true;
-                break;
-            }
-        }
-        // Also keep entries whose sources don't match any requested key
-        // (foreign tags from hand-edit or older adapters).
-        if (!keep) {
-            var matches_any_requested = false;
-            for (host_keys) |key| {
-                if (key.len == 0) continue;
-                if (managedEntryMatchesHostKey(entry, key)) {
-                    matches_any_requested = true;
-                    break;
-                }
-            }
-            if (!matches_any_requested) keep = true;
-        }
-        if (!keep) continue;
-
-        for (entry.sources) |src| {
-            // Re-derive host_key from first source prefix for upsert.
-            const key = sourceTagHostKey(src) orelse "discover";
-            try refreshUpsertHost(allocator, &collected, entry.host, key);
-        }
         if (entry.sources.len == 0) {
-            try refreshUpsertHost(allocator, &collected, entry.host, "discover");
+            if (!refreshKeyIsNonEmpty(non_empty.items, "discover")) {
+                try refreshUpsertHost(allocator, &collected, entry.host, "discover");
+            }
+            continue;
+        }
+        for (entry.sources) |src| {
+            const tag_key = sourceTagHostKey(src) orelse "discover";
+            if (refreshKeyIsNonEmpty(non_empty.items, tag_key)) continue;
+            try refreshUpsertHost(allocator, &collected, entry.host, tag_key);
         }
     }
 
@@ -298,6 +266,13 @@ pub fn refreshManagedDiscovery(
 
     try writeManaged(io, allocator, workspace_root, collected.items);
     freeRefreshManagedHostsOwnedSources(allocator, &collected);
+}
+
+fn refreshKeyIsNonEmpty(non_empty: []const []const u8, key: []const u8) bool {
+    for (non_empty) |k| {
+        if (std.mem.eql(u8, k, key)) return true;
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------

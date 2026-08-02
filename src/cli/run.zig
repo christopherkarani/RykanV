@@ -1817,42 +1817,43 @@ fn mergeDiscoveryIntoAllow(
     host_key: ?[]const u8,
     ctx: DiscoveryLaunchContext,
 ) !void {
-    // Managed path is always workspace_root/.orca/network-discovered.yaml (cwd-independent).
     var store = try policy.network_discovered.loadManaged(ctx.io, allocator, ctx.workspace_root);
     defer store.deinit(allocator);
 
-    // Collect managed∪live into one contribution, then a single preserve merge.
+    // All contrib strings are owned (duped managed + owned discover) so free is uniform.
     var contrib: std.ArrayList([]const u8) = .empty;
-    defer {
-        // Borrowed hostnames from store + owned from discover — free only owned.
+    errdefer {
+        for (contrib.items) |h| allocator.free(h);
         contrib.deinit(allocator);
     }
 
     const key = host_key orelse "";
-    // Host-scoped managed grant: only entries tagged for this host_key.
     if (key.len > 0) {
         for (store.hosts) |entry| {
             if (!policy.network_discovered.managedEntryMatchesHostKey(entry, key)) continue;
-            try contrib.append(allocator, entry.host);
+            const owned = try allocator.dupe(u8, entry.host);
+            errdefer allocator.free(owned);
+            try contrib.append(allocator, owned);
         }
-    }
 
-    // Launch-time adapter (parent HOME; soft-empty on missing/corrupt/empty home).
-    var discovered: []const []const u8 = &.{};
-    defer if (discovered.len > 0) policy.schema.freeStringList(allocator, discovered);
-    if (key.len > 0) {
-        discovered = try policy.inference_discover.discoverForHost(
+        const discovered = try policy.inference_discover.discoverForHost(
             ctx.io,
             allocator,
             key,
             ctx.home,
         );
+        defer policy.schema.freeStringList(allocator, discovered);
         for (discovered) |h| {
-            try contrib.append(allocator, h);
+            const owned = try allocator.dupe(u8, h);
+            errdefer allocator.free(owned);
+            try contrib.append(allocator, owned);
         }
     }
 
-    if (contrib.items.len == 0) return;
+    if (contrib.items.len == 0) {
+        contrib.deinit(allocator);
+        return;
+    }
 
     const old_allow = selected_policy.network.allow;
     const next = try policy.network_discovered.mergePreserveUserAllows(
@@ -1862,6 +1863,9 @@ fn mergeDiscoveryIntoAllow(
     );
     policy.schema.freeStringList(allocator, old_allow);
     selected_policy.network.allow = next;
+    // mergePreserve duped inputs — free our owned contrib list.
+    for (contrib.items) |h| allocator.free(h);
+    contrib.deinit(allocator);
 }
 
 fn requiresBackend(options: RunOptions, feature: sandbox.backend.Feature) bool {
@@ -3839,6 +3843,49 @@ test "applyNetworkOverlayWithHostKey P3 class tokens never land in allow; privat
     try p3LaunchExpectNetworkResult(allocator, &pol, "http://169.254.169.254/latest/meta-data/", .deny);
     try p3LaunchExpectNetworkResult(allocator, &pol, "http://metadata.google.internal/", .deny);
     try p3LaunchExpectNetworkResult(allocator, &pol, "http://127.0.0.1:1/", .deny);
+}
+
+test "applyNetworkOverlayWithHostKey P3 rejects 127.0.0.2 planted in agent auth" {
+    // Keep major residual: loopback residual is exact 127.0.0.1 only, not 127/8.
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ws_tmp = std.testing.tmpDir(.{});
+    defer ws_tmp.cleanup();
+    const workspace_root = try p3LaunchAbsPath(&ws_tmp);
+    defer allocator.free(workspace_root);
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    const hostile_auth =
+        \\{
+        \\  "local": {
+        \\    "type": "api",
+        \\    "key": "sk-fixture-127-wide-NOT-REAL",
+        \\    "baseUrl": "http://127.0.0.2:9/v1"
+        \\  }
+        \\}
+    ;
+    try p3LaunchPlantPiHome(home_tmp.dir, hostile_auth, null);
+    const home = try p3LaunchAbsPath(&home_tmp);
+    defer allocator.free(home);
+
+    var pol: policy.schema.Policy = .{ .allocator = allocator };
+    defer pol.network.deinit(allocator);
+
+    try applyNetworkOverlayWithHostKey(
+        allocator,
+        &pol,
+        .{ .command_argv = &.{"pi"} },
+        .mediated,
+        true,
+        "pi",
+        .{ .io = io, .workspace_root = workspace_root, .home = home },
+    );
+
+    try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "127.0.0.2"));
+    try p3LaunchExpectNetworkResult(allocator, &pol, "http://127.0.0.2:9/", .deny);
+    try p3LaunchExpectNetworkResult(allocator, &pol, "http://127.1.2.3/", .deny);
 }
 
 test "applyNetworkOverlayWithHostKey P3 soft-skips missing managed and empty home still seeds pack floor" {

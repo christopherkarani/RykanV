@@ -219,7 +219,8 @@ fn parseIpv4(host: []const u8) ?[4]u8 {
 }
 
 fn isLocalhostIp(ip: [4]u8) bool {
-    return ip[0] == 127;
+    // Exact 127.0.0.1 only — not entire 127/8 (class residual would be wider than Ollama claim).
+    return ip[0] == 127 and ip[1] == 0 and ip[2] == 0 and ip[3] == 1;
 }
 
 fn isIpv6Literal(host: []const u8) bool {
@@ -441,6 +442,16 @@ test "inference_hostname loopback residual accepts 127.0.0.1 URL host only" {
 
     try std.testing.expect(host != null);
     try std.testing.expectEqualStrings("127.0.0.1", host.?);
+}
+
+test "inference_hostname rejects non-exact 127/8 addresses" {
+    // Residual is 127.0.0.1 only — not 127.0.0.2 / 127.1.2.3 class widen.
+    const allocator = std.testing.allocator;
+    for ([_][]const u8{ "127.0.0.2", "http://127.0.0.2:9/", "127.1.2.3", "https://127.1.2.3/v1" }) |field| {
+        const host = try extractHostname(allocator, field);
+        defer if (host) |h| allocator.free(h);
+        try std.testing.expect(host == null);
+    }
 }
 
 test "inference_hostname rejects metadata.google.internal cloud metadata host" {
