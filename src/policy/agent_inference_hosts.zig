@@ -1,14 +1,19 @@
-//! Agent-inference network allow — static core pack (§5.1) and host overlays (§5.2).
+//! Agent-inference network allow — static core pack (§5.1), host overlays (§5.2),
+//! and provider-id catalog (§5.3).
 //!
 //! Pure, FS-free tables + deterministic merge into `network.allow`. Launch seeding
 //! lives in `cli/run.zig` (`applyNetworkOverlayWithHostKey`); this module owns pack
-//! data and merge only. Normative SoT id: **AINA-2026-08-02**.
+//! data, provider catalog, and merge only. Normative SoT id: **AINA-2026-08-02**.
 //!
 //! Ownership contract for `mergeAllowList`:
 //! - Returned outer slice is allocator-owned (free with `schema.freeStringList`).
 //! - Every string entry is allocator-owned (duped from static pack/overlay and/or existing).
 //! - Never removes entries present in `existing`; dedupes by exact string equality.
 //! - Merge order: existing, then core pack, then optional host overlay (first wins).
+//!
+//! Ownership contract for `catalogForProvider` / `hostsForProviderId`:
+//! - Returns borrowed static host slices (process-long; do not free).
+//! - Unknown / empty provider id → empty slice (no invented hosts).
 //!
 //! Do not invent cloud wildcards (no bare `*.amazonaws.com`) or paste sinks.
 
@@ -39,6 +44,34 @@ const OVERLAY_PI = [_][]const u8{
     "openrouter.ai",
 };
 
+// ---------------------------------------------------------------------------
+// Provider id catalog (§5.3 / DIS-4 / A-P3-4) — pure, static, FS-free.
+// Adapters map auth keys / provider ids through this table. Unknown → empty.
+// Borrowed host slices are process-long (do not free). No secrets; hostnames only.
+// ---------------------------------------------------------------------------
+
+const CATALOG_ANTHROPIC = [_][]const u8{
+    "api.anthropic.com",
+};
+
+const CATALOG_OPENAI = [_][]const u8{
+    "api.openai.com",
+};
+
+const CATALOG_XAI = [_][]const u8{
+    "api.x.ai",
+    "auth.x.ai",
+};
+
+const CATALOG_OPENROUTER = [_][]const u8{
+    "openrouter.ai",
+};
+
+const CATALOG_OPENCODE = [_][]const u8{
+    "opencode.ai",
+    "models.opencode.ai",
+};
+
 /// Static core hosts; borrowed, process-long (do not free).
 pub fn corePack() []const []const u8 {
     return &CORE_PACK;
@@ -50,6 +83,37 @@ pub fn overlayForHost(host_key: []const u8) []const []const u8 {
     if (std.mem.eql(u8, host_key, "opencode")) return &OVERLAY_OPENCODE;
     if (std.mem.eql(u8, host_key, "pi")) return &OVERLAY_PI;
     return &.{};
+}
+
+/// Map a provider **id** (auth key / config provider field) to static inference hosts.
+///
+/// Borrowed, process-long host slices — do not free. Unknown / empty / host-launch
+/// alias keys return empty (no invented hosts; DIS-4 / NG-P3-5). Never includes
+/// bare `*.amazonaws.com` or paste sinks. Prefer literal URL hosts from adapters
+/// when present; this catalog is the floor for id-only mappings.
+///
+/// Spec §5.3 minima: anthropic; openai/openai-codex; xai/xai-oauth; openrouter;
+/// opencode/opencode-go. Optional ids (kimi-coding, zai, amazon-bedrock bare)
+/// stay empty until verified + unit-tested.
+pub fn catalogForProvider(provider_id: []const u8) []const []const u8 {
+    if (provider_id.len == 0) return &.{};
+
+    if (std.mem.eql(u8, provider_id, "anthropic")) return &CATALOG_ANTHROPIC;
+    if (std.mem.eql(u8, provider_id, "openai") or std.mem.eql(u8, provider_id, "openai-codex"))
+        return &CATALOG_OPENAI;
+    if (std.mem.eql(u8, provider_id, "xai") or std.mem.eql(u8, provider_id, "xai-oauth"))
+        return &CATALOG_XAI;
+    if (std.mem.eql(u8, provider_id, "openrouter")) return &CATALOG_OPENROUTER;
+    if (std.mem.eql(u8, provider_id, "opencode") or std.mem.eql(u8, provider_id, "opencode-go"))
+        return &CATALOG_OPENCODE;
+
+    return &.{};
+}
+
+/// Alias for consumers that prefer the ownership contract name `hostsForProviderId`.
+/// Same semantics and lifetime as `catalogForProvider`.
+pub fn hostsForProviderId(provider_id: []const u8) []const []const u8 {
+    return catalogForProvider(provider_id);
 }
 
 /// Merge `existing ∪ corePack ∪ overlay` (null host_key → core only). See file header.
@@ -416,4 +480,129 @@ test "agent_inference SEC: core pack does not include cloud wildcards or paste s
     for ([_][]const u8{ "grok", "opencode", "pi", "claude" }) |key| {
         try std.testing.expect(!listContains(overlayForHost(key), "*.amazonaws.com"));
     }
+}
+
+// ---------------------------------------------------------------------------
+// Provider id catalog §5.3 (P3 / A-P3-4 / DIS-4) — pure mapping; unknown → empty
+//
+// Public seam (implementer): `catalogForProvider(provider_id) []const []const u8`
+// Borrowed, process-long host slices (do not free). Empty for unknown / skip.
+// ---------------------------------------------------------------------------
+
+test "agent_inference catalog A-P3-4 anthropic maps to api.anthropic.com" {
+    const hosts = catalogForProvider("anthropic");
+    try std.testing.expect(listContains(hosts, "api.anthropic.com"));
+    // Catalog is inference-floor hosts for this id only — no cross-provider pollution.
+    try std.testing.expect(!listContains(hosts, "api.openai.com"));
+    try std.testing.expect(!listContains(hosts, "openrouter.ai"));
+}
+
+test "agent_inference catalog A-P3-4 openai maps to api.openai.com" {
+    const hosts = catalogForProvider("openai");
+    try std.testing.expect(listContains(hosts, "api.openai.com"));
+    try std.testing.expect(!listContains(hosts, "api.anthropic.com"));
+    try std.testing.expect(!listContains(hosts, "models.opencode.ai"));
+}
+
+test "agent_inference catalog A-P3-4 openai-codex maps to api.openai.com" {
+    // Spec §5.3: openai and openai-codex share the OpenAI API host minimum.
+    const hosts = catalogForProvider("openai-codex");
+    try std.testing.expect(listContains(hosts, "api.openai.com"));
+    try std.testing.expect(!listContains(hosts, "api.x.ai"));
+}
+
+test "agent_inference catalog A-P3-4 xai maps to api.x.ai and auth.x.ai" {
+    // xAI inference + OAuth refresh hosts (pi/opencode auth keys use this id).
+    const hosts = catalogForProvider("xai");
+    try std.testing.expect(listContains(hosts, "api.x.ai"));
+    try std.testing.expect(listContains(hosts, "auth.x.ai"));
+    try std.testing.expect(!listContains(hosts, "openrouter.ai"));
+}
+
+test "agent_inference catalog A-P3-4 xai-oauth maps to api.x.ai and auth.x.ai" {
+    // pi auth.json key shape: xai-oauth with tokenEndpoint under auth.x.ai.
+    const hosts = catalogForProvider("xai-oauth");
+    try std.testing.expect(listContains(hosts, "api.x.ai"));
+    try std.testing.expect(listContains(hosts, "auth.x.ai"));
+    try std.testing.expect(!listContains(hosts, "cli-chat-proxy.grok.com"));
+}
+
+test "agent_inference catalog A-P3-4 openrouter maps to openrouter.ai" {
+    const hosts = catalogForProvider("openrouter");
+    try std.testing.expect(listContains(hosts, "openrouter.ai"));
+    try std.testing.expect(!listContains(hosts, "api.openai.com"));
+    try std.testing.expect(!listContains(hosts, "models.opencode.ai"));
+}
+
+test "agent_inference catalog A-P3-4 opencode maps to opencode.ai and models.opencode.ai" {
+    const hosts = catalogForProvider("opencode");
+    try std.testing.expect(listContains(hosts, "opencode.ai"));
+    try std.testing.expect(listContains(hosts, "models.opencode.ai"));
+    try std.testing.expect(!listContains(hosts, "openrouter.ai"));
+}
+
+test "agent_inference catalog A-P3-4 opencode-go maps to opencode.ai and models.opencode.ai" {
+    const hosts = catalogForProvider("opencode-go");
+    try std.testing.expect(listContains(hosts, "opencode.ai"));
+    try std.testing.expect(listContains(hosts, "models.opencode.ai"));
+    try std.testing.expect(!listContains(hosts, "api.anthropic.com"));
+}
+
+test "agent_inference catalog DIS-4 unknown provider id yields empty (no invented host)" {
+    // NG-P3-5 / DIS-4: never guess hosts for unknown ids.
+    const hosts = catalogForProvider("not-a-real-provider-id");
+    try std.testing.expectEqual(@as(usize, 0), hosts.len);
+
+    // Empty id is not a catalog entry.
+    try std.testing.expectEqual(@as(usize, 0), catalogForProvider("").len);
+
+    // Host-launch keys are not provider ids (do not invent overlay via catalog).
+    try std.testing.expectEqual(@as(usize, 0), catalogForProvider("pi").len);
+    try std.testing.expectEqual(@as(usize, 0), catalogForProvider("grok").len);
+    try std.testing.expectEqual(@as(usize, 0), catalogForProvider("claude").len);
+
+    // Unverified optional ids (spec: only after verified host + unit test) → skip.
+    try std.testing.expectEqual(@as(usize, 0), catalogForProvider("kimi-coding").len);
+    try std.testing.expectEqual(@as(usize, 0), catalogForProvider("zai").len);
+}
+
+test "agent_inference catalog SEC-6 no bare amazonaws wildcard in any minimum mapping" {
+    // SEC-6 / acceptance: catalog must not open cloud-wide wildcards.
+    const ids = [_][]const u8{
+        "anthropic",
+        "openai",
+        "openai-codex",
+        "xai",
+        "xai-oauth",
+        "openrouter",
+        "opencode",
+        "opencode-go",
+        "amazon-bedrock", // region-scoped only if ever cataloged; bare id must not invent *.amazonaws.com
+        "not-a-real-provider-id",
+        "",
+    };
+    for (ids) |id| {
+        const hosts = catalogForProvider(id);
+        try std.testing.expect(!listContains(hosts, "*.amazonaws.com"));
+        try std.testing.expect(!listContains(hosts, "pastebin.com"));
+        try std.testing.expect(!listContains(hosts, "example.com"));
+        // Never emit credential-like material via catalog (pure static table).
+        for (hosts) |h| {
+            try std.testing.expect(h.len > 0);
+            try std.testing.expect(std.mem.indexOf(u8, h, "://") == null);
+            try std.testing.expect(std.mem.indexOf(u8, h, "@") == null);
+        }
+    }
+}
+
+test "agent_inference catalog aliases share exact host sets for openai and xai families" {
+    // Both openai ids must include the same minimum host; both xai ids include OAuth + API.
+    try std.testing.expect(listContains(catalogForProvider("openai"), "api.openai.com"));
+    try std.testing.expect(listContains(catalogForProvider("openai-codex"), "api.openai.com"));
+    try std.testing.expect(listContains(catalogForProvider("xai"), "api.x.ai"));
+    try std.testing.expect(listContains(catalogForProvider("xai"), "auth.x.ai"));
+    try std.testing.expect(listContains(catalogForProvider("xai-oauth"), "api.x.ai"));
+    try std.testing.expect(listContains(catalogForProvider("xai-oauth"), "auth.x.ai"));
+    try std.testing.expect(listContains(catalogForProvider("opencode"), "opencode.ai"));
+    try std.testing.expect(listContains(catalogForProvider("opencode-go"), "models.opencode.ai"));
 }
