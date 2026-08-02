@@ -1,0 +1,460 @@
+//! Pure hostname extraction from adapter-approved URL / host fields (AINA P3 S1).
+//!
+//! Normative rules: planning/2026-08-02-aina-p3-discovery-plan.md §3.3;
+//! ownership contract: `extractHostname` (producer p3-extract → adapters/managed).
+//!
+//! SEC-3: never emit secrets, userinfo, tokens, or credential material.
+//! Intentionally does **not** call `network_eval.parseDestination` (that helper
+//! strip-accepts userinfo; discovery must reject credential-bearing authorities).
+//! Re-exported from `src/policy/mod.zig` for monopath / test-core discovery.
+
+const std = @import("std");
+
+/// Maximum adapter field length considered for host extract (fail-closed oversize).
+const max_field_len: usize = 8192;
+
+/// Extract a normalized inference hostname from an adapter-approved field
+/// (`baseUrl`, `tokenEndpoint`, discovery URLs, or bare host).
+///
+/// - Success: allocator-owned lowercase hostname (no scheme, userinfo, path,
+///   query, fragment, or port). Caller frees with `allocator.free`.
+/// - Reject (`null`): empty/whitespace, path-only, credential-bearing
+///   (userinfo), invalid UTF-8/NUL, bare wildcards not product-tested,
+///   non-loopback IP literals. Loopback (`localhost` / `127.0.0.1` / `::1`)
+///   accepted for local Ollama residual (spec §8).
+/// - Errors: allocator failures only (`error.OutOfMemory`).
+pub fn extractHostname(
+    allocator: std.mem.Allocator,
+    field: []const u8,
+) std.mem.Allocator.Error!?[]u8 {
+    if (field.len == 0 or field.len > max_field_len) return null;
+    if (!std.unicode.utf8ValidateSlice(field)) return null;
+    if (std.mem.indexOfScalar(u8, field, 0) != null) return null;
+
+    const trimmed = std.mem.trim(u8, field, " \t\r\n");
+    if (trimmed.len == 0) return null;
+
+    var rest = trimmed;
+    var had_scheme = false;
+    if (std.mem.indexOf(u8, rest, "://")) |scheme_end| {
+        if (scheme_end == 0) return null;
+        // Scheme must be alphanumeric / +.- (reject garbage like "://host")
+        const scheme = rest[0..scheme_end];
+        if (!isPlausibleScheme(scheme)) return null;
+        had_scheme = true;
+        rest = rest[scheme_end + 3 ..];
+    }
+
+    // Absolute path-only (e.g. "/oauth2/token") — no host authority.
+    if (rest.len > 0 and rest[0] == '/') return null;
+
+    const authority_end = std.mem.indexOfAny(u8, rest, "/?#") orelse rest.len;
+    const authority = rest[0..authority_end];
+    if (authority.len == 0) return null;
+
+    // SEC-3: credential-bearing authority must never emit a host.
+    // (Unlike network_eval.parseDestination, which strip-accepts userinfo.)
+    if (std.mem.indexOfScalar(u8, authority, '@') != null) return null;
+
+    const has_tail = authority_end < rest.len;
+
+    const host_raw = parseHostFromAuthority(authority) orelse return null;
+
+    // Strip trailing DNS dots (FQDN form).
+    var host = host_raw;
+    while (host.len > 0 and host[host.len - 1] == '.') {
+        host = host[0 .. host.len - 1];
+    }
+    host = std.mem.trim(u8, host, " \t\r\n");
+    if (host.len == 0 or host.len > 253) return null;
+
+    // Plan §3.3 #4: reject bare wildcards not already product-tested.
+    if (std.mem.indexOfScalar(u8, host, '*') != null) return null;
+
+    // Scheme-less `oauth2/token`-style path segments: not an unambiguous host.
+    // Prefer extract only when authority looks like a hostname (multi-label /
+    // loopback) when a path/query/fragment follows.
+    if (!had_scheme and has_tail) {
+        if (!isLoopbackHost(host) and std.mem.indexOfScalar(u8, host, '.') == null) {
+            return null;
+        }
+    }
+
+    if (!isAcceptableHost(host)) return null;
+
+    const owned = try allocator.alloc(u8, host.len);
+    for (host, 0..) |c, i| {
+        owned[i] = std.ascii.toLower(c);
+    }
+    return owned;
+}
+
+fn isPlausibleScheme(scheme: []const u8) bool {
+    if (scheme.len == 0) return false;
+    for (scheme) |c| {
+        if (!(std.ascii.isAlphanumeric(c) or c == '+' or c == '-' or c == '.')) return false;
+    }
+    return true;
+}
+
+/// Parse host from authority (no userinfo — caller already rejected `@`).
+/// Strips `:port` (default or non-default); port never appears in emit.
+fn parseHostFromAuthority(authority: []const u8) ?[]const u8 {
+    if (authority.len == 0) return null;
+
+    if (authority[0] == '[') {
+        // IPv6 literal in brackets: `[::1]` or `[::1]:11434`
+        const close = std.mem.indexOfScalar(u8, authority, ']') orelse return null;
+        if (close <= 1) return null;
+        const host = authority[1..close];
+        if (authority.len > close + 1) {
+            if (authority[close + 1] != ':') return null;
+            const port_str = authority[close + 2 ..];
+            if (port_str.len == 0) return null;
+            _ = std.fmt.parseInt(u16, port_str, 10) catch return null;
+        }
+        return host;
+    }
+
+    // Host:port — only when a single colon separates host from numeric port
+    // (avoids treating raw IPv6 as host:port).
+    if (std.mem.lastIndexOfScalar(u8, authority, ':')) |colon| {
+        if (std.mem.indexOfScalar(u8, authority[0..colon], ':') == null) {
+            const host = authority[0..colon];
+            const port_str = authority[colon + 1 ..];
+            if (host.len == 0 or port_str.len == 0) return null;
+            _ = std.fmt.parseInt(u16, port_str, 10) catch return null;
+            return host;
+        }
+    }
+
+    return authority;
+}
+
+fn isAcceptableHost(host: []const u8) bool {
+    if (parseIpv4(host)) |ip| {
+        return isLocalhostIp(ip);
+    }
+    if (isIpv6Literal(host)) {
+        return isIpv6Loopback(host);
+    }
+    return validDomain(host);
+}
+
+fn isLoopbackHost(host: []const u8) bool {
+    if (std.ascii.eqlIgnoreCase(host, "localhost")) return true;
+    if (std.ascii.endsWithIgnoreCase(host, ".localhost")) return true;
+    if (parseIpv4(host)) |ip| return isLocalhostIp(ip);
+    if (isIpv6Loopback(host)) return true;
+    return false;
+}
+
+fn validDomain(host: []const u8) bool {
+    if (host.len == 0) return false;
+    var labels = std.mem.splitScalar(u8, host, '.');
+    var saw_label = false;
+    while (labels.next()) |label| {
+        saw_label = true;
+        if (label.len == 0 or label.len > 63) return false;
+        if (label[0] == '-' or label[label.len - 1] == '-') return false;
+        for (label) |char| {
+            if (!(std.ascii.isAlphanumeric(char) or char == '-')) return false;
+        }
+    }
+    return saw_label;
+}
+
+fn parseIpv4(host: []const u8) ?[4]u8 {
+    var out: [4]u8 = undefined;
+    var parts = std.mem.splitScalar(u8, host, '.');
+    var index: usize = 0;
+    while (parts.next()) |part| {
+        if (index >= 4 or part.len == 0) return null;
+        // Reject leading zeros that would make "127.0.0.1" ok but not octal tricks
+        // beyond decimal octets 0-255 (parseInt already bounds).
+        out[index] = std.fmt.parseInt(u8, part, 10) catch return null;
+        index += 1;
+    }
+    if (index != 4) return null;
+    return out;
+}
+
+fn isLocalhostIp(ip: [4]u8) bool {
+    return ip[0] == 127;
+}
+
+fn isIpv6Literal(host: []const u8) bool {
+    // Minimal detect: contains ':' and only hex/colon/dot chars (incl. v4-mapped).
+    if (std.mem.indexOfScalar(u8, host, ':') == null) return false;
+    for (host) |c| {
+        const ok = std.ascii.isHex(c) or c == ':' or c == '.';
+        if (!ok) return false;
+    }
+    return true;
+}
+
+fn isIpv6Loopback(host: []const u8) bool {
+    // Accept common textual forms of ::1 (case-insensitive hex).
+    if (std.ascii.eqlIgnoreCase(host, "::1")) return true;
+    if (std.ascii.eqlIgnoreCase(host, "0:0:0:0:0:0:0:1")) return true;
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance 1 — absolute URL host extract (path ignored, default port stripped)
+// ---------------------------------------------------------------------------
+
+test "inference_hostname absolute https tokenEndpoint extracts auth.x.ai (path ignored)" {
+    // Real pi xai-oauth shape: tokenEndpoint → OAuth host only (A-P3 / DIS-3).
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "https://auth.x.ai/oauth2/token");
+    defer if (host) |h| allocator.free(h);
+
+    try std.testing.expect(host != null);
+    try std.testing.expectEqualStrings("auth.x.ai", host.?);
+}
+
+test "inference_hostname absolute https baseUrl extracts api.x.ai (path ignored)" {
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "https://api.x.ai/v1");
+    defer if (host) |h| allocator.free(h);
+
+    try std.testing.expect(host != null);
+    try std.testing.expectEqualStrings("api.x.ai", host.?);
+}
+
+test "inference_hostname default https port 443 stripped from host" {
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "https://auth.x.ai:443/oauth2/token");
+    defer if (host) |h| allocator.free(h);
+
+    try std.testing.expect(host != null);
+    try std.testing.expectEqualStrings("auth.x.ai", host.?);
+    // Port must not leak into allowlist host string.
+    try std.testing.expect(std.mem.indexOfScalar(u8, host.?, ':') == null);
+}
+
+test "inference_hostname default http port 80 stripped from host" {
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "http://models.opencode.ai:80/v1");
+    defer if (host) |h| allocator.free(h);
+
+    try std.testing.expect(host != null);
+    try std.testing.expectEqualStrings("models.opencode.ai", host.?);
+}
+
+test "inference_hostname non-default port still yields host only (path-agnostic)" {
+    // Allowlist is hostname-based; port is not part of the emitted host.
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "https://openrouter.ai:8443/api/v1/chat");
+    defer if (host) |h| allocator.free(h);
+
+    try std.testing.expect(host != null);
+    try std.testing.expectEqualStrings("openrouter.ai", host.?);
+    try std.testing.expect(std.mem.indexOfScalar(u8, host.?, ':') == null);
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance 2 — bare hostname normalize; empty / path-only reject
+// ---------------------------------------------------------------------------
+
+test "inference_hostname bare hostname lowercased" {
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "Auth.X.AI");
+    defer if (host) |h| allocator.free(h);
+
+    try std.testing.expect(host != null);
+    try std.testing.expectEqualStrings("auth.x.ai", host.?);
+}
+
+test "inference_hostname bare hostname strips trailing dot" {
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "api.openai.com.");
+    defer if (host) |h| allocator.free(h);
+
+    try std.testing.expect(host != null);
+    try std.testing.expectEqualStrings("api.openai.com", host.?);
+}
+
+test "inference_hostname empty field rejected" {
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "");
+    defer if (host) |h| allocator.free(h);
+    try std.testing.expect(host == null);
+}
+
+test "inference_hostname whitespace-only field rejected" {
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "   \t\n  ");
+    defer if (host) |h| allocator.free(h);
+    try std.testing.expect(host == null);
+}
+
+test "inference_hostname path-only absolute path rejected" {
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "/oauth2/token");
+    defer if (host) |h| allocator.free(h);
+    try std.testing.expect(host == null);
+}
+
+test "inference_hostname path-only relative segment rejected" {
+    // Not a bare hostname (contains '/'); not an absolute URL.
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "oauth2/token");
+    defer if (host) |h| allocator.free(h);
+    try std.testing.expect(host == null);
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance 3 — userinfo / secrets rejected; tokens never in extract output
+// ---------------------------------------------------------------------------
+
+test "inference_hostname userinfo password URL rejected" {
+    // Credential-bearing authority must not emit a host (SEC-3).
+    // Reject is required; if a wrong impl strip-accepts, still forbid secret leak.
+    const allocator = std.testing.allocator;
+    const field = "https://user:sk-fixture-token-xyz@auth.x.ai/oauth2/token";
+    const host = try extractHostname(allocator, field);
+    defer if (host) |h| allocator.free(h);
+
+    if (host) |h| {
+        try std.testing.expect(std.mem.indexOf(u8, h, "sk-fixture-token-xyz") == null);
+        try std.testing.expect(std.mem.indexOf(u8, h, "user:") == null);
+        try std.testing.expect(std.mem.indexOfScalar(u8, h, '@') == null);
+        try std.testing.expect(false); // acceptance: must be null, not strip-and-accept
+    }
+}
+
+test "inference_hostname userinfo username-only URL rejected" {
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "https://oauth-client@api.x.ai/v1");
+    defer if (host) |h| allocator.free(h);
+    try std.testing.expect(host == null);
+}
+
+test "inference_hostname query token never appears in extract output" {
+    // Path/query may carry synthetic secrets in fixtures; host emit is host only.
+    const allocator = std.testing.allocator;
+    const field = "https://api.x.ai/v1/chat?api_key=sk-fixture-query-token-abc123&ok=1";
+    const host = try extractHostname(allocator, field);
+    defer if (host) |h| allocator.free(h);
+
+    try std.testing.expect(host != null);
+    try std.testing.expectEqualStrings("api.x.ai", host.?);
+    try std.testing.expect(std.mem.indexOf(u8, host.?, "sk-fixture-query-token-abc123") == null);
+    try std.testing.expect(std.mem.indexOf(u8, host.?, "api_key") == null);
+    try std.testing.expect(std.mem.indexOfScalar(u8, host.?, '?') == null);
+    try std.testing.expect(std.mem.indexOfScalar(u8, host.?, '/') == null);
+}
+
+test "inference_hostname fragment and path never appear in extract output" {
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "https://openrouter.ai/api/v1#section");
+    defer if (host) |h| allocator.free(h);
+
+    try std.testing.expect(host != null);
+    try std.testing.expectEqualStrings("openrouter.ai", host.?);
+    try std.testing.expect(std.mem.indexOfScalar(u8, host.?, '#') == null);
+    try std.testing.expect(std.mem.indexOf(u8, host.?, "api") == null);
+}
+
+// ---------------------------------------------------------------------------
+// Branch paths — wildcards, IP literals, scheme trim, size/hostile input
+// ---------------------------------------------------------------------------
+
+test "inference_hostname bare wildcard pattern rejected" {
+    // Plan §3.3 #4: reject bare wildcards not already product-tested.
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "*.amazonaws.com");
+    defer if (host) |h| allocator.free(h);
+    try std.testing.expect(host == null);
+}
+
+test "inference_hostname non-loopback IPv4 literal rejected" {
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "https://8.8.8.8/v1");
+    defer if (host) |h| allocator.free(h);
+    try std.testing.expect(host == null);
+}
+
+test "inference_hostname bare non-loopback IPv4 rejected" {
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "203.0.113.10");
+    defer if (host) |h| allocator.free(h);
+    try std.testing.expect(host == null);
+}
+
+test "inference_hostname loopback residual accepts localhost bare host" {
+    // Spec §8: local Ollama may be discovered via explicit baseUrl; loopback residual.
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "localhost");
+    defer if (host) |h| allocator.free(h);
+
+    try std.testing.expect(host != null);
+    try std.testing.expectEqualStrings("localhost", host.?);
+}
+
+test "inference_hostname loopback residual accepts 127.0.0.1 URL host" {
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "http://127.0.0.1:11434/v1");
+    defer if (host) |h| allocator.free(h);
+
+    try std.testing.expect(host != null);
+    try std.testing.expectEqualStrings("127.0.0.1", host.?);
+}
+
+test "inference_hostname trims surrounding whitespace before parse" {
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "  https://api.anthropic.com/v1/messages  ");
+    defer if (host) |h| allocator.free(h);
+
+    try std.testing.expect(host != null);
+    try std.testing.expectEqualStrings("api.anthropic.com", host.?);
+}
+
+test "inference_hostname scheme-less host with path still extracts host" {
+    // Some config fields omit scheme but include a path suffix.
+    // If implementer rejects this shape, keep residual note — prefer host extract
+    // when authority is unambiguous (hostname + path, no userinfo).
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "api.x.ai/v1");
+    defer if (host) |h| allocator.free(h);
+
+    try std.testing.expect(host != null);
+    try std.testing.expectEqualStrings("api.x.ai", host.?);
+}
+
+test "inference_hostname owned result is independent of input buffer" {
+    // Prove caller-owned free contract: mutate input after extract; host unchanged.
+    const allocator = std.testing.allocator;
+    var field_buf = "https://models.opencode.ai/models".*;
+    const host = try extractHostname(allocator, field_buf[0..]);
+    defer if (host) |h| allocator.free(h);
+
+    try std.testing.expect(host != null);
+    try std.testing.expectEqualStrings("models.opencode.ai", host.?);
+
+    // Overwrite input; owned host must remain valid.
+    @memset(field_buf[0..], 'x');
+    try std.testing.expectEqualStrings("models.opencode.ai", host.?);
+}
+
+test "inference_hostname rejects empty authority after scheme" {
+    const allocator = std.testing.allocator;
+    const host = try extractHostname(allocator, "https:///oauth2/token");
+    defer if (host) |h| allocator.free(h);
+    try std.testing.expect(host == null);
+}
+
+test "inference_hostname rejects bare userinfo without host emission of secrets" {
+    // user:pass@host form without scheme — still credential-bearing.
+    const allocator = std.testing.allocator;
+    const field = "user:sk-fixture-bare-userinfo@auth.x.ai";
+    const host = try extractHostname(allocator, field);
+    defer if (host) |h| allocator.free(h);
+
+    if (host) |h| {
+        try std.testing.expect(std.mem.indexOf(u8, h, "sk-fixture-bare-userinfo") == null);
+        try std.testing.expect(false); // acceptance: must be null
+    }
+}
