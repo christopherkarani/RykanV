@@ -6,6 +6,7 @@
 /// - `spinner` — libvaxis-aware spinner.
 /// - `reasons` — human-readable policy reason + safe-alternative helpers.
 /// - `live_view` — optional alt-screen viewer (`history --live` / `replay --tui`).
+/// - `browse` — shared list/detail/footer/filter chassis (packs/allowlist/doctor).
 /// - `sandbox_card` — memorable session-start OS sandbox shield card.
 pub const theme = @import("theme.zig");
 pub const render = @import("render.zig");
@@ -15,6 +16,7 @@ pub const output_policy = @import("output_policy.zig");
 pub const terminal_text = @import("terminal_text.zig");
 pub const reasons = @import("reasons.zig");
 pub const live_view = @import("live_view.zig");
+pub const browse = @import("browse.zig");
 pub const sandbox_card = @import("sandbox_card.zig");
 
 test {
@@ -26,5 +28,6 @@ test {
     _ = terminal_text;
     _ = reasons;
     _ = live_view;
+    _ = browse;
     _ = sandbox_card;
 }
