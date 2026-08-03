@@ -15,7 +15,7 @@ Orca is **graded mediation**, not a universal OS sandbox. Public product languag
 
 **Default public launch posture (`orca <agent>`):** typically **`wrapper`**, plus optional OS filesystem session-attach through the run engine. Host **`hook`** applies only when hooks fire and honor veto. **`proxy`** applies only to traffic that traverses an Orca proxy. **`OS-enforced`** FS isolation requires a successful Landlock (Linux) or Seatbelt (macOS) attach for that child — not a doctor capability probe.
 
-**What can still bypass `wrapper` mediation:** absolute-path binaries outside the shim list, non-shimmed tools, agents started outside `orca <agent>` / advanced run / hooks, non-proxy HTTP clients, non-firing host hooks, and direct syscalls.
+**What can still bypass `wrapper` mediation:** absolute-path binaries outside the shim list (including `/bin/rm`), `command -p`, shell aliases/functions, nested absolute `node`/`python` exec, outer allowed `bash ./script` until a child hits a shimmed name, non-shimmed tools, agents started outside `orca <agent>` / advanced run / hooks, non-proxy HTTP clients, non-firing host hooks, and direct syscalls. High-risk bare PATH names (`rm`, `mv`, `cp`, `chmod`, `dd`) are shimmed when the session installs PATH shims; that does **not** close absolute-path residual without process-exec policy (product Q3).
 
 ### Vocabulary map
 

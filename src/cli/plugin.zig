@@ -670,7 +670,8 @@ fn writeDoctorPlain(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, r
             try stdout.print("  config references plugin: {s}\n", .{if (report.hermes_paths.config_references_plugin) "yes" else "unknown/no"});
             if (!report.hermes_paths.config_references_plugin) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install hermes\n");
             const hermes_fail_open = host_status.hermesFailOpenFromEnv();
-            try stdout.print("  fail stance: {s}\n", .{host_status.failStance("hermes", hermes_fail_open, if (report.hermes_paths.user_manifest_exists) "yes" else "no")});
+            const hermes_wired: []const u8 = if (hostPluginInstalledFromReport("hermes", report)) "yes" else if (report.host_binaries.hermes) "no" else "—";
+            try stdout.print("  fail stance: {s}\n", .{host_status.failStance("hermes", hermes_fail_open, hermes_wired)});
             if (hermes_fail_open) {
                 try stdout.writeAll("    → WARN: Hermes is fail-open when ryk is degraded (default product stance).\n");
                 try stdout.writeAll("    → Fix: export RYK_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes\n");

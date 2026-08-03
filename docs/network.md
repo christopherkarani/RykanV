@@ -2,6 +2,8 @@
 
 Orca includes a network decision engine and wrapper/proxy-mediated hooks.
 
+`file://` URLs are a filesystem/sandbox concern, not network policy. Treat them under FS grants and workspace mediation, not as network allowlist/exfil signals.
+
 ## Modes
 
 - `off`: deny network decisions.

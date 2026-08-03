@@ -4,7 +4,7 @@ Orca implements defense-in-depth credential protection across eight layers. This
 
 ## Overview
 
-When you run an AI agent through Orca, your environment variables, files, and network requests may contain sensitive credentials. Orca detects and protects these automatically—before they reach the agent process, before they are written to disk, and before they leave your machine.
+When you run an AI agent through Orca, your environment variables, files, and network requests may contain sensitive credentials. Orca detects and protects these automatically—before they reach the agent process, before they are written to disk, and (for non-allowlisted destinations) before they leave your machine. **Allowlisted HTTPS** still completes by default: exfiltration detection is annotate/audit by default and does not deny allowlisted hosts unless enforce is explicitly enabled.
 
 The protection layers are:
 
@@ -12,7 +12,7 @@ The protection layers are:
 2. [Environment Variable Filtering](#2-environment-variable-filtering) — Strips secrets before child process spawn
 3. [Credential Broker System](#3-credential-broker-system) — Secure resolution without exposing raw values
 4. [Policy Validation](#4-policy-validation) — Rejects unsafe credential configurations
-5. [Network Exfiltration Detection](#5-network-exfiltration-detection) — Blocks secrets in URLs
+5. [Network Exfiltration Detection](#5-network-exfiltration-detection) — Flags secret-like values in visible URL surfaces (annotate/audit by default; does not deny allowlisted hosts by default)
 6. [Command Classification](#6-command-classification) — Denies credential inspection commands
 7. [File System Guards](#7-file-system-guards) — Blocks access to credential files
 8. [Audit Trail Protection](#8-audit-trail-protection) — Redacts secrets before persistence
@@ -284,7 +284,14 @@ credentials:
 
 **File**: `src/intercept/network.zig`
 
-Orca scans network destinations for secret-like values in URLs and flags potential exfiltration.
+Orca scans **visible** network surfaces for secret-like values and flags potential exfiltration. Default policy is **annotate/audit only**: findings do not flip allowlisted destinations to deny. There is no body/query DLP on TLS without a MITM architecture (explicit non-goal).
+
+**What is visible:**
+
+| Path | Visible surface | Not visible |
+|------|-----------------|-------------|
+| HTTPS CONNECT | destination **host:port** only | path, query, headers, TLS body |
+| Cleartext HTTP absolute-form | path and query (when present on the wire to the proxy) | N/A for TLS payloads |
 
 ### Detected Patterns
 

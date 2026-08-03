@@ -1,6 +1,7 @@
 //! Shared pack enablement + summary helpers for the ryk CLI (P2a power baseline).
 //!
-//! Pack *definitions* stay in the Rust registry (daemon). This module:
+//! Pack *definitions* are served by the Zig shell_engine registry / packs CLI.
+//! This module:
 //! - maps policy presets → opt-in pack IDs
 //! - summarizes enabled packs for `ryk doctor`
 //! - re-exports config path + enable/disable mutation from `pack_config.zig`
@@ -142,7 +143,8 @@ pub fn unknownPacksSummary() PacksSummary {
 /// Format a one-line packs summary for status/doctor (caller owns returned slice).
 pub fn formatSummaryLine(allocator: std.mem.Allocator, summary: PacksSummary) ![]u8 {
     if (!summary.known) {
-        return try allocator.dupe(u8, "unknown (daemon unavailable; shell evaluation fails closed)");
+        // RT-12: packs inventory offline ≠ shell evaluate dead (Zig in-process shell_engine).
+        return try allocator.dupe(u8, "unknown (packs inventory offline; shell evaluate is Zig in-process)");
     }
     if (summary.opt_in_ids.len == 0) {
         return try allocator.dupe(u8, "baseline only — enable more with `ryk packs enable …`");
@@ -181,8 +183,8 @@ pub fn writeDoctorPacksSectionWithConfig(
 ) !void {
     try stdout.writeAll("\nPacks\n");
     if (!summary.known) {
-        try stdout.writeAll("  unknown (daemon unavailable; shell evaluation fails closed)\n");
-        try stdout.writeAll("  Next: ryk doctor · ryk packs  (retry once the daemon is healthy)\n");
+        try stdout.writeAll("  unknown (packs inventory offline; shell evaluate is Zig in-process)\n");
+        try stdout.writeAll("  Next: ryk packs --enabled  ·  ryk doctor  (retry packs inventory)\n");
         return;
     }
     try stdout.writeAll("  baseline: core.*, system.disk (always on)\n");
@@ -425,7 +427,9 @@ test "doctor packs section labels are stable" {
 
     writer = .fixed(&buf);
     try writeDoctorPacksSection(&writer, unknownPacksSummary());
-    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "unknown (daemon unavailable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "unknown (packs inventory offline") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "shell evaluate is Zig in-process") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "shell evaluation fails closed") == null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "ryk packs") != null);
 }
 

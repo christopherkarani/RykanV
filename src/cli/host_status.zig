@@ -131,6 +131,8 @@ pub fn shellGate(host: []const u8) []const u8 {
 /// Effective fail stance label for doctor tables.
 ///
 /// RT-06/H1: never claim `"fail-closed shell"` when the host hook is unwired.
+/// Process-wrap / PATH shims (if any) do not close absolute-path mediation; only a
+/// wired host hook that fires and honors veto can claim fail-closed shell.
 /// `wired` is doctor wired label: `"yes"` / `"partial"` / `"no"` / `"—"`.
 pub fn failStance(host: []const u8, hermes_fail_open: bool, wired: []const u8) []const u8 {
     if (std.mem.eql(u8, host, "hermes")) {
@@ -619,6 +621,10 @@ test "shellGate and failStance cover all P1 hosts" {
     try std.testing.expectEqualStrings("mode-dependent", failStance("pi", true, "no"));
     try std.testing.expectEqualStrings("fail-closed shell", failStance("codex", true, "yes"));
     try std.testing.expectEqualStrings("unwired (no fail-closed shell)", failStance("codex", true, "no"));
+    // RT-06: unwired host must not claim fail-closed shell
+    try std.testing.expectEqualStrings("unwired (no fail-closed shell)", failStance("opencode", true, "no"));
+    try std.testing.expectEqualStrings("unwired (no fail-closed shell)", failStance("claude", true, "—"));
+    try std.testing.expectEqualStrings("fail-closed shell", failStance("opencode", true, "partial"));
 }
 
 test "formatFix prefers smoke failure and hermes fail-open remediation" {
