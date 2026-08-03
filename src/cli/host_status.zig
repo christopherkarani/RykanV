@@ -129,11 +129,16 @@ pub fn shellGate(host: []const u8) []const u8 {
 }
 
 /// Effective fail stance label for doctor tables.
-pub fn failStance(host: []const u8, hermes_fail_open: bool) []const u8 {
+///
+/// RT-06/H1: never claim `"fail-closed shell"` when the host hook is unwired.
+/// `wired` is doctor wired label: `"yes"` / `"partial"` / `"no"` / `"—"`.
+pub fn failStance(host: []const u8, hermes_fail_open: bool, wired: []const u8) []const u8 {
     if (std.mem.eql(u8, host, "hermes")) {
         return if (hermes_fail_open) "fail-open (default)" else "fail-closed";
     }
     if (std.mem.eql(u8, host, "pi")) return "mode-dependent";
+    const hook_wired = std.mem.eql(u8, wired, "yes") or std.mem.eql(u8, wired, "partial");
+    if (!hook_wired) return "unwired (no fail-closed shell)";
     return "fail-closed shell";
 }
 
@@ -159,9 +164,9 @@ pub fn formatFix(
             return try allocator.dupe(u8, "./scripts/host-live-e2e.sh pi  # verify extension coverage");
         }
         if (std.mem.eql(u8, wired, "no")) {
-            return try allocator.dupe(u8, "ryk start  # install the bundled Pi extension");
+            return try allocator.dupe(u8, "ryk doctor --fix  # install the bundled Pi extension");
         }
-        return try allocator.dupe(u8, "install Pi, then run: ryk start");
+        return try allocator.dupe(u8, "install Pi, then run: ryk doctor --fix");
     }
     // Degraded first: deny works but allow failed → daemon/policy, not reinstall.
     if (smoke.isDegraded() or (smoke.deny == .pass and smoke.allow == .fail)) {
@@ -597,10 +602,11 @@ test "shellGate and failStance cover all P1 hosts" {
     try std.testing.expectEqualStrings("tool.before", shellGate("openclaw"));
     try std.testing.expectEqualStrings("pre_tool_call", shellGate("hermes"));
     try std.testing.expectEqualStrings("extension-managed (smoke not run)", shellGate("pi"));
-    try std.testing.expectEqualStrings("fail-open (default)", failStance("hermes", true));
-    try std.testing.expectEqualStrings("fail-closed", failStance("hermes", false));
-    try std.testing.expectEqualStrings("mode-dependent", failStance("pi", true));
-    try std.testing.expectEqualStrings("fail-closed shell", failStance("codex", true));
+    try std.testing.expectEqualStrings("fail-open (default)", failStance("hermes", true, "yes"));
+    try std.testing.expectEqualStrings("fail-closed", failStance("hermes", false, "yes"));
+    try std.testing.expectEqualStrings("mode-dependent", failStance("pi", true, "no"));
+    try std.testing.expectEqualStrings("fail-closed shell", failStance("codex", true, "yes"));
+    try std.testing.expectEqualStrings("unwired (no fail-closed shell)", failStance("codex", true, "no"));
 }
 
 test "formatFix prefers smoke failure and hermes fail-open remediation" {
@@ -615,7 +621,8 @@ test "formatFix prefers smoke failure and hermes fail-open remediation" {
 
     const pi_fix = try formatFix(allocator, "pi", "—", .{}, true);
     defer allocator.free(pi_fix);
-    try std.testing.expect(std.mem.indexOf(u8, pi_fix, "ryk start") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pi_fix, "doctor --fix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pi_fix, "ryk start") == null);
     try std.testing.expect(std.mem.indexOf(u8, pi_fix, "coverage") == null);
 }
 

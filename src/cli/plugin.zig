@@ -670,7 +670,7 @@ fn writeDoctorPlain(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, r
             try stdout.print("  config references plugin: {s}\n", .{if (report.hermes_paths.config_references_plugin) "yes" else "unknown/no"});
             if (!report.hermes_paths.config_references_plugin) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install hermes\n");
             const hermes_fail_open = host_status.hermesFailOpenFromEnv();
-            try stdout.print("  fail stance: {s}\n", .{host_status.failStance("hermes", hermes_fail_open)});
+            try stdout.print("  fail stance: {s}\n", .{host_status.failStance("hermes", hermes_fail_open, if (report.hermes_paths.user_manifest_exists) "yes" else "no")});
             if (hermes_fail_open) {
                 try stdout.writeAll("    → WARN: Hermes is fail-open when ryk is degraded (default product stance).\n");
                 try stdout.writeAll("    → Fix: export RYK_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes\n");
@@ -765,7 +765,7 @@ fn writeUnifiedHostStatusTable(
         cells[0] = host_name;
         cells[1] = wired;
         cells[2] = host_status.shellGate(host_name);
-        cells[3] = host_status.failStance(host_name, hermes_fail_open);
+        cells[3] = host_status.failStance(host_name, hermes_fail_open, wired);
         cells[4] = allow_s;
         cells[5] = deny_s;
         rows[i] = cells;
@@ -788,7 +788,7 @@ fn writeUnifiedHostStatusTable(
         cells[0] = "pi";
         cells[1] = wired;
         cells[2] = host_status.shellGate("pi");
-        cells[3] = host_status.failStance("pi", hermes_fail_open);
+        cells[3] = host_status.failStance("pi", hermes_fail_open, wired);
         cells[4] = allow_s;
         cells[5] = deny_s;
         rows[row_hosts.items.len] = cells;
