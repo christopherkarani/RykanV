@@ -72,7 +72,7 @@ Orca focuses on the actions that can ruin your day:
 ```text
 git push --force
 git reset --hard
-rm -rf
+rm -rf          # when mediated (PATH shim and/or host hook that fires + honors veto)
 sudo
 curl | sh
 terraform destroy
@@ -87,7 +87,7 @@ modifying protected config
 sending data to unknown hosts
 ```
 
-Orca can allow, deny, ask for approval, or log these actions depending on your policy.
+Orca can allow, deny, ask for approval, or log these actions depending on your policy. Mediation is **graded** (hook / wrapper / proxy / OS-enforced) — see [docs/compatibility.md](docs/compatibility.md). Absolute paths (for example `/bin/rm`) can skip PATH shims unless a host hook or OS sandbox also covers them.
 
 ---
 
@@ -123,7 +123,7 @@ You find out after the damage is done.
 
 The agent tries the same action.
 
-Orca intercepts it first.
+When the command is **mediated** (PATH shim and/or a host hook that fires and honors veto), Orca intercepts it first. See protection grades in [docs/compatibility.md](docs/compatibility.md).
 
 ```text
 Action blocked
@@ -138,8 +138,10 @@ Policy:
 deny destructive file deletion
 
 Result:
-Command was not executed.
+Command was not executed (mediated path).
 ```
+
+Bare `PATH` names such as `rm` hit session shims when installed; absolute `/bin/rm`, `command -p`, aliases, and nested absolute exec may still bypass wrapper mediation.
 
 For actions that might be valid but risky, Orca asks in plain language:
 

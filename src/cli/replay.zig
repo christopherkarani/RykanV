@@ -150,14 +150,22 @@ fn writeReplayHuman(
         defer deny_body.deinit(allocator);
         try deny_body.print(allocator, "{d} action(s) blocked:", .{denied_count});
         var listed: usize = 0;
+        var first_target: ?[]const u8 = null;
         for (session.events) |event| {
             if (!isDeniedEvent(event)) continue;
+            if (first_target == null) first_target = event.target_value;
             if (listed == 0) {
                 try deny_body.print(allocator, " {s}", .{event.target_value});
-            } else {
+            } else if (listed < 4) {
                 try deny_body.print(allocator, " · {s}", .{event.target_value});
+            } else if (listed == 4) {
+                try deny_body.print(allocator, " · …", .{});
             }
             listed += 1;
+        }
+        // Progressive what-now pointer (same pack tools as run deny block).
+        if (first_target) |target| {
+            try deny_body.print(allocator, "\nUnderstand: ryk explain \"{s}\"", .{target});
         }
         try tui.render.callout(io, stdout, .danger, "Denied actions", deny_body.items);
         try stdout.writeByte('\n');

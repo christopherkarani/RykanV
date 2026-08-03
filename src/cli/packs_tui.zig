@@ -3,31 +3,33 @@
 //! # Product (W1 / U04)
 //!
 //! On colour TTY when `shouldEnterTui` is true, bare `ryk packs` opens the shared
-//! browse kit: **enabled + baseline first**, `/` search, `a` toggle-all, `e`/`d`
-//! enable/disable with **confirm default No**. Status line shows the write target
-//! (project `.orca.toml` vs user config). Mutations use the same `pack_config`
-//! paths as argv enable/disable.
+//! browse kit: **full catalog first** (`a` narrows to enabled-only), `/` search.
+//! **Enter** (or `e`/`d`) toggles enable/disable **immediately** — no line-mode
+//! confirm (that froze under raw alt-screen). Status shows write target.
+//! In enabled-only mode, a just-disabled pack stays visible (sticky) so rows do
+//! not vanish under the cursor. Mutations use the same `pack_config` paths as
+//! argv enable/disable. Baseline disable needs a second Enter/`d` (in-loop) or
+//! `ORCA_OPERATOR=1`.
 //!
 //! # Test floor
 //!
-//! Pure filter builders, entry-gate decisions, and confirm-cancel fixtures live
-//! here. The raw TTY `runBrowse` loop is comptime-gated under `builtin.is_test`
-//! (same pattern as `tui.live_view.run`) so unit tests never need a real Tty.
+//! Pure filter builders and entry-gate decisions live here. The raw TTY
+//! `runBrowse` loop is comptime-gated under `builtin.is_test` (same pattern as
+//! `tui.live_view.run`) so unit tests never need a real Tty.
 const std = @import("std");
 const builtin = @import("builtin");
 const tui = @import("../tui/mod.zig");
 const pack_config = @import("pack_config.zig");
 const onboarding = @import("onboarding.zig");
-const danger_confirmation = @import("danger_confirmation.zig");
 const exit_codes = @import("exit_codes.zig");
 const vaxis = @import("vaxis");
 
 // ── Public pure types ───────────────────────────────────────────────────────
 
-/// First-screen filter: only currently-enabled packs (baseline + opt-in on).
-/// Toggle with domain key `a` to show the full catalog.
+/// List filter mode. Default open is **full catalog** (`all`); domain key `a`
+/// toggles to enabled-only and back.
 pub const ViewMode = enum {
-    /// Enabled packs only (includes baseline packs that are active).
+    /// Enabled packs only (plus session-sticky just-disabled rows).
     enabled_baseline,
     /// Full catalog (still respects search query when set).
     all,
@@ -80,8 +82,8 @@ pub fn domainActionFromCodepoint(codepoint: u21) DomainAction {
 /// Footer domain fragment for the shared browse kit.
 pub fn footerActions(mode: ViewMode) []const u8 {
     return switch (mode) {
-        .enabled_baseline => "e enable · d disable · a show all",
-        .all => "e enable · d disable · a enabled only",
+        .enabled_baseline => "enter toggle · e/d · a show all",
+        .all => "enter toggle · e/d · a enabled only",
     };
 }
 
@@ -119,11 +121,21 @@ fn pathTail(path: []const u8, max: usize) []const u8 {
 }
 
 /// Whether a pack row is included under the current view mode + optional query.
-/// Default mode keeps **enabled** packs (baseline that are on + opt-in enabled).
+/// `sticky_disabled`: when true, keep a disabled pack visible under
+/// `enabled_baseline` (session sticky after an in-view disable).
 pub fn packMatchesFilter(pack: PackRef, mode: ViewMode, query: []const u8) bool {
+    return packMatchesFilterSticky(pack, mode, query, false);
+}
+
+pub fn packMatchesFilterSticky(
+    pack: PackRef,
+    mode: ViewMode,
+    query: []const u8,
+    sticky_disabled: bool,
+) bool {
     switch (mode) {
         .enabled_baseline => {
-            if (!pack.enabled) return false;
+            if (!pack.enabled and !sticky_disabled) return false;
         },
         .all => {},
     }
@@ -142,9 +154,22 @@ pub fn filterPackIndices(
     query: []const u8,
     out_indices: []usize,
 ) usize {
+    return filterPackIndicesSticky(packs, mode, query, null, out_indices);
+}
+
+/// Like `filterPackIndices`, but `sticky[i]` keeps pack `i` visible when disabled
+/// under `enabled_baseline` (must be null or length ≥ packs.len).
+pub fn filterPackIndicesSticky(
+    packs: []const PackRef,
+    mode: ViewMode,
+    query: []const u8,
+    sticky: ?[]const bool,
+    out_indices: []usize,
+) usize {
     var n: usize = 0;
     for (packs, 0..) |pack, i| {
-        if (!packMatchesFilter(pack, mode, query)) continue;
+        const keep = if (sticky) |s| (i < s.len and s[i]) else false;
+        if (!packMatchesFilterSticky(pack, mode, query, keep)) continue;
         if (n >= out_indices.len) break;
         out_indices[n] = i;
         n += 1;
@@ -182,23 +207,16 @@ pub fn formatDetailLines(
     const l3 = if (write_status.len > 0)
         std.fmt.bufPrint(line3, "{s}", .{write_status}) catch write_status
     else
-        std.fmt.bufPrint(line3, "e enable · d disable", .{}) catch "";
+        std.fmt.bufPrint(line3, "enter toggle · e enable · d disable", .{}) catch "";
     return .{ l0, l1, l2, l3 };
 }
 
-/// Confirm default No: empty / non-yes answer means cancel (no config write).
-/// Mirrors `tui.prompt.confirm` normal kind: only `y`/`yes` proceeds.
-pub fn mutationProceedsFromAnswer(answer: []const u8) bool {
-    const trimmed = std.mem.trim(u8, answer, " \t\r\n");
-    return std.ascii.eqlIgnoreCase(trimmed, "y") or std.ascii.eqlIgnoreCase(trimmed, "yes");
-}
-
-/// Build a short confirm prompt for enable/disable (no secrets).
-pub fn confirmPrompt(kind: MutateKind, pack_id: []const u8, buf: []u8) []const u8 {
-    return switch (kind) {
-        .enable => std.fmt.bufPrint(buf, "Enable pack '{s}'?", .{pack_id}) catch "Enable pack?",
-        .disable => std.fmt.bufPrint(buf, "Disable pack '{s}'?", .{pack_id}) catch "Disable pack?",
-    };
+/// Whether a baseline disable needs a second press (in-loop soft confirm).
+/// Returns true when this press should proceed with the write.
+pub fn baselineDisableArmed(pending_id: ?[]const u8, pack_id: []const u8) bool {
+    if (pack_config.isOperatorBreakGlass()) return true;
+    if (pending_id) |p| return std.mem.eql(u8, p, pack_id);
+    return false;
 }
 
 fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
@@ -229,8 +247,8 @@ pub const BrowseInput = struct {
     write_path: []const u8,
     /// Optional initial search term (from `--filter`).
     initial_query: ?[]const u8 = null,
-    /// Start in all-mode when CLI `--filter` needs to find disabled packs.
-    start_all: bool = false,
+    /// Start in full-catalog mode (default true). False = enabled-only first.
+    start_all: bool = true,
 };
 
 /// Run the packs browse loop. Caller must have already gated with
@@ -301,6 +319,7 @@ fn runBrowseLoop(
         break :blk 6;
     };
 
+    // C: full catalog first so Enter disable never empties the initial list.
     var mode: ViewMode = if (input.start_all) .all else .enabled_baseline;
     var nav: tui.browse.NavState = .{};
     var filter_model: tui.browse.FilterModel = .{};
@@ -311,7 +330,7 @@ fn runBrowseLoop(
         @memcpy(query_buf[0..copy_len], q[0..copy_len]);
         query_len = copy_len;
         filter_model.len = copy_len;
-        // Start with applied query (not live-typing mode).
+        // Search always runs against full catalog (disabled packs remain findable).
         mode = .all;
     }
 
@@ -321,6 +340,13 @@ fn runBrowseLoop(
     var status_msg: []const u8 = "";
     var status_owned: ?[]u8 = null;
     defer if (status_owned) |s| allocator.free(s);
+
+    // Soft arm for baseline disable (second Enter/d). Never use line-mode confirm
+    // while raw Tty is active — that freezes the alt-screen loop.
+    var pending_baseline_disable: ?[]const u8 = null;
+
+    // A: parallel sticky flags — just-disabled packs stay visible in enabled-only.
+    var sticky: [256]bool = .{false} ** 256;
 
     const write_status = writeTargetStatus(input.write_scope, input.write_path);
 
@@ -339,7 +365,13 @@ fn runBrowseLoop(
         }
 
         const q = query_buf[0..query_len];
-        const filtered_n = filterPackIndices(pack_views[0..pack_count], mode, q, indices_buf[0..]);
+        const filtered_n = filterPackIndicesSticky(
+            pack_views[0..pack_count],
+            mode,
+            q,
+            sticky[0..pack_count],
+            indices_buf[0..],
+        );
         nav.selected = tui.browse.clampSelected(nav.selected, filtered_n);
         nav.list_scroll = tui.browse.scrollToShow(nav.selected, nav.list_scroll, list_rows, filtered_n);
 
@@ -379,6 +411,7 @@ fn runBrowseLoop(
             .footer_actions = footerActions(mode),
             .status_msg = status_msg,
             .filter_query = filter_q,
+            .selected_token = .success,
         }, "\r\n");
         try flush(stdout);
 
@@ -413,18 +446,30 @@ fn runBrowseLoop(
         const action = tui.browse.keyToAction(key);
         switch (action) {
             .quit => break,
-            .up, .down, .top, .bottom => nav.apply(action, filtered_n, list_rows),
+            .up, .down, .top, .bottom => {
+                pending_baseline_disable = null;
+                nav.apply(action, filtered_n, list_rows);
+            },
             .start_filter => {
+                pending_baseline_disable = null;
                 filter_model.start();
                 query_len = 0;
             },
             .enter => {
-                // Enter is detail-only (detail always visible); no-op activate.
+                // Enter = instant toggle (enable ↔ disable). No line confirm.
+                if (filtered_n == 0) continue;
+                const pi = indices_buf[nav.selected];
+                const pack = pack_views[pi];
+                const kind: MutateKind = if (pack.enabled) .disable else .enable;
+                try applyMutate(io, allocator, pack, pi, kind, input, &pending_baseline_disable, sticky[0..pack_count], &status_owned, &status_msg);
             },
             .other => {
                 const domain = domainActionFromCodepoint(key.codepoint);
                 switch (domain) {
                     .toggle_all => {
+                        pending_baseline_disable = null;
+                        // Sticky is session-only for the current enabled-only view.
+                        @memset(sticky[0..pack_count], false);
                         mode = switch (mode) {
                             .enabled_baseline => .all,
                             .all => .enabled_baseline,
@@ -433,7 +478,7 @@ fn runBrowseLoop(
                         nav.list_scroll = 0;
                         setStatus(allocator, &status_owned, &status_msg, switch (mode) {
                             .all => "showing all packs",
-                            .enabled_baseline => "showing enabled + baseline",
+                            .enabled_baseline => "showing enabled only",
                         });
                     },
                     .enable, .disable => {
@@ -449,8 +494,7 @@ fn runBrowseLoop(
                             setStatus(allocator, &status_owned, &status_msg, "already disabled");
                             continue;
                         }
-                        try handleMutate(io, allocator, stdout, pack, kind, input, &status_owned, &status_msg);
-                        // Refresh enabled flags from input.enabled after mutate.
+                        try applyMutate(io, allocator, pack, pi, kind, input, &pending_baseline_disable, sticky[0..pack_count], &status_owned, &status_msg);
                     },
                     .none => {},
                 }
@@ -460,47 +504,30 @@ fn runBrowseLoop(
     return exit_codes.success;
 }
 
-fn handleMutate(
+/// Apply enable/disable without leaving raw mode (no stdin line prompts).
+/// On successful disable, marks `sticky[pack_index]` so enabled-only view keeps the row.
+fn applyMutate(
     io: std.Io,
     allocator: std.mem.Allocator,
-    stdout: anytype,
     pack: PackRef,
+    pack_index: usize,
     kind: MutateKind,
     input: BrowseInput,
+    pending_baseline: *?[]const u8,
+    sticky: []bool,
     status_owned: *?[]u8,
     status_msg: *[]const u8,
 ) !void {
-    // Baseline disable requires operator break-glass or interactive danger confirm.
+    // Baseline disable: second press or ORCA_OPERATOR — never line-mode confirm.
     if (kind == .disable and pack_config.isBaselinePackId(pack.id)) {
-        if (!pack_config.isOperatorBreakGlass()) {
-            const decision = danger_confirmation.decide(
-                io,
-                stdout,
-                "Disable baseline safety pack? This weakens default shell protection.",
-                false,
-                true,
-                null,
-            ) catch {
-                setStatus(allocator, status_owned, status_msg, "cancelled");
-                return;
-            };
-            switch (decision) {
-                .proceed => {},
-                .cancelled, .requires_yes => {
-                    setStatus(allocator, status_owned, status_msg, "cancelled — no change");
-                    return;
-                },
-            }
-        }
-    } else {
-        // Confirm default No via normal [y/N].
-        var prompt_buf: [128]u8 = undefined;
-        const prompt = confirmPrompt(kind, pack.id, &prompt_buf);
-        const ok = tui.prompt.confirm(io, stdout, .normal, prompt, null) catch false;
-        if (!ok) {
-            setStatus(allocator, status_owned, status_msg, "cancelled — no change");
+        if (!baselineDisableArmed(pending_baseline.*, pack.id)) {
+            pending_baseline.* = pack.id;
+            setStatus(allocator, status_owned, status_msg, "baseline: press Enter/d again to disable");
             return;
         }
+        pending_baseline.* = null;
+    } else {
+        pending_baseline.* = null;
     }
 
     const workspace_root = onboarding.resolveWorkspaceRoot(io, allocator) catch {
@@ -519,7 +546,7 @@ fn handleMutate(
     };
     defer result.deinit(allocator);
 
-    // Update parallel enabled flags for live list refresh.
+    // Update parallel enabled flags for live list refresh (● / ○).
     for (input.packs, 0..) |p, i| {
         if (std.mem.eql(u8, p.id, pack.id)) {
             input.enabled[i] = (kind == .enable);
@@ -527,9 +554,14 @@ fn handleMutate(
         }
     }
 
+    // A: sticky row — disable keeps the pack in enabled-only until re-enable or mode flip.
+    if (pack_index < sticky.len) {
+        sticky[pack_index] = (kind == .disable);
+    }
+
     setStatus(allocator, status_owned, status_msg, switch (kind) {
-        .enable => "enabled",
-        .disable => "disabled",
+        .enable => "enabled ●",
+        .disable => "disabled ○",
     });
 }
 
@@ -643,7 +675,7 @@ test "packs browse: wouldEnterPacksBrowse gates on TTY and argv escapes" {
     try std.testing.expect(wouldEnterPacksBrowse(true, true, &.{ "--filter", "git" }, false));
 }
 
-test "packs browse: default enabled.baseline filter excludes disabled opt-in" {
+test "packs browse: enabled-only filter excludes disabled opt-in" {
     const packs = [_]PackRef{
         .{ .id = "core.git", .name = "Git", .category = "core", .description = "git", .enabled = true },
         .{ .id = "containers.docker", .name = "Docker", .category = "containers", .description = "docker", .enabled = false },
@@ -661,6 +693,44 @@ test "packs browse: default enabled.baseline filter excludes disabled opt-in" {
     for (idx[0..n]) |i| {
         try std.testing.expect(!std.mem.eql(u8, packs[i].id, "containers.docker"));
     }
+}
+
+test "packs browse: sticky keeps just-disabled pack in enabled-only view" {
+    var packs = [_]PackRef{
+        .{ .id = "core.git", .name = "Git", .category = "core", .description = "git", .enabled = true },
+        .{ .id = "containers.docker", .name = "Docker", .category = "containers", .description = "docker", .enabled = false },
+        .{ .id = "system.disk", .name = "Disk", .category = "system", .description = "disk", .enabled = true },
+    };
+    // Simulate: user disabled system.disk — flag off but sticky[2] true.
+    packs[2].enabled = false;
+    var sticky = [_]bool{ false, false, true };
+    var idx: [8]usize = undefined;
+
+    const without = filterPackIndices(&packs, .enabled_baseline, "", &idx);
+    try std.testing.expectEqual(@as(usize, 1), without);
+    try std.testing.expectEqualStrings("core.git", packs[idx[0]].id);
+
+    const with_sticky = filterPackIndicesSticky(&packs, .enabled_baseline, "", &sticky, &idx);
+    try std.testing.expectEqual(@as(usize, 2), with_sticky);
+    try std.testing.expectEqualStrings("core.git", packs[idx[0]].id);
+    try std.testing.expectEqualStrings("system.disk", packs[idx[1]].id);
+
+    // Full catalog still shows everything; sticky is a no-op there.
+    const all_n = filterPackIndicesSticky(&packs, .all, "", &sticky, &idx);
+    try std.testing.expectEqual(@as(usize, 3), all_n);
+}
+
+test "packs browse: default open is full catalog (start_all true)" {
+    // C: BrowseInput defaults start_all=true so bare packs opens .all.
+    const input: BrowseInput = .{
+        .packs = &.{},
+        .enabled = &.{},
+        .write_scope = .user,
+        .write_path = "user",
+    };
+    try std.testing.expect(input.start_all);
+    try std.testing.expect(std.mem.indexOf(u8, browseTitle(.all), "all") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footerActions(.all), "enabled only") != null);
 }
 
 test "packs browse: toggle all includes disabled; search narrows" {
@@ -723,35 +793,31 @@ test "packs browse: domain keys e/d/a; footer and title" {
     try std.testing.expectEqual(DomainAction.none, domainActionFromCodepoint('o'));
 
     try std.testing.expect(std.mem.indexOf(u8, footerActions(.enabled_baseline), "show all") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footerActions(.enabled_baseline), "enter toggle") != null);
     try std.testing.expect(std.mem.indexOf(u8, footerActions(.all), "enabled only") != null);
     try std.testing.expect(std.mem.indexOf(u8, browseTitle(.enabled_baseline), "enabled") != null);
+    try std.testing.expect(std.mem.indexOf(u8, browseTitle(.all), "all") != null);
 }
 
-test "packs browse: confirm default No — empty/n cancel; y/yes proceed" {
-    try std.testing.expect(!mutationProceedsFromAnswer(""));
-    try std.testing.expect(!mutationProceedsFromAnswer("n"));
-    try std.testing.expect(!mutationProceedsFromAnswer("no"));
-    try std.testing.expect(!mutationProceedsFromAnswer("  "));
-    try std.testing.expect(mutationProceedsFromAnswer("y"));
-    try std.testing.expect(mutationProceedsFromAnswer("Y"));
-    try std.testing.expect(mutationProceedsFromAnswer("yes"));
-    try std.testing.expect(mutationProceedsFromAnswer("YES"));
+test "packs browse: baseline disable needs second press unless operator" {
+    // First press: not armed → no write.
+    try std.testing.expect(!baselineDisableArmed(null, "core.git"));
+    // Second press on same id: armed.
+    try std.testing.expect(baselineDisableArmed("core.git", "core.git"));
+    // Different id: not armed.
+    try std.testing.expect(!baselineDisableArmed("core.git", "core.shell"));
 }
 
-test "packs browse: confirm cancel leaves config unchanged (fixture)" {
-    // Fixture: a mutable "config" and a pure gate. Cancel must not write.
-    var config_enabled: bool = false;
-    const answer_cancel = "";
-    if (mutationProceedsFromAnswer(answer_cancel)) {
-        config_enabled = true; // would write
-    }
-    try std.testing.expect(!config_enabled);
-
-    const answer_yes = "yes";
-    if (mutationProceedsFromAnswer(answer_yes)) {
-        config_enabled = true;
-    }
-    try std.testing.expect(config_enabled);
+test "packs browse: enable flips live flag without line confirm (fixture)" {
+    // Instant toggle model: apply flag flip is the UX; no y/N gate.
+    var enabled: bool = false;
+    const kind: MutateKind = if (enabled) .disable else .enable;
+    enabled = (kind == .enable);
+    try std.testing.expect(enabled);
+    // Toggle again.
+    const kind2: MutateKind = if (enabled) .disable else .enable;
+    enabled = (kind2 == .enable);
+    try std.testing.expect(!enabled);
 }
 
 test "packs browse: row label and detail include id and write target" {
@@ -786,19 +852,19 @@ test "packs browse: renderFrame via kit shows domain footer (no alt-screen)" {
     const items = [_][]const u8{ "● core.git  [on] baseline", "○ containers.docker  [off]" };
     const detail = [_][]const u8{ "core.git", "writes → .orca.toml (project)" };
     const n = try tui.browse.renderFrame(std.testing.io, &w, .{
-        .title = browseTitle(.enabled_baseline),
+        .title = browseTitle(.all),
         .items = &items,
         .selected = 0,
         .list_rows = 8,
         .detail_lines = &detail,
-        .footer_actions = footerActions(.enabled_baseline),
+        .footer_actions = footerActions(.all),
         .status_msg = "",
     });
     try std.testing.expect(n > 0);
     const out = w.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "core.git") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "e enable") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "show all") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "enter toggle") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "enabled only") != null);
     // Pure frame never emits alt-screen.
     try std.testing.expect(std.mem.indexOf(u8, out, vaxis.ctlseqs.smcup) == null);
     try std.testing.expect(std.mem.indexOf(u8, out, vaxis.ctlseqs.rmcup) == null);

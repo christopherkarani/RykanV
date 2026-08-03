@@ -64,7 +64,7 @@ fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const [
                 .ci_may_proceed = false,
             };
             // Deny still wins when in-sandbox audit cannot open (control write-deny).
-            var untrusted_audit = openShimAuditBestEffort(io, allocator, workspace_root, session_id, stderr) catch return exit_codes.general;
+            var untrusted_audit = openShimAuditBestEffort(io, allocator, workspace_root, session_id, stderr, env_map) catch return exit_codes.general;
             if (untrusted_audit) |*writer| {
                 defer writer.deinit();
                 try appendCommandEvent(io, writer, session_id, .command_attempt, display, null);
@@ -116,7 +116,7 @@ fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const [
             };
         } else {
             // Deny path: still deny when audit open fails under control write-deny.
-            var deny_audit = openShimAuditBestEffort(io, allocator, workspace_root, session_id, stderr) catch return exit_codes.general;
+            var deny_audit = openShimAuditBestEffort(io, allocator, workspace_root, session_id, stderr, env_map) catch return exit_codes.general;
             if (deny_audit) |*writer| {
                 defer writer.deinit();
                 try appendCommandEvent(io, writer, session_id, .command_attempt, display, null);
@@ -147,7 +147,7 @@ fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const [
     defer allocator.free(real_binary);
 
     // Allow path: still resolve + spawn when audit cannot open under control write-deny.
-    var allow_audit = openShimAuditBestEffort(io, allocator, workspace_root, session_id, stderr) catch return exit_codes.general;
+    var allow_audit = openShimAuditBestEffort(io, allocator, workspace_root, session_id, stderr, env_map) catch return exit_codes.general;
     if (allow_audit) |*writer| {
         defer writer.deinit();
         try appendCommandEvent(io, writer, session_id, .command_attempt, display, null);
@@ -189,18 +189,34 @@ fn isControlWriteDenyAuditError(err: anyerror) bool {
     return err == error.PermissionDenied or err == error.AccessDenied;
 }
 
+/// Parent sets this when OS attach is planned (control write-deny residual known).
+/// Shims skip opening `.orca/.../events.jsonl` and stay silent — parent owns the
+/// single `audit=degraded` banner (E0 / RT-05). Values: `degraded` | `skip`.
+pub const shim_audit_mode_env = "ORCA_SHIM_AUDIT_MODE";
+
+fn shimAuditModeIsDegraded(env_map: *const std.process.Environ.Map) bool {
+    const raw = env_map.get(shim_audit_mode_env) orelse return false;
+    return std.ascii.eqlIgnoreCase(raw, "degraded") or std.ascii.eqlIgnoreCase(raw, "skip");
+}
+
 /// Best-effort session audit open for in-sandbox shims.
-/// - On control write-deny residuals: warn once-style on stderr and return null
-///   (allow path continues; deny path still returns denial).
+/// - When parent set `ORCA_SHIM_AUDIT_MODE=degraded|skip`: skip open, no stderr
+///   (≤1 degraded line is the parent banner/receipt; never N× per shimmed cmd).
+/// - On control write-deny residuals without parent flag: warn on stderr and
+///   return null (allow continues; deny still denies). Residual spam path when
+///   parent did not mark attach.
 /// - On other open failures: message printed; returns `error.ShimAuditOpenFailed`
 ///   so callers map to general exit (not silent swallow of OOM/corruption).
+/// Do **not** “fix” by making `.orca` agent-writable.
 fn openShimAuditBestEffort(
     io: std.Io,
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
     session_id: []const u8,
     stderr: anytype,
+    env_map: *const std.process.Environ.Map,
 ) error{ShimAuditOpenFailed}!?core_api.AuditWriter {
+    if (shimAuditModeIsDegraded(env_map)) return null;
     return core_api.openAuditWriter(io, allocator, workspace_root, session_id) catch |open_err| {
         if (isControlWriteDenyAuditError(open_err)) {
             stderr.print(
@@ -654,6 +670,55 @@ test "shim allow continues when audit open is control write-deny" {
     try std.testing.expectEqual(exit_codes.success, code);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "control write-deny") != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "failed to open audit log") == null);
+}
+
+test "shim allow is silent when parent set ORCA_SHIM_AUDIT_MODE=degraded" {
+    // E0: parent marks known-dead in-shim audit → no per-command stderr spam.
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var fx = try prepareShimExecFixture(.{
+        .mode = "observe",
+        .real_bin = "true",
+        .shim_bin = "true",
+    });
+    defer fx.deinit();
+    try makeSessionAuditNotWritable(fx.root, fx.session_id);
+    try fx.env_map.put(shim_audit_mode_env, "degraded");
+
+    var stderr_buf: [2048]u8 = undefined;
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try execWithEnv(std.testing.io, std.testing.allocator, &.{"true"}, &fx.env_map, &stderr_writer, shell_eval.mockDaemonAllowEvaluator);
+    try std.testing.expectEqual(exit_codes.success, code);
+    try std.testing.expectEqualStrings("", stderr_writer.buffered());
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "control write-deny") == null);
+}
+
+test "shim deny still denies when ORCA_SHIM_AUDIT_MODE=degraded" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var fx = try prepareShimExecFixture(.{
+        .mode = "strict",
+        .real_bin = "rm",
+        .real_script_body = "exit 42\n",
+        .policy_path = "builtin:strict",
+        .record_builtin_policy = true,
+    });
+    defer fx.deinit();
+    try makeSessionAuditNotWritable(fx.root, fx.session_id);
+    try fx.env_map.put(shim_audit_mode_env, "degraded");
+
+    var stderr_buf: [2048]u8 = undefined;
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try execWithEnv(
+        std.testing.io,
+        std.testing.allocator,
+        &.{ "rm", "-rf", "/" },
+        &fx.env_map,
+        &stderr_writer,
+        shell_eval.mockDaemonDenyEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.denial, code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "command denied") != null);
+    // Degraded mode: no control write-deny spam on deny either
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "control write-deny") == null);
 }
 
 test "shim deny still denies when audit open is control write-deny" {

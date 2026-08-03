@@ -26,14 +26,20 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
     def test_fail_open_defaults_on(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("ORCA_HERMES_FAIL_OPEN", None)
+            os.environ.pop("RYK_HERMES_FAIL_OPEN", None)
             with mock.patch.object(_PLUGIN, "_stance_file_fail_open", return_value=None):
                 self.assertTrue(_PLUGIN._fail_open_enabled())
         with mock.patch.dict(os.environ, {"ORCA_HERMES_FAIL_OPEN": "0"}):
+            self.assertFalse(_PLUGIN._fail_open_enabled())
+        # Dual-read: RYK_ preferred brand key also closes fail-open.
+        with mock.patch.dict(os.environ, {"RYK_HERMES_FAIL_OPEN": "0"}, clear=False):
+            os.environ.pop("ORCA_HERMES_FAIL_OPEN", None)
             self.assertFalse(_PLUGIN._fail_open_enabled())
 
     def test_fail_open_stance_file_fail_closed_for_new_installs(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("ORCA_HERMES_FAIL_OPEN", None)
+            os.environ.pop("RYK_HERMES_FAIL_OPEN", None)
             with mock.patch.object(_PLUGIN, "_stance_file_fail_open", return_value=False):
                 self.assertFalse(_PLUGIN._fail_open_enabled())
             # Env wins over stance file.

@@ -129,11 +129,18 @@ pub fn shellGate(host: []const u8) []const u8 {
 }
 
 /// Effective fail stance label for doctor tables.
-pub fn failStance(host: []const u8, hermes_fail_open: bool) []const u8 {
+///
+/// RT-06/H1: never claim `"fail-closed shell"` when the host hook is unwired.
+/// Process-wrap / PATH shims (if any) do not close absolute-path mediation; only a
+/// wired host hook that fires and honors veto can claim fail-closed shell.
+/// `wired` is doctor wired label: `"yes"` / `"partial"` / `"no"` / `"—"`.
+pub fn failStance(host: []const u8, hermes_fail_open: bool, wired: []const u8) []const u8 {
     if (std.mem.eql(u8, host, "hermes")) {
         return if (hermes_fail_open) "fail-open (default)" else "fail-closed";
     }
     if (std.mem.eql(u8, host, "pi")) return "mode-dependent";
+    const hook_wired = std.mem.eql(u8, wired, "yes") or std.mem.eql(u8, wired, "partial");
+    if (!hook_wired) return "unwired (no fail-closed shell)";
     return "fail-closed shell";
 }
 
@@ -597,10 +604,14 @@ test "shellGate and failStance cover all P1 hosts" {
     try std.testing.expectEqualStrings("tool.before", shellGate("openclaw"));
     try std.testing.expectEqualStrings("pre_tool_call", shellGate("hermes"));
     try std.testing.expectEqualStrings("extension-managed (smoke not run)", shellGate("pi"));
-    try std.testing.expectEqualStrings("fail-open (default)", failStance("hermes", true));
-    try std.testing.expectEqualStrings("fail-closed", failStance("hermes", false));
-    try std.testing.expectEqualStrings("mode-dependent", failStance("pi", true));
-    try std.testing.expectEqualStrings("fail-closed shell", failStance("codex", true));
+    try std.testing.expectEqualStrings("fail-open (default)", failStance("hermes", true, "yes"));
+    try std.testing.expectEqualStrings("fail-closed", failStance("hermes", false, "yes"));
+    try std.testing.expectEqualStrings("mode-dependent", failStance("pi", true, "yes"));
+    try std.testing.expectEqualStrings("fail-closed shell", failStance("codex", true, "yes"));
+    // RT-06: unwired host must not claim fail-closed shell
+    try std.testing.expectEqualStrings("unwired (no fail-closed shell)", failStance("opencode", true, "no"));
+    try std.testing.expectEqualStrings("unwired (no fail-closed shell)", failStance("claude", true, "—"));
+    try std.testing.expectEqualStrings("fail-closed shell", failStance("opencode", true, "partial"));
 }
 
 test "formatFix prefers smoke failure and hermes fail-open remediation" {

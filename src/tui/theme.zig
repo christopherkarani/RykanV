@@ -128,8 +128,8 @@ pub fn parseOsc11Reply(reply: []const u8) Background {
 /// A semantic color token. Each renders to the best SGR sequence for the active
 /// capability and background.
 pub const Token = enum {
-    brand, // Orca coral/orange — headers, brand mark
-    success, // allow, pass, installed
+    brand, // headers / brand mark — soft mint (sampled from product UI)
+    success, // allow, pass, enabled packs
     danger, // deny, fail, destructive
     warn, // limited, partial, ask
     info, // neutral emphasis
@@ -141,10 +141,12 @@ pub const Token = enum {
 
 pub const Rgb = struct { r: u8, g: u8, b: u8 };
 
-/// Dark-theme truecolor RGB triples (Anthropic-grade, restrained).
+/// Dark-theme truecolor RGB triples.
+/// Brand/success trial: soft mint/seafoam (#7CD4B0) — sampled from the packs tree
+/// selection green the user wants (not electric neon #39FF14).
 const dark_rgb = struct {
-    const brand = Rgb{ .r = 0xff, .g = 0x7a, .b = 0x45 };
-    const success = Rgb{ .r = 0x3f, .g = 0xb9, .b = 0x50 };
+    const brand = Rgb{ .r = 0x7c, .g = 0xd4, .b = 0xb0 };
+    const success = Rgb{ .r = 0x7c, .g = 0xd4, .b = 0xb0 };
     const danger = Rgb{ .r = 0xf8, .g = 0x51, .b = 0x49 };
     const warn = Rgb{ .r = 0xd2, .g = 0x99, .b = 0x22 };
     const info = Rgb{ .r = 0x58, .g = 0xa6, .b = 0xff };
@@ -156,8 +158,8 @@ const dark_rgb = struct {
 
 /// Light-theme truecolor RGB triples (higher contrast on light backgrounds).
 const light_rgb = struct {
-    const brand = Rgb{ .r = 0xd0, .g = 0x4a, .b = 0x1f };
-    const success = Rgb{ .r = 0x1a, .g = 0x7f, .b = 0x37 };
+    const brand = Rgb{ .r = 0x00, .g = 0xc8, .b = 0x53 };
+    const success = Rgb{ .r = 0x00, .g = 0xc8, .b = 0x53 };
     const danger = Rgb{ .r = 0xcf, .g = 0x22, .b = 0x2e };
     const warn = Rgb{ .r = 0x9a, .g = 0x6a, .b = 0x02 };
     const info = Rgb{ .r = 0x09, .g = 0x69, .b = 0xda };
@@ -169,7 +171,7 @@ const light_rgb = struct {
 
 /// 16-color fallback mapping (matches the dark intent for the common dark default).
 const basic16 = struct {
-    const brand = "\x1b[33m"; // yellow
+    const brand = "\x1b[32m"; // green (mint brand trial)
     const success = "\x1b[32m"; // green
     const danger = "\x1b[31m"; // red
     const warn = "\x1b[33m"; // yellow
@@ -212,8 +214,8 @@ pub fn sequence(token: Token, cap: Capability, bg: Background) []const u8 {
             .text_bright => basic16.text_bright,
         },
         .c256 => switch (token) {
-            .brand => "\x1b[38;5;208m",
-            .success => "\x1b[38;5;40m",
+            .brand => "\x1b[38;5;115m", // soft mint (xterm ≈ #87d7af)
+            .success => "\x1b[38;5;115m",
             .danger => "\x1b[38;5;196m",
             .warn => "\x1b[38;5;178m",
             .info => "\x1b[38;5;75m",
@@ -664,7 +666,8 @@ test "sequence: 16-colour uses standard escapes" {
 
 test "sequence: truecolor emits 38;2;r;g;b" {
     const s = sequence(.brand, .truecolor, .dark);
-    try std.testing.expect(std.mem.startsWith(u8, s, "\x1b[38;2;255;122;69m"));
+    // Soft mint brand trial (#7CD4B0) — sampled from product tree selection green
+    try std.testing.expect(std.mem.startsWith(u8, s, "\x1b[38;2;124;212;176m"));
     try std.testing.expect(std.mem.endsWith(u8, s, "m"));
 }
 

@@ -52,7 +52,17 @@ Interactive Ask mode prompts in plain language: **Once** (this invocation), **Al
 
 ## Shims And Wrappers
 
-PATH shims cover shells, package managers, network tools, Python/Node, SSH/SCP/Netcat, PowerShell, and cmd wrappers. They are **wrapper-level coverage only**, not transparent OS command interception. Absolute paths (for example `/usr/bin/curl`) skip the shim directory; OS filesystem and network attach still apply to those paths when the sandbox is active.
+PATH shims cover shells, package managers, network tools, Python/Node, SSH/SCP/Netcat, PowerShell, cmd wrappers, and high-risk filesystem tools (`rm`, `mv`, `cp`, `chmod`, `dd`). Bare PATH names resolve to session shims that call `ryk shim exec` → `shell_eval` → in-process **shell_engine** (+ mode×severity). Expanding the shim list is not “prompt on every `rm`”: critical pack denials hard-block; engine-allow is silent.
+
+They are **wrapper-level coverage only**, not transparent OS command interception. Residual bypasses of PATH mediation:
+
+- absolute paths (`/bin/rm`, `/usr/bin/curl`)
+- `command -p` (uses a default PATH that skips the session shim dir)
+- shell aliases / functions that shadow the bare name
+- nested absolute exec from `node`/`python` (e.g. `execFileSync("/bin/rm", …)`)
+- outer allowed `bash ./script` until a child hits a shimmed bare name
+
+OS filesystem and network attach still apply to absolute paths when the sandbox is active. Deferred shim names (not in the minimum set): `find`, `unlink`, `shred`, `osascript`, `open`, `launchctl`, `tar`, `rsync`, `chown`. See also [compatibility.md](compatibility.md).
 
 ## Session sandbox grade
 

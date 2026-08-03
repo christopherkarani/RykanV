@@ -185,14 +185,15 @@ fn runPacksBrowse(
         } else |_| {}
     } else |_| {}
 
-    // `--filter` seeds search and starts in all-mode so disabled packs remain findable.
+    // Full catalog first (C); `--filter` only seeds search. Sticky (A) keeps
+    // just-disabled rows when the user narrows with `a` (enabled-only).
     return packs_tui.runBrowse(io, allocator, stdout, stderr, .{
         .packs = refs,
         .enabled = enabled,
         .write_scope = write_scope,
         .write_path = write_path,
         .initial_query = options.filter,
-        .start_all = options.filter != null,
+        .start_all = true,
     });
 }
 

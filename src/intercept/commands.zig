@@ -216,6 +216,10 @@ pub fn evaluate(
     };
 }
 
+/// PATH-resolved bare names that install session shims → `ryk shim exec` →
+/// `shell_eval.evaluateCommand` → **shell_engine** (not classifyArgv on this wire).
+/// High-risk filesystem tools (rm/mv/cp/chmod/dd) added for RT-04/RT-07 PATH mediation.
+/// Deferred by default (Q6 residual): find, unlink, shred, osascript, open, launchctl, tar, rsync, chown.
 pub const shim_names = [_][]const u8{
     "sh",
     "bash",
@@ -238,6 +242,12 @@ pub const shim_names = [_][]const u8{
     "powershell",
     "pwsh",
     "cmd",
+    // High-risk PATH tools (RT-04 / RT-07): bare name only; absolute /bin/rm etc. still residual.
+    "rm",
+    "mv",
+    "cp",
+    "chmod",
+    "dd",
 };
 
 pub const approved_once_env = "ORCA_APPROVED_COMMAND_ONCE";
@@ -253,6 +263,12 @@ pub fn createShimDirectory(
     const shim_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "sessions", session_id, "shims" });
     errdefer allocator.free(shim_dir);
     try std.Io.Dir.cwd().createDirPath(io, shim_dir);
+    // RT-08 residual: parent path segments may remain umask-default; only the leaf
+    // shim directory is locked to 0o700. Old session dirs are not migrated; in-session
+    // overwrite of shims is already control write-denied.
+    if (builtin.os.tag != .windows) {
+        try std.Io.Dir.cwd().setFilePermissions(io, shim_dir, std.Io.File.Permissions.fromMode(0o700), .{});
+    }
     inline for (shim_names) |name| {
         if (builtin.os.tag == .windows) {
             try writeWindowsExecutableShim(allocator, shim_dir, name, orca_executable);
@@ -383,7 +399,11 @@ fn approvalHashListRemoveAlloc(allocator: std.mem.Allocator, list: []const u8, h
 fn writePosixShim(io: std.Io, allocator: std.mem.Allocator, shim_dir: []const u8, name: []const u8, orca_executable: []const u8) !void {
     const path = try std.fs.path.join(allocator, &.{ shim_dir, name });
     defer allocator.free(path);
-    const file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
+    // Zig 0.16 Permissions.executable_file maps to default_dir (0o777). Lock 0o755
+    // so new session PATH shims are not group/other-writable (RT-08).
+    // Out of scope: other executable_file sites (codex_mcp_sandbox, host_mcp_sandbox, mcp.zig).
+    const shim_mode = std.Io.File.Permissions.fromMode(0o755);
+    const file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true, .permissions = shim_mode });
     defer file.close(io);
     const script = try std.fmt.allocPrint(allocator,
         \\#!/bin/sh
@@ -392,7 +412,7 @@ fn writePosixShim(io: std.Io, allocator: std.mem.Allocator, shim_dir: []const u8
     , .{ orca_executable, name });
     defer allocator.free(script);
     try file.writeStreamingAll(io, script);
-    if (builtin.os.tag != .windows) try file.setPermissions(io, .executable_file);
+    if (builtin.os.tag != .windows) try file.setPermissions(io, shim_mode);
 }
 
 fn writeWindowsExecutableShim(allocator: std.mem.Allocator, shim_dir: []const u8, name: []const u8, orca_executable: []const u8) !void {
@@ -1215,6 +1235,18 @@ test "shim list covers risky aliases recognized by classifier" {
     }
 }
 
+test "shim list covers high-risk PATH filesystem tools" {
+    // RT-04/RT-07 minimum set: bare PATH names hit shim → shell_eval → shell_engine.
+    const required = [_][]const u8{ "rm", "mv", "cp", "chmod", "dd" };
+    for (required) |name| {
+        var found = false;
+        inline for (shim_names) |shim_name| {
+            if (std.mem.eql(u8, shim_name, name)) found = true;
+        }
+        try std.testing.expect(found);
+    }
+}
+
 test "shim directory includes sh bash and zsh wrappers" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
 
@@ -1235,6 +1267,61 @@ test "shim directory includes sh bash and zsh wrappers" {
         defer std.testing.allocator.free(script);
         try std.testing.expect(std.mem.indexOf(u8, script, "orca\" shim exec --") != null or std.mem.indexOf(u8, script, "true\" shim exec --") != null);
         try std.testing.expect(std.mem.indexOf(u8, script, shell) != null);
+    }
+}
+
+test "shim file modes are 0o755 and leaf dir is 0o700" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    const shim_dir = try createShimDirectory(std.testing.io, std.testing.allocator, root, "shim-mode-test", "/usr/bin/true");
+    defer std.testing.allocator.free(shim_dir);
+
+    const dir_stat = try std.Io.Dir.cwd().statFile(std.testing.io, shim_dir, .{});
+    const dir_mode = dir_stat.permissions.toMode() & 0o777;
+    try std.testing.expectEqual(@as(std.posix.mode_t, 0o700), dir_mode);
+
+    const samples = [_][]const u8{ "sh", "curl" };
+    for (samples) |name| {
+        const shim_path = try std.fs.path.join(std.testing.allocator, &.{ shim_dir, name });
+        defer std.testing.allocator.free(shim_path);
+        const st = try std.Io.Dir.cwd().statFile(std.testing.io, shim_path, .{});
+        const mode = st.permissions.toMode() & 0o777;
+        try std.testing.expect((mode & 0o022) == 0);
+        try std.testing.expect((mode & 0o111) != 0);
+        try std.testing.expectEqual(@as(std.posix.mode_t, 0o755), mode);
+    }
+}
+
+test "shim directory writes high-risk PATH tools with shim exec scripts" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    const shim_dir = try createShimDirectory(std.testing.io, std.testing.allocator, root, "high-risk-shim-test", "/usr/bin/true");
+    defer std.testing.allocator.free(shim_dir);
+
+    // Product wire: PATH bare name → shim → `shim exec -- "rm"` → shell_eval → shell_engine.
+    // Engine samples (document authority; not classifyArgv on this wire):
+    //   `rm -rf /` → deny; `rm -rf /tmp/x` may allow per packs/mode.
+    const tools = [_][]const u8{ "rm", "mv", "cp", "chmod", "dd" };
+    for (tools) |name| {
+        const shim_path = try std.fs.path.join(std.testing.allocator, &.{ shim_dir, name });
+        defer std.testing.allocator.free(shim_path);
+        try std.Io.Dir.cwd().access(std.testing.io, shim_path, .{});
+        const script = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, shim_path, std.testing.allocator, .limited(1024));
+        defer std.testing.allocator.free(script);
+        try std.testing.expect(std.mem.indexOf(u8, script, "shim exec --") != null);
+        const quoted_name = try std.fmt.allocPrint(std.testing.allocator, "\"{s}\"", .{name});
+        defer std.testing.allocator.free(quoted_name);
+        try std.testing.expect(std.mem.indexOf(u8, script, quoted_name) != null);
     }
 }
 

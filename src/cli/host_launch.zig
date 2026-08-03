@@ -2,11 +2,11 @@ const std = @import("std");
 
 /// Exact host names that rewrite to `ryk run -- <host> …`.
 /// Canonical allowlist for dispatch, help, and completions.
-/// Separate from managed_hosts (plugins) so `pi` can launch without plugin install.
+/// Separate from managed_hosts (plugins) so `pi` / `grok` can launch without plugin install.
 ///
 /// Dual-table invariant: every entry here MUST have a `host_config_grants.host_config_table`
-/// / `specForHost` entry (see test below). The reverse is not required — grants-only hosts
-/// (e.g. `grok`) may appear in the grant table without being agent-primary launch aliases.
+/// / `specForHost` entry (see test below). Grant-table hosts may exist without a launch
+/// alias; every launch alias must be table-backed.
 pub const host_launch_aliases = [_][]const u8{
     "claude",
     "codex",
@@ -14,6 +14,7 @@ pub const host_launch_aliases = [_][]const u8{
     "opencode",
     "openclaw",
     "hermes",
+    "grok",
 };
 
 /// Exact, case-sensitive allowlist match only (no fuzzy host matching).
@@ -69,15 +70,12 @@ test "isHostLaunchAlias exact allowlist only" {
 }
 
 // Pin: agent-primary launch aliases must not drift away from host_config_table keys.
-// Grants-only hosts (e.g. grok) intentionally stay off this list — non-agent-primary.
 test "every host_launch_alias has host_config_table entry" {
     const host_config_grants = @import("../sandbox/host_config_grants.zig");
     for (host_launch_aliases) |host| {
         try std.testing.expect(host_config_grants.specForHost(host) != null);
     }
-    // Document intentional asymmetry: grants-only host is table-backed but not launch alias.
-    try std.testing.expect(host_config_grants.specForHost("grok") != null);
-    try std.testing.expect(!isHostLaunchAlias("grok"));
+    try std.testing.expect(isHostLaunchAlias("grok"));
 }
 
 test "buildRunArgv delegates security defaults to run and preserves host argv" {

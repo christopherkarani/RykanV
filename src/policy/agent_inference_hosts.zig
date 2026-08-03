@@ -49,7 +49,7 @@ const HOSTS_OPENCODE = [_][]const u8{
     "opencode.ai",
     "models.opencode.ai",
 };
-// Not launch-reachable at P1 (`host_launch` excludes "grok"); kept for merge API.
+// Grok is a first-class launch alias; overlay is keyed by trusted host "grok".
 const HOSTS_GROK = [_][]const u8{
     "cli-chat-proxy.grok.com",
     "auth.x.ai",

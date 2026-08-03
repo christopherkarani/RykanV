@@ -529,6 +529,25 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         try filtered_env.env_map.put("ORCA_TRANSPARENT_NETWORK_ENFORCEMENT", "tcp-port-route-forced");
         try filtered_env.env_map.put("ORCA_BACKEND_NETWORK_ENFORCEMENT", "tcp-port-route-forced");
     }
+    // RT-09: session-effective env filtering label (free-form; not backend.Level).
+    // Capability/doctor may still report env_filtering=active via installBackendEnvironment;
+    // restamp after apply so child env matches session facts (mirror network restamp).
+    try filtered_env.env_map.put(
+        "ORCA_BACKEND_ENV_FILTERING",
+        sessionEnvFilteringLabel(.{
+            .with_host_secrets = options.with_host_secrets,
+            .env_scrubbed = apply_result.env_scrubbed,
+            .env_launch_allowlisted = apply_result.env_launch_allowlisted,
+        }),
+    );
+    // E0 / RT-05: when OS attach is planned, control root is write-deny for the
+    // agent — in-shim open of events.jsonl is known dead. Mark degraded so PATH
+    // shims skip open silently (≤1 parent banner line, not N× per shimmed cmd).
+    // Do not grant the agent write access to `.orca` to "fix" audit.
+    const shim_audit_degraded = apply_result.requiresChildApply();
+    if (shim_audit_degraded) {
+        try filtered_env.env_map.put("ORCA_SHIM_AUDIT_MODE", "degraded");
+    }
     // Phase 5: effective session sandbox grade for operators/agents (env + banner).
     // Escape (--network open / legacy) never reports strong-mediated.
     const session_grade = computeSessionSandboxGrade(.{
@@ -665,6 +684,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         apply_result: *const sandbox.apply.ApplyResult,
         audit_context: *AuditContext,
         session_grade: SessionSandboxGrade,
+        shim_audit_degraded: bool,
 
         pub fn print(context: *anyopaque, session: core.session.Session) !void {
             const self: *@This() = @ptrCast(@alignCast(context));
@@ -684,6 +704,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 self.openai_gateway,
                 self.apply_result.receipt,
                 self.session_grade,
+                self.shim_audit_degraded,
             );
             // Flush before the shield dwell so the card is on-screen, not buffered.
             try flushIfSupported(self.writer);
@@ -722,6 +743,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         .apply_result = &apply_result,
         .audit_context = &audit_context,
         .session_grade = session_grade,
+        .shim_audit_degraded = shim_audit_degraded,
     };
 
     var session_approvals = intercept.approvals.SessionApprovals.init(allocator);
@@ -1947,6 +1969,8 @@ fn installNetworkEnvironment(allocator: std.mem.Allocator, env_map: *std.process
 fn installBackendEnvironment(env_map: *std.process.Environ.Map, report: sandbox.backend.ReportSet) !void {
     try env_map.put("ORCA_BACKEND", report.backend_name);
     try env_map.put("ORCA_BACKEND_FALLBACK", report.fallback_level.toString());
+    // Capability seed only — session-effective label is restamped after applyForRun
+    // (see sessionEnvFilteringLabel). Do not stuff denylist-only / host-secrets into backend.Level.
     try env_map.put("ORCA_BACKEND_ENV_FILTERING", report.get(.env_filtering).level.toString());
     try env_map.put("ORCA_BACKEND_PATH_STAGING", report.get(.path_staging).level.toString());
     try env_map.put("ORCA_BACKEND_SHELL_WRAPPING", report.get(.shell_wrapping).level.toString());
@@ -1961,6 +1985,25 @@ fn installBackendEnvironment(env_map: *std.process.Environ.Map, report: sandbox.
     try env_map.put("ORCA_BACKEND_NETWORK_OBSERVE", report.get(.network_observe).level.toString());
     try env_map.put("ORCA_BACKEND_NETWORK_PROXY_ENFORCEMENT", report.get(.network_proxy_enforce).level.toString());
     try env_map.put("ORCA_BACKEND_NETWORK_ENFORCEMENT", report.get(.network_enforce).level.toString());
+}
+
+/// Session-effective `ORCA_BACKEND_ENV_FILTERING` vocabulary (RT-09).
+/// Free-form session string — never written into `backend.Level` for `--require-backend`.
+/// Label honesty ≠ process secret presence after FS load (OpenCode putenv residual is WP-G).
+pub const SessionEnvFilteringFacts = struct {
+    with_host_secrets: bool,
+    env_scrubbed: bool,
+    env_launch_allowlisted: bool,
+};
+
+pub fn sessionEnvFilteringLabel(facts: SessionEnvFilteringFacts) []const u8 {
+    if (facts.with_host_secrets) return "host-secrets-escape";
+    // denylist + launch allowlist applied under attach materials
+    if (facts.env_scrubbed and facts.env_launch_allowlisted) return "active";
+    // denylist scrub only (grade-drop unavailable/failed; provider creds may remain)
+    if (facts.env_scrubbed) return "denylist-only";
+    // No OS scrub path (sandbox off / no apply scrub): policy filterMap only
+    return "policy-only";
 }
 
 fn parseMode(value: []const u8) ?core.types.Mode {
@@ -2074,6 +2117,7 @@ fn printSessionStart(
     openai_gateway: bool,
     os_receipt: sandbox.posture.AttachReceipt,
     session_grade: SessionSandboxGrade,
+    shim_audit_degraded: bool,
 ) !void {
     // Compact brand banner + Session / Workspace / Mode / Name grid. Celebration stays in printSessionEnd.
     try tui.render.banner(io, stdout, build_options.version, "watching this session");
@@ -2115,6 +2159,12 @@ fn printSessionStart(
         "Session grade: {s} (env ORCA_SESSION_SANDBOX_GRADE)\n",
         .{session_grade.toString()},
     );
+    // E0: one greppable audit=degraded line per session when in-shim audit is known dead.
+    var audit_line_buf: [48]u8 = undefined;
+    const audit_line: ?[]const u8 = if (shim_audit_degraded)
+        try std.fmt.bufPrint(&audit_line_buf, "audit=degraded\n", .{})
+    else
+        null;
 
     const card_posture = tui.sandbox_card.PostureKind.parse(@tagName(os_receipt.posture));
     if (card_posture.isDramatic()) {
@@ -2132,12 +2182,14 @@ fn printSessionStart(
             .machine_os_line = os_line,
         });
         try stdout.writeAll(grade_line);
+        if (audit_line) |line| try stdout.writeAll(line);
         try stdout.writeAll("\n");
     } else {
         try stdout.writeAll(posture_line);
         try stdout.writeAll(os_line);
         try stdout.writeAll("\n");
         try stdout.writeAll(grade_line);
+        if (audit_line) |line| try stdout.writeAll(line);
         try stdout.writeAll("\n");
     }
 }
@@ -2215,10 +2267,9 @@ fn printSessionEnd(
 ///
 /// Graceful degrade: when `rule_id` is null (fail-closed / user-denial paths) or
 /// not in the reason table, a generic reason + medium risk meter are used and
-/// safe alternatives still derive from the command shape when possible.
-///
-/// This is presentation only — it never changes the decision, audit output, or
-/// exit code. `--json`/robot output never reaches here.
+/// Progressive deny presentation (ISS-DENY-01): What → Why → Risk → Safer
+/// shape → What now. Presentation only — never changes the decision, audit
+/// output, or exit code. `--json`/robot output never reaches here.
 fn renderDenyBlock(
     io: std.Io,
     stdout: anytype,
@@ -2229,7 +2280,7 @@ fn renderDenyBlock(
     policy_path: ?[]const u8,
     policy_mode: []const u8,
 ) !void {
-    // Header.
+    // ── What: blocked command ───────────────────────────────────────────────
     try stdout.writeAll("\n");
     try tui.render.callout(io, stdout, .danger, "ryk blocked a command", "");
     try stdout.writeAll("\n");
@@ -2249,6 +2300,7 @@ fn renderDenyBlock(
         break :blk rid;
     } else null;
     const reason_text = if (reason_key) |rid| tui.reasons.reasonForRule(rid) else "Matched a deny rule in your ryk policy.";
+    // ── Why ─────────────────────────────────────────────────────────────────
     try body.append(allocator, try std.fmt.allocPrint(allocator, "Why        {s}", .{reason_text}));
 
     if (rule_id) |rid| {
@@ -2258,7 +2310,7 @@ fn renderDenyBlock(
     }
     try body.append(allocator, try std.fmt.allocPrint(allocator, "Policy     {s} · mode {s}", .{ policy_path orelse "built-in", policy_mode }));
 
-    // Panel title = the denied command, prefixed with the deny glyph.
+    // Panel title = the denied command (What), prefixed with the deny glyph.
     const command_display = try intercept.commands.displayArgvRedactedAlloc(allocator, command_argv);
     defer allocator.free(command_display);
     const title = try std.fmt.allocPrint(allocator, "✗  {s}", .{command_display});
@@ -2266,26 +2318,27 @@ fn renderDenyBlock(
     try tui.render.panel(io, stdout, title, body.items);
     try stdout.writeAll("\n");
 
-    // Risk meter (standalone — colour-safe; degrades to plain on non-TTY).
+    // ── Risk (danger-aligned; degrades to plain on non-TTY) ──────────────────
     const risk = if (reason_key) |rid| tui.reasons.riskForRule(rid) else .medium;
     try stdout.writeAll("  ");
-    try tui.theme.paint(io, stdout, .muted, "Risk   ");
+    try tui.theme.paintBold(io, stdout, .danger, "Risk");
+    try stdout.writeAll("   ");
     try tui.render.meter(io, stdout, tui.reasons.riskFraction(risk), tui.reasons.riskLabel(risk));
     try stdout.writeAll("\n\n");
 
-    // Safe alternatives: prefer daemon suggestion tip, then command-shape heuristics.
+    // ── Safer shape: prefer daemon tip, then command-shape heuristics ───────
     const alts = try tui.reasons.safeAlternatives(allocator, command_display);
     defer {
         for (alts) |a| allocator.free(a.command);
         allocator.free(alts);
     }
     if (remediation_tip) |tip| {
-        try tui.theme.paintBold(io, stdout, .info, "  Tip");
+        try tui.theme.paintBold(io, stdout, .info, "  Safer shape");
         try stdout.writeAll("\n  ");
         try stdout.writeAll(tip);
         try stdout.writeAll("\n\n");
     } else if (alts.len > 0) {
-        try tui.theme.paintBold(io, stdout, .info, "  Safe alternatives");
+        try tui.theme.paintBold(io, stdout, .info, "  Safer shape");
         try stdout.writeAll("\n");
         for (alts) |a| {
             try stdout.writeAll("  → ");
@@ -2295,16 +2348,18 @@ fn renderDenyBlock(
         try stdout.writeAll("\n");
     }
 
-    // Next-step footer: daemon pack tools (explain / allowlist / allow-once).
+    // ── What now: progressive CTAs (explain → allow-once → allowlist) ───────
+    // Tip is not re-injected here — safer shape above already showed remediation.
     const next_steps = try rust_visibility.formatDenyNextSteps(allocator, command_display, rule_id, null);
     defer allocator.free(next_steps);
-    try tui.theme.paintBold(io, stdout, .muted, "  Next");
+    try tui.theme.paintBold(io, stdout, .text_bright, "  What now");
     try stdout.writeAll("\n");
     // Indent each line of the footer for the panel-adjacent layout.
     var line_iter = std.mem.splitScalar(u8, next_steps, '\n');
     while (line_iter.next()) |line| {
         if (line.len == 0) continue;
-        if (std.mem.startsWith(u8, line, "Next:")) continue; // title already printed
+        // Title already painted above (handles both legacy "Next:" and "What now:").
+        if (std.mem.startsWith(u8, line, "Next:") or std.mem.startsWith(u8, line, "What now:")) continue;
         if (std.mem.startsWith(u8, line, "  ")) {
             try stdout.writeAll(line);
             try stdout.writeAll("\n");
@@ -2942,6 +2997,87 @@ test "run no-network sets network mode off and audits denied network state" {
     try std.testing.expect(std.mem.indexOf(u8, events, "\"type\":\"network_connect_denied\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, events, "\"type\":\"network_exfiltration_suspected\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, events, "network mode off") != null);
+}
+
+test "sessionEnvFilteringLabel maps session facts without backend.Level stuffing" {
+    try std.testing.expectEqualStrings(
+        "host-secrets-escape",
+        sessionEnvFilteringLabel(.{ .with_host_secrets = true, .env_scrubbed = true, .env_launch_allowlisted = true }),
+    );
+    try std.testing.expectEqualStrings(
+        "active",
+        sessionEnvFilteringLabel(.{ .with_host_secrets = false, .env_scrubbed = true, .env_launch_allowlisted = true }),
+    );
+    try std.testing.expectEqualStrings(
+        "denylist-only",
+        sessionEnvFilteringLabel(.{ .with_host_secrets = false, .env_scrubbed = true, .env_launch_allowlisted = false }),
+    );
+    try std.testing.expectEqualStrings(
+        "policy-only",
+        sessionEnvFilteringLabel(.{ .with_host_secrets = false, .env_scrubbed = false, .env_launch_allowlisted = false }),
+    );
+    // with-host-secrets never bare active even if scrub flags look happy
+    try std.testing.expect(!std.mem.eql(
+        u8,
+        "active",
+        sessionEnvFilteringLabel(.{ .with_host_secrets = true, .env_scrubbed = false, .env_launch_allowlisted = false }),
+    ));
+}
+
+test "run with-host-secrets exports host-secrets-escape env filtering label" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "out");
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var stdout_buf: [8192]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    // Escape path: label must not claim active even when OS attach succeeds.
+    const code = try commandForTestWithShellEvaluator(
+        &.{ "--workspace", root, "--with-host-secrets", "--os-sandbox", "off", "--", "/bin/sh", "-c", "env > out/env-label.txt" },
+        &stdout_writer,
+        &stderr_writer,
+        .ignore,
+        shell_eval.mockDaemonAllowEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.success, code);
+    const written = try tmp.dir.readFileAlloc(std.testing.io, "out/env-label.txt", std.testing.allocator, .limited(8192));
+    defer std.testing.allocator.free(written);
+    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND_ENV_FILTERING=host-secrets-escape") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND_ENV_FILTERING=active") == null);
+}
+
+test "run os-sandbox off exports policy-only env filtering label" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "out");
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var stdout_buf: [8192]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try commandForTestWithShellEvaluator(
+        &.{ "--workspace", root, "--os-sandbox", "off", "--", "/bin/sh", "-c", "env > out/env-label.txt" },
+        &stdout_writer,
+        &stderr_writer,
+        .ignore,
+        shell_eval.mockDaemonAllowEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.success, code);
+    const written = try tmp.dir.readFileAlloc(std.testing.io, "out/env-label.txt", std.testing.allocator, .limited(8192));
+    defer std.testing.allocator.free(written);
+    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND_ENV_FILTERING=policy-only") != null);
 }
 
 test "run defaults trusted host agents to empty backpack; basename spoof is generic" {
@@ -5232,7 +5368,7 @@ test "deny block renders rich guardian block for rm -rf /" {
     try std.testing.expectEqual(exit_codes.denial, code);
     const err = stderr_writer.buffered();
 
-    // Hero header.
+    // Hero header (What).
     try std.testing.expect(std.mem.indexOf(u8, err, "✗") != null);
     try std.testing.expect(std.mem.indexOf(u8, err, "ryk blocked") != null);
     // The denied command appears as the panel headline.
@@ -5243,11 +5379,11 @@ test "deny block renders rich guardian block for rm -rf /" {
     try std.testing.expect(std.mem.indexOf(u8, err, "Policy") != null);
     // Risk meter label is present.
     try std.testing.expect(std.mem.indexOf(u8, err, "Risk") != null);
-    // Daemon suggestion tip (mock includes safer alternative).
-    try std.testing.expect(std.mem.indexOf(u8, err, "Tip") != null);
+    // Safer shape (daemon tip or heuristic alternatives).
+    try std.testing.expect(std.mem.indexOf(u8, err, "Safer shape") != null or std.mem.indexOf(u8, err, "Tip") != null);
     try std.testing.expect(std.mem.indexOf(u8, err, "rm -rf ./build") != null or std.mem.indexOf(u8, err, "./build") != null);
-    // Next-step footer with pack tools (not policy.yaml explain).
-    try std.testing.expect(std.mem.indexOf(u8, err, "Next") != null);
+    // Progressive What-now footer (explain → allow-once → allowlist).
+    try std.testing.expect(std.mem.indexOf(u8, err, "What now") != null);
     try std.testing.expect(std.mem.indexOf(u8, err, "ryk explain") != null);
     try std.testing.expect(std.mem.indexOf(u8, err, "ryk allowlist add") != null);
     try std.testing.expect(std.mem.indexOf(u8, err, "ryk allow-once") != null);
@@ -6110,12 +6246,13 @@ test "session start banner is mechanism-neutral for disabled OS sandbox" {
         .mode = .observe,
         .platform = core.platform.detectOs(),
     };
-    try printSessionStart(std.testing.io, &writer, session, .ask, false, false, false, false, sandbox.posture.disabledReceipt(), .wrapper_only);
+    try printSessionStart(std.testing.io, &writer, session, .ask, false, false, false, false, sandbox.posture.disabledReceipt(), .wrapper_only, false);
     const out = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "OS sandbox: disabled") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Session grade: wrapper-only") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Seatbelt") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Landlock") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "audit=degraded") == null);
 
     writer = .fixed(&buf);
     const active_hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -6134,6 +6271,7 @@ test "session start banner is mechanism-neutral for disabled OS sandbox" {
             "workspace RW, system RO, platform tmp RW, no home",
         ),
         .strong_mediated,
+        true,
     );
     const active_out = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, active_out, "SHIELD UP") != null);
@@ -6142,6 +6280,7 @@ test "session start banner is mechanism-neutral for disabled OS sandbox" {
     try std.testing.expect(std.mem.indexOf(u8, active_out, "gateway=anthropic") != null);
     try std.testing.expect(std.mem.indexOf(u8, active_out, "OS sandbox: active") != null);
     try std.testing.expect(std.mem.indexOf(u8, active_out, "Session grade: strong-mediated") != null);
+    try std.testing.expect(std.mem.indexOf(u8, active_out, "audit=degraded") != null);
     try std.testing.expect(std.mem.indexOf(u8, active_out, "Seatbelt") == null);
     try std.testing.expect(std.mem.indexOf(u8, active_out, "network: unrestricted") != null);
 }

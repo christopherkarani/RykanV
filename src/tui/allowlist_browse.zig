@@ -1,10 +1,12 @@
 //! Allowlist dual-layer browse model (pure builders + optional TTY loop).
 //!
-//! Product contract (W2 / U05):
+//! Product contract (W2 / U05 + ISS-ALLOW-02 polish):
 //! - Project section **then** user section
-//! - Empty sections teach **permanent** allow path only (`ryk allow` /
-//!   `allowlist add-command`) — **never** allow-once
-//! - Status line = write target (project vs user path)
+//! - Empty sections show short `(0 entries)` chrome — **not** a CLI dump;
+//!   permanent-path CTA lives once in Detail (never allow-once in list)
+//! - Status line = abbreviated write target; full path in Detail
+//! - Footer is context-sensitive: `r remove` only when selection is removable;
+//!   Enter omitted (detail always visible; no activate)
 //! - Remove uses confirm **default No**; cancel = no write
 //! - No add wizard; no allow-once in TUI
 //!
@@ -50,17 +52,64 @@ pub const BrowseRow = struct {
     removable: bool = false,
 };
 
-/// Empty-section teaching — permanent path only (must not mention allow-once).
-pub const empty_teach_line =
-    "(empty) permanent: ryk allow <rule> -r \"…\" · allowlist add-command …";
+/// Short empty-section chrome in the list — not a truncated CLI (CTA is Detail).
+/// Must not mention allow-once.
+pub const empty_teach_line = "(0 entries)";
+
+/// Permanent-path CTAs for Detail only (single teach block; list stays short).
+pub const empty_cta_allow = "ryk allow <rule> -r \"reason\"";
+pub const empty_cta_command = "ryk allowlist add-command <cmd> -r \"reason\"";
 
 pub const section_project = "── project ──";
 pub const section_user = "── user ──";
 
-/// Domain footer fragment for browse kit (shared nav appended by renderFrame).
-pub const footer_actions = "r remove";
+/// Domain footer when the selected row is removable.
+pub const footer_actions_remove = "r remove";
+/// Legacy alias — prefer `footerForRow` for context-sensitive footers.
+pub const footer_actions = footer_actions_remove;
 
 pub const title = "allowlist";
+
+/// Context-sensitive domain footer: advertise remove only when actionable.
+pub fn footerForRow(row: ?BrowseRow) []const u8 {
+    if (row) |r| {
+        if (r.removable) return footer_actions_remove;
+    }
+    return "";
+}
+
+/// Honest list-range label: permanent entry count, not chrome-row count.
+pub fn formatListRange(buf: []u8, entry_count: usize) []const u8 {
+    if (entry_count == 0) {
+        return std.fmt.bufPrint(buf, "0 permanent entries", .{}) catch "0 permanent entries";
+    }
+    if (entry_count == 1) {
+        return std.fmt.bufPrint(buf, "1 permanent entry", .{}) catch "1 permanent entry";
+    }
+    return std.fmt.bufPrint(buf, "{d} permanent entries", .{entry_count}) catch "entries";
+}
+
+/// Basename or last two path components for compact footer status.
+pub fn abbreviatePath(path: []const u8) []const u8 {
+    if (path.len == 0) return path;
+    // Prefer last two components: ".orca/allowlist.toml" / "orca/allowlist.toml"
+    var last_sep: ?usize = null;
+    var prev_sep: ?usize = null;
+    var i: usize = 0;
+    while (i < path.len) : (i += 1) {
+        if (path[i] == '/' or path[i] == '\\') {
+            prev_sep = last_sep;
+            last_sep = i;
+        }
+    }
+    if (prev_sep) |ps| {
+        if (ps + 1 < path.len) return path[ps + 1 ..];
+    }
+    if (last_sep) |ls| {
+        if (ls + 1 < path.len) return path[ls + 1 ..];
+    }
+    return path;
+}
 
 // ---------------------------------------------------------------------------
 // Pure builders
@@ -85,6 +134,8 @@ pub fn confirmRemoveDefaultNo(answer: []const u8) bool {
 }
 
 /// Write-target status line into caller buffer. Returns written slice.
+/// Footer uses an abbreviated path so the nav legend is not drowned out;
+/// full path belongs in Detail (`fillDetail` for section/empty rows).
 pub fn formatWriteTargetStatus(
     buf: []u8,
     write_layer: Layer,
@@ -99,12 +150,18 @@ pub fn formatWriteTargetStatus(
         .project => "project",
         .user => "user",
     };
-    return std.fmt.bufPrint(buf, "write: {s} → {s}", .{ layer_name, path }) catch {
+    const short = abbreviatePath(path);
+    return std.fmt.bufPrint(buf, "write: {s} · {s}", .{ layer_name, short }) catch {
         return switch (write_layer) {
             .project => "write: project",
             .user => "write: user",
         };
     };
+}
+
+/// Count permanent entries across both layers (honest list range).
+pub fn countPermanentEntries(project_entries: []const EntryView, user_entries: []const EntryView) usize {
+    return project_entries.len + user_entries.len;
 }
 
 /// Format a single entry list label (borrowed key/kind; no alloc).
@@ -227,11 +284,11 @@ fn appendSection(
 
 /// Detail lines for the selected row (static + stack buffers owned by caller).
 pub const DetailBufs = struct {
-    line0: [128]u8 = undefined,
+    line0: [160]u8 = undefined,
     line1: [256]u8 = undefined,
-    line2: [128]u8 = undefined,
-    line3: [96]u8 = undefined,
-    lines: [4][]const u8 = undefined,
+    line2: [160]u8 = undefined,
+    line3: [128]u8 = undefined,
+    lines: [5][]const u8 = undefined,
     count: usize = 0,
 
     pub fn slice(self: *DetailBufs) []const []const u8 {
@@ -239,28 +296,65 @@ pub const DetailBufs = struct {
     }
 };
 
+/// Detail for chrome / empty rows: layer + path + single permanent CTA block.
+/// Does not re-paste the list's empty label; no allow-once "how to fill list".
 pub fn fillDetail(
     detail: *DetailBufs,
     row: BrowseRow,
     project_entries: []const EntryView,
     user_entries: []const EntryView,
 ) void {
+    fillDetailWithPaths(detail, row, project_entries, user_entries, null, null);
+}
+
+/// Like `fillDetail` but can show the full write path for the layer (footer is abbreviated).
+pub fn fillDetailWithPaths(
+    detail: *DetailBufs,
+    row: BrowseRow,
+    project_entries: []const EntryView,
+    user_entries: []const EntryView,
+    project_path: ?[]const u8,
+    user_path: ?[]const u8,
+) void {
     detail.count = 0;
     switch (row.kind) {
-        .section_header => {
-            detail.lines[0] = switch (row.layer) {
-                .project => "Project layer (.orca/allowlist.toml)",
-                .user => "User layer ($XDG_CONFIG_HOME/orca/allowlist.toml)",
+        .section_header, .empty_teach => {
+            const layer_entries = switch (row.layer) {
+                .project => project_entries,
+                .user => user_entries,
             };
-            detail.lines[1] = "Permanent pack exceptions only — not allow-once.";
-            detail.lines[2] = "Add: ryk allow <rule> -r \"…\" · allowlist add-command …";
-            detail.count = 3;
-        },
-        .empty_teach => {
-            detail.lines[0] = "No permanent entries in this layer.";
-            detail.lines[1] = empty_teach_line;
-            detail.lines[2] = "allow-once is argv-only and never shown here.";
-            detail.count = 3;
+            const layer_name: []const u8 = switch (row.layer) {
+                .project => "project",
+                .user => "user",
+            };
+            const full_path: ?[]const u8 = switch (row.layer) {
+                .project => project_path,
+                .user => user_path,
+            };
+            detail.lines[0] = std.fmt.bufPrint(&detail.line0, "Layer: {s}  ·  {d} permanent entr{s}", .{
+                layer_name,
+                layer_entries.len,
+                if (layer_entries.len == 1) "y" else "ies",
+            }) catch "layer";
+            if (full_path) |p| {
+                detail.lines[1] = std.fmt.bufPrint(&detail.line1, "Path:  {s}", .{p}) catch p;
+            } else {
+                detail.lines[1] = switch (row.layer) {
+                    .project => "Path:  .orca/allowlist.toml (project)",
+                    .user => "Path:  $XDG_CONFIG_HOME/orca/allowlist.toml",
+                };
+            }
+            if (layer_entries.len == 0) {
+                // Single teach block: permanent path only (list shows short chrome).
+                detail.lines[2] = "Add a permanent exception (argv):";
+                detail.lines[3] = empty_cta_allow;
+                detail.lines[4] = empty_cta_command;
+                detail.count = 5;
+            } else {
+                detail.lines[2] = "Select an entry for kind, reason, and expiry.";
+                detail.lines[3] = "Remove: r  ·  filter: /";
+                detail.count = 4;
+            }
         },
         .entry => {
             const entries = switch (row.layer) {
@@ -295,11 +389,10 @@ pub fn fillDetail(
     }
 }
 
-/// Whether teaching / frame text is permanent-only (no allow-once leakage).
+/// Whether teaching / frame text leaks allow-once (list + empty Detail must not).
 pub fn textMentionsAllowOnce(text: []const u8) bool {
-    // Deliberate check used by tests: empty teach must not advertise allow-once
-    // as a path to fill the list. Detail may mention "never shown" — that is OK
-    // for teaching what is out of scope; empty *list* label must stay permanent.
+    // Empty list chrome and empty Detail CTA are permanent-path only. Entry
+    // detail never mentions allow-once either (argv-only, not a browse path).
     return std.mem.indexOf(u8, text, "allow-once") != null or
         std.mem.indexOf(u8, text, "allow once") != null or
         std.mem.indexOf(u8, text, "allow_once") != null;
@@ -391,6 +484,9 @@ pub fn run(io: std.Io, gpa: std.mem.Allocator, stdout: anytype, input: RunInput)
         input.project_path,
         input.user_path,
     );
+    var range_buf: [48]u8 = undefined;
+    const entry_total = countPermanentEntries(project_entries, user_entries);
+    const list_range = formatListRange(&range_buf, entry_total);
 
     const list_rows: usize = blk: {
         const ws = tty.getWinsize() catch break :blk 8;
@@ -406,6 +502,7 @@ pub fn run(io: std.Io, gpa: std.mem.Allocator, stdout: anytype, input: RunInput)
     // Filtered index map: filtered_labels[i] → model.rows index
     var map_buf: [512]usize = undefined;
     var label_ptrs: [512][]const u8 = undefined;
+    var actionable_flags: [512]bool = undefined;
 
     while (true) {
         const q = if (filter.active) filter.query(&filter_buf) else null;
@@ -414,14 +511,32 @@ pub fn run(io: std.Io, gpa: std.mem.Allocator, stdout: anytype, input: RunInput)
         nav.selected = browse.clampSelected(nav.selected, item_count);
         nav.list_scroll = browse.scrollToShow(nav.selected, nav.list_scroll, list_rows, item_count);
 
-        var detail_bufs: DetailBufs = .{};
-        if (item_count > 0) {
-            const row_idx = filt.map[nav.selected];
-            fillDetail(&detail_bufs, model.rows[row_idx], project_entries, user_entries);
+        // Chrome rows (section / empty) are not Enter-actionable.
+        const act_cap = @min(item_count, actionable_flags.len);
+        var ai: usize = 0;
+        while (ai < act_cap) : (ai += 1) {
+            const row = model.rows[filt.map[ai]];
+            actionable_flags[ai] = row.kind == .entry and row.removable;
         }
 
-        // Prefer transient toast; else show write-target as sticky status.
+        var detail_bufs: DetailBufs = .{};
+        var selected_row: ?BrowseRow = null;
+        if (item_count > 0) {
+            const row_idx = filt.map[nav.selected];
+            selected_row = model.rows[row_idx];
+            fillDetailWithPaths(
+                &detail_bufs,
+                model.rows[row_idx],
+                project_entries,
+                user_entries,
+                input.project_path,
+                input.user_path,
+            );
+        }
+
+        // Prefer transient toast; else show abbreviated write-target as sticky status.
         const status_msg: []const u8 = if (status_len > 0) status_buf[0..status_len] else write_status;
+        const footer = footerForRow(selected_row);
 
         if (!first_frame and frame_lines > 0) {
             try moveCursorUp(stdout, frame_lines);
@@ -436,9 +551,13 @@ pub fn run(io: std.Io, gpa: std.mem.Allocator, stdout: anytype, input: RunInput)
             .list_scroll = nav.list_scroll,
             .list_rows = list_rows,
             .detail_lines = detail_bufs.slice(),
-            .footer_actions = footer_actions,
+            .footer_actions = footer,
             .status_msg = status_msg,
             .filter_query = q,
+            .selected_token = .success,
+            .list_range_override = list_range,
+            .footer_show_enter = false,
+            .row_actionable = if (act_cap > 0) actionable_flags[0..act_cap] else null,
         }, "\r\n");
         try flush(stdout);
 
@@ -704,7 +823,7 @@ test "s-allowlist browse: dual-layer project section then user" {
     try std.testing.expect(std.mem.indexOf(u8, after.label, "git status") != null);
 }
 
-test "s-allowlist browse: empty sections teach permanent path not allow-once" {
+test "s-allowlist browse: empty sections short chrome; CTA in detail not list" {
     const gpa = std.testing.allocator;
     var model = try buildDualLayer(gpa, &.{}, &.{}, "p.toml", "u.toml", .user);
     defer model.deinit();
@@ -715,28 +834,66 @@ test "s-allowlist browse: empty sections teach permanent path not allow-once" {
             saw_empty = true;
             try std.testing.expectEqualStrings(empty_teach_line, r.label);
             try std.testing.expect(!textMentionsAllowOnce(r.label));
-            try std.testing.expect(std.mem.indexOf(u8, r.label, "ryk allow") != null);
-            try std.testing.expect(std.mem.indexOf(u8, r.label, "add-command") != null);
+            // List chrome is short — no CLI dump in the list row.
+            try std.testing.expect(std.mem.indexOf(u8, r.label, "ryk allow") == null);
+            try std.testing.expect(std.mem.indexOf(u8, r.label, "add-command") == null);
         }
     }
     try std.testing.expect(saw_empty);
-    // Both layers empty → two teach rows
+    // Both layers empty → two short empty rows
     var teach_count: usize = 0;
     for (model.rows) |r| {
         if (r.kind == .empty_teach) teach_count += 1;
     }
     try std.testing.expectEqual(@as(usize, 2), teach_count);
+
+    // Detail holds the single permanent-path teach block (not ×3 in list).
+    var detail: DetailBufs = .{};
+    fillDetailWithPaths(&detail, model.rows[1], &.{}, &.{}, "p.toml", "u.toml");
+    const dtext = try joinDetail(gpa, detail.slice());
+    defer gpa.free(dtext);
+    try std.testing.expect(std.mem.indexOf(u8, dtext, empty_cta_allow) != null);
+    try std.testing.expect(std.mem.indexOf(u8, dtext, empty_cta_command) != null);
+    try std.testing.expect(std.mem.indexOf(u8, dtext, "p.toml") != null);
+    try std.testing.expect(!textMentionsAllowOnce(dtext));
 }
 
-test "s-allowlist browse: write-target status reflects layer path" {
+test "s-allowlist browse: write-target status abbreviates path" {
     var buf: [192]u8 = undefined;
-    const proj = formatWriteTargetStatus(&buf, .project, "/ws/.orca/allowlist.toml", "/u/allowlist.toml");
+    const proj = formatWriteTargetStatus(&buf, .project, "/ws/.orca/allowlist.toml", "/home/u/.config/orca/allowlist.toml");
     try std.testing.expect(std.mem.indexOf(u8, proj, "project") != null);
-    try std.testing.expect(std.mem.indexOf(u8, proj, "/ws/.orca/allowlist.toml") != null);
+    // Abbreviated: last two components, not the full absolute path.
+    try std.testing.expect(std.mem.indexOf(u8, proj, ".orca/allowlist.toml") != null);
+    try std.testing.expect(std.mem.indexOf(u8, proj, "/ws/.orca/allowlist.toml") == null);
 
-    const user = formatWriteTargetStatus(&buf, .user, "/ws/.orca/allowlist.toml", "/u/allowlist.toml");
+    const user = formatWriteTargetStatus(&buf, .user, "/ws/.orca/allowlist.toml", "/home/u/.config/orca/allowlist.toml");
     try std.testing.expect(std.mem.indexOf(u8, user, "user") != null);
-    try std.testing.expect(std.mem.indexOf(u8, user, "/u/allowlist.toml") != null);
+    try std.testing.expect(std.mem.indexOf(u8, user, "orca/allowlist.toml") != null);
+    try std.testing.expect(std.mem.indexOf(u8, user, "/home/u/.config/orca/allowlist.toml") == null);
+}
+
+test "s-allowlist browse: honest entry count and context footer" {
+    var range_buf: [48]u8 = undefined;
+    try std.testing.expectEqualStrings("0 permanent entries", formatListRange(&range_buf, 0));
+    try std.testing.expectEqualStrings("1 permanent entry", formatListRange(&range_buf, 1));
+    try std.testing.expectEqualStrings("3 permanent entries", formatListRange(&range_buf, 3));
+
+    try std.testing.expectEqualStrings("", footerForRow(null));
+    try std.testing.expectEqualStrings("", footerForRow(.{
+        .kind = .empty_teach,
+        .label = empty_teach_line,
+        .layer = .project,
+    }));
+    try std.testing.expectEqualStrings(footer_actions_remove, footerForRow(.{
+        .kind = .entry,
+        .label = "rule  x",
+        .layer = .project,
+        .removable = true,
+        .key = "x",
+    }));
+
+    try std.testing.expectEqualStrings("allowlist.toml", abbreviatePath("allowlist.toml"));
+    try std.testing.expectEqualStrings(".orca/allowlist.toml", abbreviatePath("/ws/.orca/allowlist.toml"));
 }
 
 test "s-allowlist browse: remove confirm default No; cancel skips write" {
@@ -790,11 +947,15 @@ test "s-allowlist browse: frame shows dual-layer and write status without alt-sc
     defer model.deinit();
 
     var detail: DetailBufs = .{};
-    fillDetail(&detail, model.rows[1], &project, &.{});
+    fillDetailWithPaths(&detail, model.rows[1], &project, &.{}, "P.toml", "U.toml");
 
     var status_buf: [128]u8 = undefined;
     const status = formatWriteTargetStatus(&status_buf, .project, "P.toml", "U.toml");
+    var range_buf: [48]u8 = undefined;
+    const list_range = formatListRange(&range_buf, countPermanentEntries(&project, &.{}));
 
+    // Entry selected → actionable footer + mint selection token.
+    var actionable = [_]bool{ false, true, false, false }; // header, entry, header, empty
     var out_buf: [4096]u8 = undefined;
     var out: std.Io.Writer = .fixed(&out_buf);
     const lines = try browse.renderFrame(std.testing.io, &out, .{
@@ -803,8 +964,12 @@ test "s-allowlist browse: frame shows dual-layer and write status without alt-sc
         .selected = 1,
         .list_rows = 8,
         .detail_lines = detail.slice(),
-        .footer_actions = footer_actions,
+        .footer_actions = footerForRow(model.rows[1]),
         .status_msg = status,
+        .selected_token = .success,
+        .list_range_override = list_range,
+        .footer_show_enter = false,
+        .row_actionable = &actionable,
     });
     try std.testing.expect(lines > 0);
     const text = out.buffered();
@@ -813,8 +978,62 @@ test "s-allowlist browse: frame shows dual-layer and write status without alt-sc
     try std.testing.expect(std.mem.indexOf(u8, text, "core.git:clean-fdx") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, empty_teach_line) != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "write: project") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "1 permanent entry") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "r remove") != null);
+    // Enter omitted when domain has no activate.
+    try std.testing.expect(std.mem.indexOf(u8, text, "Enter ·") == null);
     try std.testing.expect(std.mem.indexOf(u8, text, vaxis.ctlseqs.smcup) == null);
     // List empty-teach label never advertises allow-once
     try std.testing.expect(!textMentionsAllowOnce(empty_teach_line));
+}
+
+test "s-allowlist browse: empty frame hides remove and shows CTA in detail" {
+    const gpa = std.testing.allocator;
+    var model = try buildDualLayer(gpa, &.{}, &.{}, "/ws/.orca/allowlist.toml", "/u/allowlist.toml", .project);
+    defer model.deinit();
+
+    var detail: DetailBufs = .{};
+    // Select empty teach under project
+    fillDetailWithPaths(&detail, model.rows[1], &.{}, &.{}, "/ws/.orca/allowlist.toml", "/u/allowlist.toml");
+
+    var status_buf: [128]u8 = undefined;
+    const status = formatWriteTargetStatus(&status_buf, .project, "/ws/.orca/allowlist.toml", "/u/allowlist.toml");
+    var range_buf: [48]u8 = undefined;
+    const list_range = formatListRange(&range_buf, 0);
+
+    var actionable = [_]bool{ false, false, false, false };
+    var out_buf: [4096]u8 = undefined;
+    var out: std.Io.Writer = .fixed(&out_buf);
+    _ = try browse.renderFrame(std.testing.io, &out, .{
+        .title = title,
+        .items = model.labels,
+        .selected = 1,
+        .list_rows = 8,
+        .detail_lines = detail.slice(),
+        .footer_actions = footerForRow(model.rows[1]),
+        .status_msg = status,
+        .selected_token = .success,
+        .list_range_override = list_range,
+        .footer_show_enter = false,
+        .row_actionable = &actionable,
+    });
+    const text = out.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, text, "0 permanent entries") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, empty_teach_line) != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, empty_cta_allow) != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "r remove") == null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "Enter ·") == null);
+    // Full path in detail, abbreviated in status.
+    try std.testing.expect(std.mem.indexOf(u8, text, "/ws/.orca/allowlist.toml") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "write: project · .orca/allowlist.toml") != null);
+}
+
+fn joinDetail(gpa: std.mem.Allocator, lines: []const []const u8) ![]u8 {
+    var list: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer list.deinit(gpa);
+    for (lines, 0..) |line, i| {
+        if (i > 0) try list.append(gpa, '\n');
+        try list.appendSlice(gpa, line);
+    }
+    return try list.toOwnedSlice(gpa);
 }

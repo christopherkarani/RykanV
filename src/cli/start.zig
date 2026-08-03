@@ -590,7 +590,7 @@ fn writeSuccessEndCard(
 
     try tui.theme.paintBold(io, stdout, .brand, "Try next");
     try stdout.writeAll("\n");
-    try stdout.writeAll("  ryk claude          # or codex / pi / opencode / …\n");
+    try stdout.writeAll("  ryk claude          # or codex / pi / opencode / grok / …\n");
     try stdout.writeAll("  ryk doctor\n");
     try stdout.writeAll("  ryk replay\n");
     try stdout.writeAll("\n");

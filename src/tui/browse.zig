@@ -189,6 +189,17 @@ pub const FrameInput = struct {
     status_msg: []const u8 = "",
     /// When non-null, the frame shows filter-mode chrome with this query.
     filter_query: ?[]const u8 = null,
+    /// Paint token for the selected list row (packs uses `.success` mint green).
+    selected_token: theme.Token = .text_bright,
+    /// When set, replaces the auto `"1-N of M"` / `"0 of 0"` list range label
+    /// (e.g. allowlist `"0 permanent entries"` for honest empty counts).
+    list_range_override: ?[]const u8 = null,
+    /// When false, omit `Enter ·` from the shared nav legend (domain has no
+    /// activate action — e.g. allowlist detail is always visible).
+    footer_show_enter: bool = true,
+    /// When set and same length as `items`, `false` means the row is chrome
+    /// (section/empty teach): selected glyph is `·` instead of actionable `›`.
+    row_actionable: ?[]const bool = null,
 };
 
 /// Pure frame renderer: brand header, list with selection marker, detail region,
@@ -239,7 +250,9 @@ pub fn renderFrameWithLineEnding(
     try theme.paintBold(io, stdout, .text_bright, "List");
     try stdout.writeAll("  ");
     var range_buf: [48]u8 = undefined;
-    const range = if (item_count == 0)
+    const range: []const u8 = if (frame.list_range_override) |ovr|
+        ovr
+    else if (item_count == 0)
         "0 of 0"
     else
         std.fmt.bufPrint(&range_buf, "{d}-{d} of {d}", .{
@@ -266,10 +279,26 @@ pub fn renderFrameWithLineEnding(
         var i = win.start;
         while (i < win.end) : (i += 1) {
             const is_sel = i == sel;
-            try stdout.writeAll(if (is_sel) " ›" else "  ");
+            const actionable = if (frame.row_actionable) |flags|
+                (i < flags.len and flags[i])
+            else
+                true;
+            // Actionable selection: ›. Chrome (section/empty): · so it does not
+            // look like Enter will activate something.
+            if (is_sel) {
+                try stdout.writeAll(if (actionable) " ›" else " ·");
+            } else {
+                try stdout.writeAll("  ");
+            }
             try stdout.writeAll(" ");
             if (is_sel) {
-                try theme.paintBold(io, stdout, .text_bright, frame.items[i]);
+                try theme.paintBold(io, stdout, frame.selected_token, frame.items[i]);
+            } else if (std.mem.startsWith(u8, frame.items[i], "●")) {
+                // Enabled-pack rows: mint success even when not selected.
+                try theme.paint(io, stdout, .success, frame.items[i]);
+            } else if (isSectionChromeLabel(frame.items[i])) {
+                // Dual-layer section headers: slightly stronger than muted.
+                try theme.paintBold(io, stdout, .info, frame.items[i]);
             } else {
                 try theme.paint(io, stdout, .muted, frame.items[i]);
             }
@@ -301,7 +330,7 @@ pub fn renderFrameWithLineEnding(
     } else {
         for (frame.detail_lines) |line| {
             try stdout.writeAll("  ");
-            try terminal_text.write(stdout, line, .single_line);
+            try writeDetailLine(io, stdout, line);
             try stdout.writeAll(line_ending);
             written += 1;
         }
@@ -321,12 +350,82 @@ pub fn renderFrameWithLineEnding(
             try theme.paint(io, stdout, .muted, frame.footer_actions);
             try stdout.writeAll("  ·  ");
         }
-        try theme.paint(io, stdout, .muted, "↑↓/jk move · g/G top/bot · Enter · / filter · q quit");
+        if (frame.footer_show_enter) {
+            try theme.paint(io, stdout, .muted, "↑↓/jk move · g/G top/bot · Enter · / filter · q quit");
+        } else {
+            try theme.paint(io, stdout, .muted, "↑↓/jk move · g/G top/bot · / filter · q quit");
+        }
     }
     try stdout.writeAll(line_ending);
     written += 1;
 
     return written;
+}
+
+/// Section chrome labels (allowlist dual-layer headers) get info-token paint.
+fn isSectionChromeLabel(label: []const u8) bool {
+    // "── project ──", "── user · 0 ──", ASCII fallback "--- project ---"
+    if (label.len >= 2 and label[0] == '-' and label[1] == '-') return true;
+    // UTF-8 box-drawing em dash sequence used by writeRule peers (U+2500 = e2 94 80)
+    if (label.len >= 3 and label[0] == 0xe2 and label[1] == 0x94 and label[2] == 0x80) return true;
+    return false;
+}
+
+/// How a detail line is painted (convention-based; keeps FrameInput as plain strings).
+pub const DetailPaintKind = enum {
+    /// Copy-paste CLI: `ryk allow …` — mint bold.
+    command_cta,
+    /// `Label: value` with short single-word label — muted label, bright value.
+    labeled,
+    /// Prose / multi-word prompts — muted.
+    prose,
+};
+
+/// Classify a detail line for themed paint (pure; unit-tested).
+pub fn classifyDetailLine(line: []const u8) DetailPaintKind {
+    if (std.mem.startsWith(u8, line, "ryk ")) return .command_cta;
+    if (std.mem.indexOf(u8, line, ": ")) |idx| {
+        const left = line[0..idx];
+        // Single short token labels only ("Layer", "Path", "kind", "reason") —
+        // multi-word prompts like "Add a permanent exception (argv):" stay prose.
+        if (left.len > 0 and left.len <= 16 and std.mem.indexOfScalar(u8, left, ' ') == null) {
+            return .labeled;
+        }
+    }
+    return .prose;
+}
+
+/// Paint one detail line: mint CTAs, muted labels + bright values, muted prose.
+/// Content is sanitized (no CSI/C0 injection) before paint.
+fn writeDetailLine(io: std.Io, stdout: anytype, line: []const u8) !void {
+    var safe_buf: [512]u8 = undefined;
+    var safe_w: std.Io.Writer = .fixed(&safe_buf);
+    terminal_text.write(&safe_w, line, .single_line) catch {
+        // Overflow / write error: fall back to truncated raw paint of prefix.
+        const n = @min(line.len, safe_buf.len);
+        @memcpy(safe_buf[0..n], line[0..n]);
+        const kind = classifyDetailLine(safe_buf[0..n]);
+        try paintDetailKind(io, stdout, kind, safe_buf[0..n]);
+        return;
+    };
+    const safe = safe_w.buffered();
+    try paintDetailKind(io, stdout, classifyDetailLine(safe), safe);
+}
+
+fn paintDetailKind(io: std.Io, stdout: anytype, kind: DetailPaintKind, safe: []const u8) !void {
+    switch (kind) {
+        .command_cta => try theme.paintBold(io, stdout, .success, safe),
+        .labeled => {
+            const idx = std.mem.indexOf(u8, safe, ": ") orelse {
+                try theme.paint(io, stdout, .muted, safe);
+                return;
+            };
+            const split = idx + 2;
+            try theme.paint(io, stdout, .muted, safe[0..split]);
+            try theme.paint(io, stdout, .text_bright, safe[split..]);
+        },
+        .prose => try theme.paint(io, stdout, .muted, safe),
+    }
 }
 
 fn writeRule(io: std.Io, stdout: anytype, line_ending: []const u8) !void {
@@ -467,6 +566,69 @@ test "browse renderFrame: filter mode chrome and empty list" {
     try std.testing.expect(std.mem.indexOf(u8, out, "net") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "(no items)") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Esc cancel") != null);
+}
+
+test "browse renderFrame: range override, hide enter, chrome selection glyph" {
+    theme.resetCache();
+    const items = [_][]const u8{ "── project ──", "(0 entries)" };
+    const actionable = [_]bool{ false, false };
+    var buf: [2048]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    _ = try renderFrame(std.testing.io, &w, .{
+        .title = "allowlist",
+        .items = &items,
+        .selected = 1,
+        .list_rows = 8,
+        .list_range_override = "0 permanent entries",
+        .footer_show_enter = false,
+        .row_actionable = &actionable,
+        .selected_token = .success,
+    });
+    const out = w.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "0 permanent entries") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "1-2 of 2") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "Enter ·") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "/ filter") != null);
+    // Chrome selection uses · not actionable ›
+    try std.testing.expect(std.mem.indexOf(u8, out, " · ") != null);
+}
+
+test "browse classifyDetailLine: command CTA, labeled, prose" {
+    try std.testing.expectEqual(DetailPaintKind.command_cta, classifyDetailLine("ryk allow <rule> -r \"reason\""));
+    try std.testing.expectEqual(DetailPaintKind.command_cta, classifyDetailLine("ryk allowlist add-command <cmd> -r \"reason\""));
+    try std.testing.expectEqual(DetailPaintKind.labeled, classifyDetailLine("Layer: project  ·  0 permanent entries"));
+    try std.testing.expectEqual(DetailPaintKind.labeled, classifyDetailLine("Path:  /ws/.orca/allowlist.toml"));
+    try std.testing.expectEqual(DetailPaintKind.labeled, classifyDetailLine("kind: rule  key: core.git:reset-hard"));
+    try std.testing.expectEqual(DetailPaintKind.labeled, classifyDetailLine("reason: recover"));
+    try std.testing.expectEqual(DetailPaintKind.prose, classifyDetailLine("Add a permanent exception (argv):"));
+    try std.testing.expectEqual(DetailPaintKind.prose, classifyDetailLine("Select an entry for kind, reason, and expiry."));
+    try std.testing.expectEqual(DetailPaintKind.prose, classifyDetailLine("(no detail)"));
+}
+
+test "browse renderFrame: detail paints command CTAs without losing text" {
+    theme.resetCache();
+    const items = [_][]const u8{"── project ──"};
+    const detail = [_][]const u8{
+        "Layer: project  ·  0 permanent entries",
+        "Path:  /tmp/allowlist.toml",
+        "Add a permanent exception (argv):",
+        "ryk allow <rule> -r \"reason\"",
+        "ryk allowlist add-command <cmd> -r \"reason\"",
+    };
+    var buf: [4096]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    _ = try renderFrame(std.testing.io, &w, .{
+        .title = "allowlist",
+        .items = &items,
+        .detail_lines = &detail,
+        .selected_token = .success,
+    });
+    const out = w.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "Layer:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "project  ·  0 permanent entries") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "ryk allow <rule>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "ryk allowlist add-command") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "Add a permanent exception") != null);
 }
 
 test "browse renderFrame: list window honour scroll and selection clamp" {

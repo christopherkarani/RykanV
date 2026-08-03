@@ -187,8 +187,11 @@ pub fn ruleIdFromDaemonResult(allocator: std.mem.Allocator, result: std.json.Val
 /// `command_display` must already be redacted for presentation.
 ///
 /// Day-1 recovery is the interactive Once/Always/Never prompt (not rule ids).
-/// Order for offline/human fallback: explain first, allow-once if the prompt
-/// is gone, rule-id allowlist last (advanced / permanent — not the primary path).
+/// Progressive next-steps for a deny (ISS-DENY-01):
+/// 1. Understand (explain) → 2. Temporary (allow-once) → 3. Permanent advanced (allowlist).
+/// Tip, when present, is a separate advisory line above the numbered What-now block.
+/// Order is product law: explain first; allow-once if the prompt is gone; rule-id
+/// allowlist last (not the day-1 primary path).
 pub fn formatDenyNextSteps(
     allocator: std.mem.Allocator,
     command_display: []const u8,
@@ -215,28 +218,37 @@ pub fn formatDenyNextStepsWithCode(
             try list.appendSlice(allocator, tip_line);
         }
     }
-    try list.appendSlice(allocator, "Next:\n");
+    // Progressive hierarchy labels (what now) — commands stay copy-pasteable.
+    try list.appendSlice(allocator, "What now:\n");
     {
-        const line = try std.fmt.allocPrint(allocator, "  ryk explain \"{s}\"\n", .{command_display});
+        const line = try std.fmt.allocPrint(allocator, "  1. Understand\n     ryk explain \"{s}\"\n", .{command_display});
         defer allocator.free(line);
         try list.appendSlice(allocator, line);
     }
     if (allow_once_code) |code| {
         if (code.len > 0) {
-            const line = try std.fmt.allocPrint(allocator, "  ryk allow-once {s}   # if the approval prompt is gone\n", .{code});
+            const line = try std.fmt.allocPrint(
+                allocator,
+                "  2. Temporary exception (if approval prompt is gone)\n     ryk allow-once {s}\n",
+                .{code},
+            );
             defer allocator.free(line);
             try list.appendSlice(allocator, line);
         }
     } else {
-        try list.appendSlice(allocator, "  ryk allow-once <code>          # if the approval prompt is gone\n");
+        try list.appendSlice(allocator, "  2. Temporary exception (if approval prompt is gone)\n     ryk allow-once <code>\n");
     }
-    // Advanced permanent path — keep available, de-emphasized vs prompt-native allow.
+    // Advanced permanent path — keep available, de-emphasized vs temporary.
     if (rule_id) |rid| {
-        const line = try std.fmt.allocPrint(allocator, "  ryk allowlist add {s} -r \"reason\"   # advanced\n", .{rid});
+        const line = try std.fmt.allocPrint(
+            allocator,
+            "  3. Permanent exception (advanced)\n     ryk allowlist add {s} -r \"reason\"\n",
+            .{rid},
+        );
         defer allocator.free(line);
         try list.appendSlice(allocator, line);
     } else {
-        try list.appendSlice(allocator, "  ryk allowlist list              # advanced\n");
+        try list.appendSlice(allocator, "  3. Permanent exception (advanced)\n     ryk allowlist list\n");
     }
     return try list.toOwnedSlice(allocator);
 }
@@ -649,12 +661,14 @@ test "formatDenyNextSteps includes explain allowlist and allow-once" {
     const footer = try formatDenyNextSteps(allocator, "git reset --hard", "core.git:reset-hard", "Consider using 'git stash'");
     defer allocator.free(footer);
     try std.testing.expect(std.mem.indexOf(u8, footer, "Tip: Consider using 'git stash'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "What now:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "1. Understand") != null);
     try std.testing.expect(std.mem.indexOf(u8, footer, "ryk explain \"git reset --hard\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, footer, "ryk allowlist add core.git:reset-hard") != null);
     try std.testing.expect(std.mem.indexOf(u8, footer, "ryk allow-once") != null);
-    // Offline fallback: allow-once is "if the approval prompt is gone"; rule-id allowlist is advanced.
-    try std.testing.expect(std.mem.indexOf(u8, footer, "if the approval prompt is gone") != null);
-    try std.testing.expect(std.mem.indexOf(u8, footer, "# advanced") != null);
+    // Progressive hierarchy: temporary before permanent; permanent labelled advanced.
+    try std.testing.expect(std.mem.indexOf(u8, footer, "Temporary exception") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "Permanent exception (advanced)") != null);
     // Next order: explain, then allow-once, then allowlist (not day-1 primary).
     const explain_at = std.mem.indexOf(u8, footer, "ryk explain").?;
     const once_at = std.mem.indexOf(u8, footer, "ryk allow-once").?;
@@ -668,9 +682,9 @@ test "formatDenyNextStepsWithCode emits concrete allow-once code" {
     const footer = try formatDenyNextStepsWithCode(allocator, "rm -rf /", "core.filesystem:destructive_rm", null, "A1B2C3");
     defer allocator.free(footer);
     try std.testing.expect(std.mem.indexOf(u8, footer, "ryk allow-once A1B2C3") != null);
-    try std.testing.expect(std.mem.indexOf(u8, footer, "if the approval prompt is gone") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "Temporary exception") != null);
     try std.testing.expect(std.mem.indexOf(u8, footer, "ryk allowlist add core.filesystem:destructive_rm") != null);
-    try std.testing.expect(std.mem.indexOf(u8, footer, "# advanced") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "Permanent exception (advanced)") != null);
 }
 
 test "isBlockedFeedRecord is decision-based; warn is not blocked" {

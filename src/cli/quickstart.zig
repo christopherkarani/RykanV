@@ -156,7 +156,7 @@ fn commandWithDaemonChecker(
     try writeReceipt(stdout, core, true);
     try stdout.writeAll("Core protection is ready (daemon + policy). Host integrations reported above may still need setup.\n");
     try stdout.writeAll("\nStart protecting your sessions:\n");
-    try stdout.writeAll("  ryk claude   # or codex / pi / opencode / …\n");
+    try stdout.writeAll("  ryk claude   # or codex / pi / opencode / grok / …\n");
     try stdout.writeAll("\nUseful next steps:\n");
     try stdout.writeAll("  ryk doctor\n");
     try stdout.writeAll("  ryk replay\n");

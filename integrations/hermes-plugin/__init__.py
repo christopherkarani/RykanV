@@ -126,13 +126,16 @@ def _stance_file_fail_open() -> bool | None:
 def _fail_open_enabled() -> bool:
     """Allow Hermes to proceed without ryk when degraded.
 
-    Precedence: ORCA_HERMES_FAIL_OPEN env (when set) → install stance file → product default fail-open.
+    Precedence: RYK_HERMES_FAIL_OPEN then ORCA_HERMES_FAIL_OPEN env (when set) →
+    install stance file → product default fail-open.
     New installs via `ryk plugin install hermes` write `.orca_fail_stance` = fail-closed.
     """
-    if "ORCA_HERMES_FAIL_OPEN" in os.environ:
-        value = os.environ.get("ORCA_HERMES_FAIL_OPEN", "").strip().lower()
-        if value:
-            return value not in _FAIL_CLOSED_TOKENS
+    # Dual-read brand env (prefer RYK_ then ORCA_) — doctor/formatFix copy matches.
+    for key in ("RYK_HERMES_FAIL_OPEN", "ORCA_HERMES_FAIL_OPEN"):
+        if key in os.environ:
+            value = os.environ.get(key, "").strip().lower()
+            if value:
+                return value not in _FAIL_CLOSED_TOKENS
     stance = _stance_file_fail_open()
     if stance is not None:
         return stance
