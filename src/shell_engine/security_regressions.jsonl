@@ -29,7 +29,6 @@
 {"command": "git&>>/dev/null reset --hard", "expected": "deny", "source": "repro_redirection_bypass.rs", "description": "bare argv0 attached &>>/dev/null"}
 {"command": "git >/dev/null reset --hard", "expected": "deny", "source": "repro_redirection_bypass.rs", "description": "spaced redirect mid-command"}
 {"command": "command >>/dev/null git reset --hard", "expected": "deny", "source": "repro_redirection_bypass.rs", "description": "command builtin leading append still exposes git"}
-{"command": "command >> /usr/local/log", "expected": "allow", "source": "repro_redirection_bypass.rs", "description": "command builtin pure append not truncate synthetic"}
 {"command": "rm -rf / $(git checkout -b x)", "expected": "deny", "source": "codex_p1_safe_pack_scope", "description": "safe match must not suppress cross-pack destructive"}
 {"command": "echo rm -rf / | sh", "expected": "deny", "source": "codex_p1_pipeline_payload", "description": "echo payload piped to sh is executable"}
 {"command": "echo 'rm -rf /' | bash", "expected": "deny", "source": "codex_p1_pipeline_payload", "description": "quoted echo payload piped to bash is executable"}
@@ -74,3 +73,39 @@
 {"command": "echo x | tee /etc/passwd", "expected": "deny", "source": "mapr_04837a19_pipe_tee", "description": "pipe-to-tee sensitive path must deny (M-9)"}
 {"command": "echo x | tee \"/etc/passwd\"", "expected": "deny", "source": "mapr_04837a19_pipe_tee", "description": "pipe-to-tee quoted sensitive path must deny (M-9)"}
 {"command": "printf x | sudo tee /etc/passwd", "expected": "deny", "source": "mapr_04837a19_pipe_tee", "description": "pipe-to-sudo-tee sensitive path must deny (M-9)"}
+{"command": "command >> /tmp/log", "expected": "allow", "source": "repro_redirection_bypass.rs", "description": "command builtin pure append to non-sensitive /tmp path"}
+{"command": "echo x > \"/etc/passwd\"", "expected": "deny", "source": "dcg_false_allow_fix", "description": "echo redirect to double-quoted sensitive path must deny"}
+{"command": "printf x > '/etc/passwd'", "expected": "deny", "source": "dcg_false_allow_fix", "description": "printf redirect to single-quoted sensitive path must deny"}
+{"command": "echo x > $'/etc/passwd'", "expected": "deny", "source": "dcg_false_allow_fix", "description": "echo redirect to ANSI-C quoted sensitive path must deny"}
+{"command": "echo x>\"/etc/passwd\"", "expected": "deny", "source": "dcg_false_allow_fix", "description": "glued echo redirect to double-quoted sensitive path must deny"}
+{"command": "echo x > $(echo /etc/passwd)", "expected": "deny", "source": "dcg_false_allow_fix", "description": "echo redirect via $(...) substitution target must deny"}
+{"command": "printf x > `echo /etc/passwd`", "expected": "deny", "source": "dcg_false_allow_fix", "description": "printf redirect via backtick substitution target must deny"}
+{"command": "node -e \"require('fs').rmdirSync('/',{recursive:true})\"", "expected": "deny", "source": "dcg_false_allow_fix", "description": "node fs.rmdirSync root wipe must deny"}
+{"command": "echo x >> /etc/passwd", "expected": "deny", "source": "macr_0f58317f_m2_append_redirect", "description": "echo append redirect to sensitive path must deny"}
+{"command": "printf x >> /etc/shadow", "expected": "deny", "source": "macr_0f58317f_m2_append_redirect", "description": "printf append redirect to shadow must deny"}
+{"command": "cat >> /etc/passwd", "expected": "deny", "source": "macr_0f58317f_m2_append_redirect", "description": "cat append redirect to passwd must deny"}
+{"command": "echo x>>/etc/passwd", "expected": "deny", "source": "macr_0f58317f_m2_append_redirect", "description": "glued echo append redirect to passwd must deny"}
+{"command": "echo x >> /dev/null", "expected": "allow", "source": "macr_0f58317f_m2_append_redirect", "description": "append to /dev/null remains allowed"}
+{"command": "node -e \"require('fs').unlinkSync('/etc/passwd')\"", "expected": "deny", "source": "dcg_false_allow_fix", "description": "node fs.unlinkSync sensitive path must deny"}
+{"command": "node -e \"require('fs/promises').rm('/',{recursive:true})\"", "expected": "deny", "source": "dcg_false_allow_fix", "description": "node fs/promises.rm root wipe must deny"}
+{"command": "node -e \"require('fs')['rmSync']('/',{recursive:true})\"", "expected": "deny", "source": "dcg_false_allow_fix", "description": "node fs['rmSync'] bracket form root wipe must deny"}
+{"command": "node -e \"require('fs').rmSync.call(null,'/',{recursive:true})\"", "expected": "deny", "source": "dcg_false_allow_fix", "description": "node fs.rmSync.call form root wipe must deny"}
+{"command": "node -e \"require('fs').rmSync.bind(null)('/',{recursive:true})\"", "expected": "deny", "source": "macr_89059632_node_lang_residual", "description": "node fs.rmSync.bind form root wipe must deny"}
+{"command": "node -e \"require('fs').rmSync ('/',{recursive:true})\"", "expected": "deny", "source": "macr_89059632_node_lang_residual", "description": "node rmSync whitespace-before-paren root wipe must deny"}
+{"command": "node -e \"Reflect.apply(require('fs').rmSync,null,['/',{recursive:true}])\"", "expected": "deny", "source": "macr_89059632_node_lang_residual", "description": "node Reflect.apply rmSync root wipe must deny"}
+{"command": "node -e \"require('fs').rmSync?.('/',{recursive:true})\"", "expected": "deny", "source": "macr_89059632_node_lang_residual", "description": "node rmSync optional chaining root wipe must deny"}
+{"command": "node -e \"require('fs').unlink('/etc/passwd',()=>{})\"", "expected": "deny", "source": "macr_89059632_node_lang_residual", "description": "node callback fs.unlink sensitive path must deny"}
+{"command": "node -e \"require('fs').rmdir('/',{recursive:true},()=>{})\"", "expected": "deny", "source": "macr_89059632_node_lang_residual", "description": "node callback fs.rmdir root wipe must deny"}
+{"command": "node -e \"require('fs').writeFileSync('/etc/passwd','x')\"", "expected": "deny", "source": "macr_89059632_node_lang_residual", "description": "node writeFileSync to /etc must deny"}
+{"command": "node -e \"require('fs').appendFileSync('/etc/passwd','x')\"", "expected": "deny", "source": "macr_89059632_node_lang_residual", "description": "node appendFileSync to /etc must deny"}
+{"command": "node -e \"require('fs').createWriteStream('/etc/passwd')\"", "expected": "deny", "source": "macr_89059632_node_lang_residual", "description": "node createWriteStream to /etc must deny"}
+{"command": "node -e \"require('fs').copyFileSync('/tmp/a','/etc/passwd')\"", "expected": "deny", "source": "macr_89059632_node_lang_residual", "description": "node copyFileSync to /etc must deny"}
+{"command": "node -e \"require('fs').cpSync('/tmp/a','/home/user/x')\"", "expected": "deny", "source": "macr_89059632_node_lang_residual", "description": "node cpSync to /home must deny"}
+{"command": "rg x > \"/etc/passwd\"", "expected": "deny", "source": "macr_89059632_sanitize_tee_redirect", "description": "rg quoted write-redirect to sensitive path must deny"}
+{"command": "grep y > '/etc/shadow'", "expected": "deny", "source": "macr_89059632_sanitize_tee_redirect", "description": "grep quoted write-redirect to shadow must deny"}
+{"command": "git commit -m x > \"/etc/passwd\"", "expected": "deny", "source": "macr_89059632_sanitize_tee_redirect", "description": "git commit message path with quoted write-redirect must deny"}
+{"command": "git commit -m x >> /etc/passwd", "expected": "deny", "source": "macr_89059632_sanitize_tee_redirect", "description": "git commit append redirect to passwd must deny"}
+{"command": "node -e \"require('fs').writeFileSync('/tmp/out','x')\"", "expected": "allow", "source": "macr_89059632_node_lang_residual", "description": "node writeFileSync to /tmp remains allow"}
+{"command": "tee /etc/passwd", "expected": "deny", "source": "macr_89059632_tee", "description": "tee sensitive path must deny"}
+{"command": "tee -a /etc/shadow", "expected": "deny", "source": "macr_89059632_tee", "description": "tee append sensitive path must deny"}
+{"command": "tee /tmp/log", "expected": "allow", "source": "macr_89059632_tee", "description": "tee to tmp remains allowed"}

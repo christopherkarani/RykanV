@@ -27,21 +27,29 @@ pub fn sanitizeForMatching(allocator: std.mem.Allocator, command: []const u8) ![
         maskAllQuoted(out);
         maskArgsAfterCommand(out);
         restoreWriteSinks(out, command);
+        // Bare `tee /etc/passwd` has no `>` / pipe — restore path-shaped argv so
+        // packs still match sensitive write destinations after data masking.
+        restorePathShapedArgs(out, command);
         // Process-sub / pipe-to-tee keep paths after restore, but pack regexes
         // require `> /sensitive` shape — rewrite those sinks for pack match only.
         rewriteWriteSinksForPackMatch(out);
         return out;
     }
 
-    // Search tools: first non-flag arg is often the pattern.
+    // Search tools: first non-flag arg is often the pattern. Still restore write
+    // redirects so `rg x > "/etc/passwd"` remains pack-visible after quote mask.
     if (isSearchCommand(out)) {
         maskAllQuoted(out);
+        restoreWriteSinks(out, command);
+        rewriteWriteSinksForPackMatch(out);
         return out;
     }
 
-    // git commit -m / --message: mask message strings.
+    // git commit -m / --message: mask message strings, keep write redirects.
     if (containsWord(out, "git") and (std.mem.indexOf(u8, out, "commit") != null)) {
         maskAllQuoted(out);
+        restoreWriteSinks(out, command);
+        rewriteWriteSinksForPackMatch(out);
         return out;
     }
 
@@ -287,6 +295,64 @@ fn restoreWriteSinks(buf: []u8, original: []const u8) void {
         }
         i += 1;
     }
+}
+
+/// For write-path argv sinks (`tee`), re-copy absolute/sensitive path-shaped
+/// argv tokens that masking blanked. Skips redirect targets (handled elsewhere)
+/// and does **not** restore herestring/heredoc bodies.
+fn restorePathShapedArgs(buf: []u8, original: []const u8) void {
+    if (buf.len != original.len) return;
+    var i: usize = 0;
+    while (i < buf.len and std.ascii.isWhitespace(buf[i])) : (i += 1) {}
+    while (i < buf.len and !std.ascii.isWhitespace(buf[i])) : (i += 1) {}
+    while (i < buf.len) {
+        if (std.ascii.isWhitespace(buf[i])) {
+            i += 1;
+            continue;
+        }
+        // Any redirect op (write or input): skip operator + target without
+        // path-argv restore. Write targets are already restored; input targets
+        // (including `<<<` herestrings) must stay masked.
+        if (redirectOperatorEnd(buf, i)) |op_end| {
+            var t = op_end;
+            while (t < buf.len and std.ascii.isWhitespace(buf[t])) : (t += 1) {}
+            i = redirectTargetEnd(buf, t);
+            continue;
+        }
+        // Pipe stages: leave to restoreWriteSinks / rewriteWriteSinksForPackMatch.
+        if (buf[i] == '|' and !(i + 1 < buf.len and buf[i + 1] == '|')) {
+            i = unquotedSimpleCommandEnd(buf, i);
+            continue;
+        }
+        const tok_end = redirectTargetEnd(buf, i);
+        if (tok_end > i and isPathShapedArg(original[i..tok_end])) {
+            @memcpy(buf[i..tok_end], original[i..tok_end]);
+        }
+        i = tok_end;
+    }
+}
+
+/// True when `tok` (possibly quoted / $'...') looks like an absolute or
+/// home-relative path that pack matchers need to see for write sinks.
+fn isPathShapedArg(tok: []const u8) bool {
+    const inner = unwrapShellQuotes(tok);
+    if (inner.len == 0) return false;
+    if (inner[0] == '/') return true;
+    if (inner[0] == '~') return true;
+    if (inner.len >= 5 and std.mem.startsWith(u8, inner, "$HOME")) return true;
+    return false;
+}
+
+/// Strip one layer of `"..."`, `'...'`, or `$'...'` if present; otherwise return `tok`.
+fn unwrapShellQuotes(tok: []const u8) []const u8 {
+    if (tok.len >= 2 and (tok[0] == '"' or tok[0] == '\'')) {
+        const q = tok[0];
+        if (tok[tok.len - 1] == q) return tok[1 .. tok.len - 1];
+    }
+    if (tok.len >= 3 and tok[0] == '$' and tok[1] == '\'') {
+        if (tok[tok.len - 1] == '\'') return tok[2 .. tok.len - 1];
+    }
+    return tok;
 }
 
 /// Rewrite process-substitution write sinks and pipe-to-writer stages into a
@@ -833,4 +899,37 @@ test "sanitize still masks data-only echo without redirect" {
     const s = try sanitizeForMatching(std.testing.allocator, "echo rm -rf /");
     defer std.testing.allocator.free(s);
     try std.testing.expect(std.mem.indexOf(u8, s, "rm -rf") == null);
+}
+
+test "sanitize preserves tee absolute path argv for pack match" {
+    // bare tee writes via path argv (no `>`); masking must not blank sensitive paths.
+    const cases = [_][]const u8{
+        "tee /etc/passwd",
+        "tee -a /etc/shadow",
+        "tee \"/etc/passwd\"",
+        "tee -a '/etc/shadow'",
+    };
+    for (cases) |cmd| {
+        const s = try sanitizeForMatching(std.testing.allocator, cmd);
+        defer std.testing.allocator.free(s);
+        try std.testing.expect(std.mem.indexOf(u8, s, "/etc/") != null);
+    }
+    const tmp = try sanitizeForMatching(std.testing.allocator, "tee /tmp/log");
+    defer std.testing.allocator.free(tmp);
+    try std.testing.expect(std.mem.indexOf(u8, tmp, "/tmp/log") != null);
+}
+
+test "sanitize preserves search/git quoted write-redirect targets" {
+    const cases = [_][]const u8{
+        "rg x > \"/etc/passwd\"",
+        "grep y > '/etc/shadow'",
+        "git commit -m x > \"/etc/passwd\"",
+        "git commit -m x >> /etc/passwd",
+    };
+    for (cases) |cmd| {
+        const s = try sanitizeForMatching(std.testing.allocator, cmd);
+        defer std.testing.allocator.free(s);
+        try std.testing.expect(std.mem.indexOf(u8, s, "/etc/") != null);
+        try std.testing.expect(std.mem.indexOf(u8, s, ">") != null);
+    }
 }

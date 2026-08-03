@@ -3887,7 +3887,8 @@ test "s-product-wire: zigEvaluator loads user permanent allowlist from XDG_CONFI
     var ws = try sProductWireGitWorkspace();
     defer ws.deinit();
 
-    const cmd = "git reset --hard HEAD";
+    // Medium pack hit (critical cannot be permanently unlocked — covered below).
+    const cmd = "git branch -D feature";
     const reason = "s-product-wire user-layer permanent command marker";
     try sProductWireWriteUserCommandAllow(xdg.config_root, cmd, reason);
 
@@ -3901,6 +3902,28 @@ test "s-product-wire: zigEvaluator loads user permanent allowlist from XDG_CONFI
     try std.testing.expect(std.mem.indexOf(u8, got_reason, reason) != null);
 }
 
+test "s-product-wire: permanent kind=command cannot unlock critical via zigEvaluator" {
+    const allocator = std.testing.allocator;
+    var xdg = try sProductWireIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sProductWireGitWorkspace();
+    defer ws.deinit();
+
+    // User-layer permanent command (project command is stripped M-10); critical still hard-fenced.
+    const cmd = "git reset --hard HEAD";
+    const reason = "s-product-wire permanent critical command must stay deny";
+    try sProductWireWriteUserCommandAllow(xdg.config_root, cmd, reason);
+
+    var parsed = try zigEvaluator(allocator, .{
+        .command = cmd,
+        .cwd = ws.root,
+    });
+    defer parsed.deinit();
+    try std.testing.expectEqual(daemon.ResponseStatus.deny, daemon.responseStatus(parsed.value.result));
+    const got_reason = daemon.responseReason(parsed.value.result) orelse "";
+    try std.testing.expect(std.mem.indexOf(u8, got_reason, reason) == null);
+}
+
 test "s-product-wire: zigEvaluator loads project permanent kind=rule (E8 skip-this-rule)" {
     const allocator = std.testing.allocator;
     var xdg = try sProductWireIsolateXdg();
@@ -3908,12 +3931,13 @@ test "s-product-wire: zigEvaluator loads project permanent kind=rule (E8 skip-th
     var ws = try sProductWireGitWorkspace();
     defer ws.deinit();
 
+    // Medium pack hit (match engine permanent tests); critical rule skip is hard-fenced.
     const reason = "s-product-wire permanent rule marker for zigEvaluator E8";
-    try sProductWireWriteProjectRuleAllow(ws.root, "core.git:reset-hard", reason);
+    try sProductWireWriteProjectRuleAllow(ws.root, "core.git:branch-force-delete", reason);
 
     {
         var parsed = try zigEvaluator(allocator, .{
-            .command = "git reset --hard HEAD",
+            .command = "git branch -D feature",
             .cwd = ws.root,
         });
         defer parsed.deinit();
@@ -3925,12 +3949,32 @@ test "s-product-wire: zigEvaluator loads project permanent kind=rule (E8 skip-th
     // E8: compound still denies (filesystem / other pack).
     {
         var parsed = try zigEvaluator(allocator, .{
-            .command = "git reset --hard; rm -rf /",
+            .command = "git branch -D feature; rm -rf /",
             .cwd = ws.root,
         });
         defer parsed.deinit();
         try std.testing.expectEqual(daemon.ResponseStatus.deny, daemon.responseStatus(parsed.value.result));
     }
+}
+
+test "s-product-wire: permanent kind=rule cannot unlock critical via zigEvaluator" {
+    const allocator = std.testing.allocator;
+    var xdg = try sProductWireIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sProductWireGitWorkspace();
+    defer ws.deinit();
+
+    const reason = "s-product-wire permanent critical rule must stay deny";
+    try sProductWireWriteProjectRuleAllow(ws.root, "core.git:reset-hard", reason);
+
+    var parsed = try zigEvaluator(allocator, .{
+        .command = "git reset --hard HEAD",
+        .cwd = ws.root,
+    });
+    defer parsed.deinit();
+    try std.testing.expectEqual(daemon.ResponseStatus.deny, daemon.responseStatus(parsed.value.result));
+    const got_reason = daemon.responseReason(parsed.value.result) orelse "";
+    try std.testing.expect(std.mem.indexOf(u8, got_reason, reason) == null);
 }
 
 test "s-product-wire: zigEvaluator loads allow-once from XDG data and consumes by default" {

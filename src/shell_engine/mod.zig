@@ -1167,38 +1167,41 @@ fn isAssignmentOnly(cmd: []const u8) bool {
 fn matchLangDestruct(cmd: []const u8) ?registry.Hit {
     // Python/Ruby: shutil.rmtree / os.remove / FileUtils.rm_rf.
     // Node: fs.rmSync / fs.rm / rimraf / fse.remove / fs/promises — flexible call forms.
-    if (!langDestructApiPresent(cmd)) return null;
-
-    // Catastrophe paths → critical so product hard-fence / permanent fence apply.
-    const critical_paths = [_][]const u8{
-        "/home", "/etc", "/usr", "/var", "/root",
-        "~",     "$HOME",
-        "'/'",   "\"/\"", "('/'", "(\"/\"" ,
-    };
-    for (critical_paths) |s| {
-        if (std.mem.indexOf(u8, cmd, s) != null) {
-            return .{
-                .pack_id = "core.filesystem",
-                .pattern_name = "rm-rf-root-home",
-                .severity = .critical,
-                .reason = "Language-runtime recursive delete of root/home/system paths is catastrophic.",
-            };
+    if (langDestructApiPresent(cmd)) {
+        // Catastrophe paths → critical so product hard-fence / permanent fence apply.
+        const critical_paths = [_][]const u8{
+            "/home", "/etc", "/usr", "/var", "/root",
+            "~",     "$HOME",
+            "'/'",   "\"/\"", "('/'", "(\"/\"" ,
+        };
+        for (critical_paths) |s| {
+            if (std.mem.indexOf(u8, cmd, s) != null) {
+                return .{
+                    .pack_id = "core.filesystem",
+                    .pattern_name = "rm-rf-root-home",
+                    .severity = .critical,
+                    .reason = "Language-runtime recursive delete of root/home/system paths is catastrophic.",
+                };
+            }
         }
+        // Other path-like args (e.g. /tmp) or bare calls → high (softenable; not hard-fence).
+        return .{
+            .pack_id = "core.filesystem",
+            .pattern_name = "rm-rf-general",
+            .severity = .high,
+            .reason = "Language-runtime recursive delete is destructive and requires human approval.",
+        };
     }
-    // Other path-like args (e.g. /tmp) or bare calls → high (softenable; not hard-fence).
-    return .{
-        .pack_id = "core.filesystem",
-        .pattern_name = "rm-rf-general",
-        .severity = .high,
-        .reason = "Language-runtime recursive delete is destructive and requires human approval.",
-    };
+    // Node write/overwrite of sensitive paths (not recursive delete).
+    if (matchLangWriteSensitive(cmd)) |h| return h;
+    return null;
 }
 
 /// True when `cmd` contains a language-runtime recursive-delete API call shape.
-/// Tolerates optional whitespace before `(`, bracket property access, and
-/// `fs/promises` / `promises.rm` variants that exact substrings miss.
+/// Tolerates optional whitespace before `(`, `.call`/`.apply`/`.bind`, optional
+/// chaining `?.`, bracket property access, Reflect.apply, and `fs/promises`.
 fn langDestructApiPresent(cmd: []const u8) bool {
-    // Unique API basenames: name, optional ws, then '('. "fs.rm" must not match "fs.rmSync".
+    // Unique API basenames: name + invocation surface. "fs.rm" must not match "fs.rmSync".
     const call_names = [_][]const u8{
         "rmtree",
         "os.remove",
@@ -1207,11 +1210,23 @@ fn langDestructApiPresent(cmd: []const u8) bool {
         "FileUtils.rm_r",
         "Path.rmtree",
         "rmSync",
+        "rmdirSync",
+        "unlinkSync",
+        // Callback forms: require('fs').unlink( / .rmdir(
+        "unlink",
+        "rmdir",
         "rimraf",
         "fse.removeSync",
         "fse.remove",
         "promises.rm",
+        "promises.rmdir",
+        "promises.unlink",
         "fs.rm",
+        "fs.unlink",
+        "fs.rmdir",
+        "fs.promises.rm",
+        "fs.promises.rmdir",
+        "fs.promises.unlink",
     };
     for (call_names) |name| {
         if (hasCallLike(cmd, name)) return true;
@@ -1222,30 +1237,104 @@ fn langDestructApiPresent(cmd: []const u8) bool {
         "['rmSync']",
         "[\"rm\"]",
         "['rm']",
+        "[\"rmdirSync\"]",
+        "['rmdirSync']",
+        "[\"unlinkSync\"]",
+        "['unlinkSync']",
     };
     for (bracket_apis) |b| {
         if (hasCallLike(cmd, b)) return true;
     }
     // require("fs/promises").rm(...) — module path breaks "fs.promises.rm(" / "fs.rm(".
-    if (std.mem.indexOf(u8, cmd, "fs/promises") != null and hasCallLike(cmd, ".rm")) return true;
+    if (std.mem.indexOf(u8, cmd, "fs/promises") != null) {
+        const methods = [_][]const u8{ ".rm", ".rmdir", ".unlink", ".rmSync", ".rmdirSync", ".unlinkSync" };
+        for (methods) |m| {
+            if (hasCallLike(cmd, m)) return true;
+        }
+    }
     return false;
 }
 
-/// True when `name` appears followed by optional whitespace (and optional `]`) then `(`.
+/// True when `rest` begins with method token `token` at a non-identifier boundary.
+fn langMethodToken(rest: []const u8, token: []const u8) bool {
+    if (!std.mem.startsWith(u8, rest, token)) return false;
+    if (rest.len == token.len) return true;
+    const c = rest[token.len];
+    return !(std.ascii.isAlphanumeric(c) or c == '_' or c == '$');
+}
+
+/// True when `name` appears as an invocation surface: `name(`, whitespace-before-(,
+/// `name.call`/`.apply`/`.bind`, optional chaining `name?.(`, or Reflect.apply arg.
 fn hasCallLike(cmd: []const u8, name: []const u8) bool {
     var start: usize = 0;
     while (std.mem.indexOfPos(u8, cmd, start, name)) |idx| {
-        var j = idx + name.len;
+        const j = idx + name.len;
         // Reject longer identifier continuation (fs.rm vs fs.rmSync; .rm vs .rmtree).
         if (j < cmd.len and (std.ascii.isAlphanumeric(cmd[j]) or cmd[j] == '_' or cmd[j] == '$')) {
             start = idx + 1;
             continue;
         }
-        while (j < cmd.len and std.ascii.isWhitespace(cmd[j])) : (j += 1) {}
-        if (j < cmd.len and cmd[j] == '(') return true;
+        // Direct call with optional whitespace: name( / name (
+        var p = j;
+        while (p < cmd.len and std.ascii.isWhitespace(cmd[p])) : (p += 1) {}
+        if (p < cmd.len and cmd[p] == '(') return true;
+        // Optional chaining: name?.( / name?.call / name?.apply / name?.bind
+        if (j + 1 < cmd.len and cmd[j] == '?' and cmd[j + 1] == '.') {
+            const rest = cmd[j + 2 ..];
+            var q: usize = 0;
+            while (q < rest.len and std.ascii.isWhitespace(rest[q])) : (q += 1) {}
+            if (q < rest.len and rest[q] == '(') return true;
+            if (langMethodToken(rest, "call") or langMethodToken(rest, "apply") or langMethodToken(rest, "bind")) return true;
+        }
+        // Bound call: name.call / name.apply / name.bind
+        if (j < cmd.len and cmd[j] == '.') {
+            const rest = cmd[j + 1 ..];
+            if (langMethodToken(rest, "call") or langMethodToken(rest, "apply") or langMethodToken(rest, "bind")) return true;
+        }
+        // Reflect.apply(fn, …) / Function.prototype.apply — method as argument token
+        if (j < cmd.len and (cmd[j] == ',' or cmd[j] == ')')) {
+            if (std.mem.indexOf(u8, cmd, "Reflect.apply") != null or
+                std.mem.indexOf(u8, cmd, "Function.prototype.apply") != null)
+            {
+                return true;
+            }
+        }
         start = idx + 1;
     }
     return false;
+}
+
+/// Sensitive path literals for language-runtime write/overwrite APIs.
+/// Excludes `/tmp` so temp writes can remain allow.
+fn langSensitiveWritePath(cmd: []const u8) bool {
+    const sensitive = [_][]const u8{ "/home", "/etc", "/usr", "/var", "/root", "~", "$HOME", "'/'", "\"/\"", "('/'", "(\"/\"" };
+    for (sensitive) |s| {
+        if (std.mem.indexOf(u8, cmd, s) != null) return true;
+    }
+    return false;
+}
+
+/// Node write/overwrite APIs on sensitive paths (parallel to shell redirect packs).
+fn matchLangWriteSensitive(cmd: []const u8) ?registry.Hit {
+    if (!langSensitiveWritePath(cmd)) return null;
+    const write_apis = [_][]const u8{
+        "writeFileSync",
+        "appendFileSync",
+        "createWriteStream",
+        "copyFileSync",
+        "cpSync",
+    };
+    for (write_apis) |a| {
+        if (hasCallLike(cmd, a)) {
+            return .{
+                .pack_id = "core.filesystem",
+                .pattern_name = "lang-write-sensitive",
+                .severity = .high,
+                .reason = "Language-runtime write/overwrite of a sensitive path requires human approval.",
+            };
+        }
+    }
+    return null;
 }
 
 /// Mask `NAME=value` / `NAME='...'` / `NAME="..."` RHS so assignment text cannot
@@ -1634,6 +1723,13 @@ test "evaluateCommand denies node fs.rmSync wipe of root" {
         "node -e 'require(\"fs\")[\"rmSync\"](\"/\",{recursive:true})'",
         "node -e 'require(\"fs\").rmSync (\"/\",{recursive:true})'",
         "node -e 'require(\"fs\").promises.rm(\"/\",{recursive:true})'",
+        // Second-pass residuals: bind / Reflect / optional chaining / rmdir / unlink.
+        "node -e \"require('fs').rmSync.bind(null)('/',{recursive:true})\"",
+        "node -e \"Reflect.apply(require('fs').rmSync,null,['/',{recursive:true}])\"",
+        "node -e \"require('fs').rmSync?.('/',{recursive:true})\"",
+        "node -e \"require('fs').rmdirSync('/',{recursive:true})\"",
+        "node -e \"require('fs').unlinkSync('/etc/passwd')\"",
+        "node -e \"require('fs').rmSync.call(null,'/',{recursive:true})\"",
     };
     for (cases) |cmd| {
         var eval = try evaluateCommand(std.testing.allocator, cmd, .{});
@@ -1644,6 +1740,24 @@ test "evaluateCommand denies node fs.rmSync wipe of root" {
         try std.testing.expect(eval.rule_id != null);
         try std.testing.expectEqualStrings("core.filesystem:rm-rf-root-home", eval.rule_id.?);
     }
+}
+
+test "evaluateCommand denies node write APIs on sensitive paths" {
+    const deny_cases = [_][]const u8{
+        "node -e \"require('fs').writeFileSync('/etc/passwd','x')\"",
+        "node -e \"require('fs').appendFileSync('/etc/passwd','x')\"",
+        "node -e \"require('fs').createWriteStream('/etc/passwd')\"",
+        "node -e \"require('fs').copyFileSync('/tmp/a','/etc/passwd')\"",
+        "node -e \"require('fs').cpSync('/tmp/a','/home/user/x')\"",
+    };
+    for (deny_cases) |cmd| {
+        var eval = try evaluateCommand(std.testing.allocator, cmd, .{});
+        defer eval.deinit(std.testing.allocator);
+        try std.testing.expect(eval.decision == .deny);
+    }
+    var allow_eval = try evaluateCommand(std.testing.allocator, "node -e \"require('fs').writeFileSync('/tmp/out','x')\"", .{});
+    defer allow_eval.deinit(std.testing.allocator);
+    try std.testing.expect(allow_eval.decision == .allow);
 }
 
 test "evaluateCommand denies rm after newline following git commit -m" {
@@ -1691,7 +1805,8 @@ test "evaluateCommand denies attached redirection git>/dev/null reset" {
 }
 
 test "evaluateCommand allows command builtin pure append redirect" {
-    var eval = try evaluateCommand(std.testing.allocator, "command >> /usr/local/log", .{});
+    // Non-sensitive path only: append to /usr/* is a pack deny (redirect-truncate-root-home).
+    var eval = try evaluateCommand(std.testing.allocator, "command >> /tmp/log", .{});
     defer eval.deinit(std.testing.allocator);
     try std.testing.expect(eval.decision == .allow);
 }

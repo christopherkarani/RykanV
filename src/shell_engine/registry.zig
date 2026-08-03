@@ -374,7 +374,7 @@ pub fn severityForRuleId(rule_id: []const u8) Severity {
 }
 
 /// Embedded oracle pattern totals (must match extract from frozen orca-rs packs).
-pub const expected_destructive_patterns: usize = 792;
+pub const expected_destructive_patterns: usize = 793;
 pub const expected_safe_patterns: usize = 830;
 
 fn compileOnePattern(a: std.mem.Allocator, pat: std.json.Value) !CompiledPattern {
@@ -667,3 +667,4 @@ test "s-engine: MatchOptions can skip multiple rule ids" {
     try std.testing.expect(disk == .deny);
     try std.testing.expectEqualStrings("system.disk", disk.deny.pack_id);
 }
+
