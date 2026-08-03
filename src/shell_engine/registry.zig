@@ -667,4 +667,3 @@ test "s-engine: MatchOptions can skip multiple rule ids" {
     try std.testing.expect(disk == .deny);
     try std.testing.expectEqualStrings("system.disk", disk.deny.pack_id);
 }
-

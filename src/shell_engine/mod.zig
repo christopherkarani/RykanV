@@ -327,6 +327,13 @@ fn collectPermanentRuleSkipIds(
 }
 
 /// Plan §4.1 step 1: exact allow-once hit before permanent/packs.
+///
+/// Product law (operator break-glass): allow-once MAY FULL ALLOW a critical pack
+/// hit after the operator redeems a deny-panel short code. Permanent kind=command
+/// / kind=rule cannot unlock critical (see tryPermanentCommand /
+/// collectPermanentRuleSkipIds). This is intentional dual-path policy, not an
+/// oversight — document + test both; do not apply the permanent critical fence here.
+///
 /// Two-phase consume (M-15): peek without burning, build Evaluation, then consume
 /// single_use only after the allow Evaluation is fully constructed. Prevents losing
 /// the exception when post-match allocation fails.
@@ -462,19 +469,12 @@ fn tryPermanentCommand(
     const now = options.now_iso orelse return null;
     const entry = store.matchCommand(trimmed, now) orelse return null;
 
-    // Critical hard fence: refuse permanent FULL ALLOW when packs would deny
-    // this exact command at critical severity. Uses registry match (no recurse
-    // into evaluateCommand — avoids error-set dependency loops).
-    registry.ensureInit() catch return null;
-    const pack_hit = registry.matchCommandDetailedOpts(trimmed, .{
-        .default_packs_only = options.default_packs_only,
-        .extra_enabled = options.extra_enabled,
-        .disabled = options.disabled,
-        .skipped_rule_ids = &.{},
-    });
-    if (pack_hit == .deny and pack_hit.deny.severity == .critical) {
-        return null;
-    }
+    // Critical hard fence: same deny pipeline as evaluate (evalOne: sanitize →
+    // matchLangDestruct → pack match → normalize re-match) with empty skip list.
+    // Raw registry-only match missed normalize-only criticals and lang-destruct
+    // hits. Refuse FULL ALLOW when any pipeline hit is critical. Does not recurse
+    // into evaluateCommand (avoids error-set / exception-stack loops).
+    if (try wouldDenyCritical(allocator, trimmed, options)) return null;
 
     const layer = permanentLayerName(entry.layer);
     const detail = try std.fmt.allocPrint(
@@ -550,6 +550,28 @@ fn firstDenyHit(
         if (try evalOne(allocator, cand, match_opts, .{ .skip_data_sanitize = true })) |hit| return hit;
     }
     return null;
+}
+
+/// True when production evalOne (sanitize / lang-destruct / pack / normalize)
+/// would deny `cmd` at critical severity under empty skip. Used by the permanent
+/// kind=command hard fence so obfuscated and lang-only criticals cannot FULL ALLOW.
+/// On registry init failure, fails closed (treat as critical — no permanent unlock).
+fn wouldDenyCritical(
+    allocator: std.mem.Allocator,
+    cmd: []const u8,
+    options: EvaluateOptions,
+) !bool {
+    registry.ensureInit() catch return true;
+    const match_opts = registry.MatchOptions{
+        .default_packs_only = options.default_packs_only,
+        .extra_enabled = options.extra_enabled,
+        .disabled = options.disabled,
+        .skipped_rule_ids = &.{},
+    };
+    if (try evalOne(allocator, cmd, match_opts, .{})) |hit| {
+        return hit.severity == .critical;
+    }
+    return false;
 }
 
 fn allowExceptionOwned(
@@ -1144,48 +1166,86 @@ fn isAssignmentOnly(cmd: []const u8) bool {
 
 fn matchLangDestruct(cmd: []const u8) ?registry.Hit {
     // Python/Ruby: shutil.rmtree / os.remove / FileUtils.rm_rf.
-    // Node: fs.rmSync / fs.rm / rimraf / fse.remove on sensitive paths.
-    const apis = [_][]const u8{
-        "rmtree(",
-        "os.remove(",
-        "os.unlink(",
-        "FileUtils.rm_rf(",
-        "FileUtils.rm_r(",
-        "Path.rmtree(",
-        "rmSync(",
-        "fs.rm(",
-        "fs.promises.rm(",
-        "rimraf(",
-        "fse.remove(",
-        "fse.removeSync(",
+    // Node: fs.rmSync / fs.rm / rimraf / fse.remove / fs/promises — flexible call forms.
+    if (!langDestructApiPresent(cmd)) return null;
+
+    // Catastrophe paths → critical so product hard-fence / permanent fence apply.
+    const critical_paths = [_][]const u8{
+        "/home", "/etc", "/usr", "/var", "/root",
+        "~",     "$HOME",
+        "'/'",   "\"/\"", "('/'", "(\"/\"" ,
     };
-    var hit_api = false;
-    for (apis) |a| {
-        if (std.mem.indexOf(u8, cmd, a) != null) {
-            hit_api = true;
-            break;
-        }
-    }
-    if (!hit_api) return null;
-    // Any path-like argument or bare call → treat as destructive filesystem op.
-    const sensitive = [_][]const u8{ "/home", "/etc", "/usr", "/var", "/root", "/tmp", "~", "$HOME", "'/'", "\"/\"", "('/'", "(\"/\"" };
-    for (sensitive) |s| {
+    for (critical_paths) |s| {
         if (std.mem.indexOf(u8, cmd, s) != null) {
             return .{
                 .pack_id = "core.filesystem",
-                .pattern_name = "rm-rf-general",
-                .severity = .high,
-                .reason = "Language-runtime recursive delete (rmtree/remove/rmSync) is destructive and requires human approval.",
+                .pattern_name = "rm-rf-root-home",
+                .severity = .critical,
+                .reason = "Language-runtime recursive delete of root/home/system paths is catastrophic.",
             };
         }
     }
-    // Even without sensitive path literal, rmtree/rm_rf/rmSync is high risk.
+    // Other path-like args (e.g. /tmp) or bare calls → high (softenable; not hard-fence).
     return .{
         .pack_id = "core.filesystem",
         .pattern_name = "rm-rf-general",
         .severity = .high,
         .reason = "Language-runtime recursive delete is destructive and requires human approval.",
     };
+}
+
+/// True when `cmd` contains a language-runtime recursive-delete API call shape.
+/// Tolerates optional whitespace before `(`, bracket property access, and
+/// `fs/promises` / `promises.rm` variants that exact substrings miss.
+fn langDestructApiPresent(cmd: []const u8) bool {
+    // Unique API basenames: name, optional ws, then '('. "fs.rm" must not match "fs.rmSync".
+    const call_names = [_][]const u8{
+        "rmtree",
+        "os.remove",
+        "os.unlink",
+        "FileUtils.rm_rf",
+        "FileUtils.rm_r",
+        "Path.rmtree",
+        "rmSync",
+        "rimraf",
+        "fse.removeSync",
+        "fse.remove",
+        "promises.rm",
+        "fs.rm",
+    };
+    for (call_names) |name| {
+        if (hasCallLike(cmd, name)) return true;
+    }
+    // Bracket / computed property: fs["rmSync"]( / fs['rm'](
+    const bracket_apis = [_][]const u8{
+        "[\"rmSync\"]",
+        "['rmSync']",
+        "[\"rm\"]",
+        "['rm']",
+    };
+    for (bracket_apis) |b| {
+        if (hasCallLike(cmd, b)) return true;
+    }
+    // require("fs/promises").rm(...) — module path breaks "fs.promises.rm(" / "fs.rm(".
+    if (std.mem.indexOf(u8, cmd, "fs/promises") != null and hasCallLike(cmd, ".rm")) return true;
+    return false;
+}
+
+/// True when `name` appears followed by optional whitespace (and optional `]`) then `(`.
+fn hasCallLike(cmd: []const u8, name: []const u8) bool {
+    var start: usize = 0;
+    while (std.mem.indexOfPos(u8, cmd, start, name)) |idx| {
+        var j = idx + name.len;
+        // Reject longer identifier continuation (fs.rm vs fs.rmSync; .rm vs .rmtree).
+        if (j < cmd.len and (std.ascii.isAlphanumeric(cmd[j]) or cmd[j] == '_' or cmd[j] == '$')) {
+            start = idx + 1;
+            continue;
+        }
+        while (j < cmd.len and std.ascii.isWhitespace(cmd[j])) : (j += 1) {}
+        if (j < cmd.len and cmd[j] == '(') return true;
+        start = idx + 1;
+    }
+    return false;
 }
 
 /// Mask `NAME=value` / `NAME='...'` / `NAME="..."` RHS so assignment text cannot
@@ -1560,9 +1620,7 @@ test "evaluateCommand denies echo/printf/cat redirect to sensitive path" {
         defer eval.deinit(std.testing.allocator);
         try std.testing.expect(eval.decision == .deny);
         try std.testing.expect(eval.rule_id != null);
-        // redirect-truncate-root-home on core.filesystem
-        try std.testing.expect(std.mem.indexOf(u8, eval.rule_id.?, "redirect") != null or
-            std.mem.indexOf(u8, eval.rule_id.?, "core.filesystem") != null);
+        try std.testing.expectEqualStrings("core.filesystem:redirect-truncate-root-home", eval.rule_id.?);
     }
 }
 
@@ -1571,11 +1629,20 @@ test "evaluateCommand denies node fs.rmSync wipe of root" {
         "node -e \"require('fs').rmSync('/',{recursive:true})\"",
         "node -e 'require(\"fs\").rmSync(\"/\",{recursive:true})'",
         "node --eval \"fs.rmSync('/etc',{recursive:true})\"",
+        // Residual forms the exact-substring list previously missed (M-4).
+        "node -e 'require(\"fs/promises\").rm(\"/\",{recursive:true})'",
+        "node -e 'require(\"fs\")[\"rmSync\"](\"/\",{recursive:true})'",
+        "node -e 'require(\"fs\").rmSync (\"/\",{recursive:true})'",
+        "node -e 'require(\"fs\").promises.rm(\"/\",{recursive:true})'",
     };
     for (cases) |cmd| {
         var eval = try evaluateCommand(std.testing.allocator, cmd, .{});
         defer eval.deinit(std.testing.allocator);
         try std.testing.expect(eval.decision == .deny);
+        // Root/home/system lang-destruct wipes are critical (product hard-fence class).
+        try std.testing.expect(eval.severity == .critical);
+        try std.testing.expect(eval.rule_id != null);
+        try std.testing.expectEqualStrings("core.filesystem:rm-rf-root-home", eval.rule_id.?);
     }
 }
 
@@ -1939,6 +2006,57 @@ test "s-engine: permanent kind=command cannot unlock critical pack hit" {
     try std.testing.expectEqualStrings("core.git:reset-hard", eval.rule_id.?);
 }
 
+test "s-engine: permanent kind=command cannot unlock normalize-only critical form" {
+    // Raw registry match on the exact permanent string may miss; evalOne normalize
+    // path still yields critical. Fence must use the full pipeline (M-2).
+    const cases = [_][]const u8{
+        "git \"reset\" --hard HEAD",
+        "g\\it reset --hard HEAD",
+    };
+    for (cases) |cmd| {
+        const store = sEnginePermanentStore(&.{
+            .{
+                .kind = .command,
+                .command = cmd,
+                .reason = "normalize-only critical must stay hard-fenced",
+                .created_at = "2026-07-25T12:00:00Z",
+                .layer = .user,
+            },
+        });
+        var eval = try evaluateCommand(std.testing.allocator, cmd, .{
+            .permanent_allowlist = store,
+            .now_iso = s_engine_now,
+        });
+        defer eval.deinit(std.testing.allocator);
+        try std.testing.expect(eval.decision == .deny);
+        try std.testing.expect(eval.exception_source == null);
+        try std.testing.expect(eval.severity == .critical);
+        try std.testing.expectEqualStrings("core.git:reset-hard", eval.rule_id.?);
+    }
+}
+
+test "s-engine: permanent kind=command cannot unlock critical lang-destruct Node wipe" {
+    const cmd = "node -e \"require('fs').rmSync('/',{recursive:true})\"";
+    const store = sEnginePermanentStore(&.{
+        .{
+            .kind = .command,
+            .command = cmd,
+            .reason = "lang-destruct critical must stay hard-fenced",
+            .created_at = "2026-07-25T12:00:00Z",
+            .layer = .user,
+        },
+    });
+    var eval = try evaluateCommand(std.testing.allocator, cmd, .{
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now,
+    });
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .deny);
+    try std.testing.expect(eval.exception_source == null);
+    try std.testing.expect(eval.severity == .critical);
+    try std.testing.expectEqualStrings("core.filesystem:rm-rf-root-home", eval.rule_id.?);
+}
+
 test "s-engine: kind=command permanent does not FULL ALLOW different compound string" {
     // Exact-command short-circuit applies only to the full command string.
     const store = sEnginePermanentStore(&.{
@@ -2061,6 +2179,52 @@ test "s-engine: kind=rule is not pre-pack FULL ALLOW for unrelated destructive p
 
 // ── Acceptance 2: allow-once before permanent/packs; consume flag ───────────
 
+test "s-engine: allow-once may FULL ALLOW critical (operator break-glass); permanent cannot" {
+    // Product law: permanent is hard-fenced for critical; allow-once after operator
+    // redeem is the intentional single-use recovery path (help.zig / plan §4.1).
+    const cmd = "git reset --hard HEAD";
+
+    const store = sEnginePermanentStore(&.{
+        .{
+            .kind = .command,
+            .command = cmd,
+            .reason = "permanent must not unlock critical",
+            .created_at = "2026-07-25T12:00:00Z",
+            .layer = .user,
+        },
+    });
+    var perm = try evaluateCommand(std.testing.allocator, cmd, .{
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now,
+    });
+    defer perm.deinit(std.testing.allocator);
+    try std.testing.expect(perm.decision == .deny);
+    try std.testing.expect(perm.exception_source == null);
+    try std.testing.expect(perm.severity == .critical);
+
+    var tmp = try sEngineTmpRoot();
+    defer {
+        std.testing.allocator.free(tmp.path);
+        tmp.dir.cleanup();
+    }
+    const pending_path = try sEngineJoin(tmp.path, allow_once_mod.pending_file_name);
+    defer std.testing.allocator.free(pending_path);
+    const once_path = try sEngineJoin(tmp.path, allow_once_mod.allow_once_file_name);
+    defer std.testing.allocator.free(once_path);
+    try sEngineSeedAllowOnce(pending_path, once_path, cmd, tmp.path, "operator redeem of critical deny");
+
+    var once = try evaluateCommand(std.testing.allocator, cmd, .{
+        .cwd = tmp.path,
+        .allow_once_path = once_path,
+        .io = std.testing.io,
+        .consume_allow_once = false,
+        .now_iso = s_engine_now,
+    });
+    defer once.deinit(std.testing.allocator);
+    try std.testing.expect(once.decision == .allow);
+    try std.testing.expectEqualStrings("allow_once", once.exception_source.?);
+}
+
 test "s-engine: allow-once exact hit allows before packs and consumes when true" {
     var tmp = try sEngineTmpRoot();
     defer {
@@ -2072,6 +2236,7 @@ test "s-engine: allow-once exact hit allows before packs and consumes when true"
     const once_path = try sEngineJoin(tmp.path, allow_once_mod.allow_once_file_name);
     defer std.testing.allocator.free(once_path);
 
+    // Critical command: allow-once is the intentional break-glass path (see tryAllowOnce).
     const cmd = "git reset --hard HEAD";
     const cwd = "/work/project";
     const once_reason = "one-time unlock after human review of deny panel";

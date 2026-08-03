@@ -60,3 +60,17 @@
 {"command": "printf x > /etc/passwd", "expected": "deny", "source": "dcg_false_allow_fix", "description": "printf redirect to sensitive path must deny"}
 {"command": "cat > /etc/passwd", "expected": "deny", "source": "dcg_false_allow_fix", "description": "cat redirect to sensitive path must deny"}
 {"command": "node -e \"require('fs').rmSync('/',{recursive:true})\"", "expected": "deny", "source": "dcg_false_allow_fix", "description": "node fs.rmSync root wipe must deny"}
+{"command": "node -e 'require(\"fs/promises\").rm(\"/\",{recursive:true})'", "expected": "deny", "source": "dcg_false_allow_fix", "description": "node fs/promises.rm root wipe must deny"}
+{"command": "node -e 'require(\"fs\")[\"rmSync\"](\"/\",{recursive:true})'", "expected": "deny", "source": "dcg_false_allow_fix", "description": "node bracket rmSync root wipe must deny"}
+{"command": "node -e 'require(\"fs\").rmSync (\"/\",{recursive:true})'", "expected": "deny", "source": "dcg_false_allow_fix", "description": "node rmSync with space before paren must deny"}
+{"command": "node -e 'require(\"fs\").promises.rm(\"/\",{recursive:true})'", "expected": "deny", "source": "dcg_false_allow_fix", "description": "node fs.promises.rm after quoted require must deny"}
+{"command": "echo pwn >\"/etc/passwd\"", "expected": "deny", "source": "mapr_04837a19_quoted_redirect", "description": "quoted double redirect target must deny (M-1)"}
+{"command": "echo pwn >'/etc/shadow'", "expected": "deny", "source": "mapr_04837a19_quoted_redirect", "description": "quoted single redirect target must deny (M-1)"}
+{"command": "echo pwn > \"/etc/passwd\"", "expected": "deny", "source": "mapr_04837a19_quoted_redirect", "description": "spaced quoted redirect target must deny (M-1)"}
+{"command": "printf x > '/etc/passwd'", "expected": "deny", "source": "mapr_04837a19_quoted_redirect", "description": "printf single-quoted redirect target must deny (M-1)"}
+{"command": "echo x > >(tee /etc/passwd)", "expected": "deny", "source": "mapr_04837a19_process_sub", "description": "process-substitution write sink must deny (M-6)"}
+{"command": "printf x > >(tee /etc/shadow)", "expected": "deny", "source": "mapr_04837a19_process_sub", "description": "printf process-sub write sink must deny (M-6)"}
+{"command": "echo pwn > >(tee /etc/passwd)", "expected": "deny", "source": "mapr_04837a19_process_sub", "description": "echo pwn process-sub write sink must deny (M-6)"}
+{"command": "echo x | tee /etc/passwd", "expected": "deny", "source": "mapr_04837a19_pipe_tee", "description": "pipe-to-tee sensitive path must deny (M-9)"}
+{"command": "echo x | tee \"/etc/passwd\"", "expected": "deny", "source": "mapr_04837a19_pipe_tee", "description": "pipe-to-tee quoted sensitive path must deny (M-9)"}
+{"command": "printf x | sudo tee /etc/passwd", "expected": "deny", "source": "mapr_04837a19_pipe_tee", "description": "pipe-to-sudo-tee sensitive path must deny (M-9)"}
