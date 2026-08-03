@@ -206,10 +206,10 @@ pub fn managedEntryMatchesHostKey(entry: ManagedHost, host_key: []const u8) bool
 /// `workspace_root`. Hostnames + source tags only. Never edits policy.yaml.
 ///
 /// Merge-by-source (tag-scoped) contract:
-/// - Non-empty adapter **replaces** that host_key's source tags.
-/// - Soft-empty adapter **preserves** only prior tags for that host_key.
-/// - Shared hostnames **union** remaining tags.
-/// - Unrequested / foreign tags preserved.
+/// - Non-empty adapter **replaces** that host_key's source tags (live write).
+/// - Soft-empty **requested** adapter **preserves** prior tags for that host_key only.
+/// - Foreign / unrequested tags are **dropped** when any key rediscovered non-empty
+///   (full regenerate of managed contribution; DIS-7).
 /// - All requested keys soft-empty → leave file untouched.
 pub fn refreshManagedDiscovery(
     io: std.Io,
@@ -239,23 +239,20 @@ pub fn refreshManagedDiscovery(
         try non_empty.append(allocator, key);
         for (discovered) |host| {
             if (host.len == 0) continue;
-            try refreshUpsertHost(allocator, &collected, host, key);
+            try refreshUpsertHostWithTag(allocator, &collected, host, refreshSourceTagString(key));
         }
     }
 
-    // Tag-scoped preserve: keep prior tags only when that host_key soft-emptied
-    // (or was not requested). Never re-apply tags for keys replaced by live discovery.
+    // Soft-empty requested keys only: preserve prior tags matching those keys.
+    // Foreign tags (e.g. fixture:stale) are dropped when rediscovery produced hosts.
     for (prior.hosts) |entry| {
-        if (entry.sources.len == 0) {
-            if (!refreshKeyIsNonEmpty(non_empty.items, "discover")) {
-                try refreshUpsertHost(allocator, &collected, entry.host, "discover");
-            }
-            continue;
-        }
         for (entry.sources) |src| {
-            const tag_key = sourceTagHostKey(src) orelse "discover";
+            if (!isSafeSourceTag(src)) continue;
+            const tag_key = sourceTagHostKey(src) orelse continue;
+            // Only preserve if this host_key was requested AND soft-empty this round.
+            if (!refreshKeyWasRequested(host_keys, tag_key)) continue;
             if (refreshKeyIsNonEmpty(non_empty.items, tag_key)) continue;
-            try refreshUpsertHost(allocator, &collected, entry.host, tag_key);
+            try refreshUpsertHostWithTag(allocator, &collected, entry.host, src);
         }
     }
 
@@ -266,6 +263,13 @@ pub fn refreshManagedDiscovery(
 
     try writeManaged(io, allocator, workspace_root, collected.items);
     freeRefreshManagedHostsOwnedSources(allocator, &collected);
+}
+
+fn refreshKeyWasRequested(host_keys: []const []const u8, key: []const u8) bool {
+    for (host_keys) |k| {
+        if (std.mem.eql(u8, k, key)) return true;
+    }
+    return false;
 }
 
 fn refreshKeyIsNonEmpty(non_empty: []const []const u8, key: []const u8) bool {
@@ -294,22 +298,20 @@ fn sourceTagHostKey(src: []const u8) ?[]const u8 {
     return src;
 }
 
-/// Upsert host into collected list; union source tags on collision (owned sources).
-fn refreshUpsertHost(
+/// Upsert host with an exact source tag string (owned copy). Live adapters use
+/// product tags (`pi:discover`); preserve path keeps original safe tags.
+fn refreshUpsertHostWithTag(
     allocator: std.mem.Allocator,
     collected: *std.ArrayList(ManagedHost),
     host: []const u8,
-    host_key: []const u8,
+    tag: []const u8,
 ) !void {
-    const tag = refreshSourceTagString(host_key);
-    // Find existing host (exact match).
+    if (tag.len == 0 or !isSafeSourceTag(tag)) return;
     for (collected.items) |*entry| {
         if (!std.mem.eql(u8, entry.host, host)) continue;
-        // Already has this source tag?
         for (entry.sources) |s| {
             if (std.mem.eql(u8, s, tag)) return;
         }
-        // Union: grow sources slice.
         const old = entry.sources;
         var next = try allocator.alloc([]const u8, old.len + 1);
         errdefer allocator.free(next);
@@ -319,7 +321,6 @@ fn refreshUpsertHost(
         entry.sources = next;
         return;
     }
-    // New host entry.
     const owned_host = try allocator.dupe(u8, host);
     errdefer allocator.free(owned_host);
     const owned_tag = try allocator.dupe(u8, tag);

@@ -146,7 +146,7 @@ Managed store path: `<workspace>/.orca/network-discovered.yaml` (optional; soft-
 
 Adapters emit **hostnames only**. They prefer literal hosts from approved URL fields (`baseUrl`, `tokenEndpoint`, discovery endpoints), else map provider **ids** through a static catalog (unknown ids skipped). They **never** harvest MCP, marketplace, plugins, or full-tree URL regexes.
 
-**Hard rejects on extract/load:** reserved policy class tokens (`private`, `metadata`, `direct-ip`, bare `localhost`), cloud-metadata hostnames (`metadata.google.internal`), bare wildcards, credential-bearing URLs, non-loopback IP literals. Loopback residual is exact `127.0.0.1` / `::1` only — never the class token `localhost` (which would allow all loopback destinations).
+**Hard rejects on extract/load:** reserved policy class tokens (`private`, `metadata`, `direct-ip`, bare `localhost`), cloud-metadata hostnames (`metadata.google.internal`), bare wildcards, credential-bearing URLs, non-loopback IP literals (extract accepts exact `127.0.0.1` / `::1` only). **Discovery never auto-merges loopback** — local Ollama must be listed in user `policy.yaml` (avoids allow-before-class-deny SSRF via agent-writable auth).
 
 **Soft-drop sinks:** paste/webhook/tunnel hosts from the shared `network_eval` table never auto-grant (live adapter and managed load).
 

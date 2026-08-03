@@ -245,7 +245,7 @@ fn appendCatalogHosts(
     }
 }
 
-/// Takes ownership of `owned_host` (frees on dupe/cap/sink reject).
+/// Takes ownership of `owned_host` (frees on dupe/cap/sink/loopback reject).
 fn appendOwnedHost(
     allocator: std.mem.Allocator,
     list: *std.ArrayList([]const u8),
@@ -257,12 +257,24 @@ fn appendOwnedHost(
         allocator.free(owned_host);
         return;
     }
+    // Never auto-merge loopback residual from agent-writable auth — require
+    // explicit user policy.yaml allow (avoids allow-before-class-deny SSRF).
+    if (isLoopbackExact(owned_host)) {
+        allocator.free(owned_host);
+        return;
+    }
     if (list.items.len >= max_discovered_hosts or listContainsExactOwned(list.items, owned_host)) {
         allocator.free(owned_host);
         return;
     }
     errdefer allocator.free(owned_host);
     try list.append(allocator, owned_host);
+}
+
+fn isLoopbackExact(host: []const u8) bool {
+    return std.mem.eql(u8, host, "127.0.0.1") or
+        std.ascii.eqlIgnoreCase(host, "::1") or
+        std.ascii.eqlIgnoreCase(host, "0:0:0:0:0:0:0:1");
 }
 
 fn listContainsExactOwned(hosts: []const []const u8, needle: []const u8) bool {
