@@ -55,3 +55,8 @@
 {"command": "env -u FOO bash <<'EOF'\nrm -rf /\nEOF", "expected": "deny", "source": "codex_p1_wrapper_operand", "description": "env -u NAME consumes operand before bash receiver"}
 {"command": "if true; then bash <<'EOF'\nrm -rf /\nEOF\nfi", "expected": "deny", "source": "codex_p1_reserved_word", "description": "then reserved word skipped before bash receiver"}
 {"command": "cat <<A <<B\nfirst\nA\nrm -rf /\nB", "expected": "allow", "source": "codex_p2_multi_heredoc", "description": "both non-executing heredoc bodies masked"}
+{"command": "lvconvert --merge", "expected": "deny", "source": "dcg_false_allow_fix", "description": "lvconvert merge must deny via system.disk keyword+pattern"}
+{"command": "echo x > /etc/passwd", "expected": "deny", "source": "dcg_false_allow_fix", "description": "echo redirect to sensitive path must deny"}
+{"command": "printf x > /etc/passwd", "expected": "deny", "source": "dcg_false_allow_fix", "description": "printf redirect to sensitive path must deny"}
+{"command": "cat > /etc/passwd", "expected": "deny", "source": "dcg_false_allow_fix", "description": "cat redirect to sensitive path must deny"}
+{"command": "node -e \"require('fs').rmSync('/',{recursive:true})\"", "expected": "deny", "source": "dcg_false_allow_fix", "description": "node fs.rmSync root wipe must deny"}

@@ -206,18 +206,76 @@ fn maskAllQuoted(buf: []u8) void {
 }
 
 fn maskArgsAfterCommand(buf: []u8) void {
-    // Skip first word, then mask remainder except redirects that are standalone.
+    // Skip first word, then mask data args — but preserve redirect operators and
+    // their targets so `echo x > /etc/passwd` still matches redirect packs while
+    // `echo rm -rf /` (data only, no redirect) stays masked.
     var i: usize = 0;
     while (i < buf.len and std.ascii.isWhitespace(buf[i])) : (i += 1) {}
     while (i < buf.len and !std.ascii.isWhitespace(buf[i])) : (i += 1) {}
-    // mask rest but keep structure for empty check
-    while (i < buf.len) : (i += 1) {
-        // leave whitespace; mask other non-quote (quotes already handled)
-        if (!std.ascii.isWhitespace(buf[i]) and buf[i] != '"' and buf[i] != '\'') {
-            // don't mask shell vars start? mask anyway for FP immunity
+    while (i < buf.len) {
+        if (std.ascii.isWhitespace(buf[i])) {
+            i += 1;
+            continue;
+        }
+        if (redirectOperatorEnd(buf, i)) |op_end| {
+            // Leave operator bytes intact; advance past them.
+            i = op_end;
+            while (i < buf.len and std.ascii.isWhitespace(buf[i])) : (i += 1) {}
+            // Preserve the redirect target token (path / fd / word).
+            while (i < buf.len and !std.ascii.isWhitespace(buf[i])) {
+                // Stop if another redirect starts mid-stream (rare glued forms).
+                if (redirectOperatorEnd(buf, i) != null) break;
+                i += 1;
+            }
+            continue;
+        }
+        // Mask one data character (quotes already handled by maskAllQuoted).
+        if (buf[i] != '"' and buf[i] != '\'') {
             buf[i] = 'x';
         }
+        i += 1;
     }
+}
+
+/// If `buf[i..]` starts a shell redirect operator (optional fd digits + `>`/`<`/`&>`/…),
+/// return the exclusive end index of the operator; otherwise null.
+fn redirectOperatorEnd(buf: []const u8, i: usize) ?usize {
+    if (i >= buf.len) return null;
+    var j = i;
+    // Optional leading fd digits (`2>`, `1>>`, …).
+    while (j < buf.len and std.ascii.isDigit(buf[j])) : (j += 1) {}
+    if (j < buf.len and buf[j] == '&' and j + 1 < buf.len and buf[j + 1] == '>') {
+        return j + 2; // &>
+    }
+    if (j >= buf.len or (buf[j] != '>' and buf[j] != '<')) {
+        // Digits alone are not a redirect.
+        return null;
+    }
+    const op = buf[j];
+    j += 1;
+    if (j < buf.len and buf[j] == op) j += 1; // >> or <<
+    if (j < buf.len and op == '<' and buf[j] == '<') j += 1; // <<<
+    if (j < buf.len and buf[j] == '&') {
+        j += 1; // >& or <&
+        while (j < buf.len and std.ascii.isDigit(buf[j])) : (j += 1) {} // >&1
+    }
+    if (j < buf.len and op == '>' and buf[j] == '|') j += 1; // >|
+    // Require a real operator char was consumed beyond optional digits.
+    if (j == i) return null;
+    // Pure digits with no operator → not a redirect (already handled above).
+    if (j > i and buf[i] != '>' and buf[i] != '<' and buf[i] != '&') {
+        // Started with digits; ensure we actually saw an angle/amp operator.
+        var saw_op = false;
+        var k = i;
+        while (k < j) : (k += 1) {
+            if (buf[k] == '>' or buf[k] == '<' or buf[k] == '&') {
+                saw_op = true;
+                break;
+            }
+        }
+        if (!saw_op) return null;
+    }
+    return j;
 }
 
 fn basename(path: []const u8) []const u8 {
@@ -291,6 +349,29 @@ test "sanitize preserves payload piped into interpreter" {
 
 test "sanitize still masks echo data without interpreter sink" {
     const s = try sanitizeForMatching(std.testing.allocator, "echo rm -rf / | cat");
+    defer std.testing.allocator.free(s);
+    try std.testing.expect(std.mem.indexOf(u8, s, "rm -rf") == null);
+}
+
+test "sanitize preserves redirect operator and sensitive target" {
+    const cases = [_][]const u8{
+        "echo x > /etc/passwd",
+        "printf x > /etc/passwd",
+        "cat > /etc/passwd",
+        "echo x >/etc/passwd",
+        "echo x 2> /etc/shadow",
+    };
+    for (cases) |cmd| {
+        const s = try sanitizeForMatching(std.testing.allocator, cmd);
+        defer std.testing.allocator.free(s);
+        try std.testing.expect(std.mem.indexOf(u8, s, ">") != null);
+        // Target path must remain visible for pack matching.
+        try std.testing.expect(std.mem.indexOf(u8, s, "/etc/") != null);
+    }
+}
+
+test "sanitize still masks data-only echo without redirect" {
+    const s = try sanitizeForMatching(std.testing.allocator, "echo rm -rf /");
     defer std.testing.allocator.free(s);
     try std.testing.expect(std.mem.indexOf(u8, s, "rm -rf") == null);
 }

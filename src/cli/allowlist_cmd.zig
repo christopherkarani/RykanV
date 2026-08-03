@@ -1556,10 +1556,11 @@ test "s-allowlist-cli: allow shortcut then evaluate allows with allowlist attrib
     var ws = try sAllowlistCliGitWorkspace();
     defer ws.deinit();
 
+    // Non-critical rule (medium): permanent kind=rule may skip. Critical cannot.
     const reason = "s-allowlist-cli rule allow attribution marker";
     {
         const run = try sAllowlistCliRunAllow(&.{
-            "core.git:reset-hard",
+            "core.git:branch-force-delete",
             "-r",
             reason,
             "--project",
@@ -1577,7 +1578,7 @@ test "s-allowlist-cli: allow shortcut then evaluate allows with allowlist attrib
     try std.testing.expectEqual(@as(usize, 1), loaded.store.entries.len);
 
     // Engine path (s-engine contract): kind=rule → allow + exception_* attribution.
-    var eval = try shell_engine.evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+    var eval = try shell_engine.evaluateCommand(std.testing.allocator, "git branch -D feature", .{
         .permanent_allowlist = loaded.store,
         .now_iso = s_allowlist_cli_now,
     });
@@ -1597,9 +1598,9 @@ test "s-allowlist-cli: allow rule still denies compound / other packs (E8)" {
 
     {
         const run = try sAllowlistCliRunAllow(&.{
-            "core.git:reset-hard",
+            "core.git:branch-force-delete",
             "-r",
-            "reset exception must not unlock filesystem wipe",
+            "branch delete exception must not unlock filesystem wipe",
             "--project",
         });
         defer sAllowlistCliFreeRun(run);
@@ -1611,7 +1612,7 @@ test "s-allowlist-cli: allow rule still denies compound / other packs (E8)" {
     var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, path, .project);
     defer loaded.store.deinit(std.testing.allocator);
 
-    var compound = try shell_engine.evaluateCommand(std.testing.allocator, "git reset --hard; rm -rf /", .{
+    var compound = try shell_engine.evaluateCommand(std.testing.allocator, "git branch -D feature; rm -rf /", .{
         .permanent_allowlist = loaded.store,
         .now_iso = s_allowlist_cli_now,
     });
@@ -1636,8 +1637,9 @@ test "s-allowlist-cli: add-command then evaluate FULL ALLOWs exact command only"
     var ws = try sAllowlistCliGitWorkspace();
     defer ws.deinit();
 
+    // Non-critical exact command (medium pack hit) may FULL ALLOW permanently.
     const reason = "exact command permanent short-circuit via CLI";
-    const cmd_text = "git reset --hard HEAD";
+    const cmd_text = "git branch -D feature";
     {
         const run = try sAllowlistCliRunAllowlist(&.{
             "add-command",
@@ -1666,14 +1668,14 @@ test "s-allowlist-cli: add-command then evaluate FULL ALLOWs exact command only"
     try std.testing.expect(std.mem.indexOf(u8, eval.reason, reason) != null);
 
     // Non-exact / compound string still denies (no prefix, no full-string near-miss).
-    var miss = try shell_engine.evaluateCommand(std.testing.allocator, "git reset --hard HEAD~1", .{
+    var miss = try shell_engine.evaluateCommand(std.testing.allocator, "git branch -D other", .{
         .permanent_allowlist = loaded.store,
         .now_iso = s_allowlist_cli_now,
     });
     defer miss.deinit(std.testing.allocator);
     try std.testing.expect(miss.decision == .deny);
 
-    var compound = try shell_engine.evaluateCommand(std.testing.allocator, "git reset --hard HEAD; rm -rf /", .{
+    var compound = try shell_engine.evaluateCommand(std.testing.allocator, "git branch -D feature; rm -rf /", .{
         .permanent_allowlist = loaded.store,
         .now_iso = s_allowlist_cli_now,
     });
@@ -1687,12 +1689,13 @@ test "s-allowlist-cli: unallow shortcut removes rule so evaluate denies again" {
     var ws = try sAllowlistCliGitWorkspace();
     defer ws.deinit();
 
-    // Seed rule first, then command. Unallow the NON-FIRST key (command string) so
-    // pop-first greening fails; the rule sibling must remain and still evaluate-allow.
+    // Seed non-critical rule first, then command. Unallow the NON-FIRST key
+    // (command string) so pop-first greening fails; the rule sibling must remain
+    // and still evaluate-allow (medium only — critical is hard-fenced).
     const cmd_text = "git status";
     {
         const add = try sAllowlistCliRunAllow(&.{
-            "core.git:reset-hard",
+            "core.git:branch-force-delete",
             "-r",
             "rule sibling must survive unallow of later command",
             "--project",
@@ -1726,12 +1729,12 @@ test "s-allowlist-cli: unallow shortcut removes rule so evaluate denies again" {
         defer loaded.store.deinit(std.testing.allocator);
         try std.testing.expectEqual(@as(usize, 1), loaded.store.entries.len);
         try std.testing.expect(loaded.store.entries[0].kind == .rule);
-        try std.testing.expectEqualStrings("core.git:reset-hard", loaded.store.entries[0].id.?);
-        try std.testing.expect(loaded.store.matchRule("core.git:reset-hard", s_allowlist_cli_now) != null);
+        try std.testing.expectEqualStrings("core.git:branch-force-delete", loaded.store.entries[0].id.?);
+        try std.testing.expect(loaded.store.matchRule("core.git:branch-force-delete", s_allowlist_cli_now) != null);
         try std.testing.expect(loaded.store.matchCommand(cmd_text, s_allowlist_cli_now) == null);
 
         // Rule still in force: evaluate allows with allowlist attribution (not pop-first).
-        var still = try shell_engine.evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+        var still = try shell_engine.evaluateCommand(std.testing.allocator, "git branch -D feature", .{
             .permanent_allowlist = loaded.store,
             .now_iso = s_allowlist_cli_now,
         });
@@ -1743,7 +1746,7 @@ test "s-allowlist-cli: unallow shortcut removes rule so evaluate denies again" {
 
     // Second step: unallow the remaining rule key → evaluate denies again.
     {
-        const rem_rule = try sAllowlistCliRunUnallow(&.{ "core.git:reset-hard", "--project" });
+        const rem_rule = try sAllowlistCliRunUnallow(&.{ "core.git:branch-force-delete", "--project" });
         defer sAllowlistCliFreeRun(rem_rule);
         try std.testing.expectEqual(exit_codes.success, rem_rule.code);
     }
@@ -1751,9 +1754,9 @@ test "s-allowlist-cli: unallow shortcut removes rule so evaluate denies again" {
         var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, path, .project);
         defer loaded.store.deinit(std.testing.allocator);
         try std.testing.expectEqual(@as(usize, 0), loaded.store.entries.len);
-        try std.testing.expect(loaded.store.matchRule("core.git:reset-hard", s_allowlist_cli_now) == null);
+        try std.testing.expect(loaded.store.matchRule("core.git:branch-force-delete", s_allowlist_cli_now) == null);
 
-        var eval = try shell_engine.evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+        var eval = try shell_engine.evaluateCommand(std.testing.allocator, "git branch -D feature", .{
             .permanent_allowlist = loaded.store,
             .now_iso = s_allowlist_cli_now,
         });
@@ -1769,7 +1772,8 @@ test "s-allowlist-cli: remove exact-command key empties store and restores deny"
     var ws = try sAllowlistCliGitWorkspace();
     defer ws.deinit();
 
-    const cmd_text = "git reset --hard HEAD";
+    // Medium pack hit (permanent may allow); after remove, packs deny again.
+    const cmd_text = "git branch -D feature";
     {
         const add = try sAllowlistCliRunAllowlist(&.{
             "add-command",

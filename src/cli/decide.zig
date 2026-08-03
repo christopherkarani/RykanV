@@ -3,6 +3,7 @@ const core = @import("orca_core").core;
 const supervisor = core.supervisor;
 const core_api = @import("orca_core").api;
 const policy = @import("orca_core").policy;
+const shell_engine = @import("../shell_engine/mod.zig");
 
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
@@ -314,6 +315,55 @@ fn evaluateDecision(
             const evaluation = try core_api.explainAction(allocator, @ptrCast(policy_value), .command, command_text);
             defer evaluation.deinit(allocator);
 
+            // Shell pack fence: medium/high/critical pack denials beat pure
+            // policy `commands.allow` (and other pure allows). Aligns decide
+            // with `ryk test` / hook hard fence for pack hits.
+            var shell = shell_engine.evaluateCommand(allocator, command_text, .{}) catch {
+                // Fail closed on evaluator errors.
+                const decision: PluginDecision = .block;
+                return .{
+                    .decision = decision,
+                    .risk = .critical,
+                    .category = try allocator.dupe(u8, "command"),
+                    .reason = try allocator.dupe(u8, "Shell pack evaluator failed (fail closed)."),
+                    .rule = try allocator.dupe(u8, "zig.shell:init"),
+                    .message = try buildMessage(allocator, decision, "command"),
+                    .redactions = try redactions.toOwnedSlice(allocator),
+                };
+            };
+            defer shell.deinit(allocator);
+
+            if (shell.decision == .deny and packSeverityBlocksPolicyAllow(shell.severity) and
+                evaluation.decision.result == .allow)
+            {
+                // medium non-ci → ask; high/critical → block (CI hardens ask→block).
+                const final_decision: PluginDecision = switch (shell.severity) {
+                    .critical, .high => .block,
+                    .medium => if (ci_mode) .block else .ask,
+                    .low => .allow,
+                };
+                const risk: RiskLevel = switch (shell.severity) {
+                    .critical => .critical,
+                    .high => .high,
+                    .medium => .medium,
+                    .low => .low,
+                };
+                const rule_owned: ?[]const u8 = if (shell.rule_id) |rid|
+                    try allocator.dupe(u8, rid)
+                else
+                    null;
+                errdefer if (rule_owned) |r| allocator.free(r);
+                return .{
+                    .decision = final_decision,
+                    .risk = risk,
+                    .category = try allocator.dupe(u8, "command"),
+                    .reason = try allocator.dupe(u8, shell.reason),
+                    .rule = rule_owned,
+                    .message = try buildMessage(allocator, final_decision, "command"),
+                    .redactions = try redactions.toOwnedSlice(allocator),
+                };
+            }
+
             const decision = PluginDecision.fromDecisionResult(evaluation.decision.result, ci_mode);
             const risk = RiskLevel.fromScore(evaluation.decision.risk_score);
 
@@ -449,6 +499,14 @@ fn evaluateDecision(
             };
         },
     }
+}
+
+/// Pack deny at medium+ must not be pure-allowed by broad `commands.allow`.
+fn packSeverityBlocksPolicyAllow(severity: shell_engine.Severity) bool {
+    return switch (severity) {
+        .critical, .high, .medium => true,
+        .low => false,
+    };
 }
 
 fn buildFileNormalizationBlock(allocator: std.mem.Allocator, category: []const u8) !DecisionOutput {
@@ -864,6 +922,27 @@ test "decide command with dangerous command returns block" {
     const output = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "\"decision\": \"block\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"category\": \"command\"") != null);
+}
+
+test "decide command pack fence: git branch -D is not pure-allow" {
+    // Medium pack hit must not pure-allow via broad commands.allow.
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [512]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try decideCommand(std.testing.io, .command, &.{
+        "--json", "{\"command\":\"git branch -D feature\"}",
+    }, &stdout_writer, &stderr_writer);
+    // ask (exit ask) or block (denial) — never success/allow.
+    try std.testing.expect(code == exit_codes.ask or code == exit_codes.denial);
+
+    const output = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"decision\": \"allow\"") == null);
+    try std.testing.expect(
+        std.mem.indexOf(u8, output, "\"decision\": \"ask\"") != null or
+            std.mem.indexOf(u8, output, "\"decision\": \"block\"") != null,
+    );
 }
 
 test "decide file write to protected path returns block" {

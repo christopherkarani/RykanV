@@ -311,10 +311,17 @@ fn collectPermanentRuleSkipIds(
 ) !void {
     const store = options.permanent_allowlist orelse return;
     const now = options.now_iso orelse return;
+    // Need registry for severity lookup (critical hard fence).
+    registry.ensureInit() catch {
+        // Fail closed: no permanent rule skips when registry unavailable.
+        return;
+    };
     for (store.entries) |e| {
         if (e.kind != .rule) continue;
         if (allowlist_store.isExpired(e, now)) continue;
         const id = e.id orelse continue;
+        // Permanent kind=rule cannot unlock critical pack hits.
+        if (registry.severityForRuleId(id) == .critical) continue;
         try out.append(allocator, id);
     }
 }
@@ -444,6 +451,7 @@ fn isSandboxHomeStoreAccessError(err: anyerror) bool {
 }
 
 /// Plan §4.1 step 2: permanent kind=command exact → FULL ALLOW pre-pack.
+/// Critical hard fence: permanent kind=command cannot unlock a critical pack hit.
 fn tryPermanentCommand(
     allocator: std.mem.Allocator,
     trimmed: []const u8,
@@ -453,6 +461,20 @@ fn tryPermanentCommand(
     const store = options.permanent_allowlist orelse return null;
     const now = options.now_iso orelse return null;
     const entry = store.matchCommand(trimmed, now) orelse return null;
+
+    // Critical hard fence: refuse permanent FULL ALLOW when packs would deny
+    // this exact command at critical severity. Uses registry match (no recurse
+    // into evaluateCommand — avoids error-set dependency loops).
+    registry.ensureInit() catch return null;
+    const pack_hit = registry.matchCommandDetailedOpts(trimmed, .{
+        .default_packs_only = options.default_packs_only,
+        .extra_enabled = options.extra_enabled,
+        .disabled = options.disabled,
+        .skipped_rule_ids = &.{},
+    });
+    if (pack_hit == .deny and pack_hit.deny.severity == .critical) {
+        return null;
+    }
 
     const layer = permanentLayerName(entry.layer);
     const detail = try std.fmt.allocPrint(
@@ -1121,8 +1143,22 @@ fn isAssignmentOnly(cmd: []const u8) bool {
 }
 
 fn matchLangDestruct(cmd: []const u8) ?registry.Hit {
-    // shutil.rmtree / os.remove / FileUtils.rm_rf on sensitive paths.
-    const apis = [_][]const u8{ "rmtree(", "os.remove(", "os.unlink(", "FileUtils.rm_rf(", "FileUtils.rm_r(", "Path.rmtree(" };
+    // Python/Ruby: shutil.rmtree / os.remove / FileUtils.rm_rf.
+    // Node: fs.rmSync / fs.rm / rimraf / fse.remove on sensitive paths.
+    const apis = [_][]const u8{
+        "rmtree(",
+        "os.remove(",
+        "os.unlink(",
+        "FileUtils.rm_rf(",
+        "FileUtils.rm_r(",
+        "Path.rmtree(",
+        "rmSync(",
+        "fs.rm(",
+        "fs.promises.rm(",
+        "rimraf(",
+        "fse.remove(",
+        "fse.removeSync(",
+    };
     var hit_api = false;
     for (apis) |a| {
         if (std.mem.indexOf(u8, cmd, a) != null) {
@@ -1132,18 +1168,18 @@ fn matchLangDestruct(cmd: []const u8) ?registry.Hit {
     }
     if (!hit_api) return null;
     // Any path-like argument or bare call → treat as destructive filesystem op.
-    const sensitive = [_][]const u8{ "/home", "/etc", "/usr", "/var", "/root", "/tmp", "~", "$HOME", "'/'", "\"/\"" };
+    const sensitive = [_][]const u8{ "/home", "/etc", "/usr", "/var", "/root", "/tmp", "~", "$HOME", "'/'", "\"/\"", "('/'", "(\"/\"" };
     for (sensitive) |s| {
         if (std.mem.indexOf(u8, cmd, s) != null) {
             return .{
                 .pack_id = "core.filesystem",
                 .pattern_name = "rm-rf-general",
                 .severity = .high,
-                .reason = "Language-runtime recursive delete (rmtree/remove) is destructive and requires human approval.",
+                .reason = "Language-runtime recursive delete (rmtree/remove/rmSync) is destructive and requires human approval.",
             };
         }
     }
-    // Even without sensitive path literal, rmtree/rm_rf is high risk.
+    // Even without sensitive path literal, rmtree/rm_rf/rmSync is high risk.
     return .{
         .pack_id = "core.filesystem",
         .pattern_name = "rm-rf-general",
@@ -1505,6 +1541,44 @@ test "evaluateCommand allows echo unquoted rm -rf data" {
     try std.testing.expect(eval.decision == .allow);
 }
 
+test "evaluateCommand denies lvconvert --merge under default packs" {
+    var eval = try evaluateCommand(std.testing.allocator, "lvconvert --merge", .{});
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .deny);
+    try std.testing.expect(eval.rule_id != null);
+    try std.testing.expectEqualStrings("system.disk:lvconvert-merge", eval.rule_id.?);
+}
+
+test "evaluateCommand denies echo/printf/cat redirect to sensitive path" {
+    const cases = [_][]const u8{
+        "echo x > /etc/passwd",
+        "printf x > /etc/passwd",
+        "cat > /etc/passwd",
+    };
+    for (cases) |cmd| {
+        var eval = try evaluateCommand(std.testing.allocator, cmd, .{});
+        defer eval.deinit(std.testing.allocator);
+        try std.testing.expect(eval.decision == .deny);
+        try std.testing.expect(eval.rule_id != null);
+        // redirect-truncate-root-home on core.filesystem
+        try std.testing.expect(std.mem.indexOf(u8, eval.rule_id.?, "redirect") != null or
+            std.mem.indexOf(u8, eval.rule_id.?, "core.filesystem") != null);
+    }
+}
+
+test "evaluateCommand denies node fs.rmSync wipe of root" {
+    const cases = [_][]const u8{
+        "node -e \"require('fs').rmSync('/',{recursive:true})\"",
+        "node -e 'require(\"fs\").rmSync(\"/\",{recursive:true})'",
+        "node --eval \"fs.rmSync('/etc',{recursive:true})\"",
+    };
+    for (cases) |cmd| {
+        var eval = try evaluateCommand(std.testing.allocator, cmd, .{});
+        defer eval.deinit(std.testing.allocator);
+        try std.testing.expect(eval.decision == .deny);
+    }
+}
+
 test "evaluateCommand denies rm after newline following git commit -m" {
     var eval = try evaluateCommand(std.testing.allocator, "git commit -m\nrm -rf /", .{});
     defer eval.deinit(std.testing.allocator);
@@ -1799,27 +1873,30 @@ fn sEngineSeedAllowOnce(
 
 // ── Acceptance 1: kind=command FULL ALLOW pre-pack; kind=rule E8 skip ───────
 
-test "s-engine: kind=command permanent FULL ALLOW pre-pack exact command" {
-    const reason = "recovering local branch after failed rebase work";
+test "s-engine: kind=command permanent FULL ALLOW pre-pack exact command (non-critical)" {
+    // Medium-severity pack hit may still be permanently allowlisted; critical cannot.
+    const reason = "local feature branch cleanup is approved for this workspace";
+    const cmd = "git branch -D feature";
     const store = sEnginePermanentStore(&.{
         .{
             .kind = .command,
-            .command = "git reset --hard HEAD",
+            .command = cmd,
             .reason = reason,
             .created_at = "2026-07-25T12:00:00Z",
             .layer = .project,
         },
     });
 
-    // Baseline without permanent → deny.
+    // Baseline without permanent → deny (medium pack).
     {
-        var deny = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{});
+        var deny = try evaluateCommand(std.testing.allocator, cmd, .{});
         defer deny.deinit(std.testing.allocator);
         try std.testing.expect(deny.decision == .deny);
         try std.testing.expect(deny.exception_source == null);
+        try std.testing.expect(deny.severity == .medium);
     }
 
-    var eval = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+    var eval = try evaluateCommand(std.testing.allocator, cmd, .{
         .permanent_allowlist = store,
         .now_iso = s_engine_now,
     });
@@ -1831,13 +1908,35 @@ test "s-engine: kind=command permanent FULL ALLOW pre-pack exact command" {
     try std.testing.expect(std.mem.indexOf(u8, eval.reason, reason) != null);
 
     // Near-miss / non-exact command still denies (exact-only; no prefix).
-    var miss = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD~1", .{
+    var miss = try evaluateCommand(std.testing.allocator, "git branch -D other", .{
         .permanent_allowlist = store,
         .now_iso = s_engine_now,
     });
     defer miss.deinit(std.testing.allocator);
     try std.testing.expect(miss.decision == .deny);
     try std.testing.expect(miss.exception_source == null);
+}
+
+test "s-engine: permanent kind=command cannot unlock critical pack hit" {
+    const store = sEnginePermanentStore(&.{
+        .{
+            .kind = .command,
+            .command = "git reset --hard HEAD",
+            .reason = "critical must remain hard-fenced",
+            .created_at = "2026-07-25T12:00:00Z",
+            .layer = .project,
+        },
+    });
+    var eval = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now,
+    });
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .deny);
+    try std.testing.expect(eval.exception_source == null);
+    try std.testing.expect(eval.severity == .critical);
+    try std.testing.expect(eval.rule_id != null);
+    try std.testing.expectEqualStrings("core.git:reset-hard", eval.rule_id.?);
 }
 
 test "s-engine: kind=command permanent does not FULL ALLOW different compound string" {
@@ -1860,19 +1959,19 @@ test "s-engine: kind=command permanent does not FULL ALLOW different compound st
     try std.testing.expect(eval.exception_source == null);
 }
 
-test "s-engine: kind=rule skips only that rule_id and allows matching command" {
-    const reason = "temporary exception for hard reset on feature branch";
+test "s-engine: kind=rule skips only that rule_id and allows matching command (non-critical)" {
+    const reason = "temporary exception for force-delete of stale feature branch";
     const store = sEnginePermanentStore(&.{
         .{
             .kind = .rule,
-            .id = "core.git:reset-hard",
+            .id = "core.git:branch-force-delete",
             .reason = reason,
             .created_at = "2026-07-25T12:00:00Z",
             .layer = .user,
         },
     });
 
-    var eval = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+    var eval = try evaluateCommand(std.testing.allocator, "git branch -D feature", .{
         .permanent_allowlist = store,
         .now_iso = s_engine_now,
     });
@@ -1884,19 +1983,40 @@ test "s-engine: kind=rule skips only that rule_id and allows matching command" {
     try std.testing.expect(std.mem.indexOf(u8, eval.reason, reason) != null);
 }
 
-test "s-engine: E8 compound still denies when only core.git:reset-hard is allowlisted" {
+test "s-engine: permanent kind=rule cannot unlock critical pack hit" {
     const store = sEnginePermanentStore(&.{
         .{
             .kind = .rule,
             .id = "core.git:reset-hard",
-            .reason = "reset exception must not unlock filesystem wipe",
+            .reason = "critical hard fence ignores permanent rule skip",
+            .created_at = "2026-07-25T12:00:00Z",
+            .layer = .user,
+        },
+    });
+    var eval = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+        .permanent_allowlist = store,
+        .now_iso = s_engine_now,
+    });
+    defer eval.deinit(std.testing.allocator);
+    try std.testing.expect(eval.decision == .deny);
+    try std.testing.expect(eval.exception_source == null);
+    try std.testing.expect(eval.severity == .critical);
+    try std.testing.expectEqualStrings("core.git:reset-hard", eval.rule_id.?);
+}
+
+test "s-engine: E8 compound still denies when only core.git:branch-force-delete is allowlisted" {
+    const store = sEnginePermanentStore(&.{
+        .{
+            .kind = .rule,
+            .id = "core.git:branch-force-delete",
+            .reason = "branch delete exception must not unlock filesystem wipe",
             .created_at = "2026-07-25T12:00:00Z",
             .layer = .project,
         },
     });
 
-    // Multi-pack compound: skip git rule only; filesystem still denies.
-    var compound = try evaluateCommand(std.testing.allocator, "git reset --hard; rm -rf /", .{
+    // Multi-pack compound: skip medium git rule only; filesystem still denies.
+    var compound = try evaluateCommand(std.testing.allocator, "git branch -D feature; rm -rf /", .{
         .permanent_allowlist = store,
         .now_iso = s_engine_now,
     });
@@ -2226,11 +2346,13 @@ test "s-engine: allow-once wrong cwd does not match" {
 
 test "s-engine: permanent exceptions not wired via EvaluateOptions.allowlists" {
     // Permanent uses dedicated field; Layered allowlists remains a separate legacy short-circuit.
+    // Use a non-critical pack hit (medium) so permanent FULL ALLOW remains valid.
     const permanent_reason = "distinct permanent API reason text for attribution";
+    const cmd = "git branch -D feature";
     const store = sEnginePermanentStore(&.{
         .{
             .kind = .command,
-            .command = "git reset --hard HEAD",
+            .command = cmd,
             .reason = permanent_reason,
             .created_at = "2026-07-25T12:00:00Z",
             .layer = .project,
@@ -2238,7 +2360,7 @@ test "s-engine: permanent exceptions not wired via EvaluateOptions.allowlists" {
     });
 
     // Product permanent path: permanent_allowlist field only (no Layered).
-    var via_permanent = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+    var via_permanent = try evaluateCommand(std.testing.allocator, cmd, .{
         .permanent_allowlist = store,
         .allowlists = null,
         .now_iso = s_engine_now,
@@ -2252,10 +2374,10 @@ test "s-engine: permanent exceptions not wired via EvaluateOptions.allowlists" {
     // NOT the permanent store API — attribution must not claim permanent allowlist.
     const layered: allowlist.Layered = .{
         .entries = &.{
-            .{ .pattern = "git reset --hard HEAD", .prefix = false },
+            .{ .pattern = cmd, .prefix = false },
         },
     };
-    var via_layered = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+    var via_layered = try evaluateCommand(std.testing.allocator, cmd, .{
         .allowlists = layered,
         .permanent_allowlist = null,
         .now_iso = s_engine_now,
@@ -2297,10 +2419,11 @@ test "s-engine: EvaluateOptions defaults leave permanent and allow-once disabled
 
 test "s-engine: trace attributes source layer kind reason on permanent allow" {
     const reason = "trace must record permanent allowlist source layer kind reason";
+    const cmd = "git branch -D feature";
     const store = sEnginePermanentStore(&.{
         .{
             .kind = .command,
-            .command = "git reset --hard HEAD",
+            .command = cmd,
             .reason = reason,
             .created_at = "2026-07-25T12:00:00Z",
             .layer = .project,
@@ -2309,7 +2432,7 @@ test "s-engine: trace attributes source layer kind reason on permanent allow" {
 
     var collector = TraceCollector.init(std.testing.allocator);
     defer collector.deinit();
-    var eval = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+    var eval = try evaluateCommand(std.testing.allocator, cmd, .{
         .permanent_allowlist = store,
         .now_iso = s_engine_now,
         .trace = &collector,
@@ -2445,17 +2568,18 @@ test "s-engine: expired permanent kind=command is ignored (no FULL ALLOW)" {
 
 test "s-engine: expired permanent kind=rule is ignored (not added to skip list)" {
     // Expired rule must not enter skipped_rule_ids; pack deny still fires.
+    // Medium rule so the unexpired path can still allow (critical cannot).
     const store = sEnginePermanentStore(&.{
         .{
             .kind = .rule,
-            .id = "core.git:reset-hard",
-            .reason = "expired rule skip must not unlock reset-hard",
+            .id = "core.git:branch-force-delete",
+            .reason = "expired rule skip must not unlock branch delete",
             .created_at = "2026-07-20T12:00:00Z",
             .expires_at = "2026-07-24T00:00:00Z",
             .layer = .project,
         },
     });
-    var eval = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+    var eval = try evaluateCommand(std.testing.allocator, "git branch -D feature", .{
         .permanent_allowlist = store,
         .now_iso = s_engine_now, // after expires_at
     });
@@ -2464,7 +2588,7 @@ test "s-engine: expired permanent kind=rule is ignored (not added to skip list)"
     try std.testing.expect(eval.exception_source == null);
 
     // Same entry not yet expired → still allows via rule skip.
-    var live = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+    var live = try evaluateCommand(std.testing.allocator, "git branch -D feature", .{
         .permanent_allowlist = store,
         .now_iso = "2026-07-23T00:00:00Z", // before expires_at
     });
@@ -2476,17 +2600,19 @@ test "s-engine: expired permanent kind=rule is ignored (not added to skip list)"
 
 test "s-engine: unexpired permanent with far-future expiry still allows" {
     // Uses s_engine_future as expires_at so the non-expired path is pinned.
+    // Medium pack hit (critical permanent FULL ALLOW is hard-fenced).
+    const cmd = "git branch -D feature";
     const store = sEnginePermanentStore(&.{
         .{
             .kind = .command,
-            .command = "git reset --hard HEAD",
+            .command = cmd,
             .reason = "far-future expiry must still FULL ALLOW",
             .created_at = "2026-07-25T12:00:00Z",
             .expires_at = s_engine_future,
             .layer = .project,
         },
     });
-    var eval = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+    var eval = try evaluateCommand(std.testing.allocator, cmd, .{
         .permanent_allowlist = store,
         .now_iso = s_engine_now,
     });
@@ -2497,34 +2623,34 @@ test "s-engine: unexpired permanent with far-future expiry still allows" {
 }
 
 test "s-engine: multiple permanent kind=rule ids all skip (not first-only)" {
-    // Evaluate must collect every non-expired kind=rule into skipped_rule_ids.
-    // Skipping only the first store entry would leave reset-hard denying.
+    // Evaluate must collect every non-expired non-critical kind=rule into skip list.
+    // Skipping only the first store entry would leave branch-force-delete denying.
     const store = sEnginePermanentStore(&.{
         .{
             .kind = .rule,
-            .id = "core.filesystem:rm-rf-root-home",
-            .reason = "first rule skip filesystem wipe pattern",
+            .id = "core.git:stash-drop",
+            .reason = "first rule skip stash drop pattern",
             .created_at = "2026-07-25T12:00:00Z",
             .layer = .user,
         },
         .{
             .kind = .rule,
-            .id = "core.git:reset-hard",
+            .id = "core.git:branch-force-delete",
             .reason = "second rule skip must also apply at evaluate",
             .created_at = "2026-07-25T12:00:00Z",
             .layer = .user,
         },
     });
 
-    // Needs the second skip (reset-hard) — proves multi-id skip list build.
-    var reset = try evaluateCommand(std.testing.allocator, "git reset --hard HEAD", .{
+    // Needs the second skip (branch-force-delete) — proves multi-id skip list build.
+    var branch = try evaluateCommand(std.testing.allocator, "git branch -D feature", .{
         .permanent_allowlist = store,
         .now_iso = s_engine_now,
     });
-    defer reset.deinit(std.testing.allocator);
-    try std.testing.expect(reset.decision == .allow);
-    try std.testing.expectEqualStrings("allowlist", reset.exception_source.?);
-    try std.testing.expectEqualStrings("rule", reset.exception_kind.?);
+    defer branch.deinit(std.testing.allocator);
+    try std.testing.expect(branch.decision == .allow);
+    try std.testing.expectEqualStrings("allowlist", branch.exception_source.?);
+    try std.testing.expectEqualStrings("rule", branch.exception_kind.?);
 
     // Unrelated pack still denies under multi-rule permanent store (E8).
     var disk = try evaluateCommand(std.testing.allocator, "mkfs.ext4 /dev/sda1", .{
