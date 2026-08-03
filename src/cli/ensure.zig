@@ -2012,3 +2012,222 @@ test "EnsureSoft start bridge receipt driven by protection_label not multi-selec
             std.mem.indexOf(u8, start_src, "processExitForOutcome") != null,
     );
 }
+
+// ---------------------------------------------------------------------------
+// EnsureSoft pack hub — w1-ensure-tests-pack composition (HOME / nested-cwd /
+// soft D06 honesty). Named-run gate still --filter EnsureSoft.
+// ---------------------------------------------------------------------------
+
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+fn ensureSoftDupEnvZ(name: [*:0]const u8) !?[:0]u8 {
+    if (std.c.getenv(name)) |value| {
+        return try std.testing.allocator.dupeZ(u8, std.mem.span(value));
+    }
+    return null;
+}
+
+fn ensureSoftRestoreEnv(name: [*:0]const u8, prev: ?[:0]u8) void {
+    if (prev) |value| {
+        _ = setenv(name, value.ptr, 1);
+        std.testing.allocator.free(value);
+    } else {
+        _ = unsetenv(name);
+    }
+}
+
+test "EnsureSoft from_install HOME is policy root not process nested cwd (D32/D29 pack)" {
+    // Acceptance (pack): HOME/nested-cwd policy root — install door writes policy at
+    // absolute HOME, never under a nested process cwd (D32 + D29 composition).
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    var nest_tmp = std.testing.tmpDir(.{});
+    defer nest_tmp.cleanup();
+
+    try nest_tmp.dir.createDirPath(io, "nested/deep");
+    try nest_tmp.dir.createDirPath(io, ".git");
+
+    const home_abs = try home_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home_abs);
+    try std.testing.expect(std.fs.path.isAbsolute(home_abs));
+
+    const prev_home = try ensureSoftDupEnvZ("HOME");
+    defer ensureSoftRestoreEnv("HOME", prev_home);
+    const home_z = try allocator.dupeZ(u8, home_abs);
+    defer allocator.free(home_z);
+    try std.testing.expectEqual(@as(c_int, 0), setenv("HOME", home_z.ptr, 1));
+
+    var nested = try nest_tmp.dir.openDir(io, "nested/deep", .{});
+    defer nested.close(io);
+
+    var stdout_buf: [8192]u8 = undefined;
+    var stderr_buf: [2048]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    var outcome = try runEnsure(io, allocator, nested, .{
+        .from_install = true,
+        .quiet = true,
+        .preset = onboarding.default_preset,
+        .skip_verify = true,
+    }, &stdout_writer, &stderr_writer);
+    defer outcome.deinit(allocator);
+
+    try std.testing.expect(outcome.core_ok);
+    try std.testing.expect(outcome.policy_created or outcome.policy_left_alone);
+    try std.testing.expect(onboarding.policyExists(io, home_abs));
+
+    // Must not steal policy into nested process cwd.
+    if (nest_tmp.dir.access(io, "nested/deep/.orca/policy.yaml", .{})) |_| {
+        try std.testing.expect(false);
+    } else |_| {}
+    if (nest_tmp.dir.access(io, ".orca/policy.yaml", .{})) |_| {
+        try std.testing.expect(false);
+    } else |_| {}
+
+    const policy = try home_tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(64 * 1024));
+    defer allocator.free(policy);
+    try std.testing.expect(policy.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, policy, "mode:") != null or std.mem.indexOf(u8, policy, "version:") != null);
+
+    // Soft success map: zero/soft hosts keep exit 0; never full-protection claim on empty proof.
+    try std.testing.expectEqual(@as(u8, exit_codes.success), processExitForOutcome(outcome));
+    try std.testing.expect(outcome.protection_label != .core_failed);
+    if (outcome.protection_label == .partial) {
+        var rbuf: [4096]u8 = undefined;
+        var rwriter: std.Io.Writer = .fixed(&rbuf);
+        try writeEnsureReceipt(&rwriter, outcome);
+        const receipt = rwriter.buffered();
+        try std.testing.expect(!ensureSoftClaimsFullProtection(receipt));
+        try std.testing.expect(ensureSoftHasPartialToken(receipt));
+        try std.testing.expect(ensureSoftHasDoctorRepair(receipt));
+    }
+}
+
+test "EnsureSoft from_install without absolute HOME is core_failed fail-closed (D32/D33)" {
+    // Acceptance (pack): install door never falls open to process-cwd when HOME is
+    // unusable — relative HOME → core_failed (D32/D33 fail-closed).
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+
+    var nest_tmp = std.testing.tmpDir(.{});
+    defer nest_tmp.cleanup();
+    try nest_tmp.dir.createDirPath(io, "nested");
+
+    const prev_home = try ensureSoftDupEnvZ("HOME");
+    defer ensureSoftRestoreEnv("HOME", prev_home);
+    try std.testing.expectEqual(@as(c_int, 0), setenv("HOME", "relative-home-not-absolute", 1));
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [2048]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    var outcome = try runEnsure(io, allocator, nest_tmp.dir, .{
+        .from_install = true,
+        .quiet = false,
+        .preset = null,
+        .skip_verify = true,
+    }, &stdout_writer, &stderr_writer);
+    defer outcome.deinit(allocator);
+
+    try std.testing.expect(!outcome.core_ok);
+    try std.testing.expectEqual(ProtectionLabel.core_failed, outcome.protection_label);
+    try std.testing.expect(processExitForOutcome(outcome) != 0);
+    // No policy steal under process cwd from a failed install door.
+    if (nest_tmp.dir.access(io, ".orca/policy.yaml", .{})) |_| {
+        try std.testing.expect(false);
+    } else |_| {}
+}
+
+test "EnsureSoft nested cwd leave-alone keeps workspace root policy stable (pack)" {
+    // Acceptance (pack): nested-cwd policy root leave-alone — second ensure from
+    // nested process cwd observes same root path/content without rewrite (D29).
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, ".git");
+    try tmp.dir.createDirPath(io, "nested/deep");
+
+    const marker =
+        \\version: 1
+        \\mode: ask
+        \\# ensure-soft-pack-nested-leave-alone
+        \\
+    ;
+    try ensureCoreWritePolicy(tmp.dir, marker);
+    const before = try ensureCoreReadPolicy(tmp.dir);
+    defer allocator.free(before);
+
+    var nested = try tmp.dir.openDir(io, "nested/deep", .{});
+    defer nested.close(io);
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [2048]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    var outcome = try runEnsure(io, allocator, nested, .{
+        .from_install = false,
+        .quiet = true,
+        .preset = onboarding.default_preset,
+        .skip_verify = true,
+    }, &stdout_writer, &stderr_writer);
+    defer outcome.deinit(allocator);
+
+    try std.testing.expect(outcome.core_ok);
+    try std.testing.expect(outcome.policy_left_alone);
+    try std.testing.expect(!outcome.policy_created);
+
+    const after = try ensureCoreReadPolicy(tmp.dir);
+    defer allocator.free(after);
+    try std.testing.expectEqualStrings(before, after);
+    if (tmp.dir.access(io, "nested/deep/.orca/policy.yaml", .{})) |_| {
+        try std.testing.expect(false);
+    } else |_| {}
+}
+
+test "EnsureSoft mock host smoke fail receipt forbids D06 full phrases requires partial" {
+    // Acceptance (3) pack re-proof: host mock fail path forbids D06 full-protection
+    // phrases; requires partial + doctor --fix + failed host id (smoke class).
+    var hosts = [_]HostResult{
+        .{
+            .host_id = "pi",
+            .detected = true,
+            .wired = true,
+            .smoke_ok = false,
+            .fix_hint = "ryk doctor --fix",
+            .error_class = .smoke,
+        },
+    };
+
+    const label = protectionLabelFromHosts(hosts[0..]);
+    try std.testing.expectEqual(ProtectionLabel.partial, label);
+
+    var outcome = EnsureOutcome{
+        .core_ok = true,
+        .hosts = hosts[0..],
+        .policy_created = false,
+        .policy_left_alone = true,
+        .protection_label = label,
+        .hosts_owned = false,
+    };
+    defer outcome.deinit(std.testing.allocator);
+
+    var buf: [8192]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try writeEnsureReceipt(&writer, outcome);
+    const text = writer.buffered();
+
+    try std.testing.expect(!ensureSoftClaimsFullProtection(text));
+    try std.testing.expect(ensureSoftHasPartialToken(text));
+    try std.testing.expect(ensureSoftHasDoctorRepair(text));
+    try std.testing.expect(containsIgnoreCase(text, "pi"));
+    try std.testing.expectEqual(@as(u8, exit_codes.success), processExitForOutcome(outcome));
+}
