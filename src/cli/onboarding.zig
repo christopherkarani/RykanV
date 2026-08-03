@@ -852,6 +852,86 @@ test "DayOneHost day-one set is former core hosts plus cursor without grok" {
     }
 }
 
+// ---------------------------------------------------------------------------
+// DayOneHost pack hub — w1-ensure-tests-pack membership + collect monopath
+// Named-run gate still --filter DayOneHost.
+// ---------------------------------------------------------------------------
+
+fn dayOneHostEmptyPluginReport() plugin.PluginDoctorReport {
+    // Borrowed static strings only — do not deinit (no owned fields).
+    return .{
+        .orca_version = "test",
+        .orca_binary_path = null,
+        .cwd = @constCast("."),
+        .workspace_root = ".",
+        .policy_present = false,
+        .policy_valid = false,
+        .policy_error = null,
+        .audit_replay_available = false,
+        .mcp_support_status = "",
+        .plugin_directories = .{ .codex = false, .claude = false, .opencode = false, .openclaw = false, .hermes = false, .common = false },
+        .host_binaries = .{ .codex = false, .claude = false, .opencode = false, .openclaw = false, .hermes = false },
+        .opencode_paths = .{ .project_plugin_exists = false, .global_plugin_exists = false, .config_references_plugin = false },
+        .openclaw_paths = .{ .host_plugin_installed = false, .plugin_manifest_exists = false, .package_json_exists = false, .source_exists = false, .detection_note = "" },
+        .hermes_paths = .{ .repo_manifest_exists = false, .repo_source_exists = false, .repo_mapping_exists = false, .user_manifest_exists = false, .user_source_exists = false, .user_mapping_exists = false, .config_references_plugin = false },
+        .hermes_hook_smoke_passed = false,
+        .marketplace = .{ .codex_marketplace = false, .claude_marketplace = false, .codex_plugin_manifest = false, .claude_plugin_manifest = false, .codex_user_plugin = false, .claude_user_plugin = false },
+        .platform_summary = "",
+        .warnings = &.{},
+    };
+}
+
+test "DayOneHost collectHostStatuses iterates only day-one membership set" {
+    // Acceptance (pack): day-one host matrix collect monopath — statuses cover exactly
+    // supported_hosts (cursor in, grok out); no ensure-local second list.
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+    const report = dayOneHostEmptyPluginReport();
+
+    const statuses = try collectHostStatuses(io, allocator, report);
+    defer allocator.free(statuses);
+
+    try std.testing.expectEqual(supported_hosts.len, statuses.len);
+    try std.testing.expectEqual(@as(usize, 7), statuses.len);
+
+    var saw_cursor = false;
+    for (statuses) |st| {
+        try std.testing.expect(isSupportedHost(st.name));
+        try std.testing.expect(!std.mem.eql(u8, st.name, "grok"));
+        if (std.mem.eql(u8, st.name, "cursor")) {
+            saw_cursor = true;
+            // Fail-closed until W3 writer: never claim installed for cursor.
+            try std.testing.expect(!st.installed);
+        }
+    }
+    try std.testing.expect(saw_cursor);
+
+    // Exact membership: every day-one id appears once in collect order of supported_hosts.
+    for (supported_hosts, 0..) |want, i| {
+        try std.testing.expectEqualStrings(want, statuses[i].name);
+    }
+}
+
+test "DayOneHost ensure HostWireTable membership keys onboarding isSupportedHost (F2)" {
+    // Single-source law: ensure production must key day-one membership via
+    // onboarding.isSupportedHost — no ensure-local host-id array after auto-wire.
+    const ensure_src = @embedFile("ensure.zig");
+    const prod = blk: {
+        if (std.mem.indexOf(u8, ensure_src, "\ntest \"")) |idx| break :blk ensure_src[0..idx];
+        break :blk ensure_src;
+    };
+
+    try std.testing.expect(std.mem.indexOf(u8, prod, "isSupportedHost") != null);
+    try std.testing.expect(
+        std.mem.indexOf(u8, prod, "HostWireTable") != null or
+            std.mem.indexOf(u8, prod, "host_wire_table") != null or
+            std.mem.indexOf(u8, prod, "wireDetectedHosts") != null,
+    );
+    // Membership single-source remains onboarding.supported_hosts (not a second list).
+    try std.testing.expect(isSupportedHost("cursor"));
+    try std.testing.expect(!isSupportedHost("grok"));
+}
+
 test "onboarding verifies every selected host before success" {
     const verifier = struct {
         fn verify(_: std.Io, _: std.mem.Allocator, _: []const u8, host: []const u8) !bool {

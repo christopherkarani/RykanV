@@ -1853,6 +1853,154 @@ test "doctorFix --fix command path invokes ensure mutation door" {
 }
 
 // ---------------------------------------------------------------------------
+// doctorFix pack hub — w1-ensure-tests-pack composition + D06 receipt honesty
+// Named-run gate still --filter doctorFix.
+// ---------------------------------------------------------------------------
+
+fn doctorFixSha256(bytes: []const u8) [32]u8 {
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    return digest;
+}
+
+fn doctorFixClaimsFullProtection(text: []const u8) bool {
+    // D06 forbid-list (case-insensitive) — partial soft path must never claim these.
+    const needles = [_][]const u8{
+        "fully protected",
+        "all hosts wired",
+        "protection complete",
+        "full protection",
+    };
+    for (needles) |n| {
+        if (std.ascii.indexOfIgnoreCase(text, n) != null) return true;
+    }
+    return false;
+}
+
+test "doctorFix composition ensure writer then doctor check observes policy without second write" {
+    // Composition acceptance: writer ensure under fixture → loader doctor diagnose
+    // (--check probe) observes same policy artifact without second write.
+    // Note: --check exit may be non-zero when daemon is unavailable (readiness gate);
+    // composition oracle is hash stability + no rewrite, not core readiness green.
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, ".git");
+
+    const prev_cwd = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(prev_cwd);
+    try std.process.setCurrentDir(io, tmp.dir);
+    defer std.process.setCurrentPath(io, prev_cwd) catch {};
+
+    var stdout_buf: [65536]u8 = undefined;
+    var stderr_buf: [8192]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    // Writer: doctor --fix → ensure create-if-missing.
+    const fix_code = try command(io, &.{"--fix"}, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, fix_code);
+    try std.testing.expect(doctorFixPathExists(tmp.dir, ".orca/policy.yaml"));
+
+    const before = try tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(64 * 1024));
+    defer allocator.free(before);
+    const before_hash = doctorFixSha256(before);
+
+    // Loader: --check is probe-only (D42) — must not rewrite policy (may fail readiness).
+    stdout_writer = .fixed(&stdout_buf);
+    stderr_writer = .fixed(&stderr_buf);
+    _ = try command(io, &.{"--check"}, &stdout_writer, &stderr_writer);
+    try std.testing.expect(doctorFixPathExists(tmp.dir, ".orca/policy.yaml"));
+
+    const after_check = try tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(64 * 1024));
+    defer allocator.free(after_check);
+    try std.testing.expectEqualStrings(before, after_check);
+    try std.testing.expectEqual(before_hash, doctorFixSha256(after_check));
+
+    // Second --fix leave-alone: core soft-success exit 0 without policy rewrite.
+    stdout_writer = .fixed(&stdout_buf);
+    stderr_writer = .fixed(&stderr_buf);
+    const leave_code = try command(io, &.{"--fix"}, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, leave_code);
+    const after_leave = try tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(64 * 1024));
+    defer allocator.free(after_leave);
+    try std.testing.expectEqualStrings(before, after_leave);
+}
+
+test "doctorFix parse exit map soft partial is success when core_ok (D25 pack)" {
+    // Acceptance: doctor --fix parse/exit — soft host fail keeps process exit 0 when
+    // core_ok; core_failed is non-zero (pure processExitForOutcome contract).
+    const ensure_mod = @import("ensure.zig");
+
+    var hosts = [_]ensure_mod.HostResult{
+        .{
+            .host_id = "claude",
+            .detected = true,
+            .wired = false,
+            .smoke_ok = false,
+            .fix_hint = "ryk doctor --fix",
+            .error_class = .wire,
+        },
+    };
+    const soft = ensure_mod.EnsureOutcome{
+        .core_ok = true,
+        .hosts = hosts[0..],
+        .policy_created = true,
+        .policy_left_alone = false,
+        .protection_label = .partial,
+        .hosts_owned = false,
+    };
+    try std.testing.expectEqual(exit_codes.success, ensure_mod.processExitForOutcome(soft));
+
+    const failed = ensure_mod.EnsureOutcome{
+        .core_ok = false,
+        .hosts = &.{},
+        .policy_created = false,
+        .policy_left_alone = false,
+        .protection_label = .core_failed,
+        .hosts_owned = false,
+    };
+    try std.testing.expect(ensure_mod.processExitForOutcome(failed) != 0);
+}
+
+test "doctorFix host mock fail receipt forbids D06 full phrases requires partial and fix" {
+    // Acceptance (3): Forbidden D06 phrases asserted when host mock fails — receipt
+    // on doctor --fix partial path must teach partial + doctor --fix, never full-protection.
+    const ensure_mod = @import("ensure.zig");
+    var hosts = [_]ensure_mod.HostResult{
+        .{
+            .host_id = "codex",
+            .detected = true,
+            .wired = false,
+            .smoke_ok = false,
+            .fix_hint = "ryk doctor --fix",
+            .error_class = .wire,
+        },
+    };
+    var outcome = ensure_mod.EnsureOutcome{
+        .core_ok = true,
+        .hosts = hosts[0..],
+        .policy_created = false,
+        .policy_left_alone = true,
+        .protection_label = .partial,
+        .hosts_owned = false,
+    };
+    defer outcome.deinit(std.testing.allocator);
+
+    var buf: [8192]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try ensure_mod.writeEnsureReceipt(&writer, outcome);
+    const text = writer.buffered();
+
+    try std.testing.expect(!doctorFixClaimsFullProtection(text));
+    try std.testing.expect(std.ascii.indexOfIgnoreCase(text, "partial") != null);
+    try std.testing.expect(std.ascii.indexOfIgnoreCase(text, "doctor --fix") != null);
+    try std.testing.expect(std.ascii.indexOfIgnoreCase(text, "codex") != null);
+}
+
+// ---------------------------------------------------------------------------
 // MessageMigrate — core CLI fix strings → doctor --fix (w1-message-migrate-core)
 // Named substring `MessageMigrate` for monopath filters. Co-located only; does
 // not implement production. Forbidden start-onboard needle is built via concat
