@@ -174,7 +174,8 @@ pub fn policyExists(io: std.Io, workspace_root: []const u8) bool {
     return plugin.fileExistsAbsolute(io, path);
 }
 
-/// Creates `.orca/policy.yaml` when missing. Never passes `--quiet` so init prints next steps.
+/// Creates `.orca/policy.yaml` when missing under `workspace_root` (not process cwd).
+/// Never passes `--quiet` so init prints next steps.
 pub fn ensurePolicy(
     io: std.Io,
     cwd: std.Io.Dir,
@@ -184,14 +185,21 @@ pub fn ensurePolicy(
     stderr: anytype,
     messages: EnsurePolicyMessages,
 ) !u8 {
+    _ = cwd;
     if (policyExists(io, workspace_root)) {
         if (messages.exists) |text| try stdout.writeAll(text);
         return exit_codes.success;
     }
 
     try stdout.writeAll(messages.missing);
+    // Open workspace root Dir so nested process cwd cannot create policy elsewhere.
+    var root_dir = std.Io.Dir.openDirAbsolute(io, workspace_root, .{}) catch |err| {
+        try stderr.print("ryk: cannot open workspace root '{s}': {s}\n", .{ workspace_root, @errorName(err) });
+        return exit_codes.general;
+    };
+    defer root_dir.close(io);
     const init_argv = &[_][]const u8{ "--preset", preset };
-    return init.command(io, cwd, init_argv, stdout, stderr);
+    return init.command(io, root_dir, init_argv, stdout, stderr);
 }
 
 /// Guided setup when both stdin and stdout are TTYs (matches quickstart auto-setup gate).

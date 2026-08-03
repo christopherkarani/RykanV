@@ -10,9 +10,6 @@ const onboarding = @import("onboarding.zig");
 const ensure = @import("ensure.zig");
 const pack_state = @import("pack_state.zig");
 const plugin = @import("plugin.zig");
-const child_process = @import("child_process.zig");
-const pi_install = @import("pi_install.zig");
-const grok_install = @import("grok_install.zig");
 const shell_eval = @import("shell_eval.zig");
 const build_options = @import("build_options");
 const env_util = @import("../env_util.zig");
@@ -92,8 +89,8 @@ pub fn runStart(
     var failures: usize = 0;
     var protection_active = false;
 
-    // Temporary bridge (W1): policy create/leave-alone via shared ensure library — no
-    // parallel onboarding policy-create path (D61). Host auto-wire remains below.
+    // Policy-only ensure bridge: create/leave-alone without auto-wiring every day-one host.
+    // Multi-select below owns host mutation (skip_host_wire). Full auto-wire is doctor --fix.
     const policy_existed = onboarding.policyExists(io, workspace_root);
     if (policy_existed) {
         try stdout.writeAll("Policy already exists — leaving it unchanged.\n");
@@ -105,6 +102,8 @@ pub fn runStart(
         .quiet = true,
         .preset = flags.preset,
         .skip_verify = flags.skip_verify,
+        .skip_host_wire = true,
+        .workspace_root_override = workspace_root,
     }, stdout, stderr);
     defer ensure_outcome.deinit(allocator);
 
@@ -134,9 +133,13 @@ pub fn runStart(
     }
 
     // Additive pack enablement from preset (project .orca.toml when in git repo).
-    var packs_result = pack_state.ensurePresetPacksByName(io, allocator, workspace_root, flags.preset) catch pack_state.EnsurePacksResult{
-        .message = "Packs: baseline only (pack config write skipped)",
-        .owned = false,
+    var packs_ok = true;
+    var packs_result = pack_state.ensurePresetPacksByName(io, allocator, workspace_root, flags.preset) catch blk: {
+        packs_ok = false;
+        break :blk pack_state.EnsurePacksResult{
+            .message = "Packs: baseline only (pack config write skipped)",
+            .owned = false,
+        };
     };
     defer packs_result.deinit(allocator);
     try tui.render.stepLine(io, stdout, .done, "Packs", packs_result.message, 80);
@@ -174,7 +177,7 @@ pub fn runStart(
     if (selected_hosts.items.len == 0) {
         try tui.render.stepLine(io, stdout, .done, "Hosts", "No hosts selected.", 80);
     } else if (protection.needsCommandGuard()) {
-        const host_failures = try installSelectedHosts(io, allocator, selected_hosts.items, stdout, &configured_hosts);
+        const host_failures = try installSelectedHosts(io, allocator, selected_hosts.items, workspace_root, stdout, &configured_hosts);
         failures += host_failures;
         protection_active = protection_active and host_failures == 0;
         if (host_failures == 0) {
@@ -221,6 +224,18 @@ pub fn runStart(
         }
     } else if (flags.skip_verify) {
         try stdout.writeAll("\nVerification skipped (--skip-verify).\n");
+    }
+
+    // Wire applySoftIncomplete on the production start path (packs + global verify honesty).
+    if (ensure_outcome.core_ok) {
+        const verify_ok = if (flags.skip_verify) true else if (verification) |v| v.passed() else failures == 0;
+        const demoted = ensure.applySoftIncomplete(ensure_outcome.protection_label, packs_ok, verify_ok);
+        if (demoted == .partial and ensure_outcome.protection_label == .full) {
+            ensure_outcome.protection_label = .partial;
+            try ensure.writeEnsureReceipt(stdout, ensure_outcome);
+        } else {
+            ensure_outcome.protection_label = demoted;
+        }
     }
 
     try stdout.writeAll("\n");
@@ -356,6 +371,7 @@ fn installSelectedHosts(
     io: std.Io,
     allocator: std.mem.Allocator,
     hosts: []const []const u8,
+    workspace_root: []const u8,
     stdout: anytype,
     configured_out: *std.ArrayList([]const u8),
 ) !usize {
@@ -367,56 +383,38 @@ fn installSelectedHosts(
     var failures: usize = 0;
     for (hosts) |host_name| {
         try stdout.print("  → {s}: ", .{host_name});
-        if (std.mem.eql(u8, host_name, "pi")) {
-            const result = pi_install.install(io, allocator, .{
-                .home = home,
-                .ryk_binary = self_exe,
-            }) catch |err| {
-                try stdout.print("failed ({s})\n", .{@errorName(err)});
-                failures += 1;
-                continue;
-            };
-            if (result == .assets_unavailable) {
+        // Shared monopath with ensure.installOneHost — no dual timeout/verify drift.
+        switch (ensure.installOneHost(io, allocator, host_name, home, self_exe, workspace_root)) {
+            .installed => {
+                if (std.mem.eql(u8, host_name, "pi")) {
+                    try stdout.writeAll("installed (bundled extension)\n");
+                } else if (std.mem.eql(u8, host_name, "grok")) {
+                    try stdout.writeAll("installed (PreToolUse hook)\n");
+                } else {
+                    try stdout.writeAll("installed (verified)\n");
+                }
+                try configured_out.append(allocator, try allocator.dupe(u8, host_name));
+            },
+            .upgraded => {
+                try stdout.writeAll("upgraded (bundled extension)\n");
+                try configured_out.append(allocator, try allocator.dupe(u8, host_name));
+            },
+            .already_installed => {
+                try stdout.writeAll("already installed (verified)\n");
+                try configured_out.append(allocator, try allocator.dupe(u8, host_name));
+            },
+            .assets_unavailable => {
                 try stdout.writeAll("failed (bundled extension assets unavailable)\n");
                 failures += 1;
-                continue;
-            }
-            try stdout.writeAll(switch (result) {
-                .installed => "installed (bundled extension)\n",
-                .upgraded => "upgraded (bundled extension)\n",
-                .already_installed => "already installed (verified)\n",
-                .assets_unavailable => unreachable,
-            });
-            try configured_out.append(allocator, try allocator.dupe(u8, host_name));
-            continue;
-        }
-        if (std.mem.eql(u8, host_name, "grok")) {
-            const result = grok_install.installAtHome(io, allocator, home, self_exe) catch |err| {
-                try stdout.print("failed ({s})\n", .{@errorName(err)});
+            },
+            .deferred => {
+                try stdout.writeAll("deferred (Cursor writer ships in W3; ryk doctor --fix)\n");
                 failures += 1;
-                continue;
-            };
-            defer result.deinit(allocator);
-            try stdout.writeAll(if (result.changed) "installed (PreToolUse hook)\n" else "already installed (verified)\n");
-            try configured_out.append(allocator, try allocator.dupe(u8, host_name));
-            continue;
-        }
-        const install_argv = &[_][]const u8{ self_exe, "plugin", "install", host_name, "--yes" };
-        const code = runChild(allocator, install_argv) catch |err| {
-            try stdout.print("failed ({s})\n", .{@errorName(err)});
-            failures += 1;
-            continue;
-        };
-        const outcome = plugin.verifyHostInstallAfterChild(io, allocator, host_name, code);
-        if (outcome != .failed) {
-            if (outcome == .installed_after_child_failure)
-                try stdout.print("installed (verified; installer exited {d})\n", .{code})
-            else
-                try stdout.writeAll("installed (verified)\n");
-            try configured_out.append(allocator, try allocator.dupe(u8, host_name));
-        } else {
-            try stdout.print("failed verification (installer exit {d})\n", .{code});
-            failures += 1;
+            },
+            .failed => {
+                try stdout.writeAll("failed\n");
+                failures += 1;
+            },
         }
     }
     return failures;
@@ -469,18 +467,6 @@ fn softRefreshStartDiscovery(
     // Soft-skip errors — start still succeeds (DIS-1). Warning is logged by
     // callers that have stderr when needed; silent here to avoid wrong stream.
     refreshManagedDiscovery(io, allocator, workspace_root, home, keys_buf[0..keys_len]) catch {};
-}
-
-fn runChild(allocator: std.mem.Allocator, argv: []const []const u8) !u8 {
-    const result = try child_process.runHostCommandTimed(
-        allocator,
-        argv,
-        15_000,
-        .{},
-        .{},
-    );
-    defer child_process.deinitHostCommandResult(result, allocator);
-    return if (result.timed_out) 255 else result.exit_code;
 }
 
 /// Stable first-run end-card after successful `ryk start`.
@@ -590,7 +576,7 @@ fn writeSuccessEndCard(
 
     try tui.theme.paintBold(io, stdout, .brand, "Try next");
     try stdout.writeAll("\n");
-    try stdout.writeAll("  ryk claude          # or codex / pi / opencode / …\n");
+    try stdout.writeAll("  ryk claude          # or codex / pi / opencode / grok / …\n");
     try stdout.writeAll("  ryk doctor\n");
     try stdout.writeAll("  ryk replay\n");
     try stdout.writeAll("\n");
@@ -666,7 +652,7 @@ fn writeFailureSummary(
     try stdout.print("  {s}\n", .{daemon_check.remediation});
     try stdout.writeAll("  ryk plugin doctor\n");
     try stdout.writeAll("  ryk doctor --verbose\n");
-    try stdout.writeAll("  ryk start --auto\n");
+    try stdout.writeAll("  ryk doctor --fix\n");
 }
 
 fn flushIfSupported(writer: anytype) !void {

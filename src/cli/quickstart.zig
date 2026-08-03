@@ -8,6 +8,7 @@ const help = @import("help.zig");
 const doctor = @import("doctor.zig");
 const setup = @import("setup.zig");
 const onboarding = @import("onboarding.zig");
+const ensure_lib = @import("ensure.zig");
 const readiness = @import("readiness.zig");
 const build_options = @import("build_options");
 const tui = @import("../tui/mod.zig");
@@ -108,10 +109,13 @@ fn commandWithDaemonChecker(
 
     if (!onboarding.policyExists(io, workspace_root)) {
         try tui.render.stepLine(io, stdout, .active, "Step 2 — Policy", "Creating your first policy...", 0);
-        const init_code = try onboarding.ensurePolicy(io, cwd, workspace_root, flags.preset, stdout, stderr, .{
-            .missing = "",
-            .exists = null,
-        });
+        var ensure_outcome = try ensure_lib.runEnsure(io, allocator, cwd, .{
+            .preset = flags.preset,
+            .skip_host_wire = true,
+            .workspace_root_override = workspace_root,
+        }, stdout, stderr);
+        defer ensure_outcome.deinit(allocator);
+        const init_code = ensure_lib.processExitForOutcome(ensure_outcome);
         if (init_code != exit_codes.success) {
             try tui.render.stepLine(io, stdout, .failed, "Step 2 — Policy", "Policy creation failed.", 0);
             try writeReceipt(stdout, readiness.assess(daemon_check.status, false, false), false);
@@ -156,7 +160,7 @@ fn commandWithDaemonChecker(
     try writeReceipt(stdout, core, true);
     try stdout.writeAll("Core protection is ready (daemon + policy). Host integrations reported above may still need setup.\n");
     try stdout.writeAll("\nStart protecting your sessions:\n");
-    try stdout.writeAll("  ryk claude   # or codex / pi / opencode / …\n");
+    try stdout.writeAll("  ryk claude   # or codex / pi / opencode / grok / …\n");
     try stdout.writeAll("\nUseful next steps:\n");
     try stdout.writeAll("  ryk doctor\n");
     try stdout.writeAll("  ryk replay\n");
@@ -233,8 +237,8 @@ test "quickstart check json is a read-only readiness envelope" {
 test "quickstart check does not request daemon startup" {
     const spy = struct {
         var ensure_running: ?bool = null;
-        fn check(_: std.mem.Allocator, ensure: bool) !void {
-            ensure_running = ensure;
+        fn check(_: std.mem.Allocator, ensure_running_flag: bool) !void {
+            ensure_running = ensure_running_flag;
             return error.DaemonBinaryNotFound;
         }
     };

@@ -120,13 +120,15 @@ pub const Runtime = struct {
         if (!server_closed) {
             self.state.server.deinit(io);
         }
-        // M-2/M-3: Do not abandon reclaim while active_connections > 0. State
-        // borrows selected_policy and a caller-owned allocator; returning with
-        // a leaked State still UAFs when the caller frees policy/GPA after
-        // deinit. Prefer blocking until workers drain over intentional leak.
-        // Force-shutdown above makes quiet tunnels exit promptly; workers still
-        // mid-dial or under continuous traffic may take a short additional wait.
+        // Bound reclaim: force-shutdown client + upstream FDs, then wait a hard
+        // budget. Mid-dial / blackholed upstream must not hang deinit forever.
+        // Residual: if workers remain after the budget, State is still reclaimed
+        // (prefer bounded leak over unbounded hang in agent-grade teardown).
+        const hard_reclaim_ns: u64 = 5 * std.time.ns_per_s;
+        const reclaim_started = std.Io.Clock.Timestamp.now(io, .awake);
         while (self.state.active_connections.load(.acquire) > 0) {
+            const elapsed: u64 = @intCast(@max(reclaim_started.durationFromNow(io).raw.nanoseconds, 0));
+            if (elapsed > hard_reclaim_ns) break;
             self.state.shutdownConnections(io);
             const duration = std.Io.Duration.fromNanoseconds(10 * std.time.ns_per_ms);
             std.Io.sleep(io, duration, .awake) catch {};
@@ -134,6 +136,7 @@ pub const Runtime = struct {
         for (self.state.audit_events.items) |ev| ev.deinit(self.state.allocator);
         self.state.audit_events.deinit(self.state.allocator);
         self.state.active_streams.deinit(self.state.allocator);
+        self.state.active_upstreams.deinit(self.state.allocator);
         self.state.allocator.free(self.state.bind_url);
         self.state.allocator.destroy(self.state);
         self.* = undefined;
@@ -159,6 +162,8 @@ const State = struct {
     active_connections: std.atomic.Value(usize) = .init(0),
     connections_mutex: std.Io.Mutex = .init,
     active_streams: std.ArrayList(std.Io.net.Stream) = .empty,
+    /// Upstream ends (CONNECT/HTTP forward) so deinit force-close is not client-only.
+    active_upstreams: std.ArrayList(std.Io.net.Stream) = .empty,
     audit_mutex: std.Io.Mutex = .init,
     audit_events: std.ArrayList(AuditEvent) = .empty,
     threaded: std.Io.Threaded = undefined,
@@ -183,13 +188,15 @@ const State = struct {
     }
 
     fn registerConnection(self: *State, io: std.Io, stream: std.Io.net.Stream) !void {
-        try self.connections_mutex.lock(io);
+        self.connections_mutex.lockUncancelable(io);
         defer self.connections_mutex.unlock(io);
         try self.active_streams.append(self.allocator, stream);
     }
 
     fn unregisterConnection(self: *State, io: std.Io, handle: std.Io.net.Socket.Handle) void {
-        self.connections_mutex.lock(io) catch return;
+        // Uncancelable: silent cancel/skip leaves closed FDs in the force-shutdown list
+        // (recycled-FD SHUT_RDWR risk after accept reuses the number).
+        self.connections_mutex.lockUncancelable(io);
         defer self.connections_mutex.unlock(io);
         for (self.active_streams.items, 0..) |stream, index| {
             if (stream.socket.handle != handle) continue;
@@ -198,10 +205,29 @@ const State = struct {
         }
     }
 
+    fn registerUpstream(self: *State, io: std.Io, stream: std.Io.net.Stream) !void {
+        self.connections_mutex.lockUncancelable(io);
+        defer self.connections_mutex.unlock(io);
+        try self.active_upstreams.append(self.allocator, stream);
+    }
+
+    fn unregisterUpstream(self: *State, io: std.Io, handle: std.Io.net.Socket.Handle) void {
+        self.connections_mutex.lockUncancelable(io);
+        defer self.connections_mutex.unlock(io);
+        for (self.active_upstreams.items, 0..) |stream, index| {
+            if (stream.socket.handle != handle) continue;
+            _ = self.active_upstreams.swapRemove(index);
+            return;
+        }
+    }
+
     fn shutdownConnections(self: *State, io: std.Io) void {
-        self.connections_mutex.lock(io) catch return;
+        self.connections_mutex.lockUncancelable(io);
         defer self.connections_mutex.unlock(io);
         for (self.active_streams.items) |stream| {
+            stream.shutdown(io, .both) catch {};
+        }
+        for (self.active_upstreams.items) |stream| {
             stream.shutdown(io, .both) catch {};
         }
     }
@@ -354,6 +380,14 @@ fn handleConnection(state: *State, io: std.Io, client: std.Io.net.Stream) !void 
     defer decision.deinit(state.allocator);
     state.record(.network_connect_attempt, decision.redacted_target, null) catch {};
 
+    // RT-03 F-audit: annotate-only — emit exfil findings even when allow.
+    // Visible surfaces only: CONNECT is host:port; cleartext absolute-form may
+    // include path/query. Not body, headers, or TLS payload. Flushed end-of-run
+    // via Runtime.snapshotAuditEvents (not mid-CONNECT live stream).
+    if (decision.exfil_findings.len > 0) {
+        state.record(.network_exfiltration_suspected, decision.redacted_target, decision.decision) catch {};
+    }
+
     if (!(decision.decision.result == .allow or decision.decision.result == .observe)) {
         state.record(.network_connect_denied, decision.redacted_target, decision.decision) catch {};
         try writeProxyError(io, client, 403, "Forbidden");
@@ -362,10 +396,10 @@ fn handleConnection(state: *State, io: std.Io, client: std.Io.net.Stream) !void 
     state.record(.network_connect_allowed, decision.redacted_target, decision.decision) catch {};
 
     if (request.https_connect) {
-        try tunnelConnect(state.allocator, io, client, request.host, request.port orelse 443, &state.stop);
+        try tunnelConnect(state, io, client, request.host, request.port orelse 443);
         return;
     }
-    try forwardHttp(state.allocator, io, client, request, buffer[0..read_len], &state.stop);
+    try forwardHttp(state, io, client, request, buffer[0..read_len]);
 }
 
 fn readHeaders(io: std.Io, stream: std.Io.net.Stream, buffer: []u8) !usize {
@@ -458,7 +492,16 @@ pub fn parseRequest(bytes: []const u8) !ParsedRequest {
 /// Zig 0.16 `IpAddress.resolve` only parses IP text (not DNS). Hostnames need
 /// `HostName.connect` (lookup + connect). Using resolve alone abort CONNECT tunnels
 /// after policy allow — empty reply / "Proxy CONNECT aborted" for example.com.
-fn connectUpstream(io: std.Io, host: []const u8, port: u16) !std.Io.net.Stream {
+///
+/// Honors Runtime stop before dial. Zig 0.16 Threaded `netConnectIp` panics if
+/// `ConnectOptions.timeout != .none`, so dials are not OS-timeout bound here;
+/// `Runtime.deinit` force-closes client+upstream FDs and uses a hard reclaim budget
+/// so teardown cannot hang forever on blackhole mid-dial workers.
+fn connectUpstream(io: std.Io, host: []const u8, port: u16, stop: ?*const std.atomic.Value(bool)) !std.Io.net.Stream {
+    if (stop) |s| {
+        if (s.load(.acquire)) return error.ProxyStopped;
+    }
+    // Never pass ConnectOptions.timeout — Threaded backend panics (Zig 0.16 TODO).
     if (std.Io.net.IpAddress.parse(host, port)) |address| {
         return address.connect(io, .{ .mode = .stream });
     } else |_| {
@@ -468,44 +511,58 @@ fn connectUpstream(io: std.Io, host: []const u8, port: u16) !std.Io.net.Stream {
 }
 
 fn forwardHttp(
-    allocator: std.mem.Allocator,
+    state: *State,
     io: std.Io,
     client: std.Io.net.Stream,
     request: ParsedRequest,
     first_read: []const u8,
-    stop: *const std.atomic.Value(bool),
 ) !void {
-    var upstream = try connectUpstream(io, request.host, request.port orelse 80);
-    defer upstream.close(io);
+    if (state.stop.load(.acquire)) return error.ProxyStopped;
+    var upstream = try connectUpstream(io, request.host, request.port orelse 80, &state.stop);
+    // Register before tunnel so deinit force-closes blackholed upstream ends.
+    state.registerUpstream(io, upstream) catch {
+        upstream.close(io);
+        return error.OutOfMemory;
+    };
+    defer {
+        state.unregisterUpstream(io, upstream.socket.handle);
+        upstream.close(io);
+    }
     var upstream_buf: [64 * 1024]u8 = undefined;
     var upstream_writer = upstream.writer(io, &upstream_buf);
     if (std.mem.indexOf(u8, request.target, "://")) |_| {
-        const rewritten = try rewriteAbsoluteRequest(allocator, request, first_read);
-        defer allocator.free(rewritten);
+        const rewritten = try rewriteAbsoluteRequest(state.allocator, request, first_read);
+        defer state.allocator.free(rewritten);
         try upstream_writer.interface.writeAll(rewritten);
     } else {
         try upstream_writer.interface.writeAll(first_read);
     }
     try upstream_writer.interface.flush();
-    try tunnel(io, client, upstream, stop);
+    try tunnel(io, client, upstream, &state.stop);
 }
 
 fn tunnelConnect(
-    allocator: std.mem.Allocator,
+    state: *State,
     io: std.Io,
     client: std.Io.net.Stream,
     host: []const u8,
     port: u16,
-    stop: *const std.atomic.Value(bool),
 ) !void {
-    _ = allocator;
-    var upstream = try connectUpstream(io, host, port);
-    defer upstream.close(io);
+    if (state.stop.load(.acquire)) return error.ProxyStopped;
+    var upstream = try connectUpstream(io, host, port, &state.stop);
+    state.registerUpstream(io, upstream) catch {
+        upstream.close(io);
+        return error.OutOfMemory;
+    };
+    defer {
+        state.unregisterUpstream(io, upstream.socket.handle);
+        upstream.close(io);
+    }
     var client_buf: [256]u8 = undefined;
     var client_writer = client.writer(io, &client_buf);
     try client_writer.interface.writeAll("HTTP/1.1 200 Connection Established\r\nProxy-Agent: Orca\r\n\r\n");
     try client_writer.interface.flush();
-    try tunnel(io, client, upstream, stop);
+    try tunnel(io, client, upstream, &state.stop);
 }
 
 /// Bidirectional byte relay for CONNECT and HTTP forward (shared path).
@@ -1362,7 +1419,7 @@ test "connectUpstream dials IP literals and DNS hostnames" {
         }
     }.run, .{ &server, io });
     defer accept_thread.join();
-    var ip_stream = try connectUpstream(io, "127.0.0.1", port);
+    var ip_stream = try connectUpstream(io, "127.0.0.1", port, null);
     ip_stream.close(io);
 
     // DNS path via localhost (hermetic: no external resolv / offline skip).
@@ -1377,7 +1434,7 @@ test "connectUpstream dials IP literals and DNS hostnames" {
         }
     }.run, .{ &host_server, io });
     defer host_accept.join();
-    var host_stream = try connectUpstream(io, "localhost", host_port);
+    var host_stream = try connectUpstream(io, "localhost", host_port, null);
     host_stream.close(io);
 }
 
@@ -1650,5 +1707,115 @@ test "proxy deinit reclaims quiet open tunnel within bound" {
     if (client_open) {
         client.close(io);
         client_open = false;
+    }
+}
+
+test "proxy F-audit records exfil on allow for sink host and cleartext secret query" {
+    // RT-03 F-audit: annotate-only even when allow. CONNECT host-class sinks fire;
+    // cleartext absolute-form secret query fires; plain CONNECT non-sink does not.
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
+        \\version: 1
+        \\mode: observe
+        \\network:
+        \\  mode: open
+        \\  backend: proxy
+        \\  detect_exfiltration:
+        \\    dns: true
+        \\    long_query_strings: true
+        \\    secret_patterns: true
+    , "proxy-f-audit.yaml");
+    defer loaded.deinit();
+
+    const io = std.testing.io;
+    var runtime = try start(std.testing.allocator, &loaded, .observe);
+    defer runtime.deinit();
+    std.Io.sleep(io, std.Io.Duration.fromNanoseconds(50 * std.time.ns_per_ms), .awake) catch {};
+    const proxy_port = try bindPort(runtime.bindUrl());
+    const proxy_addr = try std.Io.net.IpAddress.parse("127.0.0.1", proxy_port);
+
+    // 1) CONNECT non-sink (api.github.com) — no exfil event expected for host-class.
+    {
+        var client = try std.Io.net.IpAddress.connect(&proxy_addr, io, .{ .mode = .stream });
+        defer client.close(io);
+        const req = "CONNECT api.github.com:443 HTTP/1.1\r\nHost: api.github.com:443\r\n\r\n";
+        var write_buf: [256]u8 = undefined;
+        var writer = client.writer(io, &write_buf);
+        try writer.interface.writeAll(req);
+        try writer.interface.flush();
+        var response_buf: [512]u8 = undefined;
+        _ = readHttpResponse(io, client, &response_buf) catch {};
+    }
+    try runtime.waitForIdle(2 * std.time.ns_per_s);
+    {
+        const events = try runtime.snapshotAuditEvents(std.testing.allocator);
+        defer runtime.freeAuditEvents(std.testing.allocator, events);
+        var saw_exfil = false;
+        for (events) |ev| {
+            if (ev.event_type == .network_exfiltration_suspected) saw_exfil = true;
+        }
+        try std.testing.expect(!saw_exfil);
+    }
+
+    // 2) CONNECT paste sink — annotate + allow (open mode).
+    {
+        var client = try std.Io.net.IpAddress.connect(&proxy_addr, io, .{ .mode = .stream });
+        defer client.close(io);
+        const req = "CONNECT pastebin.com:443 HTTP/1.1\r\nHost: pastebin.com:443\r\n\r\n";
+        var write_buf: [256]u8 = undefined;
+        var writer = client.writer(io, &write_buf);
+        try writer.interface.writeAll(req);
+        try writer.interface.flush();
+        var response_buf: [512]u8 = undefined;
+        _ = readHttpResponse(io, client, &response_buf) catch {};
+    }
+    try runtime.waitForIdle(2 * std.time.ns_per_s);
+    {
+        const events = try runtime.snapshotAuditEvents(std.testing.allocator);
+        defer runtime.freeAuditEvents(std.testing.allocator, events);
+        var saw_exfil = false;
+        var saw_allowed = false;
+        for (events) |ev| {
+            if (ev.event_type == .network_exfiltration_suspected and
+                std.mem.indexOf(u8, ev.target, "pastebin.com") != null)
+                saw_exfil = true;
+            if (ev.event_type == .network_connect_allowed and
+                std.mem.indexOf(u8, ev.target, "pastebin.com") != null)
+                saw_allowed = true;
+        }
+        try std.testing.expect(saw_exfil);
+        try std.testing.expect(saw_allowed);
+    }
+
+    // 3) Cleartext absolute-form HTTP with secret query — findings on visible path/query.
+    {
+        var client = try std.Io.net.IpAddress.connect(&proxy_addr, io, .{ .mode = .stream });
+        defer client.close(io);
+        const req =
+            "GET http://example.com/path?token=sk-fakeSyntheticOpenAIKey1234567890 HTTP/1.1\r\n" ++
+            "Host: example.com\r\nConnection: close\r\n\r\n";
+        var write_buf: [512]u8 = undefined;
+        var writer = client.writer(io, &write_buf);
+        try writer.interface.writeAll(req);
+        try writer.interface.flush();
+        var response_buf: [512]u8 = undefined;
+        _ = readHttpResponse(io, client, &response_buf) catch {};
+    }
+    try runtime.waitForIdle(2 * std.time.ns_per_s);
+    {
+        const events = try runtime.snapshotAuditEvents(std.testing.allocator);
+        defer runtime.freeAuditEvents(std.testing.allocator, events);
+        var saw_secret_exfil = false;
+        for (events) |ev| {
+            if (ev.event_type == .network_exfiltration_suspected and
+                std.mem.indexOf(u8, ev.target, "example.com") != null)
+            {
+                // Redacted target must not contain the raw synthetic secret.
+                try std.testing.expect(std.mem.indexOf(u8, ev.target, "sk-fakeSyntheticOpenAIKey") == null);
+                saw_secret_exfil = true;
+            }
+        }
+        try std.testing.expect(saw_secret_exfil);
     }
 }

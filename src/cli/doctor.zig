@@ -168,8 +168,8 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
             stderr,
         );
         defer outcome.deinit(allocator);
-        // Soft-success honesty: partial hosts keep core_ok; receipt teaches repair.
-        if (outcome.protection_label == .partial) {
+        // Honesty receipt for partial soft-success and core_failed (not silent on either).
+        if (outcome.protection_label == .partial or outcome.protection_label == .core_failed) {
             try ensure.writeEnsureReceipt(stdout, outcome);
         }
         return ensure.processExitForOutcome(outcome);
@@ -858,7 +858,7 @@ fn collectHostDoctorRows(io: std.Io, allocator: std.mem.Allocator) !HostDoctorSn
 
         const wired: []const u8 = if (installed) "yes" else if (detected) "no" else "—";
         const shell_gate = host_status.shellGate(host_name);
-        const fail_stance = host_status.failStance(host_name, hermes_fail_open);
+        const fail_stance = host_status.failStance(host_name, hermes_fail_open, wired);
         const smoke = host_status.HostSmokePair{};
         const fix = try host_status.formatFix(allocator, host_name, wired, smoke, hermes_fail_open);
 
@@ -883,7 +883,7 @@ fn collectHostDoctorRows(io: std.Io, allocator: std.mem.Allocator) !HostDoctorSn
             .host = try allocator.dupe(u8, "pi"),
             .wired = try allocator.dupe(u8, wired),
             .shell_gate = try allocator.dupe(u8, host_status.shellGate("pi")),
-            .fail_stance = try allocator.dupe(u8, host_status.failStance("pi", hermes_fail_open)),
+            .fail_stance = try allocator.dupe(u8, host_status.failStance("pi", hermes_fail_open, wired)),
             .smoke_allow = try allocator.dupe(u8, smoke.allow.toString()),
             .smoke_deny = try allocator.dupe(u8, smoke.deny.toString()),
             .fix = fix,
@@ -1380,8 +1380,10 @@ test "doctor packs section is unknown when daemon is unavailable" {
     try writeReport(std.testing.io, &stdout_writer, .linux, report, context, false);
     const written = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, written, "\nPacks\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "unknown (daemon unavailable") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "fails closed") != null);
+    // RT-12: packs offline ≠ shell evaluate dead
+    try std.testing.expect(std.mem.indexOf(u8, written, "unknown (packs inventory offline") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "shell evaluate is Zig in-process") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "shell evaluation fails closed") == null);
 }
 
 test "doctor host table lists managed hosts and shell gates" {
@@ -1864,17 +1866,8 @@ fn doctorFixSha256(bytes: []const u8) [32]u8 {
 }
 
 fn doctorFixClaimsFullProtection(text: []const u8) bool {
-    // D06 forbid-list (case-insensitive) — partial soft path must never claim these.
-    const needles = [_][]const u8{
-        "fully protected",
-        "all hosts wired",
-        "protection complete",
-        "full protection",
-    };
-    for (needles) |n| {
-        if (std.ascii.indexOfIgnoreCase(text, n) != null) return true;
-    }
-    return false;
+    // Shared D06 forbid-list with ensure (case-insensitive).
+    return ensure.ensureSoftClaimsFullProtection(text);
 }
 
 test "doctorFix composition ensure writer then doctor check observes policy without second write" {
