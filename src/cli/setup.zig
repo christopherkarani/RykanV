@@ -8,6 +8,7 @@ const help = @import("help.zig");
 const style = @import("style.zig");
 const plugin = @import("plugin.zig");
 const onboarding = @import("onboarding.zig");
+const ensure = @import("ensure.zig");
 const pack_state = @import("pack_state.zig");
 const spinner_pkg = @import("spinner.zig");
 const build_options = @import("build_options");
@@ -86,10 +87,19 @@ fn runAutoSetup(io: std.Io, cwd: std.Io.Dir, preset: []const u8, stdout: anytype
     const workspace_root = try onboarding.resolveWorkspaceRootFromCwd(io, allocator, cwd);
     defer allocator.free(workspace_root);
 
-    const policy_code = try onboarding.ensurePolicy(io, cwd, workspace_root, preset, stdout, stderr, .{
-        .missing = "Policy not found. Initializing...\n",
-        .exists = "Policy already exists.\n",
-    });
+    // Shared ensure door (no parallel ensurePolicy create path). Policy-only: host wire is start/doctor.
+    if (onboarding.policyExists(io, workspace_root)) {
+        try stdout.writeAll("Policy already exists.\n");
+    } else {
+        try stdout.writeAll("Policy not found. Initializing...\n");
+    }
+    var ensure_outcome = try ensure.runEnsure(io, allocator, cwd, .{
+        .preset = preset,
+        .skip_host_wire = true,
+        .workspace_root_override = workspace_root,
+    }, stdout, stderr);
+    defer ensure_outcome.deinit(allocator);
+    const policy_code = ensure.processExitForOutcome(ensure_outcome);
     if (policy_code != exit_codes.success) return policy_code;
 
     // Additive pack enablement (idempotent). Init may have already written packs when policy
@@ -264,10 +274,16 @@ fn runGuidedSetup(
     if (!render.embedded) {
         try tui.render.stepLine(io, stdout, .active, "Policy", "Checking workspace policy...", 0);
     }
-    const policy_code = try onboarding.ensurePolicy(io, cwd, workspace_root, preset, stdout, stderr, .{
-        .missing = "No policy found. Creating policy...\n",
-        .exists = null,
-    });
+    if (!policy_existed and !render.embedded) {
+        try stdout.writeAll("No policy found. Creating policy...\n");
+    }
+    var ensure_outcome = try ensure.runEnsure(io, allocator, cwd, .{
+        .preset = preset,
+        .skip_host_wire = true,
+        .workspace_root_override = workspace_root,
+    }, stdout, stderr);
+    defer ensure_outcome.deinit(allocator);
+    const policy_code = ensure.processExitForOutcome(ensure_outcome);
     if (policy_code != exit_codes.success) {
         if (!render.embedded) {
             try tui.render.stepLine(io, stdout, .failed, "Policy", "Policy setup failed.", 0);

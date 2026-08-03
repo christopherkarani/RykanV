@@ -53,9 +53,19 @@ pub fn runHostCommandTimed(
     stdout_writer: anytype,
     stderr_writer: anytype,
 ) !HostCommandResult {
-    if (argv.len == 0) return error.InvalidArgv;
     _ = stdout_writer;
     _ = stderr_writer;
+    return runHostCommandTimedCwd(allocator, argv, timeout_ms, null);
+}
+
+/// Same as `runHostCommandTimed` but optionally pins the child cwd (plugin install roots).
+pub fn runHostCommandTimedCwd(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    timeout_ms: u64,
+    cwd_path: ?[]const u8,
+) !HostCommandResult {
+    if (argv.len == 0) return error.InvalidArgv;
 
     var threaded = std.Io.Threaded.init(allocator, .{
         .environ = env_util.processEnviron(),
@@ -65,6 +75,7 @@ pub fn runHostCommandTimed(
 
     var child = try std.process.spawn(io, .{
         .argv = argv,
+        .cwd = if (cwd_path) |p| .{ .path = p } else .inherit,
         .stdin = .ignore,
         .stdout = .ignore,
         .stderr = .ignore,

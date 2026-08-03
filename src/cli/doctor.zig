@@ -176,8 +176,8 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
             stderr,
         );
         defer outcome.deinit(allocator);
-        // Soft-success honesty: partial hosts keep core_ok; receipt teaches repair.
-        if (outcome.protection_label == .partial) {
+        // Honesty receipt for partial soft-success and core_failed (not silent on either).
+        if (outcome.protection_label == .partial or outcome.protection_label == .core_failed) {
             try ensure.writeEnsureReceipt(stdout, outcome);
         }
         return ensure.processExitForOutcome(outcome);
@@ -2086,17 +2086,8 @@ fn doctorFixSha256(bytes: []const u8) [32]u8 {
 }
 
 fn doctorFixClaimsFullProtection(text: []const u8) bool {
-    // D06 forbid-list (case-insensitive) — partial soft path must never claim these.
-    const needles = [_][]const u8{
-        "fully protected",
-        "all hosts wired",
-        "protection complete",
-        "full protection",
-    };
-    for (needles) |n| {
-        if (std.ascii.indexOfIgnoreCase(text, n) != null) return true;
-    }
-    return false;
+    // Shared D06 forbid-list with ensure (case-insensitive).
+    return ensure.ensureSoftClaimsFullProtection(text);
 }
 
 test "doctorFix composition ensure writer then doctor check observes policy without second write" {

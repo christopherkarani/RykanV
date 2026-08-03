@@ -2237,9 +2237,9 @@ test "plugin help and disable re-enable messaging de-emphasize --yes in favor of
     try std.testing.expectEqual(exit_codes.success, code);
 
     const output = stdout_writer.buffered();
-    // Primary path is `ryk start` (guided on TTY); removed setup must not be re-taught.
+    // One-click repair is doctor --fix; guided multi-select remains ryk start. Setup removed.
     try std.testing.expect(std.mem.indexOf(u8, output, "ryk start") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "guided") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "doctor --fix") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "orca setup") == null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }

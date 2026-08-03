@@ -167,6 +167,9 @@ output="$(
   fail "install still invoked start --auto (forbidden; restore is not a green path)"
 [[ "$(grep -c '^start' "${onboard_log}")" == 0 ]] ||
   fail "install invoked start door (forbidden after w1-install-handoff)"
+# Install-scope flag must ride with the doctor --fix door (D32).
+grep -qE '^argv=doctor --fix --from-install' "${onboard_log}" ||
+  fail "onboarding argv missing --from-install (got: $(grep '^argv=' "${onboard_log}" 2>/dev/null || true))"
 
 actual_onboard_cwd="$(sed -n 's/^cwd=//p' "${onboard_log}" | head -n 1)"
 [[ -n "${actual_onboard_cwd}" && "${actual_onboard_cwd}" -ef "${home}" ]] ||
@@ -414,6 +417,9 @@ if grep -n 'start --auto' "${INSTALL_SH}" >/dev/null 2>&1; then
 fi
 if ! grep -nF '"$DESTINATION" doctor --fix' "${INSTALL_SH}" >/dev/null 2>&1; then
   fail 'scripts/install.sh missing invocation-anchored "$DESTINATION" doctor --fix'
+fi
+if ! grep -nF '"$DESTINATION" doctor --fix --from-install' "${INSTALL_SH}" >/dev/null 2>&1; then
+  fail 'scripts/install.sh missing "$DESTINATION" doctor --fix --from-install (install-scope flag)'
 fi
 if ! grep -nF 'cd "$HOME"' "${INSTALL_SH}" >/dev/null 2>&1; then
   fail 'scripts/install.sh missing cd "$HOME" around ensure invocation'

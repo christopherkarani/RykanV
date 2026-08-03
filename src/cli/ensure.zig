@@ -11,6 +11,7 @@ const init = @import("init.zig");
 const exit_codes = @import("exit_codes.zig");
 const env_util = @import("../env_util.zig");
 const plugin = @import("plugin.zig");
+const core_api = @import("orca_core").api;
 const orca_policy = @import("orca_core").policy;
 const pi_install = @import("pi_install.zig");
 const grok_install = @import("grok_install.zig");
@@ -25,15 +26,20 @@ pub const doctor_fix_hint: []const u8 = "ryk doctor --fix";
 // Frozen API surface (plan §2 / D20)
 // ---------------------------------------------------------------------------
 
-/// Options for `runEnsure`. Field set is frozen — later W1 units fill behavior only.
+/// Options for `runEnsure`. Existing fields stay stable; additive fields default off.
 pub const EnsureOptions = struct {
-    /// Install / `--from-install` door: HOME + resource-root scope (D32).
+    /// Install / `--from-install` door: absolute HOME scope only (D32/D33).
+    /// Resource roots are ambient (`install.sh` exports); not enforced by ensure itself.
     from_install: bool = false,
     quiet: bool = false,
     /// Create-only when policy missing; null → `onboarding.default_preset`.
     preset: ?[]const u8 = null,
     skip_verify: bool = false,
-    // Honor RYK_RESOURCE_ROOT / ORCA_RESOURCE_ROOT when set (resource_root helpers).
+    /// Policy create/leave-alone only: skip day-one host auto-wire (start multi-select bridge).
+    /// Full auto-wire remains exclusive to `doctor --fix` / install (`skip_host_wire=false`).
+    skip_host_wire: bool = false,
+    /// Absolute workspace root override. When set, skip cwd/HOME resolution (start path parity).
+    workspace_root_override: ?[]const u8 = null,
 };
 
 pub const HostErrorClass = enum {
@@ -79,7 +85,7 @@ pub const EnsureOutcome = struct {
 };
 
 /// Shared ensure entry: resolve workspace root, create-if-missing policy (never overwrite),
-/// auto-wire every detected day-one host (no multi-select), return soft-success outcome.
+/// optionally auto-wire detected day-one hosts (no multi-select), return soft-success outcome.
 ///
 /// Policy is always written at the resolved workspace root (D29) — never naively under
 /// a nested process cwd when a parent workspace marker exists.
@@ -90,6 +96,10 @@ pub const EnsureOutcome = struct {
 ///
 /// Soft success (D24/D25): host/wire/smoke fails keep `core_ok` when policy is ok;
 /// `protection_label=partial` + `fix_hint` teaching `ryk doctor --fix` (D06 honesty).
+///
+/// Host wire: default auto-wires every detected day-one host. Callers that own host
+/// selection (e.g. `ryk start` multi-select) pass `skip_host_wire=true` so cancel /
+/// subset selection is not overridden by ensure.
 pub fn runEnsure(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -99,7 +109,16 @@ pub fn runEnsure(
     stderr: anytype,
 ) !EnsureOutcome {
     // D32/D33: install door never falls open to process-cwd when HOME is unusable.
-    const workspace_root = resolveEnsureWorkspaceRoot(io, allocator, cwd, options) catch |err| {
+    // Caller-owned override (start) is duplicated so defer free is uniform.
+    const workspace_root = if (options.workspace_root_override) |override| blk: {
+        if (override.len == 0 or !std.fs.path.isAbsolute(override)) {
+            if (!options.quiet) {
+                try stderr.print("ryk ensure: workspace_root_override must be absolute\n", .{});
+            }
+            return coreFailedOutcome();
+        }
+        break :blk try allocator.dupe(u8, override);
+    } else resolveEnsureWorkspaceRoot(io, allocator, cwd, options) catch |err| {
         if (err == error.InstallHomeUnavailable) {
             if (!options.quiet) {
                 try stderr.print("ryk ensure: install scope requires absolute HOME (D32/D33)\n", .{});
@@ -146,7 +165,7 @@ pub fn runEnsure(
     }
 
     // Policy created → auto-wire detected hosts (soft); zero hosts → partial, never full claim.
-    return try coreOkOutcomeWithHosts(io, allocator, options, true, false);
+    return try coreOkOutcomeWithHosts(io, allocator, workspace_root, options, true, false);
 }
 
 fn coreFailedOutcome() EnsureOutcome {
@@ -164,17 +183,36 @@ fn coreFailedOutcome() EnsureOutcome {
 fn coreOkOutcomeWithHosts(
     io: std.Io,
     allocator: std.mem.Allocator,
+    workspace_root: []const u8,
     options: EnsureOptions,
     policy_created: bool,
     policy_left_alone: bool,
 ) !EnsureOutcome {
-    const hosts = try wireDetectedHosts(io, allocator, options);
+    if (options.skip_host_wire) {
+        // Policy-only: hosts not assessed. Callers must not treat this as host-partial honesty
+        // (start multi-select owns wire; do not print empty-hosts partial receipts).
+        return .{
+            .core_ok = true,
+            .hosts = &.{},
+            .policy_created = policy_created,
+            .policy_left_alone = policy_left_alone,
+            // Not host-evaluated — callers with skip_host_wire ignore this label for receipts.
+            .protection_label = .partial,
+            .hosts_owned = false,
+        };
+    }
+    const hosts = try wireDetectedHosts(io, allocator, workspace_root, options);
+    var label = protectionLabelFromHosts(hosts);
+    // Install-evidence / skip_verify must never claim full protection without real smoke.
+    if (options.skip_verify) {
+        label = applySoftIncomplete(label, true, false);
+    }
     return .{
         .core_ok = true,
         .hosts = hosts,
         .policy_created = policy_created,
         .policy_left_alone = policy_left_alone,
-        .protection_label = protectionLabelFromHosts(hosts),
+        .protection_label = label,
         .hosts_owned = true,
     };
 }
@@ -227,38 +265,51 @@ fn leaveAloneWithHonesty(
             return coreFailedOutcome();
         },
     }
-    return try coreOkOutcomeWithHosts(io, allocator, options, false, true);
+    return try coreOkOutcomeWithHosts(io, allocator, workspace_root, options, false, true);
 }
 
 /// Read existing policy at workspace root and classify mode evidence.
+/// Uses the same policy loader as `start` / doctor (single classifier — no hand YAML drift).
 /// Never mutates the file. Returns `.unreadable` on open/read failure.
 fn inspectExistingPolicy(
     io: std.Io,
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
 ) ExistingPolicyClass {
-    var root_dir = std.Io.Dir.openDirAbsolute(io, workspace_root, .{}) catch return .unreadable;
-    defer root_dir.close(io);
+    const path = onboarding.policyPath(allocator, workspace_root) catch return .unreadable;
+    defer allocator.free(path);
 
-    const text = root_dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(256 * 1024)) catch return .unreadable;
-    defer allocator.free(text);
+    var loaded = core_api.loadPolicyFile(io, allocator, path) catch |err| switch (err) {
+        error.FileNotFound => return .unreadable,
+        else => {
+            // Unreadable or parse failure: try lightweight mode scan for residual honesty,
+            // else unreadable / no_mode.
+            var root_dir = std.Io.Dir.openDirAbsolute(io, workspace_root, .{}) catch return .unreadable;
+            defer root_dir.close(io);
+            const text = root_dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(256 * 1024)) catch return .unreadable;
+            defer allocator.free(text);
+            if (text.len == 0) return .no_mode;
+            const mode_raw = extractTopLevelMode(text) orelse return .no_mode;
+            const parsed = orca_policy.schema.Mode.parse(mode_raw) orelse return .no_mode;
+            return classifyMode(parsed);
+        },
+    };
+    defer loaded.deinit();
+    return classifyMode(loaded.mode());
+}
 
-    if (text.len == 0) return .no_mode;
-
-    const mode_raw = extractTopLevelMode(text) orelse return .no_mode;
-    const parsed = orca_policy.schema.Mode.parse(mode_raw) orelse return .no_mode;
-
-    return switch (parsed) {
-        // Soft / non-mediating: must not claim Ask-on-risk (matches start.policyModeIsAskEquivalent).
-        .observe, .trusted => .{ .non_mediating = parsed.toString() },
-        // Mediating / ask-equivalent (and strict enforce family).
+fn classifyMode(mode: orca_policy.schema.Mode) ExistingPolicyClass {
+    return switch (mode) {
+        .observe, .trusted => .{ .non_mediating = mode.toString() },
         .ask, .yolo, .strict, .ci, .redteam => .mediating,
     };
 }
 
 /// Extract top-level YAML `mode:` scalar from policy text (borrowed into `text`).
 /// Skips comments and indented keys so nested `mode:` fields are ignored.
+/// Last-wins when multiple top-level `mode:` keys appear (matches policy loader).
 fn extractTopLevelMode(text: []const u8) ?[]const u8 {
+    var found: ?[]const u8 = null;
     var line_start: usize = 0;
     while (line_start <= text.len) {
         const rest = text[line_start..];
@@ -291,14 +342,13 @@ fn extractTopLevelMode(text: []const u8) ?[]const u8 {
             {
                 value = value[1 .. value.len - 1];
             }
-            if (value.len == 0) return null;
-            return value;
+            if (value.len > 0) found = value;
         }
 
         line_start = next;
         if (nl == null) break;
     }
-    return null;
+    return found;
 }
 
 /// Install door requires absolute HOME (D32/D33 fail-closed); interactive door walks from cwd (D29/D31).
@@ -323,10 +373,20 @@ fn resolveEnsureWorkspaceRoot(
         if (home.len == 0 or !std.fs.path.isAbsolute(home)) {
             return error.InstallHomeUnavailable;
         }
-        return home;
+        // realpath-canonicalize so /var vs /private/var (Darwin) matches other consumers.
+        // realPath*Alloc returns [:0]u8 — re-dupe to []u8 so callers free with plain free.
+        const canon_z = std.Io.Dir.realPathFileAbsoluteAlloc(io, home, allocator) catch {
+            return home; // absolute HOME still usable when realpath fails
+        };
+        defer allocator.free(canon_z);
+        const canon = try allocator.dupe(u8, canon_z);
+        allocator.free(home);
+        return canon;
     }
 
-    const start_path = try cwd.realPathFileAlloc(io, ".", allocator);
+    const start_z = try cwd.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(start_z);
+    const start_path = try allocator.dupe(u8, start_z);
     defer allocator.free(start_path);
 
     if (zigCacheTmpCeiling(start_path)) |ceiling| {
@@ -337,9 +397,10 @@ fn resolveEnsureWorkspaceRoot(
 }
 
 fn homeDirOwned(allocator: std.mem.Allocator) !?[]u8 {
-    var env_map = env_util.createProcessMap(allocator) catch return null;
+    // Propagate allocation failures; only genuine missing HOME → null.
+    var env_map = try env_util.createProcessMap(allocator);
     defer env_map.deinit();
-    return env_util.getOwned(&env_map, allocator, "HOME") catch return null;
+    return try env_util.getOwned(&env_map, allocator, "HOME");
 }
 
 /// If `path` is under `.../.zig-cache/tmp/<entry>/...`, return the absolute
@@ -412,12 +473,13 @@ fn resolveWorkspaceRootWithCeiling(
 }
 
 fn workspaceMarkerAt(io: std.Io, dir_path: []const u8) bool {
-    const git_path = std.fs.path.join(std.heap.page_allocator, &.{ dir_path, ".git" }) catch return false;
-    defer std.heap.page_allocator.free(git_path);
+    // Stack paths — avoid page_allocator so OOM cannot masquerade as "no marker".
+    var git_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const git_path = std.fmt.bufPrint(&git_buf, "{s}/.git", .{dir_path}) catch return false;
     if (absoluteExists(io, git_path)) return true;
 
-    const policy_path = std.fs.path.join(std.heap.page_allocator, &.{ dir_path, ".orca", "policy.yaml" }) catch return false;
-    defer std.heap.page_allocator.free(policy_path);
+    var policy_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const policy_path = std.fmt.bufPrint(&policy_buf, "{s}/.orca/policy.yaml", .{dir_path}) catch return false;
     return absoluteExists(io, policy_path);
 }
 
@@ -456,7 +518,8 @@ pub fn processExitForOutcome(outcome: EnsureOutcome) u8 {
     return exit_codes.general;
 }
 
-/// Soft-incomplete demotion for packs / global shell verify (D24).
+/// Soft-incomplete demotion for packs / global shell verify / skip_verify (D24).
+/// Wired into `coreOkOutcomeWithHosts` when `skip_verify` (install-evidence path).
 /// Never upgrades core_failed; demotes full → partial when packs or global verify fail.
 pub fn applySoftIncomplete(
     label: ProtectionLabel,
@@ -503,15 +566,13 @@ pub fn writeEnsureReceipt(writer: anytype, outcome: EnsureOutcome) !void {
 
 /// Installer strategy for a day-one host (D28). Ensure owns host→installer
 /// dispatch; membership keys come from `onboarding.isSupportedHost` only (F2).
-/// Mirrors `start.installSelectedHosts` without multi-select:
 /// - `pi_extension` → `pi_install.install`
-/// - `grok_hook` → `grok_install.installAtHome`
 /// - `plugin_yes` → `ryk plugin install <host> --yes` + `plugin.verifyHostInstallAfterChild`
-/// W3 Cursor extends via the same table (`plugin_yes` or a new installer kind).
+/// - `deferred_w3` → detect-only (Cursor writer lands in W3; no doomed plugin install)
 const HostInstaller = enum {
     pi_extension,
-    grok_hook,
     plugin_yes,
+    deferred_w3,
 };
 
 /// Host→installer dispatch row (D28).
@@ -520,25 +581,18 @@ const HostWireTableEntry = struct {
     installer: HostInstaller,
 };
 
-/// Greppable day-one wire table symbol (D28). Rows name installer entrypoints;
-/// membership is onboarding single-source — no ensure-local host-id array (F2).
+/// Day-one wire table (D28). Membership is onboarding single-source (F2).
 const HostWireTable = struct {
-    /// Compile-time marker that the table exists for source contracts.
-    pub const present = true;
-
-    /// Resolve whether a host id is in the day-one membership set (onboarding single-source).
     pub fn isDayOneMember(host_id: []const u8) bool {
         return onboarding.isSupportedHost(host_id);
     }
 
-    /// Build a dispatch entry for a membership host (keys import onboarding list).
     pub fn entryFor(host_id: []const u8) ?HostWireTableEntry {
         if (!isDayOneMember(host_id)) return null;
-        // Per-host installer entrypoints (W1 reuses Pi/plugin paths; W3 extends).
         const installer: HostInstaller = if (std.mem.eql(u8, host_id, "pi"))
             .pi_extension
-        else if (std.mem.eql(u8, host_id, "grok"))
-            .grok_hook
+        else if (std.mem.eql(u8, host_id, "cursor"))
+            .deferred_w3
         else
             .plugin_yes;
         return .{
@@ -548,8 +602,54 @@ const HostWireTable = struct {
     }
 };
 
-/// Also greppable as host_wire_table for D28 source contracts.
-const host_wire_table = HostWireTable;
+/// Shared host install outcome (ensure auto-wire + start multi-select).
+pub const DayOneInstallResult = enum {
+    installed,
+    upgraded,
+    already_installed,
+    assets_unavailable,
+    failed,
+    deferred,
+};
+
+/// Single host install path shared by ensure auto-wire and start multi-select (no dual drift).
+/// `workspace_root` is the install cwd for plugin marketplace wires (from_install → HOME).
+pub fn installOneHost(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    host_id: []const u8,
+    home: []const u8,
+    self_exe: []const u8,
+    workspace_root: []const u8,
+) DayOneInstallResult {
+    if (std.mem.eql(u8, host_id, "cursor")) return .deferred;
+    if (std.mem.eql(u8, host_id, "pi")) {
+        const result = pi_install.install(io, allocator, .{
+            .home = home,
+            .ryk_binary = self_exe,
+        }) catch return .failed;
+        return switch (result) {
+            .installed => .installed,
+            .upgraded => .upgraded,
+            .already_installed => .already_installed,
+            .assets_unavailable => .assets_unavailable,
+        };
+    }
+    if (std.mem.eql(u8, host_id, "grok")) {
+        // Day-one native Command Guard: PreToolUse bash hook in ~/.grok/user-settings.json.
+        const result = grok_install.installAtHome(io, allocator, home, self_exe) catch return .failed;
+        result.deinit(allocator);
+        return if (result.changed) .installed else .already_installed;
+    }
+    // Plugin install resolves marketplace roots from process cwd — pin to ensure workspace
+    // so from_install (HOME) cannot write plugins under a nested caller `.git` tree.
+    const install_argv = [_][]const u8{ self_exe, "plugin", "install", host_id, "--yes" };
+    const code = ensureRunChildAt(allocator, &install_argv, workspace_root) catch return .failed;
+    return switch (plugin.verifyHostInstallAfterChild(io, allocator, host_id, code)) {
+        .failed => .failed,
+        .installed, .installed_after_child_failure => .installed,
+    };
+}
 
 fn ensureProcessHome(allocator: std.mem.Allocator) ![]u8 {
     var env_map = try env_util.createProcessMap(allocator);
@@ -563,12 +663,15 @@ fn ensureIsProductRykBinary(path: []const u8) bool {
 }
 
 fn ensureRunChild(allocator: std.mem.Allocator, argv: []const []const u8) !u8 {
-    const result = try child_process.runHostCommandTimed(
+    return ensureRunChildAt(allocator, argv, null);
+}
+
+fn ensureRunChildAt(allocator: std.mem.Allocator, argv: []const []const u8, cwd_path: ?[]const u8) !u8 {
+    const result = try child_process.runHostCommandTimedCwd(
         allocator,
         argv,
         15_000,
-        .{},
-        .{},
+        cwd_path,
     );
     defer child_process.deinitHostCommandResult(result, allocator);
     return if (result.timed_out) 255 else result.exit_code;
@@ -582,29 +685,15 @@ fn attemptHostInstall(
     entry: HostWireTableEntry,
     home: []const u8,
     self_exe: []const u8,
+    workspace_root: []const u8,
 ) bool {
-    switch (entry.installer) {
-        .pi_extension => {
-            // Entrypoint: pi_install.install (bundled extension).
-            const result = pi_install.install(io, allocator, .{
-                .home = home,
-                .ryk_binary = self_exe,
-            }) catch return false;
-            return result != .assets_unavailable;
+    return switch (entry.installer) {
+        .deferred_w3 => false,
+        .pi_extension, .plugin_yes => switch (installOneHost(io, allocator, entry.host_id, home, self_exe, workspace_root)) {
+            .installed, .upgraded, .already_installed => true,
+            .assets_unavailable, .failed, .deferred => false,
         },
-        .grok_hook => {
-            // Entrypoint: grok_install.installAtHome (PreToolUse hook).
-            const result = grok_install.installAtHome(io, allocator, home, self_exe) catch return false;
-            result.deinit(allocator);
-            return true;
-        },
-        .plugin_yes => {
-            // Entrypoint: ryk plugin install <host> --yes + verifyHostInstallAfterChild.
-            const install_argv = [_][]const u8{ self_exe, "plugin", "install", entry.host_id, "--yes" };
-            const code = ensureRunChild(allocator, &install_argv) catch return false;
-            return plugin.verifyHostInstallAfterChild(io, allocator, entry.host_id, code) != .failed;
-        },
-    }
+    };
 }
 
 /// Per-host smoke (D26 / D14 doctor-class; no live host UI spawn).
@@ -629,12 +718,12 @@ fn evaluateHostSmoke(
         return .{ .smoke_ok = false, .error_class = .smoke };
     }
 
-    // Pi / grok: native install paths — host_status returns not_run for pi;
-    // wire evidence is the W1 smoke bar (extension/hook presence).
-    if (std.mem.eql(u8, host_id, "pi") or std.mem.eql(u8, host_id, "grok")) {
+    // Pi: extension-managed; host_status smoke is not_run — wire evidence is presence.
+    if (std.mem.eql(u8, host_id, "pi")) {
         return .{ .smoke_ok = true, .error_class = .none };
     }
 
+    // Grok uses the same PreToolUse hook smoke path as codex (exit-2 deny).
     const smoke = host_status.runHostSmokePair(allocator, host_id) catch {
         return .{ .smoke_ok = false, .error_class = .smoke };
     };
@@ -655,13 +744,13 @@ fn evaluateHostSmoke(
 /// 4. Per-host smoke when `!skip_verify` (D26); skip_verify → install-evidence smoke skip-pass.
 ///
 /// HostResult.host_id / fix_hint are borrowed static strings; only the slice is owned.
+/// `workspace_root` pins plugin install cwd (from_install → HOME absolute root).
 pub fn wireDetectedHosts(
     io: std.Io,
     allocator: std.mem.Allocator,
+    workspace_root: []const u8,
     options: EnsureOptions,
 ) ![]HostResult {
-    _ = host_wire_table.present;
-
     // skip_verify: skip live Hermes smoke spawn inside doctor collect (install-evidence path).
     // When smoke is on, null override runs real hermes_hook_smoke for HostResult folding.
     var doctor_report = try plugin.collectPluginDoctorReportWithHermesSmoke(
@@ -675,11 +764,19 @@ pub fn wireDetectedHosts(
     defer allocator.free(statuses);
 
     // Install context once. Missing HOME / non-product binary → soft wire fail (no mutation
-    // under unit-test harness where self_exe is not `ryk`/`orca`).
-    const home_opt = ensureProcessHome(allocator) catch null;
+    // under unit-test harness where self_exe is not `ryk`/`orca`). OOM propagates.
+    const home_opt: ?[]u8 = ensureProcessHome(allocator) catch |err| switch (err) {
+        error.HomeNotSet => null,
+        else => return err,
+    };
     defer if (home_opt) |h| allocator.free(h);
-    const self_exe_opt = std.process.executablePathAlloc(io, allocator) catch null;
-    defer if (self_exe_opt) |e| allocator.free(e);
+    // executablePathAlloc returns [:0]u8 — free the sentinel slice, not a retyped []u8.
+    const self_exe_z: ?[:0]u8 = std.process.executablePathAlloc(io, allocator) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => null,
+    };
+    defer if (self_exe_z) |e| allocator.free(e);
+    const self_exe_opt: ?[]const u8 = if (self_exe_z) |e| e else null;
     const can_mutate = blk: {
         const home = home_opt orelse break :blk false;
         if (home.len == 0 or !std.fs.path.isAbsolute(home)) break :blk false;
@@ -695,14 +792,25 @@ pub fn wireDetectedHosts(
         const entry = HostWireTable.entryFor(st.name) orelse continue;
         if (!st.detected) continue;
 
+        // Cursor W3: detect-only — never dispatch doomed plugin install.
+        if (entry.installer == .deferred_w3) {
+            try list.append(allocator, .{
+                .host_id = st.name,
+                .detected = true,
+                .wired = false,
+                .smoke_ok = false,
+                .fix_hint = "ryk doctor --fix  # Cursor auto-wire deferred to W3",
+                .error_class = .wire,
+            });
+            continue;
+        }
+
         var wired = st.installed;
         if (!wired and can_mutate) {
-            // Auto-wire: attempt host→installer (mirror start.installSelectedHosts, no multi-select).
-            wired = attemptHostInstall(io, allocator, entry, home_opt.?, self_exe_opt.?);
+            wired = attemptHostInstall(io, allocator, entry, home_opt.?, self_exe_opt.?, workspace_root);
         }
 
         if (!wired) {
-            // Soft wire incomplete: keep core_ok path; honest partial + repair.
             try list.append(allocator, .{
                 .host_id = st.name,
                 .detected = true,
@@ -715,26 +823,14 @@ pub fn wireDetectedHosts(
         }
 
         const smoke = evaluateHostSmoke(allocator, st.name, doctor_report, options.skip_verify);
-        if (smoke.smoke_ok) {
-            try list.append(allocator, .{
-                .host_id = st.name,
-                .detected = true,
-                .wired = true,
-                .smoke_ok = true,
-                .fix_hint = "",
-                .error_class = .none,
-            });
-        } else {
-            // Wired but smoke failed → soft .smoke + partial demotion (D24/D26).
-            try list.append(allocator, .{
-                .host_id = st.name,
-                .detected = true,
-                .wired = true,
-                .smoke_ok = false,
-                .fix_hint = doctor_fix_hint,
-                .error_class = smoke.error_class,
-            });
-        }
+        try list.append(allocator, .{
+            .host_id = st.name,
+            .detected = true,
+            .wired = true,
+            .smoke_ok = smoke.smoke_ok,
+            .fix_hint = if (smoke.smoke_ok) "" else doctor_fix_hint,
+            .error_class = smoke.error_class,
+        });
     }
 
     return try list.toOwnedSlice(allocator);
@@ -777,22 +873,13 @@ test "EnsureCore API surface freezes EnsureOptions Outcome HostResult fields" {
         .quiet = true,
         .preset = "generic-agent",
         .skip_verify = true,
+        .skip_host_wire = false,
     };
     try std.testing.expect(!opts.from_install);
     try std.testing.expect(opts.quiet);
     try std.testing.expectEqualStrings("generic-agent", opts.preset.?);
     try std.testing.expect(opts.skip_verify);
-
-    // Enum members required by plan §2 / soft-success map.
-    try std.testing.expectEqual(ProtectionLabel.full, ProtectionLabel.full);
-    try std.testing.expectEqual(ProtectionLabel.partial, ProtectionLabel.partial);
-    try std.testing.expectEqual(ProtectionLabel.core_failed, ProtectionLabel.core_failed);
-
-    try std.testing.expectEqual(HostErrorClass.none, HostErrorClass.none);
-    try std.testing.expectEqual(HostErrorClass.detect, HostErrorClass.detect);
-    try std.testing.expectEqual(HostErrorClass.wire, HostErrorClass.wire);
-    try std.testing.expectEqual(HostErrorClass.smoke, HostErrorClass.smoke);
-    try std.testing.expectEqual(HostErrorClass.other, HostErrorClass.other);
+    try std.testing.expect(!opts.skip_host_wire);
 
     // HostResult shape: host_id / detected / wired / smoke_ok / fix_hint / error_class.
     const host = HostResult{
@@ -806,6 +893,8 @@ test "EnsureCore API surface freezes EnsureOptions Outcome HostResult fields" {
     try std.testing.expectEqualStrings("claude", host.host_id);
     try std.testing.expect(std.mem.indexOf(u8, host.fix_hint, "doctor --fix") != null);
     try std.testing.expect(std.mem.indexOf(u8, host.fix_hint, "ryk start") == null);
+    try std.testing.expectEqual(HostErrorClass.wire, HostErrorClass.wire);
+    try std.testing.expectEqual(ProtectionLabel.partial, ProtectionLabel.partial);
 
     // EnsureOutcome shape: core_ok / hosts / policy_created / policy_left_alone / protection_label.
     var outcome = EnsureOutcome{
@@ -1656,11 +1745,18 @@ test "EnsurePolicy existing ask mode leave-alone hash equal without false residu
 // ---------------------------------------------------------------------------
 
 /// D06 forbid-list (case-insensitive) for partial / soft-incomplete success copy.
-fn ensureSoftClaimsFullProtection(text: []const u8) bool {
-    if (containsIgnoreCase(text, "fully protected")) return true;
-    if (containsIgnoreCase(text, "all hosts wired")) return true;
-    if (containsIgnoreCase(text, "protection complete")) return true;
-    if (containsIgnoreCase(text, "full protection")) return true;
+const d06_full_protection_phrases = [_][]const u8{
+    "fully protected",
+    "all hosts wired",
+    "protection complete",
+    "full protection",
+};
+
+/// Shared D06 full-protection phrase detector (ensure receipts + doctor tests).
+pub fn ensureSoftClaimsFullProtection(text: []const u8) bool {
+    for (d06_full_protection_phrases) |phrase| {
+        if (containsIgnoreCase(text, phrase)) return true;
+    }
     return false;
 }
 
@@ -1990,10 +2086,10 @@ test "EnsureSoft runEnsure zero hosts is soft success not full protection claim"
     }
 }
 
-test "EnsureSoft start bridge receipt driven by protection_label not multi-select ensure path" {
-    // code_paths include start.zig: temporary bridge remains; ensure soft path must not
-    // reintroduce multiSelect for host consent on the ensure library. Start may still
-    // multi-select for legacy interactive start until W4 (dual residual) — ensure must not.
+test "EnsureSoft start bridge is policy-only skip_host_wire not multi-select ensure path" {
+    // Ensure must not multiSelect; start routes policy via runEnsure with skip_host_wire
+    // so multi-select owns host mutation. Policy-only bridge must not print empty-hosts
+    // ensure partial receipts (no writeEnsureReceipt on the start monopath).
     const start_src = @embedFile("start.zig");
     const ensure_src = @embedFile("ensure.zig");
 
@@ -2003,14 +2099,10 @@ test "EnsureSoft start bridge receipt driven by protection_label not multi-selec
     };
     try std.testing.expect(std.mem.indexOf(u8, ensure_prod, "multiSelect") == null);
 
-    // Bridge still routes policy via runEnsure (locked by EnsureCore); soft unit fills
-    // host table + receipt honesty. Start should consume protection_label for honesty.
     try std.testing.expect(std.mem.indexOf(u8, start_src, "runEnsure") != null);
-    try std.testing.expect(
-        std.mem.indexOf(u8, start_src, "protection_label") != null or
-            std.mem.indexOf(u8, start_src, "writeEnsureReceipt") != null or
-            std.mem.indexOf(u8, start_src, "processExitForOutcome") != null,
-    );
+    try std.testing.expect(std.mem.indexOf(u8, start_src, "skip_host_wire") != null);
+    // Start must not call writeEnsureReceipt for the policy-only bridge.
+    try std.testing.expect(std.mem.indexOf(u8, start_src, "writeEnsureReceipt") == null);
 }
 
 // ---------------------------------------------------------------------------

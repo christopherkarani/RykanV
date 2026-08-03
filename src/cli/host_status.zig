@@ -166,9 +166,9 @@ pub fn formatFix(
             return try allocator.dupe(u8, "./scripts/host-live-e2e.sh pi  # verify extension coverage");
         }
         if (std.mem.eql(u8, wired, "no")) {
-            return try allocator.dupe(u8, "ryk start  # install the bundled Pi extension");
+            return try allocator.dupe(u8, "ryk doctor --fix  # install the bundled Pi extension");
         }
-        return try allocator.dupe(u8, "install Pi, then run: ryk start");
+        return try allocator.dupe(u8, "install Pi, then run: ryk doctor --fix");
     }
     // Degraded first: deny works but allow failed → daemon/policy, not reinstall.
     if (smoke.isDegraded() or (smoke.deny == .pass and smoke.allow == .fail)) {
@@ -607,8 +607,10 @@ test "shellGate and failStance cover all P1 hosts" {
     try std.testing.expectEqualStrings("fail-open (default)", failStance("hermes", true, "yes"));
     try std.testing.expectEqualStrings("fail-closed", failStance("hermes", false, "yes"));
     try std.testing.expectEqualStrings("mode-dependent", failStance("pi", true, "yes"));
+    try std.testing.expectEqualStrings("mode-dependent", failStance("pi", true, "no"));
     try std.testing.expectEqualStrings("fail-closed shell", failStance("codex", true, "yes"));
     // RT-06: unwired host must not claim fail-closed shell
+    try std.testing.expectEqualStrings("unwired (no fail-closed shell)", failStance("codex", true, "no"));
     try std.testing.expectEqualStrings("unwired (no fail-closed shell)", failStance("opencode", true, "no"));
     try std.testing.expectEqualStrings("unwired (no fail-closed shell)", failStance("claude", true, "—"));
     try std.testing.expectEqualStrings("fail-closed shell", failStance("opencode", true, "partial"));
@@ -626,7 +628,8 @@ test "formatFix prefers smoke failure and hermes fail-open remediation" {
 
     const pi_fix = try formatFix(allocator, "pi", "—", .{}, true);
     defer allocator.free(pi_fix);
-    try std.testing.expect(std.mem.indexOf(u8, pi_fix, "ryk start") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pi_fix, "doctor --fix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pi_fix, "ryk start") == null);
     try std.testing.expect(std.mem.indexOf(u8, pi_fix, "coverage") == null);
 }
 

@@ -104,7 +104,7 @@ pub const commands =
         },
         .{
             .name = "start",
-            .summary = "Get protected: wire hosts, policy, and Ask posture",
+            .summary = "Guided setup: multi-select hosts, policy, and Ask posture",
             .usage = "ryk start [--auto|--yes|--no-interact] [--hosts <list>] [--preset <name>] [--skip-verify]",
             .category = .getting_started,
             .public = true,
@@ -683,7 +683,7 @@ pub const commands =
             "  ryk plugin manifest [codex|claude|opencode|openclaw|hermes|all] [--json]",
             "  ryk plugin install                                 # dry-run preview of all hosts (no mutation)",
             "  ryk plugin install <codex|claude|opencode|openclaw|hermes|all> [--dry-run|--yes] [--path <path>]",
-            "Primary onboarding path: run `ryk start` (guided interactive selection on TTY terminals).",
+            "One-click repair: `ryk doctor --fix`. Guided multi-select setup: `ryk start`.",
             "Bare install never mutates; mutation requires an explicit host or `all` plus --yes (confirm default No on TTY).",
             "Plugin doctor does not print secrets.",
         } },
@@ -801,7 +801,8 @@ pub fn writeWithMode(io: std.Io, writer: anytype, mode: WriteMode) !void {
     try writer.writeAll("\n");
     const Task = struct { label: []const u8, cmd: []const u8 };
     const public_tasks = [_]Task{
-        .{ .label = "Get protected", .cmd = "ryk start" },
+        .{ .label = "Get protected", .cmd = "ryk doctor --fix" },
+        .{ .label = "Guided setup", .cmd = "ryk start" },
         .{ .label = "Run an agent", .cmd = "ryk claude  (or: codex | pi | opencode | openclaw | hermes | grok)" },
         .{ .label = "Diagnose", .cmd = "ryk doctor" },
         .{ .label = "Review session", .cmd = "ryk replay" },
@@ -810,7 +811,8 @@ pub fn writeWithMode(io: std.Io, writer: anytype, mode: WriteMode) !void {
         .{ .label = "Stop protection", .cmd = "ryk stop" },
     };
     const all_tasks = [_]Task{
-        .{ .label = "Get protected", .cmd = "ryk start" },
+        .{ .label = "Get protected", .cmd = "ryk doctor --fix" },
+        .{ .label = "Guided setup", .cmd = "ryk start" },
         .{ .label = "Diagnose", .cmd = "ryk doctor" },
         .{ .label = "Why blocked?", .cmd = "ryk explain \"…\"" },
         .{ .label = "Run an agent", .cmd = "ryk claude  (or: codex | pi | opencode | openclaw | hermes | grok)" },

@@ -688,6 +688,7 @@ if [ "${RYK_INSTALL_SKIP_ONBOARD:-${ORCA_INSTALL_SKIP_ONBOARD:-0}}" != "1" ]; th
   if [ "$_ob_exit" -ne 0 ]; then
     if [ "$QUIET" -eq 1 ]; then
       [ ! -s "$TMP_DIR/.onboarding.err" ] || sed 's/^/    /' "$TMP_DIR/.onboarding.err" >&2
+      [ ! -s "$TMP_DIR/.onboarding.out" ] || sed 's/^/    /' "$TMP_DIR/.onboarding.out" >&2
     fi
     fail "ryk protection setup failed (exit ${_ob_exit})" \
       "The CLI was installed, but doctor --fix did not finish successfully.
@@ -695,6 +696,13 @@ Re-run: ryk doctor --fix
 Or re-run the installer after resolving the host integration error."
   fi
   # Exit 0 includes soft/partial host outcomes — never step_done full-protection phrasing.
+  # Quiet path still surfaces partial/core-failed honesty (stdout was captured).
+  if [ "$QUIET" -eq 1 ] && [ -s "$TMP_DIR/.onboarding.out" ]; then
+    if grep -Eiq 'partial|incomplete|core failed|repair:' "$TMP_DIR/.onboarding.out" 2>/dev/null; then
+      printf '    ryk ensure: partial or incomplete host outcomes (quiet install)\n' >&2
+      grep -Ei 'partial|incomplete|core failed|repair:|host ' "$TMP_DIR/.onboarding.out" 2>/dev/null | head -8 | sed 's/^/    /' >&2 || true
+    fi
+  fi
   step_done "Set up protection" "doctor --fix finished; host results shown above"
   ONBOARDING_RAN=1
 fi
