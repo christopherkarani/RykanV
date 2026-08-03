@@ -9,9 +9,8 @@
 //! Also rejects `network_eval` class/metapattern tokens (`private`, `metadata`,
 //! `cloud-metadata`, `direct-ip`, bare `localhost`) and cloud-metadata hostnames
 //! (`metadata.google.internal`) so discovery cannot widen class-wide allows.
-//! Loopback residual is exact IP only (`127.0.0.1` / `::1`) — never the class
-//! token `localhost`, which `matchesHostPattern` expands to all loopback.
-//! Re-exported from `src/policy/mod.zig` for monopath / test-core discovery.
+//! No IP literals or OS-ambiguous IP-like spellings are emitted (loopback
+//! requires user `policy.yaml`). Re-exported from `src/policy/mod.zig`.
 
 const std = @import("std");
 const network_eval = @import("network_eval.zig");
@@ -164,17 +163,82 @@ fn isAcceptableHost(host: []const u8) bool {
     // reserved token; multi-label `metadata.google.internal` needs this path).
     if (network_eval.isCloudMetadataHostname(host)) return false;
     // Bare localhost / *.localhost are class tokens/patterns — reject.
-    // Exact 127.0.0.1 / ::1 remain the only loopback residual (Ollama).
     if (std.ascii.eqlIgnoreCase(host, "localhost")) return false;
     if (std.ascii.endsWithIgnoreCase(host, ".localhost")) return false;
-    if (parseIpv4(host)) |ip| {
-        if (isCloudMetadataIpv4(ip)) return false;
-        return isLocalhostIp(ip);
-    }
-    if (isIpv6Literal(host)) {
-        return isIpv6Loopback(host);
-    }
+    // No IP literals in discovery emit — loopback residual requires user policy.yaml
+    // (prevents allow-before-class-deny SSRF via agent-writable auth).
+    if (parseIpv4(host) != null) return false;
+    if (isIpv6Literal(host)) return false;
+    // OS-ambiguous IP spellings that validDomain would accept as "hostnames"
+    // (macOS getaddrinfo: 127.1, 10.1, 0x7f000001, decimal dword, …).
+    if (isAmbiguousIpLike(host)) return false;
     return validDomain(host);
+}
+
+/// Reject host spellings that look like incomplete/hex/decimal IPv4 and would
+/// resolve to loopback/private under common OS resolvers, yet pass validDomain.
+fn isAmbiguousIpLike(host: []const u8) bool {
+    if (host.len == 0) return false;
+
+    // Pure decimal dword (e.g. 2130706433 → 127.0.0.1).
+    if (isAllAsciiDigits(host)) {
+        if (host.len >= 1 and host.len <= 10) return true;
+    }
+
+    // 0x… hex IPv4 (e.g. 0x7f000001).
+    if (host.len > 2 and host[0] == '0' and (host[1] == 'x' or host[1] == 'X')) {
+        var all_hex = true;
+        for (host[2..]) |c| {
+            if (!std.ascii.isHex(c)) {
+                all_hex = false;
+                break;
+            }
+        }
+        if (all_hex and host.len > 2) return true;
+    }
+
+    // Dotted forms: any component that is pure digits or 0x-hex → treat as IP-like
+    // when *all* labels are numeric-ish (not real multi-label DNS).
+    var labels = std.mem.splitScalar(u8, host, '.');
+    var n: usize = 0;
+    var all_numeric_ish = true;
+    while (labels.next()) |label| {
+        n += 1;
+        if (label.len == 0) return true; // empty label in dotted form
+        if (!isNumericIshLabel(label)) all_numeric_ish = false;
+    }
+    // 1–3 all-numeric dotted components (127.1, 10.1, 192.168.1) or 4+ with hex/decimal mix.
+    if (all_numeric_ish and n >= 1 and n <= 4) return true;
+    // Mixed hex-dotted like 0x7f.0.0.1
+    if (n >= 2 and n <= 4 and hostContainsHexLabel(host)) return true;
+    return false;
+}
+
+fn isAllAsciiDigits(s: []const u8) bool {
+    if (s.len == 0) return false;
+    for (s) |c| {
+        if (!std.ascii.isDigit(c)) return false;
+    }
+    return true;
+}
+
+fn isNumericIshLabel(label: []const u8) bool {
+    if (label.len == 0) return false;
+    if (label.len > 2 and label[0] == '0' and (label[1] == 'x' or label[1] == 'X')) {
+        for (label[2..]) |c| {
+            if (!std.ascii.isHex(c)) return false;
+        }
+        return true;
+    }
+    return isAllAsciiDigits(label);
+}
+
+fn hostContainsHexLabel(host: []const u8) bool {
+    var labels = std.mem.splitScalar(u8, host, '.');
+    while (labels.next()) |label| {
+        if (label.len > 2 and label[0] == '0' and (label[1] == 'x' or label[1] == 'X')) return true;
+    }
+    return false;
 }
 
 fn isCloudMetadataIpv4(ip: [4]u8) bool {
@@ -209,8 +273,8 @@ fn parseIpv4(host: []const u8) ?[4]u8 {
     var index: usize = 0;
     while (parts.next()) |part| {
         if (index >= 4 or part.len == 0) return null;
-        // Reject leading zeros that would make "127.0.0.1" ok but not octal tricks
-        // beyond decimal octets 0-255 (parseInt already bounds).
+        // Reject leading zeros (octal tricks: 01, 010) — only "0" itself is ok.
+        if (part.len > 1 and part[0] == '0') return null;
         out[index] = std.fmt.parseInt(u8, part, 10) catch return null;
         index += 1;
     }
@@ -434,20 +498,37 @@ test "inference_hostname rejects bare localhost class token" {
     }
 }
 
-test "inference_hostname loopback residual accepts 127.0.0.1 URL host only" {
-    // Spec §8 Ollama residual: exact IP, not class token localhost.
+test "inference_hostname rejects all loopback and IP literals including 127.0.0.1" {
+    // Discovery never auto-merges loopback; Ollama requires user policy.yaml.
     const allocator = std.testing.allocator;
-    const host = try extractHostname(allocator, "http://127.0.0.1:11434/v1");
-    defer if (host) |h| allocator.free(h);
-
-    try std.testing.expect(host != null);
-    try std.testing.expectEqualStrings("127.0.0.1", host.?);
+    for ([_][]const u8{
+        "127.0.0.1",
+        "http://127.0.0.1:11434/v1",
+        "127.0.0.2",
+        "127.1.2.3",
+        "::1",
+        "http://[::1]:11434/",
+    }) |field| {
+        const host = try extractHostname(allocator, field);
+        defer if (host) |h| allocator.free(h);
+        try std.testing.expect(host == null);
+    }
 }
 
-test "inference_hostname rejects non-exact 127/8 addresses" {
-    // Residual is 127.0.0.1 only — not 127.0.0.2 / 127.1.2.3 class widen.
+test "inference_hostname rejects OS-ambiguous IP-like host forms" {
+    // macOS getaddrinfo-style: incomplete dotted, hex dword, decimal dword.
     const allocator = std.testing.allocator;
-    for ([_][]const u8{ "127.0.0.2", "http://127.0.0.2:9/", "127.1.2.3", "https://127.1.2.3/v1" }) |field| {
+    for ([_][]const u8{
+        "127.1",
+        "http://127.1:9/",
+        "127.0.1",
+        "10.1",
+        "192.168.1",
+        "0x7f000001",
+        "2130706433",
+        "0x7f.0.0.1",
+        "127.0.0.01",
+    }) |field| {
         const host = try extractHostname(allocator, field);
         defer if (host) |h| allocator.free(h);
         try std.testing.expect(host == null);
