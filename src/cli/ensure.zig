@@ -10,7 +10,16 @@ const onboarding = @import("onboarding.zig");
 const init = @import("init.zig");
 const exit_codes = @import("exit_codes.zig");
 const env_util = @import("../env_util.zig");
+const plugin = @import("plugin.zig");
 const orca_policy = @import("orca_core").policy;
+const pi_install = @import("pi_install.zig");
+const grok_install = @import("grok_install.zig");
+const host_status = @import("host_status.zig");
+const child_process = @import("child_process.zig");
+const brand = @import("brand.zig");
+
+/// Teach repair door for soft host/wire failures — never `ryk start` as required.
+pub const doctor_fix_hint: []const u8 = "ryk doctor --fix";
 
 // ---------------------------------------------------------------------------
 // Frozen API surface (plan §2 / D20)
@@ -70,7 +79,7 @@ pub const EnsureOutcome = struct {
 };
 
 /// Shared ensure entry: resolve workspace root, create-if-missing policy (never overwrite),
-/// return structured outcome. Host auto-wire is filled by later W1 units.
+/// auto-wire every detected day-one host (no multi-select), return soft-success outcome.
 ///
 /// Policy is always written at the resolved workspace root (D29) — never naively under
 /// a nested process cwd when a parent workspace marker exists.
@@ -78,6 +87,9 @@ pub const EnsureOutcome = struct {
 /// D09/D10: missing → generic-agent (ask-on-risk) create; present → never overwrite;
 /// unreadable / non-mediating / no-mode → operator-visible residual or core_failed
 /// (never silent-green Ask-on-risk without mode evidence).
+///
+/// Soft success (D24/D25): host/wire/smoke fails keep `core_ok` when policy is ok;
+/// `protection_label=partial` + `fix_hint` teaching `ryk doctor --fix` (D06 honesty).
 pub fn runEnsure(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -100,7 +112,7 @@ pub fn runEnsure(
 
     if (onboarding.policyExists(io, workspace_root)) {
         // Honesty depth (D10): inspect mode evidence; never claim Ask-on-risk without it.
-        return try leaveAloneWithHonesty(io, allocator, workspace_root, stderr);
+        return try leaveAloneWithHonesty(io, allocator, workspace_root, options, stderr);
     }
 
     var root_dir = std.Io.Dir.openDirAbsolute(io, workspace_root, .{}) catch |err| {
@@ -128,32 +140,13 @@ pub fn runEnsure(
     if (code != exit_codes.success) {
         // Multi-process race: peer may have won exclusive create. Present policy is leave-alone (D23).
         if (onboarding.policyExists(io, workspace_root)) {
-            return try leaveAloneWithHonesty(io, allocator, workspace_root, stderr);
+            return try leaveAloneWithHonesty(io, allocator, workspace_root, options, stderr);
         }
         return coreFailedOutcome();
     }
 
-    // Zero hosts: success without full-protection claim (plan §2 core_ok map).
-    return EnsureOutcome{
-        .core_ok = true,
-        .hosts = &.{},
-        .policy_created = true,
-        .policy_left_alone = false,
-        .protection_label = .partial,
-        .hosts_owned = false,
-    };
-}
-
-fn leaveAloneOutcome() EnsureOutcome {
-    return .{
-        .core_ok = true,
-        .hosts = &.{},
-        .policy_created = false,
-        .policy_left_alone = true,
-        // Zero hosts / no wire proof → partial (never claim full protection).
-        .protection_label = .partial,
-        .hosts_owned = false,
-    };
+    // Policy created → auto-wire detected hosts (soft); zero hosts → partial, never full claim.
+    return try coreOkOutcomeWithHosts(io, allocator, options, true, false);
 }
 
 fn coreFailedOutcome() EnsureOutcome {
@@ -164,6 +157,25 @@ fn coreFailedOutcome() EnsureOutcome {
         .policy_left_alone = false,
         .protection_label = .core_failed,
         .hosts_owned = false,
+    };
+}
+
+/// Policy ok → attach auto-wire HostResult[] + protection_label from hosts (D05/D24).
+fn coreOkOutcomeWithHosts(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    options: EnsureOptions,
+    policy_created: bool,
+    policy_left_alone: bool,
+) !EnsureOutcome {
+    const hosts = try wireDetectedHosts(io, allocator, options);
+    return .{
+        .core_ok = true,
+        .hosts = hosts,
+        .policy_created = policy_created,
+        .policy_left_alone = policy_left_alone,
+        .protection_label = protectionLabelFromHosts(hosts),
+        .hosts_owned = true,
     };
 }
 
@@ -181,15 +193,17 @@ const ExistingPolicyClass = union(enum) {
 
 /// Leave-alone path with D10 honesty: residual warn or core_failed when mode evidence
 /// is missing or non-mediating. Never overwrites. Never claims Ask-on-risk without mode.
+/// On leave-alone (not core_failed), still auto-wires detected hosts with soft success.
 fn leaveAloneWithHonesty(
     io: std.Io,
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
+    options: EnsureOptions,
     stderr: anytype,
 ) !EnsureOutcome {
     const class = inspectExistingPolicy(io, allocator, workspace_root);
     switch (class) {
-        .mediating => return leaveAloneOutcome(),
+        .mediating => {},
         .non_mediating => |mode_name| {
             // Operator-visible residual aligned with start's "policy mode=… (not Ask)" wording.
             // Always emit (not gated on quiet): honesty must not silent-green under --quiet.
@@ -197,14 +211,12 @@ fn leaveAloneWithHonesty(
                 "ryk ensure: policy mode={s} (not Ask) — existing non-mediating policy left unchanged.\n",
                 .{mode_name},
             );
-            return leaveAloneOutcome();
         },
         .no_mode => {
             try stderr.print(
                 "ryk ensure: policy has no mode evidence (non-mediating residual) — left alone; not Ask-on-risk without mode evidence.\n",
                 .{},
             );
-            return leaveAloneOutcome();
         },
         .unreadable => {
             // D23 / fail-closed: unreadable is not "present and readable" mediating proof.
@@ -215,6 +227,7 @@ fn leaveAloneWithHonesty(
             return coreFailedOutcome();
         },
     }
+    return try coreOkOutcomeWithHosts(io, allocator, options, false, true);
 }
 
 /// Read existing policy at workspace root and classify mode evidence.
@@ -411,6 +424,320 @@ fn workspaceMarkerAt(io: std.Io, dir_path: []const u8) bool {
 fn absoluteExists(io: std.Io, path: []const u8) bool {
     std.Io.Dir.accessAbsolute(io, path, .{}) catch return false;
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Soft success + host wire table (D28 / D24 / D05 / D06) — w1-auto-wire-soft-success
+// ---------------------------------------------------------------------------
+
+/// Map host results → protection label (D05).
+/// Zero hosts / zero detected → partial (never full-protection claim without proof).
+/// ≥1 detected and all wired+smoke_ok with error_class.none → full.
+/// Any detected host incomplete → partial.
+pub fn protectionLabelFromHosts(hosts: []const HostResult) ProtectionLabel {
+    var any_detected: bool = false;
+    var all_ok: bool = true;
+    for (hosts) |h| {
+        if (!h.detected) continue;
+        any_detected = true;
+        if (!h.wired or !h.smoke_ok or h.error_class != .none) {
+            all_ok = false;
+        }
+    }
+    if (!any_detected) return .partial;
+    if (all_ok) return .full;
+    return .partial;
+}
+
+/// Process exit map for ensure / doctor --fix soft success (D24/D25).
+/// core_ok true → 0; core_ok false → non-zero (never soft-success on core fail).
+pub fn processExitForOutcome(outcome: EnsureOutcome) u8 {
+    if (outcome.core_ok) return exit_codes.success;
+    return exit_codes.general;
+}
+
+/// Soft-incomplete demotion for packs / global shell verify (D24).
+/// Never upgrades core_failed; demotes full → partial when packs or global verify fail.
+pub fn applySoftIncomplete(
+    label: ProtectionLabel,
+    packs_ok: bool,
+    global_verify_ok: bool,
+) ProtectionLabel {
+    if (label == .core_failed) return .core_failed;
+    if (!packs_ok or !global_verify_ok) return .partial;
+    return label;
+}
+
+/// Plain-text ensure receipt (W1). Partial must include partial token + doctor --fix
+/// repair + failed host ids; must never claim D06 full-protection phrases.
+pub fn writeEnsureReceipt(writer: anytype, outcome: EnsureOutcome) !void {
+    switch (outcome.protection_label) {
+        .full => {
+            // Allowed only when label is full (≥1 host all ok). Avoid D06 forbid-list phrases.
+            try writer.writeAll("ryk ensure: hosts ready.\n");
+            for (outcome.hosts) |h| {
+                if (h.detected) try writer.print("  host {s}: ok\n", .{h.host_id});
+            }
+        },
+        .partial => {
+            try writer.writeAll("ryk ensure: protection partial — some hosts incomplete or none detected.\n");
+            var any_fail_line: bool = false;
+            for (outcome.hosts) |h| {
+                if (!h.detected) continue;
+                if (h.wired and h.smoke_ok and h.error_class == .none) continue;
+                any_fail_line = true;
+                const hint = if (h.fix_hint.len > 0) h.fix_hint else doctor_fix_hint;
+                try writer.print("  host {s}: incomplete — repair: {s}\n", .{ h.host_id, hint });
+            }
+            if (!any_fail_line) {
+                // Zero hosts or only non-detected: still teach repair door.
+                try writer.print("  no hosts fully wired — repair: {s}\n", .{doctor_fix_hint});
+            }
+        },
+        .core_failed => {
+            try writer.writeAll("ryk ensure: core failed — policy create or binary unusable.\n");
+            try writer.print("  repair: {s}\n", .{doctor_fix_hint});
+        },
+    }
+}
+
+/// Installer strategy for a day-one host (D28). Ensure owns host→installer
+/// dispatch; membership keys come from `onboarding.isSupportedHost` only (F2).
+/// Mirrors `start.installSelectedHosts` without multi-select:
+/// - `pi_extension` → `pi_install.install`
+/// - `grok_hook` → `grok_install.installAtHome`
+/// - `plugin_yes` → `ryk plugin install <host> --yes` + `plugin.verifyHostInstallAfterChild`
+/// W3 Cursor extends via the same table (`plugin_yes` or a new installer kind).
+const HostInstaller = enum {
+    pi_extension,
+    grok_hook,
+    plugin_yes,
+};
+
+/// Host→installer dispatch row (D28).
+const HostWireTableEntry = struct {
+    host_id: []const u8,
+    installer: HostInstaller,
+};
+
+/// Greppable day-one wire table symbol (D28). Rows name installer entrypoints;
+/// membership is onboarding single-source — no ensure-local host-id array (F2).
+const HostWireTable = struct {
+    /// Compile-time marker that the table exists for source contracts.
+    pub const present = true;
+
+    /// Resolve whether a host id is in the day-one membership set (onboarding single-source).
+    pub fn isDayOneMember(host_id: []const u8) bool {
+        return onboarding.isSupportedHost(host_id);
+    }
+
+    /// Build a dispatch entry for a membership host (keys import onboarding list).
+    pub fn entryFor(host_id: []const u8) ?HostWireTableEntry {
+        if (!isDayOneMember(host_id)) return null;
+        // Per-host installer entrypoints (W1 reuses Pi/plugin paths; W3 extends).
+        const installer: HostInstaller = if (std.mem.eql(u8, host_id, "pi"))
+            .pi_extension
+        else if (std.mem.eql(u8, host_id, "grok"))
+            .grok_hook
+        else
+            .plugin_yes;
+        return .{
+            .host_id = host_id,
+            .installer = installer,
+        };
+    }
+};
+
+/// Also greppable as host_wire_table for D28 source contracts.
+const host_wire_table = HostWireTable;
+
+fn ensureProcessHome(allocator: std.mem.Allocator) ![]u8 {
+    var env_map = try env_util.createProcessMap(allocator);
+    defer env_map.deinit();
+    return (try env_util.getOwned(&env_map, allocator, "HOME")) orelse error.HomeNotSet;
+}
+
+fn ensureIsProductRykBinary(path: []const u8) bool {
+    const base = std.fs.path.basename(path);
+    return brand.isPrimaryInvocation(base) or brand.isLegacyInvocation(base);
+}
+
+fn ensureRunChild(allocator: std.mem.Allocator, argv: []const []const u8) !u8 {
+    const result = try child_process.runHostCommandTimed(
+        allocator,
+        argv,
+        15_000,
+        .{},
+        .{},
+    );
+    defer child_process.deinitHostCommandResult(result, allocator);
+    return if (result.timed_out) 255 else result.exit_code;
+}
+
+/// Attempt install for one host via HostWireTable installer (no multi-select).
+/// Returns true when install succeeds / already present after attempt.
+fn attemptHostInstall(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    entry: HostWireTableEntry,
+    home: []const u8,
+    self_exe: []const u8,
+) bool {
+    switch (entry.installer) {
+        .pi_extension => {
+            // Entrypoint: pi_install.install (bundled extension).
+            const result = pi_install.install(io, allocator, .{
+                .home = home,
+                .ryk_binary = self_exe,
+            }) catch return false;
+            return result != .assets_unavailable;
+        },
+        .grok_hook => {
+            // Entrypoint: grok_install.installAtHome (PreToolUse hook).
+            const result = grok_install.installAtHome(io, allocator, home, self_exe) catch return false;
+            result.deinit(allocator);
+            return true;
+        },
+        .plugin_yes => {
+            // Entrypoint: ryk plugin install <host> --yes + verifyHostInstallAfterChild.
+            const install_argv = [_][]const u8{ self_exe, "plugin", "install", entry.host_id, "--yes" };
+            const code = ensureRunChild(allocator, &install_argv) catch return false;
+            return plugin.verifyHostInstallAfterChild(io, allocator, entry.host_id, code) != .failed;
+        },
+    }
+}
+
+/// Per-host smoke (D26 / D14 doctor-class; no live host UI spawn).
+/// When `skip_verify`, install-evidence-only: smoke is not run; wire-ok is treated
+/// as smoke skip-pass (honest: protection_label still partial if any host unwired).
+/// When smoke is on, fold doctor Hermes smoke + host_status pair into smoke_ok.
+fn evaluateHostSmoke(
+    allocator: std.mem.Allocator,
+    host_id: []const u8,
+    doctor_report: plugin.PluginDoctorReport,
+    skip_verify: bool,
+) struct { smoke_ok: bool, error_class: HostErrorClass } {
+    if (skip_verify) {
+        return .{ .smoke_ok = true, .error_class = .none };
+    }
+
+    // Hermes: doctor report already ran hook smoke (unless overridden).
+    if (std.mem.eql(u8, host_id, "hermes")) {
+        if (doctor_report.hermes_hook_smoke_passed) {
+            return .{ .smoke_ok = true, .error_class = .none };
+        }
+        return .{ .smoke_ok = false, .error_class = .smoke };
+    }
+
+    // Pi / grok: native install paths — host_status returns not_run for pi;
+    // wire evidence is the W1 smoke bar (extension/hook presence).
+    if (std.mem.eql(u8, host_id, "pi") or std.mem.eql(u8, host_id, "grok")) {
+        return .{ .smoke_ok = true, .error_class = .none };
+    }
+
+    const smoke = host_status.runHostSmokePair(allocator, host_id) catch {
+        return .{ .smoke_ok = false, .error_class = .smoke };
+    };
+    if (smoke.bothPassed()) {
+        return .{ .smoke_ok = true, .error_class = .none };
+    }
+    // not_run or fail → soft smoke incomplete (never silent full on missing smoke).
+    return .{ .smoke_ok = false, .error_class = .smoke };
+}
+
+/// Auto-wire every detected day-one host (no multi-select — D02/D28).
+///
+/// Product path:
+/// 1. Detect via `onboarding.collectHostStatuses` (membership = `onboarding.supported_hosts`).
+/// 2. Dispatch HostWireTable installer for each detected host (existing Pi/plugin paths).
+/// 3. Already-installed → wired without re-mutation; not installed → attempt install;
+///    install fail → soft `.wire` + `doctor_fix_hint` (D24), never clears core_ok.
+/// 4. Per-host smoke when `!skip_verify` (D26); skip_verify → install-evidence smoke skip-pass.
+///
+/// HostResult.host_id / fix_hint are borrowed static strings; only the slice is owned.
+pub fn wireDetectedHosts(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    options: EnsureOptions,
+) ![]HostResult {
+    _ = host_wire_table.present;
+
+    // skip_verify: skip live Hermes smoke spawn inside doctor collect (install-evidence path).
+    // When smoke is on, null override runs real hermes_hook_smoke for HostResult folding.
+    var doctor_report = try plugin.collectPluginDoctorReportWithHermesSmoke(
+        io,
+        allocator,
+        if (options.skip_verify) true else null,
+    );
+    defer plugin.deinitPluginDoctorReport(&doctor_report, allocator);
+
+    const statuses = try onboarding.collectHostStatuses(io, allocator, doctor_report);
+    defer allocator.free(statuses);
+
+    // Install context once. Missing HOME / non-product binary → soft wire fail (no mutation
+    // under unit-test harness where self_exe is not `ryk`/`orca`).
+    const home_opt = ensureProcessHome(allocator) catch null;
+    defer if (home_opt) |h| allocator.free(h);
+    const self_exe_opt = std.process.executablePathAlloc(io, allocator) catch null;
+    defer if (self_exe_opt) |e| allocator.free(e);
+    const can_mutate = blk: {
+        const home = home_opt orelse break :blk false;
+        if (home.len == 0 or !std.fs.path.isAbsolute(home)) break :blk false;
+        const exe = self_exe_opt orelse break :blk false;
+        break :blk ensureIsProductRykBinary(exe);
+    };
+
+    var list: std.ArrayList(HostResult) = .empty;
+    errdefer list.deinit(allocator);
+
+    for (statuses) |st| {
+        // Dispatch only day-one membership (onboarding keys — F2).
+        const entry = HostWireTable.entryFor(st.name) orelse continue;
+        if (!st.detected) continue;
+
+        var wired = st.installed;
+        if (!wired and can_mutate) {
+            // Auto-wire: attempt host→installer (mirror start.installSelectedHosts, no multi-select).
+            wired = attemptHostInstall(io, allocator, entry, home_opt.?, self_exe_opt.?);
+        }
+
+        if (!wired) {
+            // Soft wire incomplete: keep core_ok path; honest partial + repair.
+            try list.append(allocator, .{
+                .host_id = st.name,
+                .detected = true,
+                .wired = false,
+                .smoke_ok = false,
+                .fix_hint = doctor_fix_hint,
+                .error_class = .wire,
+            });
+            continue;
+        }
+
+        const smoke = evaluateHostSmoke(allocator, st.name, doctor_report, options.skip_verify);
+        if (smoke.smoke_ok) {
+            try list.append(allocator, .{
+                .host_id = st.name,
+                .detected = true,
+                .wired = true,
+                .smoke_ok = true,
+                .fix_hint = "",
+                .error_class = .none,
+            });
+        } else {
+            // Wired but smoke failed → soft .smoke + partial demotion (D24/D26).
+            try list.append(allocator, .{
+                .host_id = st.name,
+                .detected = true,
+                .wired = true,
+                .smoke_ok = false,
+                .fix_hint = doctor_fix_hint,
+                .error_class = smoke.error_class,
+            });
+        }
+    }
+
+    return try list.toOwnedSlice(allocator);
 }
 
 // ---------------------------------------------------------------------------
@@ -1319,4 +1646,369 @@ test "EnsurePolicy existing ask mode leave-alone hash equal without false residu
     defer allocator.free(after);
     try std.testing.expectEqualStrings(ask_body, after);
     try std.testing.expectEqualSlices(u8, &hash_before, &ensurePolicySha256(after));
+}
+
+
+// ---------------------------------------------------------------------------
+// EnsureSoft — auto-wire soft success + partial honesty (w1-auto-wire-soft-success)
+// Named-run gate: --filter EnsureSoft
+// Seams: pure label/exit/receipt helpers + source contracts (no live host spawn).
+// ---------------------------------------------------------------------------
+
+/// D06 forbid-list (case-insensitive) for partial / soft-incomplete success copy.
+fn ensureSoftClaimsFullProtection(text: []const u8) bool {
+    if (containsIgnoreCase(text, "fully protected")) return true;
+    if (containsIgnoreCase(text, "all hosts wired")) return true;
+    if (containsIgnoreCase(text, "protection complete")) return true;
+    if (containsIgnoreCase(text, "full protection")) return true;
+    return false;
+}
+
+fn ensureSoftHasPartialToken(text: []const u8) bool {
+    return containsIgnoreCase(text, "partial") or containsIgnoreCase(text, "partially");
+}
+
+fn ensureSoftHasDoctorRepair(text: []const u8) bool {
+    return containsIgnoreCase(text, "doctor --fix");
+}
+
+test "EnsureSoft never multi-select uses host wire table (D28/D02)" {
+    // Acceptance (1): Ensure never requires interactive multi-select; uses ensure
+    // host wire table (D28). Source contract — no multiSelect on ensure path;
+    // dispatcher table/function must exist for day-one auto-wire.
+    //
+    // Production (not this test block) must define a host→installer table under one
+    // of these greppable names so W3 Cursor can extend the same table.
+    const ensure_src = @embedFile("ensure.zig");
+
+    // Strip co-located test region so this file's own documentation cannot satisfy
+    // the wire-table contract. Production ends at the first co-located test.
+    const prod = blk: {
+        if (std.mem.indexOf(u8, ensure_src, "\ntest \"")) |idx| break :blk ensure_src[0..idx];
+        break :blk ensure_src;
+    };
+
+    try std.testing.expect(std.mem.indexOf(u8, prod, "multiSelect") == null);
+    try std.testing.expect(std.mem.indexOf(u8, prod, "multi_select") == null);
+
+    const has_table =
+        std.mem.indexOf(u8, prod, "HostWireTable") != null or
+        std.mem.indexOf(u8, prod, "host_wire_table") != null or
+        std.mem.indexOf(u8, prod, "wireDetectedHosts") != null or
+        std.mem.indexOf(u8, prod, "wireDayOneHosts") != null;
+    try std.testing.expect(has_table);
+
+    // Day-one membership remains single-source in onboarding (F2 residual): ensure
+    // must not invent a second host-id list for auto-wire after this unit. Table
+    // keys/dispatch may import onboarding.supported_hosts (or a later day-one const).
+    // Soft unit only forbids multi-select + requires a dispatcher symbol.
+    _ = onboarding.supported_hosts;
+}
+
+test "EnsureSoft HostResult fail carries success shape fix_hint and error_class (D22/D24)" {
+    // Acceptance (2): HostResult includes success/fail + fix_hint; soft classes use
+    // error_class. Synthetic hosts only — reject live host spawn.
+    const ok_host = HostResult{
+        .host_id = "codex",
+        .detected = true,
+        .wired = true,
+        .smoke_ok = true,
+        .fix_hint = "",
+        .error_class = .none,
+    };
+    try std.testing.expect(ok_host.detected);
+    try std.testing.expect(ok_host.wired);
+    try std.testing.expect(ok_host.smoke_ok);
+    try std.testing.expectEqual(HostErrorClass.none, ok_host.error_class);
+
+    const fail_host = HostResult{
+        .host_id = "claude",
+        .detected = true,
+        .wired = false,
+        .smoke_ok = false,
+        .fix_hint = "ryk doctor --fix",
+        .error_class = .wire,
+    };
+    try std.testing.expect(fail_host.detected);
+    try std.testing.expect(!fail_host.wired);
+    try std.testing.expect(!fail_host.smoke_ok);
+    try std.testing.expectEqual(HostErrorClass.wire, fail_host.error_class);
+    try std.testing.expect(ensureSoftHasDoctorRepair(fail_host.fix_hint));
+    try std.testing.expect(!containsIgnoreCase(fail_host.fix_hint, "ryk start") or
+        ensureSoftHasDoctorRepair(fail_host.fix_hint));
+
+    const smoke_fail = HostResult{
+        .host_id = "pi",
+        .detected = true,
+        .wired = true,
+        .smoke_ok = false,
+        .fix_hint = "ryk doctor --fix",
+        .error_class = .smoke,
+    };
+    try std.testing.expectEqual(HostErrorClass.smoke, smoke_fail.error_class);
+    try std.testing.expect(ensureSoftHasDoctorRepair(smoke_fail.fix_hint));
+}
+
+test "EnsureSoft mock one host wire fail is core_ok partial process exit 0 (D24/D25)" {
+    // Acceptance (3) + composition: Mock one host fail → core_ok true,
+    // protection_label=partial, process-map exit 0. Pure helpers — no live spawn.
+    var hosts = [_]HostResult{
+        .{
+            .host_id = "claude",
+            .detected = true,
+            .wired = false,
+            .smoke_ok = false,
+            .fix_hint = "ryk doctor --fix",
+            .error_class = .wire,
+        },
+    };
+
+    const label = protectionLabelFromHosts(hosts[0..]);
+    try std.testing.expectEqual(ProtectionLabel.partial, label);
+
+    var outcome = EnsureOutcome{
+        .core_ok = true,
+        .hosts = hosts[0..],
+        .policy_created = true,
+        .policy_left_alone = false,
+        .protection_label = label,
+        .hosts_owned = false,
+    };
+    defer outcome.deinit(std.testing.allocator);
+
+    try std.testing.expect(outcome.core_ok);
+    try std.testing.expectEqual(ProtectionLabel.partial, outcome.protection_label);
+    try std.testing.expectEqual(@as(u8, exit_codes.success), processExitForOutcome(outcome));
+    try std.testing.expect(processExitForOutcome(outcome) == 0);
+}
+
+test "EnsureSoft packs and global-verify fails stay soft partial (D24)" {
+    // Acceptance (2) soft classes: packs / global shell verify fails are soft —
+    // never clear core_ok; force partial (no full-protection claim).
+    var hosts = [_]HostResult{
+        .{
+            .host_id = "codex",
+            .detected = true,
+            .wired = true,
+            .smoke_ok = true,
+            .fix_hint = "",
+            .error_class = .none,
+        },
+    };
+    // Hosts alone would be full; packs/global soft incomplete demotes to partial.
+    const from_hosts = protectionLabelFromHosts(hosts[0..]);
+    try std.testing.expectEqual(ProtectionLabel.full, from_hosts);
+
+    const packs_soft = applySoftIncomplete(from_hosts, false, true);
+    try std.testing.expectEqual(ProtectionLabel.partial, packs_soft);
+
+    const global_soft = applySoftIncomplete(from_hosts, true, false);
+    try std.testing.expectEqual(ProtectionLabel.partial, global_soft);
+
+    const both_ok = applySoftIncomplete(from_hosts, true, true);
+    try std.testing.expectEqual(ProtectionLabel.full, both_ok);
+
+    // Soft incomplete never upgrades core_failed.
+    const core = applySoftIncomplete(.core_failed, false, false);
+    try std.testing.expectEqual(ProtectionLabel.core_failed, core);
+}
+
+test "EnsureSoft mock host fail receipt forbids D06 full phrases requires partial and fix_hint" {
+    // Acceptance (3): forbids D06 full-protection phrases; requires partial +
+    // repair/fix_hint token (doctor --fix) + failed host id.
+    var hosts = [_]HostResult{
+        .{
+            .host_id = "claude",
+            .detected = true,
+            .wired = false,
+            .smoke_ok = false,
+            .fix_hint = "ryk doctor --fix",
+            .error_class = .wire,
+        },
+        .{
+            .host_id = "codex",
+            .detected = true,
+            .wired = true,
+            .smoke_ok = true,
+            .fix_hint = "",
+            .error_class = .none,
+        },
+    };
+
+    const label = protectionLabelFromHosts(hosts[0..]);
+    try std.testing.expectEqual(ProtectionLabel.partial, label);
+
+    var outcome = EnsureOutcome{
+        .core_ok = true,
+        .hosts = hosts[0..],
+        .policy_created = false,
+        .policy_left_alone = true,
+        .protection_label = label,
+        .hosts_owned = false,
+    };
+    defer outcome.deinit(std.testing.allocator);
+
+    var buf: [8192]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try writeEnsureReceipt(&writer, outcome);
+    const text = writer.buffered();
+
+    try std.testing.expect(!ensureSoftClaimsFullProtection(text));
+    try std.testing.expect(ensureSoftHasPartialToken(text));
+    try std.testing.expect(ensureSoftHasDoctorRepair(text));
+    try std.testing.expect(containsIgnoreCase(text, "claude"));
+
+    // Process-map still soft-success.
+    try std.testing.expectEqual(@as(u8, exit_codes.success), processExitForOutcome(outcome));
+}
+
+test "EnsureSoft zero hosts success without full-protection claim (D05)" {
+    // Composition: zero hosts → success without full-protection claim.
+    const empty: []HostResult = &.{};
+    const label = protectionLabelFromHosts(empty);
+    try std.testing.expect(label != .full);
+    try std.testing.expectEqual(ProtectionLabel.partial, label);
+
+    var outcome = EnsureOutcome{
+        .core_ok = true,
+        .hosts = empty,
+        .policy_created = true,
+        .policy_left_alone = false,
+        .protection_label = label,
+        .hosts_owned = false,
+    };
+    defer outcome.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(u8, exit_codes.success), processExitForOutcome(outcome));
+
+    var buf: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try writeEnsureReceipt(&writer, outcome);
+    const text = writer.buffered();
+    try std.testing.expect(!ensureSoftClaimsFullProtection(text));
+}
+
+test "EnsureSoft all detected hosts ok yields full protection label (D05)" {
+    // Contrast path: ≥1 host detected and all ok → full allowed (not partial).
+    var hosts = [_]HostResult{
+        .{
+            .host_id = "claude",
+            .detected = true,
+            .wired = true,
+            .smoke_ok = true,
+            .fix_hint = "",
+            .error_class = .none,
+        },
+        .{
+            .host_id = "codex",
+            .detected = true,
+            .wired = true,
+            .smoke_ok = true,
+            .fix_hint = "",
+            .error_class = .none,
+        },
+    };
+    try std.testing.expectEqual(ProtectionLabel.full, protectionLabelFromHosts(hosts[0..]));
+}
+
+test "EnsureSoft core_ok false maps non-zero exit never soft success (D23/D25)" {
+    // reject: soft success when core_ok false (policy create / binary unusable).
+    var outcome = EnsureOutcome{
+        .core_ok = false,
+        .hosts = &.{},
+        .policy_created = false,
+        .policy_left_alone = false,
+        .protection_label = .core_failed,
+        .hosts_owned = false,
+    };
+    defer outcome.deinit(std.testing.allocator);
+
+    const code = processExitForOutcome(outcome);
+    try std.testing.expect(code != exit_codes.success);
+    try std.testing.expect(code != 0);
+    try std.testing.expectEqual(ProtectionLabel.core_failed, outcome.protection_label);
+}
+
+test "EnsureSoft runEnsure zero hosts is soft success not full protection claim" {
+    // Integration with frozen runEnsure: empty host auto-wire still core_ok + not full.
+    // (Auto-wire table may still return zero hosts when nothing is detected.)
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var stdout_buf: [8192]u8 = undefined;
+    var stderr_buf: [2048]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    var outcome = try runEnsure(io, allocator, tmp.dir, .{
+        .from_install = false,
+        .quiet = true,
+        .preset = onboarding.default_preset,
+        .skip_verify = true,
+    }, &stdout_writer, &stderr_writer);
+    defer outcome.deinit(allocator);
+
+    try std.testing.expect(outcome.core_ok);
+    try std.testing.expect(outcome.protection_label != .core_failed);
+    // Zero detected hosts must not claim full protection (D05).
+    if (outcome.hosts.len == 0) {
+        try std.testing.expect(outcome.protection_label != .full);
+    } else {
+        // If environment has detected hosts, any fail forces partial; all-ok may be full.
+        var any_fail = false;
+        for (outcome.hosts) |h| {
+            if (h.detected and (!h.wired or !h.smoke_ok or h.error_class != .none)) {
+                any_fail = true;
+                break;
+            }
+        }
+        if (any_fail) {
+            try std.testing.expectEqual(ProtectionLabel.partial, outcome.protection_label);
+        }
+    }
+
+    try std.testing.expectEqual(@as(u8, exit_codes.success), processExitForOutcome(outcome));
+
+    const out = stdout_writer.buffered();
+    const err = stderr_writer.buffered();
+    if (outcome.protection_label == .partial or outcome.hosts.len == 0) {
+        try std.testing.expect(!ensureSoftClaimsFullProtection(out));
+        try std.testing.expect(!ensureSoftClaimsFullProtection(err));
+    }
+
+    // Failed hosts must teach doctor --fix, never ryk start as sole repair.
+    for (outcome.hosts) |h| {
+        if (h.error_class == .none and h.wired and h.smoke_ok) continue;
+        if (!h.detected) continue;
+        try std.testing.expect(h.fix_hint.len == 0 or ensureSoftHasDoctorRepair(h.fix_hint));
+        if (h.fix_hint.len > 0 and containsIgnoreCase(h.fix_hint, "ryk start")) {
+            try std.testing.expect(ensureSoftHasDoctorRepair(h.fix_hint));
+        }
+    }
+}
+
+test "EnsureSoft start bridge receipt driven by protection_label not multi-select ensure path" {
+    // code_paths include start.zig: temporary bridge remains; ensure soft path must not
+    // reintroduce multiSelect for host consent on the ensure library. Start may still
+    // multi-select for legacy interactive start until W4 (dual residual) — ensure must not.
+    const start_src = @embedFile("start.zig");
+    const ensure_src = @embedFile("ensure.zig");
+
+    const ensure_prod = blk: {
+        if (std.mem.indexOf(u8, ensure_src, "\ntest \"")) |idx| break :blk ensure_src[0..idx];
+        break :blk ensure_src;
+    };
+    try std.testing.expect(std.mem.indexOf(u8, ensure_prod, "multiSelect") == null);
+
+    // Bridge still routes policy via runEnsure (locked by EnsureCore); soft unit fills
+    // host table + receipt honesty. Start should consume protection_label for honesty.
+    try std.testing.expect(std.mem.indexOf(u8, start_src, "runEnsure") != null);
+    try std.testing.expect(
+        std.mem.indexOf(u8, start_src, "protection_label") != null or
+            std.mem.indexOf(u8, start_src, "writeEnsureReceipt") != null or
+            std.mem.indexOf(u8, start_src, "processExitForOutcome") != null,
+    );
 }

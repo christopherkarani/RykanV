@@ -125,6 +125,12 @@ pub fn runStart(
         else
             "Policy created.";
         try tui.render.stepLine(io, stdout, .done, "Policy", policy_step, 80);
+
+        // Soft-success honesty (D06/D24): ensure protection_label drives receipt text.
+        // Host fails stay core_ok + partial — never multi-select on ensure path.
+        if (ensure_outcome.protection_label == .partial) {
+            try ensure.writeEnsureReceipt(stdout, ensure_outcome);
+        }
     }
 
     // Additive pack enablement from preset (project .orca.toml when in git repo).
