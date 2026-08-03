@@ -34,6 +34,7 @@ pub const plugin_install = @import("plugin_install.zig");
 pub const setup = @import("setup.zig");
 pub const start = @import("start.zig");
 pub const onboarding = @import("onboarding.zig");
+pub const ensure = @import("ensure.zig");
 pub const quickstart = @import("quickstart.zig");
 pub const decide = @import("decide.zig");
 pub const evaluate = @import("evaluate.zig");
@@ -80,6 +81,8 @@ test {
     // Pull style tests (TDD for color/TTY/NO_COLOR handling).
     _ = style;
     _ = onboarding;
+    // Monopath pull for co-located EnsureCore / Ensure* tests (D73).
+    _ = ensure;
     _ = host_status;
     _ = pi_install;
     _ = grok_install;
