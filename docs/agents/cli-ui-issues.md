@@ -1,7 +1,7 @@
 # ryk CLI / UI issues catalog
 
 **Status:** open backlog from 2026-08-03 full CLI audit  
-**Evidence:** `docs/agents/cli-command-audit-report.md` (every public/dispatch command exercised)  
+**Evidence:** CLI inventory + implementation plan (audit session dump removed; durable issues live here)  
 **UI implementation plan (scoped):** `docs/agents/cli-ui-libvaxis-implementation-plan.md`  
 → Focus: **doctor · packs · allowlist** only (grill freeze). Full-tier items remain backlog here until that plan is reopened.  
 

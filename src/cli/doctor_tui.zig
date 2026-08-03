@@ -344,33 +344,12 @@ pub fn run(
     input: RunInput,
 ) !u8 {
     _ = allocator;
-    try stdout.writeAll(vaxis.ctlseqs.smcup);
-    try stdout.writeAll(vaxis.ctlseqs.hide_cursor);
-    var left_alt = false;
-    defer {
-        if (!left_alt) {
-            stdout.writeAll(vaxis.ctlseqs.show_cursor) catch {};
-            stdout.writeAll(vaxis.ctlseqs.rmcup) catch {};
-        }
-    }
-
     if (comptime builtin.is_test) {
-        left_alt = true;
-        try stdout.writeAll(vaxis.ctlseqs.show_cursor);
-        try stdout.writeAll(vaxis.ctlseqs.rmcup);
         return exit_codes.success;
     }
 
-    const code = try runLoop(io, stdout, input);
-    left_alt = true;
-    try stdout.writeAll(vaxis.ctlseqs.show_cursor);
-    try stdout.writeAll(vaxis.ctlseqs.rmcup);
-    return code;
-}
-
-fn runLoop(io: std.Io, stdout: anytype, input: RunInput) !u8 {
+    // Probe Tty before alt-screen so failure falls to linear without flash.
     var tty_buf: [4096]u8 = undefined;
-    // Fail closed: Tty.init failure is not a successful doctor run — fall to linear report.
     var tty = vaxis.tty.Tty.init(io, &tty_buf) catch return exit_codes.general;
     defer tty.deinit();
 
@@ -384,6 +363,18 @@ fn runLoop(io: std.Io, stdout: anytype, input: RunInput) !u8 {
         }
     };
     configureReadTimeout(&tty);
+
+    try stdout.writeAll(vaxis.ctlseqs.smcup);
+    try stdout.writeAll(vaxis.ctlseqs.hide_cursor);
+    defer {
+        stdout.writeAll(vaxis.ctlseqs.show_cursor) catch {};
+        stdout.writeAll(vaxis.ctlseqs.rmcup) catch {};
+    }
+
+    return try runLoop(io, stdout, &tty, input);
+}
+
+fn runLoop(io: std.Io, stdout: anytype, tty: anytype, input: RunInput) !u8 {
 
     const list_rows: usize = blk: {
         const ws = tty.getWinsize() catch break :blk 6;
@@ -441,7 +432,7 @@ fn runLoop(io: std.Io, stdout: anytype, input: RunInput) !u8 {
         }, "\r\n");
         try flush(stdout);
 
-        const key = readKey(&tty, &decoder) catch break;
+        const key = readKey(tty, &decoder) catch break;
         const action = tui.browse.keyToAction(key);
         switch (action) {
             .quit => break,

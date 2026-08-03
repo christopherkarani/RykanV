@@ -3,7 +3,7 @@
 **Status:** ready to implement (scoped via grill 2026-08-03)  
 **Supersedes:** broad “all tiers” program — **out of scope** unless reopened  
 **Source:** CLI audit + grill decisions  
-**Related:** [`cli-ui-issues.md`](cli-ui-issues.md) · [`cli-command-audit-report.md`](cli-command-audit-report.md)
+**Related:** [`cli-ui-issues.md`](cli-ui-issues.md)
 
 ---
 
@@ -25,6 +25,8 @@
 | 12 | Keys | **A:** match **scan** nav (`↑↓/jk`, `g/G`, `q/Esc`); domain actions on free keys; footer shows context |
 | 13 | Allowlist empty / layers | **D:** show **project + user** layers; empty teaches `ryk allow …`; status line = write target |
 | 14 | Success (default) | Manual TTY checklist + JSON/plain regressions green; public help lists packs/allowlist; suggestions work for packs/allowlist |
+
+**Post-ship note (PR #101 tip):** packs TUI matches freeze #3/#9 (enabled+baseline first; disable confirms default No / baseline danger gate). Prefer code + this freeze over session diaries in issues.
 
 **Explicitly out of this program:** replay default TUI, host failure panel, scan polish, plugin matrix, report merge, dashboard `--once`, install-channel drift ship, hide-list redirects (except if required for help inventory tests), Tier 3 explain/policy TUIs, allow-once TUI, `allow`/`unallow` public promotion.
 

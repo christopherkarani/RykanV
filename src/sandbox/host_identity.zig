@@ -93,7 +93,7 @@ fn genericTakePath(path: []const u8, reason: []const u8) HostIdentity {
 /// 3. Basename of realpath must match `host_config_table`
 /// 4. Realpath must not be under workspace / tmp
 /// 5. Realpath must match a trusted install prefix (builtin, HOME/.local/…,
-///    HOME/.grok, HOME/.opencode, optional nvm pattern, ORCA_TRUSTED_HOST_PREFIXES,
+///    HOME/.grok/{bin,downloads}, HOME/.opencode, optional nvm pattern, ORCA_TRUSTED_HOST_PREFIXES,
 ///    extra_trusted_prefixes)
 pub fn resolveHostIdentity(
     io: std.Io,
@@ -410,8 +410,9 @@ fn isTrustedInstallPath(
             ".local/lib",
             ".local/share",
             ".opencode",
-            // Grok CLI: ~/.grok/bin wrapper + ~/.grok/downloads/<versioned binary>.
-            ".grok",
+            // Grok CLI install layouts only (not whole ~/.grok product home).
+            ".grok/bin",
+            ".grok/downloads",
             ".npm-global/bin",
         };
         for (homes_buf[0..homes_len]) |home| {
@@ -455,8 +456,9 @@ fn allowsLinkBasenameFallback(realpath: []const u8) bool {
     if (std.mem.indexOf(u8, realpath, "/node_modules/") != null) return true;
     if (std.mem.indexOf(u8, realpath, "/versions/") != null) return true;
     if (std.mem.indexOf(u8, realpath, "/Cellar/") != null) return true;
-    // Grok downloads layout: ~/.grok/downloads/grok-<ver>-<platform>.
-    if (std.mem.indexOf(u8, realpath, "/.grok/") != null) return true;
+    // Grok install layouts only (downloads + bin wrappers), not worktrees/skills.
+    if (std.mem.indexOf(u8, realpath, "/.grok/downloads/") != null) return true;
+    if (std.mem.indexOf(u8, realpath, "/.grok/bin/") != null) return true;
     const base = host_config_grants.hostBasename(realpath);
     if (base.len == 0) return false;
     // Script-like leaves (cli.js, codex.js, …).
@@ -876,6 +878,40 @@ test "resolveHostIdentity trusts HOME/.grok downloads layout via link basename" 
     try std.testing.expect(id.isTrusted());
     try std.testing.expectEqualStrings("grok", id.host.?);
 }
+
+test "resolveHostIdentity rejects binary under HOME/.grok/worktrees (not install layout)" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    const home = try home_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+
+    try home_tmp.dir.createDirPath(io, ".grok/worktrees/x");
+    try home_tmp.dir.writeFile(io, .{
+        .sub_path = ".grok/worktrees/x/claude",
+        .data = "#!/bin/sh\necho claude\n",
+    });
+    try home_tmp.dir.setFilePermissions(
+        io,
+        ".grok/worktrees/x/claude",
+        std.Io.File.Permissions.fromMode(0o755),
+        .{},
+    );
+    const real_bin = try std.fs.path.join(allocator, &.{ home, ".grok/worktrees/x/claude" });
+    defer allocator.free(real_bin);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+    try env_map.put("TMPDIR", test_tmpdir_sentinel);
+
+    var id = try resolveHostIdentity(io, allocator, real_bin, &env_map, .{});
+    defer id.deinit(allocator);
+    try std.testing.expect(!id.isTrusted());
+}
+
 
 test "resolveHostIdentity trusted pi table host via extra prefix" {
     const allocator = std.testing.allocator;

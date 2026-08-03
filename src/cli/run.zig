@@ -2294,7 +2294,6 @@ fn renderDenyBlock(
     policy_path: ?[]const u8,
     policy_mode: []const u8,
 ) !void {
-    // ── What: blocked command ───────────────────────────────────────────────
     try stdout.writeAll("\n");
     try tui.render.callout(io, stdout, .danger, "ryk blocked a command", "");
     try stdout.writeAll("\n");
@@ -2314,7 +2313,6 @@ fn renderDenyBlock(
         break :blk rid;
     } else null;
     const reason_text = if (reason_key) |rid| tui.reasons.reasonForRule(rid) else "Matched a deny rule in your ryk policy.";
-    // ── Why ─────────────────────────────────────────────────────────────────
     try body.append(allocator, try std.fmt.allocPrint(allocator, "Why        {s}", .{reason_text}));
 
     if (rule_id) |rid| {
@@ -2331,16 +2329,12 @@ fn renderDenyBlock(
     defer allocator.free(title);
     try tui.render.panel(io, stdout, title, body.items);
     try stdout.writeAll("\n");
-
-    // ── Risk (danger-aligned; degrades to plain on non-TTY) ──────────────────
     const risk = if (reason_key) |rid| tui.reasons.riskForRule(rid) else .medium;
     try stdout.writeAll("  ");
     try tui.theme.paintBold(io, stdout, .danger, "Risk");
     try stdout.writeAll("   ");
     try tui.render.meter(io, stdout, tui.reasons.riskFraction(risk), tui.reasons.riskLabel(risk));
     try stdout.writeAll("\n\n");
-
-    // ── Safer shape: prefer daemon tip, then command-shape heuristics ───────
     const alts = try tui.reasons.safeAlternatives(allocator, command_display);
     defer {
         for (alts) |a| allocator.free(a.command);
@@ -2361,8 +2355,6 @@ fn renderDenyBlock(
         }
         try stdout.writeAll("\n");
     }
-
-    // ── What now: progressive CTAs (explain → allow-once → allowlist) ───────
     // Tip is not re-injected here — safer shape above already showed remediation.
     const next_steps = try rust_visibility.formatDenyNextSteps(allocator, command_display, rule_id, null);
     defer allocator.free(next_steps);
