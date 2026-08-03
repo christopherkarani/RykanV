@@ -281,6 +281,13 @@ if printf '%s\n' "${failed_plain}" | grep -Fq "You're now protected by ryk"; the
   fail "installer claimed protection after doctor --fix failed"
 fi
 assert_no_d06_full_protection "${failed_plain}" "failed install"
+# Hard-fail remediation must re-teach install trust scope (HOME + --from-install),
+# not a bare `ryk doctor --fix` that drops the install-time scope flags.
+printf '%s\n' "${failed_plain}" | grep -Fq 'doctor --fix --from-install' ||
+  fail "hard-fail remediation missing doctor --fix --from-install (got remediation from failed install output)"
+if ! printf '%s\n' "${failed_plain}" | grep -Eiq 'home directory|cd ["'\'']?\$?HOME'; then
+  fail "hard-fail remediation missing HOME guidance (home directory / cd HOME)"
+fi
 
 # Soft host-fail honesty: doctor --fix exits 0 with partial receipt.
 # Install must not step_done / claim D06 full-protection phrases.
@@ -420,6 +427,14 @@ if ! grep -nF '"$DESTINATION" doctor --fix' "${INSTALL_SH}" >/dev/null 2>&1; the
 fi
 if ! grep -nF '"$DESTINATION" doctor --fix --from-install' "${INSTALL_SH}" >/dev/null 2>&1; then
   fail 'scripts/install.sh missing "$DESTINATION" doctor --fix --from-install (install-scope flag)'
+fi
+# Hard-fail operator remediation must re-teach install trust scope (not bare doctor --fix).
+# Match re-teach copy (ryk doctor --fix --from-install), not only the binary invocation.
+if ! grep -nE 'ryk doctor --fix --from-install' "${INSTALL_SH}" >/dev/null 2>&1; then
+  fail 'scripts/install.sh hard-fail remediation missing re-teach of ryk doctor --fix --from-install'
+fi
+if ! grep -nF 'Re-run from your home directory:' "${INSTALL_SH}" >/dev/null 2>&1; then
+  fail 'scripts/install.sh hard-fail remediation missing HOME guidance (Re-run from your home directory)'
 fi
 if ! grep -nF 'cd "$HOME"' "${INSTALL_SH}" >/dev/null 2>&1; then
   fail 'scripts/install.sh missing cd "$HOME" around ensure invocation'
