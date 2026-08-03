@@ -550,7 +550,6 @@ fn tryEnterAllowlistBrowse(
     stdout: anytype,
     stderr: anytype,
 ) !bool {
-    _ = stderr;
     const project_path = try resolveProjectPath(gpa, io);
     defer gpa.free(project_path);
     const user_path_owned = try resolveUserPath(gpa);
@@ -564,6 +563,11 @@ fn tryEnterAllowlistBrowse(
         user_outcome = try allowlist_store.loadFile(io, gpa, up, .user);
     }
     defer user_outcome.store.deinit(gpa);
+
+    // Match linear list honesty: corrupt files still open TUI empty, but warn (F193).
+    if (project_outcome.corrupt or user_outcome.corrupt) {
+        try stderr.writeAll("ryk allowlist: warning: allowlist file corrupt or unreadable; treating as empty\n");
+    }
 
     // Layer filter: --project / --user show one section only by emptying the other view.
     const write_layer: allowlist_browse.Layer = switch (resolveLayer(flags, io, gpa)) {

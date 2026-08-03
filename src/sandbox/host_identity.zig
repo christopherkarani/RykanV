@@ -467,9 +467,13 @@ fn allowsLinkBasenameFallback(realpath: []const u8) bool {
         return true;
     // Version-id leaf (e.g. claude …/versions/2.1.196).
     if (std.ascii.isDigit(base[0])) return true;
-    // Versioned product leaf: `grok-0.2.118-macos-aarch64` → stem `grok`.
+    // Versioned product leaf only: `grok-0.2.118-macos-aarch64` → stem `grok`.
+    // Require a digit after the first dash so `codex-evil` / bare host spoofs cannot
+    // unlock link-basename fallback under a trusted prefix (F39).
     if (std.mem.indexOfScalar(u8, base, '-')) |dash| {
-        if (dash > 0 and host_config_grants.specForHost(base[0..dash]) != null) return true;
+        if (dash > 0 and dash + 1 < base.len and std.ascii.isDigit(base[dash + 1]) and
+            host_config_grants.specForHost(base[0..dash]) != null)
+            return true;
     }
     return false;
 }

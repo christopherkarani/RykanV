@@ -192,16 +192,77 @@ fn isControlWriteDenyAuditError(err: anyerror) bool {
 /// Parent sets this when OS attach is planned (control write-deny residual known).
 /// Shims skip opening `.orca/.../events.jsonl` and stay silent — parent owns the
 /// single `audit=degraded` banner (E0 / RT-05). Values: `degraded` | `skip`.
+/// **Child-forgable env alone is not trusted** — session file must attest (F36).
 pub const shim_audit_mode_env = "ORCA_SHIM_AUDIT_MODE";
+pub const session_audit_mode_filename = "shim_audit_mode";
 
-fn shimAuditModeIsDegraded(env_map: *const std.process.Environ.Map) bool {
-    const raw = env_map.get(shim_audit_mode_env) orelse return false;
-    return std.ascii.eqlIgnoreCase(raw, "degraded") or std.ascii.eqlIgnoreCase(raw, "skip");
+fn sessionAuditModePath(allocator: std.mem.Allocator, workspace_root: []const u8, session_id: []const u8) ![]u8 {
+    return try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "sessions", session_id, session_audit_mode_filename });
+}
+
+/// Parent `ryk run` writes this before PATH shims run so agents cannot silence
+/// in-shim audit by exporting `ORCA_SHIM_AUDIT_MODE=degraded` alone.
+pub fn writeSessionShimAuditMode(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    mode: []const u8,
+) !void {
+    const path = try sessionAuditModePath(allocator, workspace_root, session_id);
+    defer allocator.free(path);
+    const sessions_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "sessions", session_id });
+    defer allocator.free(sessions_dir);
+    try std.Io.Dir.cwd().createDirPath(io, sessions_dir);
+    const file = try std.Io.Dir.cwd().createFile(io, path, .{});
+    defer file.close(io);
+    try file.writeStreamingAll(io, mode);
+    try file.writeStreamingAll(io, "\n");
+}
+
+fn readSessionShimAuditMode(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+) !?[]const u8 {
+    const path = try sessionAuditModePath(allocator, workspace_root, session_id);
+    defer allocator.free(path);
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(32)) catch return null;
+    // Caller does not free — only used for immediate parse; free after check.
+    defer allocator.free(bytes);
+    const trimmed = std.mem.trim(u8, bytes, " \t\r\n");
+    if (trimmed.len == 0) return null;
+    // Return a static sentinel via stack is hard; use parse inline.
+    if (std.ascii.eqlIgnoreCase(trimmed, "degraded") or std.ascii.eqlIgnoreCase(trimmed, "skip")) {
+        return "degraded";
+    }
+    return null;
+}
+
+fn shimAuditModeIsDegraded(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    env_map: *const std.process.Environ.Map,
+) bool {
+    // Session file is parent-attested; env alone is hostile (child can set it).
+    const session = readSessionShimAuditMode(io, allocator, workspace_root, session_id) catch null;
+    if (session != null) return true;
+    // Tests / legacy without a session recording: allow env only when session_id
+    // is empty (no session context) — production always has a session id.
+    if (session_id.len == 0) {
+        const raw = env_map.get(shim_audit_mode_env) orelse return false;
+        return std.ascii.eqlIgnoreCase(raw, "degraded") or std.ascii.eqlIgnoreCase(raw, "skip");
+    }
+    return false;
 }
 
 /// Best-effort session audit open for in-sandbox shims.
-/// - When parent set `ORCA_SHIM_AUDIT_MODE=degraded|skip`: skip open, no stderr
-///   (≤1 degraded line is the parent banner/receipt; never N× per shimmed cmd).
+/// - When parent **recorded** audit mode degraded|skip (session file): skip open,
+///   no stderr (≤1 degraded line is the parent banner; never N× per shimmed cmd).
+/// - Child-only `ORCA_SHIM_AUDIT_MODE` is ignored when a session id is present.
 /// - On control write-deny residuals without parent flag: warn on stderr and
 ///   return null (allow continues; deny still denies). Residual spam path when
 ///   parent did not mark attach.
@@ -216,7 +277,7 @@ fn openShimAuditBestEffort(
     stderr: anytype,
     env_map: *const std.process.Environ.Map,
 ) error{ShimAuditOpenFailed}!?core_api.AuditWriter {
-    if (shimAuditModeIsDegraded(env_map)) return null;
+    if (shimAuditModeIsDegraded(io, allocator, workspace_root, session_id, env_map)) return null;
     return core_api.openAuditWriter(io, allocator, workspace_root, session_id) catch |open_err| {
         if (isControlWriteDenyAuditError(open_err)) {
             stderr.print(
@@ -674,6 +735,7 @@ test "shim allow continues when audit open is control write-deny" {
 
 test "shim allow is silent when parent set ORCA_SHIM_AUDIT_MODE=degraded" {
     // E0: parent marks known-dead in-shim audit → no per-command stderr spam.
+    // Parent must record session shim_audit_mode (env alone is child-forgable).
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     var fx = try prepareShimExecFixture(.{
         .mode = "observe",
@@ -682,6 +744,7 @@ test "shim allow is silent when parent set ORCA_SHIM_AUDIT_MODE=degraded" {
     });
     defer fx.deinit();
     try makeSessionAuditNotWritable(fx.root, fx.session_id);
+    try writeSessionShimAuditMode(std.testing.io, std.testing.allocator, fx.root, fx.session_id, "degraded");
     try fx.env_map.put(shim_audit_mode_env, "degraded");
 
     var stderr_buf: [2048]u8 = undefined;
@@ -690,6 +753,26 @@ test "shim allow is silent when parent set ORCA_SHIM_AUDIT_MODE=degraded" {
     try std.testing.expectEqual(exit_codes.success, code);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "control write-deny") == null);
+}
+
+test "shim ignores child-only ORCA_SHIM_AUDIT_MODE without session file" {
+    // F36: agent export of degraded must not silence audit open failures.
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var fx = try prepareShimExecFixture(.{
+        .mode = "observe",
+        .real_bin = "true",
+        .shim_bin = "true",
+    });
+    defer fx.deinit();
+    try makeSessionAuditNotWritable(fx.root, fx.session_id);
+    try fx.env_map.put(shim_audit_mode_env, "degraded"); // child-only, no session file
+
+    var stderr_buf: [2048]u8 = undefined;
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try execWithEnv(std.testing.io, std.testing.allocator, &.{"true"}, &fx.env_map, &stderr_writer, shell_eval.mockDaemonAllowEvaluator);
+    try std.testing.expectEqual(exit_codes.success, code);
+    // Without parent session attestation, residual write-deny still warns.
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "control write-deny") != null);
 }
 
 test "shim deny still denies when ORCA_SHIM_AUDIT_MODE=degraded" {
@@ -703,6 +786,7 @@ test "shim deny still denies when ORCA_SHIM_AUDIT_MODE=degraded" {
     });
     defer fx.deinit();
     try makeSessionAuditNotWritable(fx.root, fx.session_id);
+    try writeSessionShimAuditMode(std.testing.io, std.testing.allocator, fx.root, fx.session_id, "degraded");
     try fx.env_map.put(shim_audit_mode_env, "degraded");
 
     var stderr_buf: [2048]u8 = undefined;

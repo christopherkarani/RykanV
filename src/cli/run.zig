@@ -547,6 +547,8 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     const shim_audit_degraded = apply_result.requiresChildApply();
     if (shim_audit_degraded) {
         try filtered_env.env_map.put("ORCA_SHIM_AUDIT_MODE", "degraded");
+        // Session-file attestation is written when the session id is known
+        // (see prepareSessionEnv next to writeSessionShimMode) — env alone is child-forgable.
     }
     // Phase 5: effective session sandbox grade for operators/agents (env + banner).
     // Escape (--network open / legacy) never reports strong-mediated.
@@ -943,6 +945,18 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 session.id.slice(),
                 self.effective_mode,
             );
+            // Parent-attested audit mode (F36): env alone is child-forgable.
+            if (self.env_map.get("ORCA_SHIM_AUDIT_MODE")) |mode| {
+                if (std.ascii.eqlIgnoreCase(mode, "degraded") or std.ascii.eqlIgnoreCase(mode, "skip")) {
+                    shim_mod.writeSessionShimAuditMode(
+                        self.audit_context.io,
+                        self.allocator,
+                        session.workspace_root,
+                        session.id.slice(),
+                        "degraded",
+                    ) catch {};
+                }
+            }
         }
 
         fn auditBackendCapability(self: *@This(), session: core.session.Session) !void {

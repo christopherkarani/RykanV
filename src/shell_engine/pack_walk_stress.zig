@@ -56,12 +56,37 @@ test "dcg pack walk stress evaluateCommand matrix" {
             continue;
         };
         defer parsed.deinit();
+        if (parsed.value != .object) {
+            crashes += 1;
+            continue;
+        }
         const obj = parsed.value.object;
-        const pack_id = obj.get("pack_id").?.string;
-        const pattern_name = obj.get("pattern_name").?.string;
-        const severity = obj.get("severity").?.string;
-        const regex_src = if (obj.get("regex")) |r| r.string else "";
-        const cands_val = obj.get("candidates").?.array;
+        // Fail closed on malformed rows — never force-unwrap past crash accounting (F218).
+        const pack_id_v = obj.get("pack_id") orelse {
+            crashes += 1;
+            continue;
+        };
+        const pattern_name_v = obj.get("pattern_name") orelse {
+            crashes += 1;
+            continue;
+        };
+        const severity_v = obj.get("severity") orelse {
+            crashes += 1;
+            continue;
+        };
+        const cands_v = obj.get("candidates") orelse {
+            crashes += 1;
+            continue;
+        };
+        if (pack_id_v != .string or pattern_name_v != .string or severity_v != .string or cands_v != .array) {
+            crashes += 1;
+            continue;
+        }
+        const pack_id = pack_id_v.string;
+        const pattern_name = pattern_name_v.string;
+        const severity = severity_v.string;
+        const regex_src = if (obj.get("regex")) |r| (if (r == .string) r.string else "") else "";
+        const cands_val = cands_v.array;
 
         // Validate which candidate actually matches the pack regex (PCRE2).
         var chosen: ?[]const u8 = null;
@@ -230,11 +255,16 @@ fn evaluateOne(allocator: std.mem.Allocator, command: []const u8, default_packs_
         // No permanent/allow-once — pure pack path.
     });
     defer eval.deinit(allocator);
+    const rule_id = if (eval.rule_id) |s| try allocator.dupe(u8, s) else null;
+    errdefer if (rule_id) |s| allocator.free(s);
+    const pack_id = if (eval.pack_id) |s| try allocator.dupe(u8, s) else null;
+    errdefer if (pack_id) |s| allocator.free(s);
+    const pattern_name = if (eval.pattern_name) |s| try allocator.dupe(u8, s) else null;
     return .{
         .decision = eval.decision,
-        .rule_id = if (eval.rule_id) |s| try allocator.dupe(u8, s) else null,
-        .pack_id = if (eval.pack_id) |s| try allocator.dupe(u8, s) else null,
-        .pattern_name = if (eval.pattern_name) |s| try allocator.dupe(u8, s) else null,
+        .rule_id = rule_id,
+        .pack_id = pack_id,
+        .pattern_name = pattern_name,
     };
 }
 

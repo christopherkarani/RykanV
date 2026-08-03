@@ -270,6 +270,7 @@ fn appendSection(
         var buf: [256]u8 = undefined;
         const raw = formatEntryLabel(&buf, e);
         const label = try gpa.dupe(u8, raw);
+        errdefer gpa.free(label);
         try owned.append(gpa, label);
         try rows.append(gpa, .{
             .kind = .entry,
@@ -534,8 +535,21 @@ pub fn run(io: std.Io, gpa: std.mem.Allocator, stdout: anytype, input: RunInput)
             );
         }
 
-        // Prefer transient toast; else show abbreviated write-target as sticky status.
-        const status_msg: []const u8 = if (status_len > 0) status_buf[0..status_len] else write_status;
+        // Prefer transient toast; else truncation honesty; else write-target sticky.
+        var trunc_buf: [64]u8 = undefined;
+        const trunc_status: ?[]const u8 = if (filt.total_match > filt.len) blk: {
+            break :blk std.fmt.bufPrint(
+                &trunc_buf,
+                "showing {d} of {d} rows (cap {d})",
+                .{ filt.len, filt.total_match, map_buf.len },
+            ) catch "list truncated (row cap)";
+        } else null;
+        const status_msg: []const u8 = if (status_len > 0)
+            status_buf[0..status_len]
+        else if (trunc_status) |t|
+            t
+        else
+            write_status;
         const footer = footerForRow(selected_row);
 
         if (!first_frame and frame_lines > 0) {
@@ -650,6 +664,8 @@ const FilteredView = struct {
     labels: []const []const u8,
     map: []const usize,
     len: usize,
+    /// Match count before the fixed display cap (512). When > len, UI must say so.
+    total_match: usize = 0,
 };
 
 fn buildFilteredView(
@@ -660,37 +676,40 @@ fn buildFilteredView(
 ) FilteredView {
     var n: usize = 0;
     const q = query orelse {
-        const cap = @min(model.rows.len, map_buf.len);
+        const total = model.rows.len;
+        const cap = @min(total, map_buf.len);
         var i: usize = 0;
         while (i < cap) : (i += 1) {
             map_buf[i] = i;
             label_buf[i] = model.labels[i];
         }
-        return .{ .labels = label_buf[0..cap], .map = map_buf[0..cap], .len = cap };
+        return .{ .labels = label_buf[0..cap], .map = map_buf[0..cap], .len = cap, .total_match = total };
     };
     if (q.len == 0) {
-        const cap = @min(model.rows.len, map_buf.len);
+        const total = model.rows.len;
+        const cap = @min(total, map_buf.len);
         var i: usize = 0;
         while (i < cap) : (i += 1) {
             map_buf[i] = i;
             label_buf[i] = model.labels[i];
         }
-        return .{ .labels = label_buf[0..cap], .map = map_buf[0..cap], .len = cap };
+        return .{ .labels = label_buf[0..cap], .map = map_buf[0..cap], .len = cap, .total_match = total };
     }
+    var total_match: usize = 0;
     for (model.rows, 0..) |row, i| {
-        if (n >= map_buf.len) break;
         // Always keep section headers so dual-layer structure remains visible;
         // filter entry/teach rows by substring (case-sensitive ASCII).
         const keep = row.kind == .section_header or
             std.mem.indexOf(u8, row.label, q) != null or
             std.mem.indexOf(u8, row.key, q) != null;
-        if (keep) {
-            map_buf[n] = i;
-            label_buf[n] = row.label;
-            n += 1;
-        }
+        if (!keep) continue;
+        total_match += 1;
+        if (n >= map_buf.len) continue;
+        map_buf[n] = i;
+        label_buf[n] = row.label;
+        n += 1;
     }
-    return .{ .labels = label_buf[0..n], .map = map_buf[0..n], .len = n };
+    return .{ .labels = label_buf[0..n], .map = map_buf[0..n], .len = n, .total_match = total_match };
 }
 
 // ── TTY helpers (mirrors scan/tui_view; keep local to exclusive write set) ──

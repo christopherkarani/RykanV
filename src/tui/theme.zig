@@ -109,9 +109,14 @@ pub fn parseOsc11Reply(reply: []const u8) Background {
     const scale = struct {
         fn to8(v: u32, digits: usize) u8 {
             if (digits == 0) return 0;
-            const max: u32 = (@as(u32, 1) << @intCast(digits * 4)) - 1;
+            // Cap digit width: OSC replies with >8 hex digits would shift past u32.
+            // Terminal RGB is 1–4 digits per channel in practice; treat wider as max.
+            const d: usize = @min(digits, 4);
+            const max: u32 = (@as(u32, 1) << @intCast(d * 4)) - 1;
             if (max == 0) return 0;
-            const scaled: u32 = (v * 255 + (max / 2)) / max;
+            // Use only the low `d` hex digits when the reply was over-wide.
+            const masked = if (digits > 4) v & max else v;
+            const scaled: u32 = (masked * 255 + (max / 2)) / max;
             return @intCast(@min(scaled, 255));
         }
     };
@@ -272,6 +277,12 @@ var test_reduced_motion: ?bool = null;
 pub fn setRichEnabled(enabled: bool) void {
     rich_enabled = enabled;
     resetCache();
+}
+
+/// Presentation policy: false after global `--no-rich` / `RYK_NO_RICH` / machine output.
+/// Used by TUI entry gates so stripped argv cannot re-open alt-screen browse.
+pub fn isRichEnabled() bool {
+    return rich_enabled;
 }
 
 pub fn setTestActive(value: ?Active) void {

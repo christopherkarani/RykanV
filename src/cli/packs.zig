@@ -137,7 +137,9 @@ fn runList(io: std.Io, argv: []const []const u8, options: Options, stdout: anyty
     const stdin_tty = std.Io.File.stdin().isTty(io) catch false;
     const stdout_tty = std.Io.File.stdout().isTty(io) catch false;
     if (packs_tui.wouldEnterPacksBrowse(stdin_tty, stdout_tty, argv, options.machine_json)) {
-        return runPacksBrowse(io, allocator, &catalog, options, stdout, stderr);
+        const code = try runPacksBrowse(io, allocator, &catalog, options, stdout, stderr);
+        // Tty.init failure after gate: fall through to linear (never green-paint empty success).
+        if (code != exit_codes.general) return code;
     }
 
     return renderHuman(allocator, io, options, catalog.packs, stdout, stderr);
@@ -185,15 +187,16 @@ fn runPacksBrowse(
         } else |_| {}
     } else |_| {}
 
-    // Full catalog first (C); `--filter` only seeds search. Sticky (A) keeps
-    // just-disabled rows when the user narrows with `a` (enabled-only).
+    // Default enabled+baseline (freeze / U04); `a` toggles full catalog. Sticky (A)
+    // keeps just-disabled rows when the user narrows with enabled-only.
+    // `--enabled` / `--installed` keep linear filter semantics via start mode.
     return packs_tui.runBrowse(io, allocator, stdout, stderr, .{
         .packs = refs,
         .enabled = enabled,
         .write_scope = write_scope,
         .write_path = write_path,
         .initial_query = options.filter,
-        .start_all = true,
+        .start_all = !options.installed,
     });
 }
 
@@ -1061,6 +1064,10 @@ test "s-packs: list real packs without daemon includes core.git enabled" {
 }
 
 test "s-packs: list --json stable schema with schema_version packs and counts" {
+    // Isolate XDG so developer user config (baseline opt-outs) cannot flip core.git.
+    var xdg = try sPacksIsolateXdgWithOperator();
+    defer xdg.deinit();
+
     var stdout_buf: [256 * 1024]u8 = undefined;
     var stderr_buf: [1024]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);

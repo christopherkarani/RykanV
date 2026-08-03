@@ -370,7 +370,8 @@ pub fn run(
 
 fn runLoop(io: std.Io, stdout: anytype, input: RunInput) !u8 {
     var tty_buf: [4096]u8 = undefined;
-    var tty = vaxis.tty.Tty.init(io, &tty_buf) catch return exit_codes.success;
+    // Fail closed: Tty.init failure is not a successful doctor run — fall to linear report.
+    var tty = vaxis.tty.Tty.init(io, &tty_buf) catch return exit_codes.general;
     defer tty.deinit();
 
     const saved = if (comptime builtin.os.tag != .windows)

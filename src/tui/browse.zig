@@ -401,11 +401,19 @@ fn writeDetailLine(io: std.Io, stdout: anytype, line: []const u8) !void {
     var safe_buf: [512]u8 = undefined;
     var safe_w: std.Io.Writer = .fixed(&safe_buf);
     terminal_text.write(&safe_w, line, .single_line) catch {
-        // Overflow / write error: fall back to truncated raw paint of prefix.
+        // Overflow / write error: never paint raw bytes (C0/CSI). Truncate + strip.
         const n = @min(line.len, safe_buf.len);
-        @memcpy(safe_buf[0..n], line[0..n]);
-        const kind = classifyDetailLine(safe_buf[0..n]);
-        try paintDetailKind(io, stdout, kind, safe_buf[0..n]);
+        var j: usize = 0;
+        var i: usize = 0;
+        while (i < n and j < safe_buf.len) : (i += 1) {
+            const c = line[i];
+            if (c < 0x20 or c == 0x7f) continue; // drop C0 / DEL
+            if (c == 0x1b) continue; // drop ESC (CSI/OSC introducer)
+            safe_buf[j] = c;
+            j += 1;
+        }
+        const kind = classifyDetailLine(safe_buf[0..j]);
+        try paintDetailKind(io, stdout, kind, safe_buf[0..j]);
         return;
     };
     const safe = safe_w.buffered();

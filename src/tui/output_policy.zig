@@ -36,13 +36,32 @@ pub fn argvDisablesTui(argv: []const []const u8) bool {
 
 /// Central pure TUI entry gate for packs / allowlist / doctor (and similar browse TUIs).
 ///
-/// Returns true only when both stdin and stdout are TTYs **and** argv does not
-/// request machine/plain/no-rich output. Inject TTY flags in tests — never requires
-/// a real Tty loop or alt-screen.
+/// Returns true only when:
+/// - both stdin and stdout are TTYs,
+/// - presentation policy still allows rich output (`rich=true`), and
+/// - argv does not request machine/plain/no-rich escapes.
 ///
-/// Fail-closed: non-TTY on either stream, or any recognised escape hatch → false.
+/// Production `parseGlobalArgs` **strips** `--no-rich` from argv and sets
+/// `theme.setRichEnabled(false)` via `output_policy.resolve`. Callers must pass
+/// that resolved `rich` (or use the 3-arg form which consults theme) so dual-TTY
+/// cannot open alt-screen after the flag is removed.
+///
+/// Fail-closed: non-TTY, rich disabled, or any recognised escape hatch → false.
 pub fn shouldEnterTui(stdin_is_tty: bool, stdout_is_tty: bool, argv: []const []const u8) bool {
+    // Consult presentation policy set by runWithCwd (covers stripped --no-rich + env).
+    return shouldEnterTuiWithRich(stdin_is_tty, stdout_is_tty, argv, @import("theme.zig").isRichEnabled());
+}
+
+/// Pure gate with explicit rich policy — preferred in composition tests that
+/// simulate global argv strip without mutating theme globals.
+pub fn shouldEnterTuiWithRich(
+    stdin_is_tty: bool,
+    stdout_is_tty: bool,
+    argv: []const []const u8,
+    rich: bool,
+) bool {
     if (!stdin_is_tty or !stdout_is_tty) return false;
+    if (!rich) return false;
     return !argvDisablesTui(argv);
 }
 
@@ -109,4 +128,23 @@ test "argvDisablesTui: pure escape detection without TTY" {
     try std.testing.expect(argvDisablesTui(&.{"--format=json"}));
     // Trailing --format without value is not a machine escape.
     try std.testing.expect(!argvDisablesTui(&.{"--format"}));
+}
+
+test "shouldEnterTuiWithRich: rich=false blocks even when argv no longer has --no-rich" {
+    // Production composition: parseGlobalArgs strips --no-rich; residual argv is bare.
+    const tty = true;
+    try std.testing.expect(!shouldEnterTuiWithRich(tty, tty, &.{"packs"}, false));
+    try std.testing.expect(!shouldEnterTuiWithRich(tty, tty, &.{ "allowlist", "list" }, false));
+    try std.testing.expect(!shouldEnterTuiWithRich(tty, tty, &.{ "--tui" }, false));
+    // rich=true still requires argv escapes to stay off.
+    try std.testing.expect(shouldEnterTuiWithRich(tty, tty, &.{"packs"}, true));
+    try std.testing.expect(!shouldEnterTuiWithRich(tty, tty, &.{ "packs", "--json" }, true));
+}
+
+test "shouldEnterTui: theme rich-disabled mirrors stripped --no-rich / RYK_NO_RICH" {
+    const theme = @import("theme.zig");
+    theme.setRichEnabled(false);
+    defer theme.setRichEnabled(true);
+    try std.testing.expect(!shouldEnterTui(true, true, &.{"packs"}));
+    try std.testing.expect(!shouldEnterTui(true, true, &.{ "allowlist", "list" }));
 }

@@ -214,7 +214,12 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         true,
         false,
     )) {
-        try runDoctorTui(io, allocator, stdout, os, backend_report, context);
+        const tui_code = try runDoctorTui(io, allocator, stdout, os, backend_report, context);
+        // Tty.init / loop failure → linear report (never green-paint empty TUI success).
+        if (tui_code != exit_codes.success) {
+            try stderr.writeAll(doctor_tui.fail_closed_message);
+            try writeReport(io, stdout, os, backend_report, context, options.verbose);
+        }
     } else {
         if (options.tui) {
             // Fail-closed: message + linear fallback (D2).
@@ -242,7 +247,7 @@ fn runDoctorTui(
     os: core.platform.Os,
     backend_report: sandbox.backend.ReportSet,
     context: IntegrationContext,
-) !void {
+) !u8 {
     const counts = countCapabilitySummary(os, backend_report);
     const policy_status = if (!context.policy_present)
         "no policy"
@@ -251,11 +256,8 @@ fn runDoctorTui(
     else
         "policy valid";
 
-    // Packs one-liner for Summary (same facts family as linear Packs section).
-    var packs_summary = if (context.daemon_health != .compatible)
-        pack_state.unknownPacksSummary()
-    else
-        pack_state.queryPacksSummaryDefault(io, allocator) catch pack_state.unknownPacksSummary();
+    // Packs one-liner for Summary — Zig inventory (not daemon-gated).
+    var packs_summary = pack_state.queryPacksSummaryDefault(io, allocator) catch pack_state.unknownPacksSummary();
     defer packs_summary.deinit(allocator);
 
     var packs_buf: [160]u8 = undefined;
@@ -324,7 +326,7 @@ fn runDoctorTui(
         .hermes_installed = context.hermes_installed,
     };
 
-    _ = try doctor_tui.run(io, allocator, stdout, .{
+    return try doctor_tui.run(io, allocator, stdout, .{
         .summary = summary,
         .hosts = host_facts,
         .capabilities = &cap_facts,
@@ -350,6 +352,11 @@ fn parseDoctorOptions(argv: []const []const u8, stderr: anytype) !DoctorOptions 
             options.json = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--plain") or std.mem.eql(u8, arg, "--no-rich")) {
+            // Linear report escape (matches help: non-TTY / --json / --plain).
+            // Also disables opt-in --tui via shouldEnterTui when still on argv.
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--tui")) {
             options.tui = true;
             continue;
@@ -372,7 +379,7 @@ fn parseDoctorOptions(argv: []const []const u8, stderr: anytype) !DoctorOptions 
             continue;
         }
         try suggestions.writeUnknownOption(stderr, "ryk doctor", arg, &.{
-            "--verbose", "-v", "--check", "--json", "--tui", "--fix", "--from-install", "--preset", "--help", "-h",
+            "--verbose", "-v", "--check", "--json", "--plain", "--no-rich", "--tui", "--fix", "--from-install", "--preset", "--help", "-h",
         }, "doctor");
         return error.Usage;
     }
@@ -804,10 +811,7 @@ fn writePacksSection(io: std.Io, stdout: anytype, context: IntegrationContext) !
     };
     defer if (config_path) |p| context.allocator.free(p);
 
-    if (context.daemon_health != .compatible) {
-        try pack_state.writeDoctorPacksSectionWithConfig(stdout, pack_state.unknownPacksSummary(), config_path, null);
-        return;
-    }
+    // RT-12: packs inventory is Zig in-process — do not hard-gate on daemon health.
     var summary = pack_state.queryPacksSummaryDefault(io, context.allocator) catch pack_state.unknownPacksSummary();
     defer summary.deinit(context.allocator);
     try pack_state.writeDoctorPacksSectionWithConfig(stdout, summary, config_path, null);
@@ -1499,7 +1503,8 @@ test "doctor recommendations prioritize daemon remediation over missing policy" 
     try std.testing.expect(std.mem.indexOf(u8, written, "ryk init --preset generic-agent") != null);
 }
 
-test "doctor packs section is unknown when daemon is unavailable" {
+test "doctor packs section stays known when daemon is unavailable" {
+    // RT-12 / F9: packs inventory is Zig monopath — not daemon-gated.
     var stdout_buf: [16384]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     const report = sandbox.backend.detect(.linux);
@@ -1512,9 +1517,14 @@ test "doctor packs section is unknown when daemon is unavailable" {
     try writeReport(std.testing.io, &stdout_writer, .linux, report, context, false);
     const written = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, written, "\nPacks\n") != null);
-    // RT-12: packs offline ≠ shell evaluate dead
-    try std.testing.expect(std.mem.indexOf(u8, written, "unknown (packs inventory offline") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "shell evaluate is Zig in-process") != null);
+    // Must not claim unknown solely because daemon is down.
+    try std.testing.expect(std.mem.indexOf(u8, written, "unknown (packs inventory offline") == null);
+    // Baseline / opt-in summary from oracle registry.
+    try std.testing.expect(
+        std.mem.indexOf(u8, written, "baseline") != null or
+            std.mem.indexOf(u8, written, "opt-in") != null or
+            std.mem.indexOf(u8, written, "Packs") != null,
+    );
     try std.testing.expect(std.mem.indexOf(u8, written, "shell evaluation fails closed") == null);
 }
 

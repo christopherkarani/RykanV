@@ -218,7 +218,91 @@ pub fn writeDoctorPacksSectionWithConfig(
     }
 }
 
-/// Query daemon packs JSON via ExecuteCli-compatible callback.
+/// Embedded oracle pack definitions (same source as shell_engine.registry / packs CLI).
+const packs_json = @embedFile("../shell_engine/oracle_packs.json");
+
+/// Query packs inventory in-process (Zig registry + pack_config). Never requires daemon.
+/// RT-12: doctor packs summary must stay available when daemon is unhealthy.
+pub fn queryPacksSummaryInProcess(io: std.Io, allocator: std.mem.Allocator) !PacksSummary {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, packs_json, .{}) catch {
+        return unknownPacksSummary();
+    };
+    defer parsed.deinit();
+    if (parsed.value != .array) return unknownPacksSummary();
+
+    const onboarding = @import("onboarding.zig");
+    const workspace_root = onboarding.resolveWorkspaceRoot(io, allocator) catch null;
+    defer if (workspace_root) |r| allocator.free(r);
+
+    var enabled_ids: []const []const u8 = &.{};
+    var disabled_ids: []const []const u8 = &.{};
+    var loaded: ?pack_config.LoadedPackIds = null;
+    defer if (loaded) |*l| l.deinit(allocator);
+
+    if (workspace_root) |root| {
+        loaded = pack_config.loadPackIdsForWorkspace(io, allocator, root) catch null;
+        if (loaded) |l| {
+            enabled_ids = l.enabled;
+            disabled_ids = l.disabled;
+        }
+    }
+
+    var opt_in: std.ArrayListUnmanaged([]const u8) = .empty;
+    errdefer {
+        for (opt_in.items) |id| allocator.free(id);
+        opt_in.deinit(allocator);
+    }
+
+    var total_enabled: usize = 0;
+    var total_available: usize = 0;
+    for (parsed.value.array.items) |item| {
+        if (item != .object) continue;
+        const id_val = item.object.get("id") orelse continue;
+        if (id_val != .string) continue;
+        const id = id_val.string;
+        if (std.mem.eql(u8, id, "test.deadline")) continue;
+        total_available += 1;
+        if (!packIsActiveForSummary(id, enabled_ids, disabled_ids)) continue;
+        total_enabled += 1;
+        if (isBaselinePackId(id)) continue;
+        const owned = try allocator.dupe(u8, id);
+        errdefer allocator.free(owned);
+        try opt_in.append(allocator, owned);
+    }
+    std.mem.sort([]const u8, opt_in.items, {}, struct {
+        fn less(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.order(u8, a, b) == .lt;
+        }
+    }.less);
+
+    return .{
+        .known = true,
+        .total_enabled = total_enabled,
+        .total_available = total_available,
+        .opt_in_ids = try opt_in.toOwnedSlice(allocator),
+        .owned = true,
+    };
+}
+
+fn packIdListedForSummary(pack_id: []const u8, ids: []const []const u8) bool {
+    for (ids) |id| {
+        if (std.mem.eql(u8, pack_id, id)) return true;
+        if (std.mem.indexOfScalar(u8, id, '.') == null and id.len > 0) {
+            if (pack_id.len > id.len and pack_id[id.len] == '.' and std.mem.startsWith(u8, pack_id, id)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+fn packIsActiveForSummary(id: []const u8, extra_enabled: []const []const u8, disabled: []const []const u8) bool {
+    if (packIdListedForSummary(id, disabled)) return false;
+    if (isBaselinePackId(id)) return true;
+    return packIdListedForSummary(id, extra_enabled);
+}
+
+/// Legacy daemon-callback path (tests / rare tooling). Prefer `queryPacksSummaryInProcess`.
 pub fn queryPacksSummary(
     comptime execute_cli: anytype,
     io: std.Io,
@@ -241,9 +325,9 @@ pub fn queryPacksSummary(
     return try summarizeFromPacksOutput(allocator, parsed.value);
 }
 
+/// Doctor / status default: Zig monopath (oracle registry + pack_config), not daemon.
 pub fn queryPacksSummaryDefault(io: std.Io, allocator: std.mem.Allocator) !PacksSummary {
-    const cli = @import("mod.zig");
-    return queryPacksSummary(cli.executeDaemonCli, io, allocator);
+    return queryPacksSummaryInProcess(io, allocator);
 }
 
 /// Ensure opt-in packs for `preset` are listed in the daemon-readable pack config.

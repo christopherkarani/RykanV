@@ -135,11 +135,14 @@ pub fn shellGate(host: []const u8) []const u8 {
 /// wired host hook that fires and honors veto can claim fail-closed shell.
 /// `wired` is doctor wired label: `"yes"` / `"partial"` / `"no"` / `"—"`.
 pub fn failStance(host: []const u8, hermes_fail_open: bool, wired: []const u8) []const u8 {
+    // RT-06: never claim fail-closed (or Hermes fail-open default as “policy stance”)
+    // when the host hook is unwired — process-wrap alone is not shell mediation.
+    const hook_wired = std.mem.eql(u8, wired, "yes") or std.mem.eql(u8, wired, "partial");
     if (std.mem.eql(u8, host, "hermes")) {
+        if (!hook_wired) return "unwired (no fail-closed shell)";
         return if (hermes_fail_open) "fail-open (default)" else "fail-closed";
     }
     if (std.mem.eql(u8, host, "pi")) return "mode-dependent";
-    const hook_wired = std.mem.eql(u8, wired, "yes") or std.mem.eql(u8, wired, "partial");
     if (!hook_wired) return "unwired (no fail-closed shell)";
     return "fail-closed shell";
 }
@@ -606,6 +609,10 @@ test "shellGate and failStance cover all P1 hosts" {
     try std.testing.expectEqualStrings("extension-managed (smoke not run)", shellGate("pi"));
     try std.testing.expectEqualStrings("fail-open (default)", failStance("hermes", true, "yes"));
     try std.testing.expectEqualStrings("fail-closed", failStance("hermes", false, "yes"));
+    // RT-06/H1: Hermes unwired must not claim fail-closed (or fail-open default as live stance).
+    try std.testing.expectEqualStrings("unwired (no fail-closed shell)", failStance("hermes", false, "no"));
+    try std.testing.expectEqualStrings("unwired (no fail-closed shell)", failStance("hermes", true, "—"));
+    try std.testing.expectEqualStrings("fail-open (default)", failStance("hermes", true, "partial"));
     try std.testing.expectEqualStrings("mode-dependent", failStance("pi", true, "yes"));
     try std.testing.expectEqualStrings("mode-dependent", failStance("pi", true, "no"));
     try std.testing.expectEqualStrings("fail-closed shell", failStance("codex", true, "yes"));

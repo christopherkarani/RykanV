@@ -101,8 +101,15 @@ pub fn writeTargetStatus(scope: pack_config.ConfigScope, path: []const u8) Write
     const scope_label = scope.label();
     // Prefer short path tail for status toast width.
     const display = pathTail(path, 48);
-    const written = std.fmt.bufPrint(&buf.bytes, "writes → {s} ({s})", .{ display, scope_label }) catch "writes → config";
-    buf.len = written.len;
+    // bufPrint into fixed bytes cannot fail with these short inputs; if it did,
+    // leave len=0 rather than pointing at a temporary string (F44).
+    if (std.fmt.bufPrint(&buf.bytes, "writes → {s} ({s})", .{ display, scope_label })) |written| {
+        buf.len = written.len;
+    } else |_| {
+        const fallback = "writes → config";
+        @memcpy(buf.bytes[0..fallback.len], fallback);
+        buf.len = fallback.len;
+    }
     return buf;
 }
 
@@ -247,8 +254,8 @@ pub const BrowseInput = struct {
     write_path: []const u8,
     /// Optional initial search term (from `--filter`).
     initial_query: ?[]const u8 = null,
-    /// Start in full-catalog mode (default true). False = enabled-only first.
-    start_all: bool = true,
+    /// Start in full-catalog mode. Default false = enabled+baseline first (freeze / U04).
+    start_all: bool = false,
 };
 
 /// Run the packs browse loop. Caller must have already gated with
@@ -298,7 +305,8 @@ fn runBrowseLoop(
     input: BrowseInput,
 ) !u8 {
     var tty_buf: [4096]u8 = undefined;
-    var tty = vaxis.tty.Tty.init(io, &tty_buf) catch return exit_codes.success;
+    // Fail closed: Tty.init failure must not green-paint success — caller falls to linear.
+    var tty = vaxis.tty.Tty.init(io, &tty_buf) catch return exit_codes.general;
     defer tty.deinit();
 
     const saved = if (comptime builtin.os.tag != .windows)
@@ -720,15 +728,17 @@ test "packs browse: sticky keeps just-disabled pack in enabled-only view" {
     try std.testing.expectEqual(@as(usize, 3), all_n);
 }
 
-test "packs browse: default open is full catalog (start_all true)" {
-    // C: BrowseInput defaults start_all=true so bare packs opens .all.
+test "packs browse: default open is enabled+baseline (start_all false)" {
+    // Freeze / U04: bare packs opens enabled+baseline; `a` toggles full catalog.
     const input: BrowseInput = .{
         .packs = &.{},
         .enabled = &.{},
         .write_scope = .user,
         .write_path = "user",
     };
-    try std.testing.expect(input.start_all);
+    try std.testing.expect(!input.start_all);
+    try std.testing.expect(std.mem.indexOf(u8, browseTitle(.enabled_baseline), "enabled") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footerActions(.enabled_baseline), "show all") != null);
     try std.testing.expect(std.mem.indexOf(u8, browseTitle(.all), "all") != null);
     try std.testing.expect(std.mem.indexOf(u8, footerActions(.all), "enabled only") != null);
 }
