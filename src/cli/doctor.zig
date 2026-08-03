@@ -658,7 +658,7 @@ fn writeHermesFailOpenWarning(io: std.Io, stdout: anytype, context: IntegrationC
 }
 
 fn writePiNote(stdout: anytype) !void {
-    try stdout.writeAll("\nPi: bundled extension setup is managed by `ryk start` (no npm step).\n");
+    try stdout.writeAll("\nPi: bundled extension setup is managed by `ryk doctor --fix` (no npm step).\n");
     try stdout.writeAll("  Process env/network isolation: ryk run -- pi · verify: ryk doctor\n");
 }
 
@@ -1404,11 +1404,14 @@ test "doctor host table lists managed hosts and shell gates" {
     try std.testing.expect(std.mem.indexOf(u8, written, "extension-managed (smoke not run)") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "SMOKE ALLOW") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "SMOKE DENY") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "Pi: bundled extension setup is managed by `ryk start`") != null);
+    // W1 message-migrate: Pi teach strings use doctor --fix (not start onboard).
+    try std.testing.expect(std.mem.indexOf(u8, written, "Pi: bundled extension setup is managed by `ryk doctor --fix`") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "ryk run -- pi") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "pi …") == null);
     try std.testing.expect(std.mem.indexOf(u8, written, "fix pi:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "run ryk start to install the bundled extension") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "ryk doctor --fix") != null);
+    // Forbidden start-onboard needle must not appear in rendered host table / Pi note.
+    try std.testing.expect(std.mem.indexOf(u8, written, "ryk" ++ " start") == null);
 }
 
 test "doctor warns when Hermes is installed with fail-open default" {
@@ -1849,6 +1852,181 @@ test "doctorFix --fix command path invokes ensure mutation door" {
     try std.testing.expect(doctorFixPathExists(tmp.dir, ".orca/policy.yaml"));
 }
 
+// ---------------------------------------------------------------------------
+// MessageMigrate — core CLI fix strings → doctor --fix (w1-message-migrate-core)
+// Named substring `MessageMigrate` for monopath filters. Co-located only; does
+// not implement production. Forbidden start-onboard needle is built via concat
+// so this pack never reintroduces the static rg gate needle in source text.
+// ---------------------------------------------------------------------------
+
+/// Contiguous start-onboard teach string forbidden by D07/D08/D36 for W1 doors.
+/// Constructed via concat so file source never contains the gate needle.
+const message_migrate_forbidden_start: []const u8 = "ryk" ++ " start";
+
+fn messageMigrateForbiddenStartNeedle() []const u8 {
+    return message_migrate_forbidden_start;
+}
+
+/// Full source of this file (prod + co-located tests) — gate polarity surface.
+fn messageMigrateDoctorSource() []const u8 {
+    return @embedFile("doctor.zig");
+}
+
+/// Production region only (everything before the first co-located test).
+fn messageMigrateDoctorProdSource() []const u8 {
+    return doctorFixProdSource();
+}
+
+/// Sibling plugin.zig (exclusive code_path for message migrate; tests live here).
+fn messageMigratePluginSource() []const u8 {
+    return @embedFile("plugin.zig");
+}
+
+/// Count non-overlapping occurrences (same algorithm as doctorFixCount).
+fn messageMigrateCount(hay: []const u8, needle: []const u8) usize {
+    return doctorFixCount(hay, needle);
+}
+
+test "MessageMigrate doctor production has zero start-onboard teach strings" {
+    // Acceptance (1)+(3): user-facing fix hints in doctor.zig must not teach
+    // start as required onboard. rg polarity: zero matches for the forbidden
+    // needle in production region (gate greens only when empty).
+    const prod = messageMigrateDoctorProdSource();
+    const forbidden = messageMigrateForbiddenStartNeedle();
+    try std.testing.expectEqual(@as(usize, 0), messageMigrateCount(prod, forbidden));
+}
+
+test "MessageMigrate doctor full source has zero start-onboard teach strings" {
+    // Acceptance (2)+(3): co-located tests updated off start teach-strings; full
+    // file (prod+tests) matches static gate polarity (empty match only).
+    const src = messageMigrateDoctorSource();
+    const forbidden = messageMigrateForbiddenStartNeedle();
+    try std.testing.expectEqual(@as(usize, 0), messageMigrateCount(src, forbidden));
+}
+
+test "MessageMigrate plugin source has zero start-onboard teach strings" {
+    // Acceptance (1)+(3): plugin.zig user-facing fix/help strings stop teaching
+    // start onboard. Static gate also covers plugin.zig; tested from doctor
+    // co-located pack (exclusive test_paths = doctor.zig only).
+    const src = messageMigratePluginSource();
+    const forbidden = messageMigrateForbiddenStartNeedle();
+    try std.testing.expectEqual(@as(usize, 0), messageMigrateCount(src, forbidden));
+}
+
+test "MessageMigrate doctor production teaches doctor --fix repair door" {
+    // Acceptance (1): fix hints → ryk doctor --fix. Production region must
+    // contain the taught repair door (live_smoke: rg doctor --fix doctor.zig).
+    const prod = messageMigrateDoctorProdSource();
+    try std.testing.expect(std.mem.indexOf(u8, prod, "doctor --fix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prod, "ryk doctor --fix") != null);
+
+    // Pi note is the primary doctor-owned teach string (not host_status residual).
+    const pi_note_marker = "Pi: bundled extension setup is managed by";
+    const pi_idx = std.mem.indexOf(u8, prod, pi_note_marker) orelse {
+        try std.testing.expect(false); // writePiNote must remain
+        return;
+    };
+    // Window around Pi note must teach doctor --fix, not start onboard.
+    const window_end = @min(prod.len, pi_idx + 200);
+    const pi_window = prod[pi_idx..window_end];
+    try std.testing.expect(std.mem.indexOf(u8, pi_window, "doctor --fix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pi_window, messageMigrateForbiddenStartNeedle()) == null);
+}
+
+test "MessageMigrate plugin fix strings teach doctor --fix with host plugin secondary only" {
+    // Acceptance (1): plugin fix hints → ryk doctor --fix; host-specific
+    // `ryk plugin install <host>` may remain as secondary only (not start).
+    const src = messageMigratePluginSource();
+    const forbidden = messageMigrateForbiddenStartNeedle();
+    try std.testing.expectEqual(@as(usize, 0), messageMigrateCount(src, forbidden));
+
+    // Repair door present in plugin user-facing surface.
+    try std.testing.expect(std.mem.indexOf(u8, src, "doctor --fix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "ryk doctor --fix") != null);
+
+    // Every `→ Fix:` line that still mentions plugin install must also teach
+    // doctor --fix on the same line (primary door; host plugin secondary).
+    var rest = src;
+    while (std.mem.indexOf(u8, rest, "→ Fix:")) |idx| {
+        const line_start = rest[idx..];
+        const line_end = std.mem.indexOfScalar(u8, line_start, '\n') orelse line_start.len;
+        const line = line_start[0..line_end];
+        if (std.mem.indexOf(u8, line, "plugin install") != null) {
+            try std.testing.expect(std.mem.indexOf(u8, line, "doctor --fix") != null);
+        }
+        // No Fix line may teach start onboard.
+        try std.testing.expect(std.mem.indexOf(u8, line, forbidden) == null);
+        rest = line_start[line_end..];
+    }
+
+    // Primary flow help must not teach start as required onboard door.
+    // After migrate: doctor --fix is the taught day-one/repair door.
+    if (std.mem.indexOf(u8, src, "Primary flow:")) |pf| {
+        const window_end = @min(src.len, pf + 160);
+        const window = src[pf..window_end];
+        try std.testing.expect(std.mem.indexOf(u8, window, forbidden) == null);
+        try std.testing.expect(std.mem.indexOf(u8, window, "doctor --fix") != null);
+    }
+
+    // Pi note(s) in plugin surface follow the same door.
+    var pi_rest = src;
+    while (std.mem.indexOf(u8, pi_rest, "bundled extension setup is managed by")) |idx| {
+        const window_end = @min(pi_rest.len, idx + 80);
+        const window = pi_rest[idx..window_end];
+        try std.testing.expect(std.mem.indexOf(u8, window, "doctor --fix") != null);
+        try std.testing.expect(std.mem.indexOf(u8, window, forbidden) == null);
+        pi_rest = pi_rest[idx + 1 ..];
+    }
+}
+
+test "MessageMigrate rendered doctor host table teaches doctor --fix not start" {
+    // Acceptance (1)+(2): runtime user-facing repair strings from doctor report
+    // teach doctor --fix; no start-onboard needle in rendered output.
+    var stdout_buf: [16384]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    const report = sandbox.backend.detect(.linux);
+    var context = try testContext(std.testing.allocator, .{});
+    defer context.deinit();
+
+    try writeReport(std.testing.io, &stdout_writer, .linux, report, context, false);
+    const written = stdout_writer.buffered();
+
+    try std.testing.expect(std.mem.indexOf(u8, written, "Host integrations") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "ryk doctor --fix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "Pi: bundled extension setup is managed by `ryk doctor --fix`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, messageMigrateForbiddenStartNeedle()) == null);
+    // Composition: never print "run <start-onboard>" as required next step.
+    const run_forbidden: []const u8 = "run " ++ ("ryk" ++ " start");
+    try std.testing.expect(std.mem.indexOf(u8, written, run_forbidden) == null);
+}
+
+test "MessageMigrate no new required-onboard references to start verb in exclusive files" {
+    // Acceptance (2): no new references to start as required onboard in
+    // doctor.zig + plugin.zig. Guards common teach patterns beyond bare needle.
+    const forbidden = messageMigrateForbiddenStartNeedle();
+    const doctor_src = messageMigrateDoctorSource();
+    const plugin_src = messageMigratePluginSource();
+
+    try std.testing.expectEqual(@as(usize, 0), messageMigrateCount(doctor_src, forbidden));
+    try std.testing.expectEqual(@as(usize, 0), messageMigrateCount(plugin_src, forbidden));
+
+    // Backtick-wrapped start command form used in Pi notes / help.
+    const bt_start = "`" ++ "ryk" ++ " start`";
+    try std.testing.expect(std.mem.indexOf(u8, doctor_src, bt_start) == null);
+    try std.testing.expect(std.mem.indexOf(u8, plugin_src, bt_start) == null);
+
+    // "or <forbidden>" / "re-run <forbidden>" fix-composition patterns.
+    const or_forbidden: []const u8 = "or " ++ ("ryk" ++ " start");
+    const rerun_forbidden: []const u8 = "re-run " ++ ("ryk" ++ " start");
+    try std.testing.expect(std.mem.indexOf(u8, plugin_src, or_forbidden) == null);
+    try std.testing.expect(std.mem.indexOf(u8, plugin_src, rerun_forbidden) == null);
+    try std.testing.expect(std.mem.indexOf(u8, doctor_src, or_forbidden) == null);
+
+    // Presence of the taught door in both exclusive code surfaces.
+    try std.testing.expect(std.mem.indexOf(u8, messageMigrateDoctorProdSource(), "doctor --fix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plugin_src, "doctor --fix") != null);
+}
+
 const TestContextOptions = struct {
     policy_present: bool = true,
     policy_valid: bool = true,
@@ -1920,7 +2098,8 @@ fn testHostRows(allocator: std.mem.Allocator) ![]HostDoctorRow {
         const fix = if (std.mem.eql(u8, h.name, "hermes"))
             try allocator.dupe(u8, "export ORCA_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes")
         else if (std.mem.eql(u8, h.name, "pi"))
-            try allocator.dupe(u8, "run ryk start to install the bundled extension")
+            // W1 message-migrate: co-located fixture teaches doctor --fix (not start).
+            try allocator.dupe(u8, "ryk doctor --fix  # install the bundled Pi extension")
         else
             try allocator.dupe(u8, "—");
         try list.append(allocator, .{

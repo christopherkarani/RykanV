@@ -466,7 +466,7 @@ pub fn collectPluginDoctorReportWithHermesSmoke(
         break :blk result.passed;
     };
     if (!hermes_hook_smoke_passed) {
-        try appendWarning(allocator, &warnings, "Hermes hook smoke test failed: reinstall the integration with `ryk start`");
+        try appendWarning(allocator, &warnings, "Hermes hook smoke test failed: reinstall the integration with `ryk doctor --fix`");
     }
 
     const os = core.platform.detectOs();
@@ -552,35 +552,35 @@ fn writeDoctorPlain(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, r
 
     try stdout.writeAll("\nPlugin directories:\n");
     try stdout.print("  integrations/common: {s}\n", .{if (report.plugin_directories.common) "found" else "missing"});
-    if (!report.plugin_directories.common) try stdout.writeAll("    → Fix: ryk start or ryk plugin install all\n");
+    if (!report.plugin_directories.common) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install all\n");
     try stdout.print("  integrations/codex-plugin: {s}\n", .{if (report.plugin_directories.codex) "found" else "missing"});
-    if (!report.plugin_directories.codex) try stdout.writeAll("    → Fix: ryk start or ryk plugin install codex\n");
+    if (!report.plugin_directories.codex) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install codex\n");
     try stdout.print("  integrations/claude-code-plugin: {s}\n", .{if (report.plugin_directories.claude) "found" else "missing"});
-    if (!report.plugin_directories.claude) try stdout.writeAll("    → Fix: ryk start or ryk plugin install claude\n");
+    if (!report.plugin_directories.claude) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install claude\n");
     try stdout.print("  integrations/opencode-plugin: {s}\n", .{if (report.plugin_directories.opencode) "found" else "missing"});
-    if (!report.plugin_directories.opencode) try stdout.writeAll("    → Fix: ryk start or ryk plugin install opencode\n");
+    if (!report.plugin_directories.opencode) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install opencode\n");
     try stdout.print("  integrations/openclaw-plugin: {s}\n", .{if (report.plugin_directories.openclaw) "found" else "missing"});
-    if (!report.plugin_directories.openclaw) try stdout.writeAll("    → Fix: ryk start or ryk plugin install openclaw\n");
+    if (!report.plugin_directories.openclaw) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install openclaw\n");
     try stdout.print("  integrations/hermes-plugin: {s}\n", .{if (report.plugin_directories.hermes) "found" else "missing"});
-    if (!report.plugin_directories.hermes) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
+    if (!report.plugin_directories.hermes) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install hermes\n");
 
     try stdout.writeAll("\nHost binaries:\n");
     try stdout.print("  codex: {s}\n", .{if (report.host_binaries.codex) "found in PATH" else "not found"});
-    if (!report.host_binaries.codex) try stdout.writeAll("    → Fix: ryk start or ryk plugin install codex\n");
+    if (!report.host_binaries.codex) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install codex\n");
     try stdout.print("  claude: {s}\n", .{if (report.host_binaries.claude) "found in PATH" else "not found"});
-    if (!report.host_binaries.claude) try stdout.writeAll("    → Fix: ryk start or ryk plugin install claude\n");
+    if (!report.host_binaries.claude) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install claude\n");
     try stdout.print("  opencode: {s}\n", .{if (report.host_binaries.opencode) "found in PATH" else "not found"});
-    if (!report.host_binaries.opencode) try stdout.writeAll("    → Fix: ryk start or ryk plugin install opencode\n");
+    if (!report.host_binaries.opencode) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install opencode\n");
     try stdout.print("  openclaw: {s}\n", .{if (report.host_binaries.openclaw) "found in PATH" else "not found"});
-    if (!report.host_binaries.openclaw) try stdout.writeAll("    → Fix: ryk start or ryk plugin install openclaw\n");
+    if (!report.host_binaries.openclaw) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install openclaw\n");
     try stdout.print("  hermes: {s}\n", .{if (report.host_binaries.hermes) "found in PATH" else "not found"});
-    if (!report.host_binaries.hermes) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
+    if (!report.host_binaries.hermes) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install hermes\n");
 
     try stdout.writeAll("\nMarketplace files:\n");
     try stdout.print("  .agents/plugins/marketplace.json: {s}\n", .{if (report.marketplace.codex_marketplace) "present" else "missing"});
-    if (!report.marketplace.codex_marketplace) try stdout.writeAll("    → Fix: ryk start or ryk plugin install codex\n");
+    if (!report.marketplace.codex_marketplace) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install codex\n");
     try stdout.print("  .claude-plugin/marketplace.json: {s}\n", .{if (report.marketplace.claude_marketplace) "present" else "missing"});
-    if (!report.marketplace.claude_marketplace) try stdout.writeAll("    → Fix: ryk start or ryk plugin install claude\n");
+    if (!report.marketplace.claude_marketplace) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install claude\n");
 
     try stdout.writeAll("\nPlatform:\n");
     try stdout.print("  {s}\n", .{report.platform_summary});
@@ -598,13 +598,13 @@ fn writeDoctorPlain(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, r
         .codex => {
             try stdout.writeAll("\nCodex plugin status:\n");
             try stdout.print("  host binary: {s}\n", .{if (report.host_binaries.codex) "detected" else "not detected"});
-            if (!report.host_binaries.codex) try stdout.writeAll("    → Fix: install Codex and re-run ryk start or ryk plugin install codex\n");
+            if (!report.host_binaries.codex) try stdout.writeAll("    → Fix: install Codex and re-run ryk doctor --fix or ryk plugin install codex\n");
             try stdout.print("  bundled plugin directory: {s}\n", .{if (report.plugin_directories.codex) "present" else "missing"});
             if (!report.plugin_directories.codex) try stdout.writeAll("    → Fix: reinstall ryk runtime assets\n");
             try stdout.print("  user plugin registration: {s}\n", .{if (report.marketplace.codex_user_plugin) "installed" else "missing"});
-            if (!report.marketplace.codex_user_plugin) try stdout.writeAll("    → Fix: ryk start or ryk plugin install codex\n");
+            if (!report.marketplace.codex_user_plugin) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install codex\n");
             try stdout.print("  marketplace file: {s}\n", .{if (report.marketplace.codex_marketplace) "present" else "missing"});
-            if (!report.marketplace.codex_marketplace) try stdout.writeAll("    → Fix: ryk start or ryk plugin install codex\n");
+            if (!report.marketplace.codex_marketplace) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install codex\n");
             try stdout.print("  bundled plugin manifest: {s}\n", .{if (report.marketplace.codex_plugin_manifest) "present" else "missing"});
             if (!report.marketplace.codex_plugin_manifest) try stdout.writeAll("    → Fix: reinstall ryk runtime assets\n");
             try stdout.writeAll("  install: use 'ryk plugin install codex --dry-run' to preview\n");
@@ -612,13 +612,13 @@ fn writeDoctorPlain(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, r
         .claude => {
             try stdout.writeAll("\nClaude Code plugin status:\n");
             try stdout.print("  host binary: {s}\n", .{if (report.host_binaries.claude) "detected" else "not detected"});
-            if (!report.host_binaries.claude) try stdout.writeAll("    → Fix: install Claude Code and re-run ryk start or ryk plugin install claude\n");
+            if (!report.host_binaries.claude) try stdout.writeAll("    → Fix: install Claude Code and re-run ryk doctor --fix or ryk plugin install claude\n");
             try stdout.print("  bundled plugin directory: {s}\n", .{if (report.plugin_directories.claude) "present" else "missing"});
             if (!report.plugin_directories.claude) try stdout.writeAll("    → Fix: reinstall ryk runtime assets\n");
             try stdout.print("  user plugin registration: {s}\n", .{if (report.marketplace.claude_user_plugin) "installed" else "missing"});
-            if (!report.marketplace.claude_user_plugin) try stdout.writeAll("    → Fix: ryk start or ryk plugin install claude\n");
+            if (!report.marketplace.claude_user_plugin) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install claude\n");
             try stdout.print("  marketplace file: {s}\n", .{if (report.marketplace.claude_marketplace) "present" else "missing"});
-            if (!report.marketplace.claude_marketplace) try stdout.writeAll("    → Fix: ryk start or ryk plugin install claude\n");
+            if (!report.marketplace.claude_marketplace) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install claude\n");
             try stdout.print("  bundled plugin manifest: {s}\n", .{if (report.marketplace.claude_plugin_manifest) "present" else "missing"});
             if (!report.marketplace.claude_plugin_manifest) try stdout.writeAll("    → Fix: reinstall ryk runtime assets\n");
             try stdout.writeAll("  install: use 'ryk plugin install claude --dry-run' to preview\n");
@@ -626,26 +626,26 @@ fn writeDoctorPlain(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, r
         .opencode => {
             try stdout.writeAll("\nOpenCode plugin status:\n");
             try stdout.print("  host binary: {s}\n", .{if (report.host_binaries.opencode) "detected" else "not detected"});
-            if (!report.host_binaries.opencode) try stdout.writeAll("    → Fix: ryk start or ryk plugin install opencode\n");
+            if (!report.host_binaries.opencode) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install opencode\n");
             try stdout.print("  plugin directory: {s}\n", .{if (report.plugin_directories.opencode) "present" else "not yet created"});
-            if (!report.plugin_directories.opencode) try stdout.writeAll("    → Fix: ryk start or ryk plugin install opencode\n");
+            if (!report.plugin_directories.opencode) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install opencode\n");
             try stdout.print("  project plugin path (.opencode/plugins/orca.ts): {s}\n", .{if (report.opencode_paths.project_plugin_exists) "exists" else "not found"});
-            if (!report.opencode_paths.project_plugin_exists) try stdout.writeAll("    → Fix: ryk start or ryk plugin install opencode\n");
+            if (!report.opencode_paths.project_plugin_exists) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install opencode\n");
             try stdout.print("  global plugin path (~/.config/opencode/plugins/orca.ts): {s}\n", .{if (report.opencode_paths.global_plugin_exists) "exists" else "not found"});
-            if (!report.opencode_paths.global_plugin_exists) try stdout.writeAll("    → Fix: ryk start or ryk plugin install opencode\n");
+            if (!report.opencode_paths.global_plugin_exists) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install opencode\n");
             try stdout.writeAll("  install: use 'ryk plugin install opencode --dry-run' to preview\n");
             try stdout.writeAll("  note: OpenCode plugin uses TypeScript hooks, not a manifest file\n");
         },
         .openclaw => {
             try stdout.writeAll("\nOpenClaw plugin status:\n");
             try stdout.print("  host binary: {s}\n", .{if (report.host_binaries.openclaw) "detected" else "not detected"});
-            if (!report.host_binaries.openclaw) try stdout.writeAll("    → Fix: install OpenClaw and re-run ryk start or ryk plugin install openclaw\n");
+            if (!report.host_binaries.openclaw) try stdout.writeAll("    → Fix: install OpenClaw and re-run ryk doctor --fix or ryk plugin install openclaw\n");
             try stdout.print("  bundled plugin directory: {s}\n", .{if (report.plugin_directories.openclaw) "present" else "missing"});
             if (!report.plugin_directories.openclaw) try stdout.writeAll("    → Fix: reinstall ryk runtime assets\n");
             try stdout.print("  host plugin installed: {s}\n", .{if (report.openclaw_paths.host_plugin_installed) "yes" else "no"});
-            if (!report.openclaw_paths.host_plugin_installed) try stdout.writeAll("    → Fix: ryk start or ryk plugin install openclaw\n");
+            if (!report.openclaw_paths.host_plugin_installed) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install openclaw\n");
             try stdout.print("  host plugin manifest (openclaw.plugin.json): {s}\n", .{if (report.openclaw_paths.plugin_manifest_exists) "exists" else "not found"});
-            if (!report.openclaw_paths.plugin_manifest_exists) try stdout.writeAll("    → Fix: ryk start or ryk plugin install openclaw\n");
+            if (!report.openclaw_paths.plugin_manifest_exists) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install openclaw\n");
             try stdout.print("  host package.json: {s}\n", .{if (report.openclaw_paths.package_json_exists) "exists" else "not found"});
             try stdout.print("  host source (src/index.ts): {s}\n", .{if (report.openclaw_paths.source_exists) "exists" else "not found"});
             try stdout.print("  detection note: {s}\n", .{report.openclaw_paths.detection_note});
@@ -654,21 +654,21 @@ fn writeDoctorPlain(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, r
         .hermes => {
             try stdout.writeAll("\nHermes plugin status:\n");
             try stdout.print("  host binary: {s}\n", .{if (report.host_binaries.hermes) "detected" else "not detected"});
-            if (!report.host_binaries.hermes) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
+            if (!report.host_binaries.hermes) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install hermes\n");
             try stdout.print("  plugin directory: {s}\n", .{if (report.plugin_directories.hermes) "present" else "not yet created"});
-            if (!report.plugin_directories.hermes) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
+            if (!report.plugin_directories.hermes) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install hermes\n");
             try stdout.print("  repo plugin.yaml: {s}\n", .{if (report.hermes_paths.repo_manifest_exists) "exists" else "not found"});
-            if (!report.hermes_paths.repo_manifest_exists) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
+            if (!report.hermes_paths.repo_manifest_exists) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install hermes\n");
             try stdout.print("  repo __init__.py: {s}\n", .{if (report.hermes_paths.repo_source_exists) "exists" else "not found"});
-            if (!report.hermes_paths.repo_source_exists) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
+            if (!report.hermes_paths.repo_source_exists) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install hermes\n");
             try stdout.print("  repo mapping.py: {s}\n", .{if (report.hermes_paths.repo_mapping_exists) "exists" else "not found"});
-            if (!report.hermes_paths.repo_mapping_exists) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
+            if (!report.hermes_paths.repo_mapping_exists) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install hermes\n");
             try stdout.print("  user plugin path (~/.hermes/plugins/orca/plugin.yaml): {s}\n", .{if (report.hermes_paths.user_manifest_exists) "exists" else "not found"});
-            if (!report.hermes_paths.user_manifest_exists) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
+            if (!report.hermes_paths.user_manifest_exists) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install hermes\n");
             try stdout.print("  user mapping.py: {s}\n", .{if (report.hermes_paths.user_mapping_exists) "exists" else "not found"});
-            if (!report.hermes_paths.user_mapping_exists) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
+            if (!report.hermes_paths.user_mapping_exists) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install hermes\n");
             try stdout.print("  config references plugin: {s}\n", .{if (report.hermes_paths.config_references_plugin) "yes" else "unknown/no"});
-            if (!report.hermes_paths.config_references_plugin) try stdout.writeAll("    → Fix: ryk start or ryk plugin install hermes\n");
+            if (!report.hermes_paths.config_references_plugin) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install hermes\n");
             const hermes_fail_open = host_status.hermesFailOpenFromEnv();
             try stdout.print("  fail stance: {s}\n", .{host_status.failStance("hermes", hermes_fail_open)});
             if (hermes_fail_open) {
@@ -807,7 +807,7 @@ fn writeUnifiedHostStatusTable(
         try stdout.print("  fix {s}: {s}\n", .{ line.host, line.fix });
     }
     if (include_pi) {
-        try stdout.writeAll("  note pi: bundled extension setup is managed by `ryk start` (no npm step)\n");
+        try stdout.writeAll("  note pi: bundled extension setup is managed by `ryk doctor --fix` (no npm step)\n");
         try stdout.writeAll("    → verify: ryk doctor · process isolation: ryk run -- pi\n");
     }
     if (hostPluginInstalledFromReport("hermes", report) and hermes_fail_open and (target == .all or target == .hermes)) {
@@ -1274,7 +1274,7 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
                 \\  ryk plugin install <target> --path <plugin-path> [--dry-run|--yes]
                 \\  ryk plugin install opencode --scope project|global [--dry-run|--yes]
                 \\
-                \\Primary flow: `ryk start` (guided auto-select on TTY). For advanced installs: `ryk plugin install <host>`. Mutation requires an explicit host or `all` plus --yes (or interactive confirm default No).
+                \\Primary flow: `ryk doctor --fix` (ensure + auto-wire). For advanced installs: `ryk plugin install <host>`. Mutation requires an explicit host or `all` plus --yes (or interactive confirm default No).
                 \\Options:
                 \\  --dry-run       Preview changes without mutating host config
                 \\  --all-detected  Only install for hosts found in PATH
@@ -1681,9 +1681,9 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
         }
     }
 
-    // Pi is managed by the unified start flow, not the legacy plugin subcommand.
+    // Pi is managed by ensure / doctor --fix, not the legacy plugin subcommand.
     if (!dry_run and (target == .all or all_detected)) {
-        try stdout.writeAll("\nPi: bundled extension setup is managed by `ryk start` (no npm step).\n");
+        try stdout.writeAll("\nPi: bundled extension setup is managed by `ryk doctor --fix` (no npm step).\n");
         try stdout.writeAll("  Verify: ryk doctor · process isolation: ryk run -- pi\n");
     }
 
