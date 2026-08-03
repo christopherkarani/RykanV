@@ -506,8 +506,9 @@ fn parseManagedYaml(allocator: std.mem.Allocator, text: []const u8) !ManagedStor
             if (rest[0] == '[') {
                 try parseFlowSequenceInto(allocator, rest, &cur_sources);
             } else {
-                // Single scalar source.
-                const owned = try allocator.dupe(u8, trimScalar(rest));
+                const tag = trimScalar(rest);
+                if (!isSafeSourceTag(tag)) continue;
+                const owned = try allocator.dupe(u8, tag);
                 errdefer allocator.free(owned);
                 try cur_sources.append(allocator, owned);
             }
@@ -517,7 +518,7 @@ fn parseManagedYaml(allocator: std.mem.Allocator, text: []const u8) !ManagedStor
         // Block source items under `sources:`.
         if (in_sources_block and std.mem.startsWith(u8, trimmed, "- ")) {
             const val = trimScalar(trimmed[2..]);
-            if (val.len == 0) continue;
+            if (val.len == 0 or !isSafeSourceTag(val)) continue;
             const owned = try allocator.dupe(u8, val);
             errdefer allocator.free(owned);
             try cur_sources.append(allocator, owned);
@@ -604,7 +605,7 @@ fn parseFlowSequenceInto(
     var it = std.mem.splitScalar(u8, body, ',');
     while (it.next()) |part| {
         const item = trimScalar(part);
-        if (item.len == 0) continue;
+        if (item.len == 0 or !isSafeSourceTag(item)) continue;
         const owned = try allocator.dupe(u8, item);
         errdefer allocator.free(owned);
         try out.append(allocator, owned);

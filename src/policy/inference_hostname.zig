@@ -172,7 +172,69 @@ fn isAcceptableHost(host: []const u8) bool {
     // OS-ambiguous IP spellings that validDomain would accept as "hostnames"
     // (macOS getaddrinfo: 127.1, 10.1, 0x7f000001, decimal dword, …).
     if (isAmbiguousIpLike(host)) return false;
+    // IP-embedded DNS rebinding (169.254.169.254.nip.io, 127.0.0.1.xip.io, …).
+    if (hasIpv4EmbeddedInDomain(host)) return false;
+    if (isDnsRebindingSuffix(host)) return false;
     return validDomain(host);
+}
+
+/// True when host has four consecutive all-digit labels forming an IPv4 dotted quad
+/// as a prefix of a longer domain (e.g. `10.0.0.1.evil.example`).
+fn hasIpv4EmbeddedInDomain(host: []const u8) bool {
+    var labels: [16][]const u8 = undefined;
+    var n: usize = 0;
+    var it = std.mem.splitScalar(u8, host, '.');
+    while (it.next()) |label| {
+        if (n >= labels.len) break;
+        labels[n] = label;
+        n += 1;
+    }
+    if (n < 5) return false; // need IPv4 + at least one more label
+    // Scan for four consecutive all-digit labels that form a valid IPv4.
+    var i: usize = 0;
+    while (i + 3 < n) : (i += 1) {
+        var ok = true;
+        var octets: [4]u8 = undefined;
+        var j: usize = 0;
+        while (j < 4) : (j += 1) {
+            const lab = labels[i + j];
+            if (!isAllAsciiDigits(lab) or lab.len == 0 or lab.len > 3) {
+                ok = false;
+                break;
+            }
+            if (lab.len > 1 and lab[0] == '0') {
+                ok = false;
+                break;
+            }
+            octets[j] = std.fmt.parseInt(u8, lab, 10) catch {
+                ok = false;
+                break;
+            };
+        }
+        if (ok) return true;
+    }
+    return false;
+}
+
+/// Known public DNS rebinding / wildcard-to-IP services (hostname suffix match).
+fn isDnsRebindingSuffix(host: []const u8) bool {
+    const suffixes = [_][]const u8{
+        "nip.io",
+        "xip.io",
+        "sslip.io",
+        "localtest.me",
+        "lvh.me",
+        "vcap.me",
+        "lacolhost.com",
+    };
+    for (suffixes) |suf| {
+        if (std.ascii.eqlIgnoreCase(host, suf)) return true;
+        if (host.len > suf.len + 1 and
+            host[host.len - suf.len - 1] == '.' and
+            std.ascii.eqlIgnoreCase(host[host.len - suf.len ..], suf))
+            return true;
+    }
+    return false;
 }
 
 /// Reject host spellings that look like incomplete/hex/decimal IPv4 and would
@@ -528,6 +590,22 @@ test "inference_hostname rejects OS-ambiguous IP-like host forms" {
         "2130706433",
         "0x7f.0.0.1",
         "127.0.0.01",
+    }) |field| {
+        const host = try extractHostname(allocator, field);
+        defer if (host) |h| allocator.free(h);
+        try std.testing.expect(host == null);
+    }
+}
+
+test "inference_hostname rejects IP-embedded DNS rebinding hosts" {
+    const allocator = std.testing.allocator;
+    for ([_][]const u8{
+        "169.254.169.254.nip.io",
+        "https://169.254.169.254.nip.io/latest/meta-data/",
+        "127.0.0.1.xip.io",
+        "10.0.0.1.sslip.io",
+        "evil.nip.io",
+        "foo.localtest.me",
     }) |field| {
         const host = try extractHostname(allocator, field);
         defer if (host) |h| allocator.free(h);

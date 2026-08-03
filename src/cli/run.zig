@@ -1822,10 +1822,11 @@ fn mergeDiscoveryIntoAllow(
 
     // All contrib strings are owned (duped managed + owned discover) so free is uniform.
     var contrib: std.ArrayList([]const u8) = .empty;
-    errdefer {
+    var contrib_live = true;
+    errdefer if (contrib_live) {
         for (contrib.items) |h| allocator.free(h);
         contrib.deinit(allocator);
-    }
+    };
 
     const key = host_key orelse "";
     if (key.len > 0) {
@@ -1852,6 +1853,7 @@ fn mergeDiscoveryIntoAllow(
 
     if (contrib.items.len == 0) {
         contrib.deinit(allocator);
+        contrib_live = false;
         return;
     }
 
@@ -1863,9 +1865,10 @@ fn mergeDiscoveryIntoAllow(
     );
     policy.schema.freeStringList(allocator, old_allow);
     selected_policy.network.allow = next;
-    // mergePreserve duped inputs — free our owned contrib list.
+    // mergePreserve duped inputs — free our owned contrib list; disarm errdefer.
     for (contrib.items) |h| allocator.free(h);
     contrib.deinit(allocator);
+    contrib_live = false;
 }
 
 fn requiresBackend(options: RunOptions, feature: sandbox.backend.Feature) bool {
