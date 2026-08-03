@@ -19,6 +19,7 @@ const onboarding = @import("onboarding.zig");
 const host_status = @import("host_status.zig");
 const pack_state = @import("pack_state.zig");
 const readiness = @import("readiness.zig");
+const ensure = @import("ensure.zig");
 
 const DoctorCapability = struct {
     label: []const u8,
@@ -127,6 +128,12 @@ const DoctorOptions = struct {
     verbose: bool = false,
     check: bool = false,
     json: bool = false,
+    /// Public repair door: early-branch to shared ensure (D40).
+    fix: bool = false,
+    /// Install-scope ensure: HOME + resource-root resolution (D32).
+    from_install: bool = false,
+    /// Optional preset for create-if-missing policy (null → ensure default).
+    preset: ?[]const u8 = null,
 };
 
 pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
@@ -141,6 +148,32 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_state.deinit();
     const allocator = gpa_state.allocator();
+
+    // Sole taught repair door (D40): --fix early-branches to ensure before any
+    // diagnose collect / daemon spawn. Exit map is ensure.processExitForOutcome
+    // (D25: 0 iff core_ok). No hard-dep on daemon ensure_running (D41).
+    // Default / --check / --json remain diagnose or probe-only (D42).
+    if (options.fix) {
+        var outcome = try ensure.runEnsure(
+            io,
+            allocator,
+            std.Io.Dir.cwd(),
+            .{
+                .from_install = options.from_install,
+                .quiet = false,
+                .preset = options.preset,
+                .skip_verify = false,
+            },
+            stdout,
+            stderr,
+        );
+        defer outcome.deinit(allocator);
+        // Honesty receipt for partial soft-success and core_failed (not silent on either).
+        if (outcome.protection_label == .partial or outcome.protection_label == .core_failed) {
+            try ensure.writeEnsureReceipt(stdout, outcome);
+        }
+        return ensure.processExitForOutcome(outcome);
+    }
 
     const os = core.platform.detectOs();
     const backend_report = sandbox.backend.detect(os);
@@ -173,7 +206,9 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
 
 fn parseDoctorOptions(argv: []const []const u8, stderr: anytype) !DoctorOptions {
     var options: DoctorOptions = .{};
-    for (argv) |arg| {
+    var i: usize = 0;
+    while (i < argv.len) : (i += 1) {
+        const arg = argv[i];
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) continue;
         if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--verbose")) {
             options.verbose = true;
@@ -187,7 +222,26 @@ fn parseDoctorOptions(argv: []const []const u8, stderr: anytype) !DoctorOptions 
             options.json = true;
             continue;
         }
-        try suggestions.writeUnknownOption(stderr, "ryk doctor", arg, &.{ "--verbose", "-v", "--check", "--json", "--help", "-h" }, "doctor");
+        if (std.mem.eql(u8, arg, "--fix")) {
+            options.fix = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--from-install")) {
+            options.from_install = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--preset")) {
+            i += 1;
+            if (i >= argv.len) {
+                try stderr.writeAll("ryk doctor: --preset requires a preset name.\n");
+                return error.Usage;
+            }
+            options.preset = argv[i];
+            continue;
+        }
+        try suggestions.writeUnknownOption(stderr, "ryk doctor", arg, &.{
+            "--verbose", "-v", "--check", "--json", "--fix", "--from-install", "--preset", "--help", "-h",
+        }, "doctor");
         return error.Usage;
     }
     return options;
@@ -604,7 +658,7 @@ fn writeHermesFailOpenWarning(io: std.Io, stdout: anytype, context: IntegrationC
 }
 
 fn writePiNote(stdout: anytype) !void {
-    try stdout.writeAll("\nPi: bundled extension setup is managed by `ryk start` (no npm step).\n");
+    try stdout.writeAll("\nPi: bundled extension setup is managed by `ryk doctor --fix` (no npm step).\n");
     try stdout.writeAll("  Process env/network isolation: ryk run -- pi · verify: ryk doctor\n");
 }
 
@@ -804,7 +858,7 @@ fn collectHostDoctorRows(io: std.Io, allocator: std.mem.Allocator) !HostDoctorSn
 
         const wired: []const u8 = if (installed) "yes" else if (detected) "no" else "—";
         const shell_gate = host_status.shellGate(host_name);
-        const fail_stance = host_status.failStance(host_name, hermes_fail_open);
+        const fail_stance = host_status.failStance(host_name, hermes_fail_open, wired);
         const smoke = host_status.HostSmokePair{};
         const fix = try host_status.formatFix(allocator, host_name, wired, smoke, hermes_fail_open);
 
@@ -829,7 +883,7 @@ fn collectHostDoctorRows(io: std.Io, allocator: std.mem.Allocator) !HostDoctorSn
             .host = try allocator.dupe(u8, "pi"),
             .wired = try allocator.dupe(u8, wired),
             .shell_gate = try allocator.dupe(u8, host_status.shellGate("pi")),
-            .fail_stance = try allocator.dupe(u8, host_status.failStance("pi", hermes_fail_open)),
+            .fail_stance = try allocator.dupe(u8, host_status.failStance("pi", hermes_fail_open, wired)),
             .smoke_allow = try allocator.dupe(u8, smoke.allow.toString()),
             .smoke_deny = try allocator.dupe(u8, smoke.deny.toString()),
             .fix = fix,
@@ -1326,8 +1380,10 @@ test "doctor packs section is unknown when daemon is unavailable" {
     try writeReport(std.testing.io, &stdout_writer, .linux, report, context, false);
     const written = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, written, "\nPacks\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "unknown (daemon unavailable") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "fails closed") != null);
+    // RT-12: packs offline ≠ shell evaluate dead
+    try std.testing.expect(std.mem.indexOf(u8, written, "unknown (packs inventory offline") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "shell evaluate is Zig in-process") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "shell evaluation fails closed") == null);
 }
 
 test "doctor host table lists managed hosts and shell gates" {
@@ -1350,11 +1406,14 @@ test "doctor host table lists managed hosts and shell gates" {
     try std.testing.expect(std.mem.indexOf(u8, written, "extension-managed (smoke not run)") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "SMOKE ALLOW") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "SMOKE DENY") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "Pi: bundled extension setup is managed by `ryk start`") != null);
+    // W1 message-migrate: Pi teach strings use doctor --fix (not start onboard).
+    try std.testing.expect(std.mem.indexOf(u8, written, "Pi: bundled extension setup is managed by `ryk doctor --fix`") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "ryk run -- pi") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "pi …") == null);
     try std.testing.expect(std.mem.indexOf(u8, written, "fix pi:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "run ryk start to install the bundled extension") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "ryk doctor --fix") != null);
+    // Forbidden start-onboard needle must not appear in rendered host table / Pi note.
+    try std.testing.expect(std.mem.indexOf(u8, written, "ryk" ++ " start") == null);
 }
 
 test "doctor warns when Hermes is installed with fail-open default" {
@@ -1416,6 +1475,697 @@ test "doctor parseDoctorOptions accepts --check and --json" {
     try std.testing.expect(opts.check);
     try std.testing.expect(opts.json);
     try std.testing.expect(opts.verbose);
+}
+
+// ---------------------------------------------------------------------------
+// doctorFix — public `ryk doctor --fix` → ensure (w1-doctor-fix)
+// Named substring `doctorFix` is the monopath gate proof (D77).
+// Production contracts only — co-located test region is stripped for monopath.
+// ---------------------------------------------------------------------------
+
+/// Production region of this file (everything before the first co-located test).
+fn doctorFixProdSource() []const u8 {
+    const src = @embedFile("doctor.zig");
+    if (std.mem.indexOf(u8, src, "\ntest \"")) |idx| return src[0..idx];
+    return src;
+}
+
+/// True when path under dir exists (policy / host artifact probe for mutation oracles).
+fn doctorFixPathExists(dir: std.Io.Dir, sub_path: []const u8) bool {
+    dir.access(std.testing.io, sub_path, .{}) catch return false;
+    return true;
+}
+
+/// Count non-overlapping occurrences of `needle` in `hay`.
+fn doctorFixCount(hay: []const u8, needle: []const u8) usize {
+    var n: usize = 0;
+    var rest = hay;
+    while (std.mem.indexOf(u8, rest, needle)) |idx| {
+        n += 1;
+        rest = rest[idx + needle.len ..];
+    }
+    return n;
+}
+
+/// Production strip from exclusive `if (options.fix)` through first diagnose collect.
+/// Empty when the exclusive fix gate or collect site is missing (intentional RED).
+fn doctorFixWindow() []const u8 {
+    const prod = doctorFixProdSource();
+    const fix_if = std.mem.indexOf(u8, prod, "if (options.fix)") orelse return "";
+    const collect = std.mem.indexOf(u8, prod, "collectIntegrationContext") orelse return "";
+    if (fix_if >= collect) return "";
+    return prod[fix_if..collect];
+}
+
+test "doctorFix parseDoctorOptions accepts --fix and optional --from-install / --preset" {
+    // Acceptance (1): parseDoctorOptions accepts --fix and optional
+    // --from-install / --preset. DoctorOptions must surface fix / from_install /
+    // preset fields for the ensure early branch (D32/D40).
+    var stderr_buf: [256]u8 = undefined;
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    // --fix alone: repair door without install scope.
+    {
+        const opts = try parseDoctorOptions(&.{"--fix"}, &stderr_writer);
+        try std.testing.expect(opts.fix);
+        try std.testing.expect(!opts.from_install);
+        try std.testing.expect(opts.preset == null);
+        try std.testing.expect(!opts.check);
+        try std.testing.expect(!opts.json);
+    }
+
+    // Optional install-scope + preset value (space-separated, start monopath).
+    {
+        const opts = try parseDoctorOptions(
+            &.{ "--fix", "--from-install", "--preset", "generic-agent" },
+            &stderr_writer,
+        );
+        try std.testing.expect(opts.fix);
+        try std.testing.expect(opts.from_install);
+        try std.testing.expect(opts.preset != null);
+        try std.testing.expectEqualStrings("generic-agent", opts.preset.?);
+    }
+
+    // --from-install / --preset parse without forcing check/json probe modes.
+    {
+        const opts = try parseDoctorOptions(&.{ "--fix", "--from-install" }, &stderr_writer);
+        try std.testing.expect(opts.fix);
+        try std.testing.expect(opts.from_install);
+        try std.testing.expect(!opts.check);
+        try std.testing.expect(!opts.json);
+    }
+}
+
+test "doctorFix help documents --fix" {
+    // Acceptance (1): help documents --fix (usage + completion flags).
+    // Exclusive production edit is help.zig doctor section; seam is findCommand.
+    const info = help.findCommand("doctor") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, info.usage, "--fix") != null);
+
+    var lists_fix = false;
+    for (info.additional_completion_flags) |flag| {
+        if (std.mem.eql(u8, flag, "--fix")) lists_fix = true;
+    }
+    try std.testing.expect(lists_fix);
+
+    // Operator-facing details or examples must teach the repair door.
+    var teaches_fix = false;
+    for (info.examples) |example| {
+        if (std.mem.indexOf(u8, example, "--fix") != null) teaches_fix = true;
+    }
+    for (info.details) |line| {
+        if (std.mem.indexOf(u8, line, "--fix") != null) teaches_fix = true;
+    }
+    try std.testing.expect(teaches_fix);
+}
+
+test "doctorFix early-branches to ensure with processExitForOutcome (D40/D25)" {
+    // Acceptance (2): --fix early-branches to ensure; does not inherit diagnose
+    // exit from host soft fails. Production must call ensure.runEnsure and map via
+    // processExitForOutcome under an exclusive `if (options.fix)` window that
+    // returns before collectIntegrationContext (D40).
+    const prod = doctorFixProdSource();
+    const window = doctorFixWindow();
+    try std.testing.expect(window.len > 0);
+
+    // Exclusive fix gate (not a bare options.fix token elsewhere).
+    try std.testing.expect(std.mem.indexOf(u8, prod, "if (options.fix)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, window, "runEnsure") != null);
+    try std.testing.expect(std.mem.indexOf(u8, window, "processExitForOutcome") != null);
+
+    // Return the ensure exit map from the fix window — discard / fall-through fails.
+    const returns_map =
+        std.mem.indexOf(u8, window, "return processExitForOutcome") != null or
+        std.mem.indexOf(u8, window, "return ensure.processExitForOutcome") != null;
+    try std.testing.expect(returns_map);
+
+    // Plumb CLI install-scope into EnsureOptions (not DoctorOptions fields alone).
+    try std.testing.expect(std.mem.indexOf(u8, window, "options.from_install") != null);
+    try std.testing.expect(std.mem.indexOf(u8, window, "options.preset") != null);
+
+    // Ensure module import for runEnsure / processExitForOutcome.
+    const imports_ensure =
+        std.mem.indexOf(u8, prod, "@import(\"ensure.zig\")") != null or
+        std.mem.indexOf(u8, prod, "cli.ensure") != null;
+    try std.testing.expect(imports_ensure);
+}
+
+test "doctorFix exit 0 iff ensure core_ok (D25)" {
+    // Acceptance (2): exit 0 iff ensure core_ok. Composition with frozen ensure
+    // processExitForOutcome — doctor --fix must return that map (not diagnose exit).
+    const ensure_mod = @import("ensure.zig");
+
+    var ok_outcome = ensure_mod.EnsureOutcome{
+        .core_ok = true,
+        .hosts = &.{},
+        .policy_created = false,
+        .policy_left_alone = true,
+        .protection_label = .partial,
+        .hosts_owned = false,
+    };
+    defer ok_outcome.deinit(std.testing.allocator);
+    try std.testing.expectEqual(exit_codes.success, ensure_mod.processExitForOutcome(ok_outcome));
+    try std.testing.expectEqual(@as(u8, 0), ensure_mod.processExitForOutcome(ok_outcome));
+
+    var fail_outcome = ensure_mod.EnsureOutcome{
+        .core_ok = false,
+        .hosts = &.{},
+        .policy_created = false,
+        .policy_left_alone = false,
+        .protection_label = .core_failed,
+        .hosts_owned = false,
+    };
+    defer fail_outcome.deinit(std.testing.allocator);
+    const fail_code = ensure_mod.processExitForOutcome(fail_outcome);
+    try std.testing.expect(fail_code != exit_codes.success);
+    try std.testing.expect(fail_code != 0);
+
+    // Doctor fix window must return processExitForOutcome — not readiness.exitCode.
+    const window = doctorFixWindow();
+    try std.testing.expect(window.len > 0);
+    const returns_map =
+        std.mem.indexOf(u8, window, "return processExitForOutcome") != null or
+        std.mem.indexOf(u8, window, "return ensure.processExitForOutcome") != null;
+    try std.testing.expect(returns_map);
+    // Diagnose-style exit helpers must not own the fix early-return.
+    try std.testing.expect(std.mem.indexOf(u8, window, "exitCode(options.check)") == null);
+    try std.testing.expect(std.mem.indexOf(u8, window, "core_ready.exitCode") == null);
+}
+
+test "doctorFix has no hard-dep on daemon ensure_running (D41)" {
+    // Acceptance (2): --fix must not require daemon ensure_running as a hard dep.
+    // Early-branch to ensure must precede collectIntegrationContext so fix does not
+    // inherit the diagnose path's ensure_running = !(check or json) spawn contract.
+    const prod = doctorFixProdSource();
+    const window = doctorFixWindow();
+    try std.testing.expect(window.len > 0);
+
+    const fix_if = std.mem.indexOf(u8, prod, "if (options.fix)") orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    const collect_idx = std.mem.indexOf(u8, prod, "collectIntegrationContext") orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    try std.testing.expect(fix_if < collect_idx);
+
+    // runEnsure lives only inside the fix window (before diagnose collect).
+    try std.testing.expect(std.mem.indexOf(u8, window, "runEnsure") != null);
+    const after_collect = prod[collect_idx..];
+    try std.testing.expect(std.mem.indexOf(u8, after_collect, "runEnsure") == null);
+
+    // Must not hard-code ensure_running = true for the fix door.
+    try std.testing.expect(std.mem.indexOf(u8, prod, "ensure_running = true") == null);
+    // Fix window itself must not force daemon ensure_running.
+    try std.testing.expect(std.mem.indexOf(u8, window, "ensure_running = true") == null);
+}
+
+test "doctorFix runEnsure is exclusive to if (options.fix) early return" {
+    // Acceptance (2)+(3) structural: always-call runEnsure then optional fix return
+    // must not green. runEnsure appears only under if (options.fix) … return map,
+    // never after diagnose collect, and at most once in production.
+    const prod = doctorFixProdSource();
+    const window = doctorFixWindow();
+    try std.testing.expect(window.len > 0);
+
+    try std.testing.expectEqual(@as(usize, 1), doctorFixCount(prod, "runEnsure"));
+    try std.testing.expectEqual(@as(usize, 1), doctorFixCount(window, "runEnsure"));
+
+    // Window must early-return the ensure map before collect can run.
+    const returns_map =
+        std.mem.indexOf(u8, window, "return processExitForOutcome") != null or
+        std.mem.indexOf(u8, window, "return ensure.processExitForOutcome") != null;
+    try std.testing.expect(returns_map);
+
+    // Diagnose path remains present after the fix gate (not deleted for monopath).
+    try std.testing.expect(std.mem.indexOf(u8, prod, "writeReport") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prod, "collectIntegrationContext") != null);
+}
+
+test "doctorFix default doctor is diagnose-only" {
+    // Acceptance (2): default doctor diagnose-only (no --fix → no ensure mutation).
+    var stderr_buf: [64]u8 = undefined;
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const opts = try parseDoctorOptions(&.{}, &stderr_writer);
+    try std.testing.expect(!opts.fix);
+    try std.testing.expect(!opts.from_install);
+    try std.testing.expect(opts.preset == null);
+    try std.testing.expect(!opts.check);
+    try std.testing.expect(!opts.json);
+
+    // Verbose-only remains diagnose (no fix).
+    const verbose_opts = try parseDoctorOptions(&.{"--verbose"}, &stderr_writer);
+    try std.testing.expect(verbose_opts.verbose);
+    try std.testing.expect(!verbose_opts.fix);
+
+    // Production: diagnose render path present; ensure call exclusive to fix window.
+    const prod = doctorFixProdSource();
+    try std.testing.expect(std.mem.indexOf(u8, prod, "writeReport") != null);
+    const window = doctorFixWindow();
+    try std.testing.expect(window.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, window, "runEnsure") != null);
+    // After collect there is no second ensure door.
+    if (std.mem.indexOf(u8, prod, "collectIntegrationContext")) |collect_idx| {
+        try std.testing.expect(std.mem.indexOf(u8, prod[collect_idx..], "runEnsure") == null);
+    } else {
+        try std.testing.expect(false);
+    }
+}
+
+test "doctorFix --check and --json remain probe-only (D42)" {
+    // Acceptance (3): --check / --json remain probe-only (no ensure, no host mutation).
+    var stderr_buf: [64]u8 = undefined;
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    {
+        const opts = try parseDoctorOptions(&.{"--check"}, &stderr_writer);
+        try std.testing.expect(opts.check);
+        try std.testing.expect(!opts.fix);
+        try std.testing.expect(!opts.from_install);
+    }
+    {
+        const opts = try parseDoctorOptions(&.{"--json"}, &stderr_writer);
+        try std.testing.expect(opts.json);
+        try std.testing.expect(!opts.fix);
+        try std.testing.expect(!opts.from_install);
+    }
+    {
+        const opts = try parseDoctorOptions(&.{ "--check", "--json" }, &stderr_writer);
+        try std.testing.expect(opts.check);
+        try std.testing.expect(opts.json);
+        try std.testing.expect(!opts.fix);
+    }
+
+    // Production: probe modes still force ensure_running false; runEnsure is fix-only.
+    const prod = doctorFixProdSource();
+    try std.testing.expect(std.mem.indexOf(u8, prod, "options.check") != null or
+        std.mem.indexOf(u8, prod, "options.check or") != null or
+        std.mem.indexOf(u8, prod, "!(options.check or options.json)") != null);
+    const probe_gate =
+        std.mem.indexOf(u8, prod, "ensure_running") != null and
+        (std.mem.indexOf(u8, prod, "options.check") != null or
+            std.mem.indexOf(u8, prod, "options.json") != null);
+    try std.testing.expect(probe_gate);
+
+    // Structural: single runEnsure only inside if (options.fix) window; not after collect.
+    const window = doctorFixWindow();
+    try std.testing.expect(window.len > 0);
+    try std.testing.expectEqual(@as(usize, 1), doctorFixCount(prod, "runEnsure"));
+    try std.testing.expect(std.mem.indexOf(u8, window, "runEnsure") != null);
+    if (std.mem.indexOf(u8, prod, "collectIntegrationContext")) |collect_idx| {
+        try std.testing.expect(std.mem.indexOf(u8, prod[collect_idx..], "runEnsure") == null);
+    } else {
+        try std.testing.expect(false);
+    }
+}
+
+test "doctorFix probe and default command paths do not create policy (no host mutation)" {
+    // Acceptance (2) default diagnose-only + (3) --check/--json probe-only:
+    // Behavioral monopath under isolated tmpDir (zig-cache ceiling so ensure would
+    // write here if always-called). Probe doors must leave fixture without policy.
+    // Default/verbose diagnose-only is locked structurally (exclusive if (options.fix)
+    // window + parse !fix); runtime oracle here uses --check/--json so the path
+    // forces ensure_running=false and never spawns the daemon.
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+
+    const modes = [_][]const []const u8{
+        &.{"--check"},
+        &.{"--json"},
+        &.{ "--check", "--json" },
+    };
+
+    for (modes) |argv| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        try tmp.dir.createDirPath(io, ".git");
+
+        try std.testing.expect(!doctorFixPathExists(tmp.dir, ".orca/policy.yaml"));
+        try std.testing.expect(!doctorFixPathExists(tmp.dir, ".orca"));
+
+        const prev_cwd = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
+        defer allocator.free(prev_cwd);
+        try std.process.setCurrentDir(io, tmp.dir);
+        defer std.process.setCurrentPath(io, prev_cwd) catch {};
+
+        var stdout_buf: [65536]u8 = undefined;
+        var stderr_buf: [4096]u8 = undefined;
+        var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+        var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+        // Probe must not error-hard on missing policy; diagnose/readiness only.
+        _ = try command(io, argv, &stdout_writer, &stderr_writer);
+
+        try std.testing.expect(!doctorFixPathExists(tmp.dir, ".orca/policy.yaml"));
+        // ensure create-if-missing writes .orca/ — must stay absent on probe doors.
+        try std.testing.expect(!doctorFixPathExists(tmp.dir, ".orca"));
+    }
+}
+
+test "doctorFix --fix command path invokes ensure mutation door" {
+    // Acceptance (2): --fix early-branches to ensure. Contrast with probe-only:
+    // under empty tmpDir, doctor --fix must create-if-missing .orca/policy.yaml
+    // (ensure core). Host wire may soft-fail under zig-test binary; policy create is
+    // the greppable ensure side effect. RED until production wires the fix door.
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, ".git");
+
+    try std.testing.expect(!doctorFixPathExists(tmp.dir, ".orca/policy.yaml"));
+
+    const prev_cwd = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(prev_cwd);
+    try std.process.setCurrentDir(io, tmp.dir);
+    defer std.process.setCurrentPath(io, prev_cwd) catch {};
+
+    var stdout_buf: [65536]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try command(io, &.{"--fix"}, &stdout_writer, &stderr_writer);
+    // Exit map: core_ok → 0. Policy create under empty fixture should core_ok.
+    try std.testing.expectEqual(exit_codes.success, code);
+    try std.testing.expect(doctorFixPathExists(tmp.dir, ".orca/policy.yaml"));
+}
+
+// ---------------------------------------------------------------------------
+// doctorFix pack hub — w1-ensure-tests-pack composition + D06 receipt honesty
+// Named-run gate still --filter doctorFix.
+// ---------------------------------------------------------------------------
+
+fn doctorFixSha256(bytes: []const u8) [32]u8 {
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    return digest;
+}
+
+fn doctorFixClaimsFullProtection(text: []const u8) bool {
+    // Shared D06 forbid-list with ensure (case-insensitive).
+    return ensure.ensureSoftClaimsFullProtection(text);
+}
+
+test "doctorFix composition ensure writer then doctor check observes policy without second write" {
+    // Composition acceptance: writer ensure under fixture → loader doctor diagnose
+    // (--check probe) observes same policy artifact without second write.
+    // Note: --check exit may be non-zero when daemon is unavailable (readiness gate);
+    // composition oracle is hash stability + no rewrite, not core readiness green.
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, ".git");
+
+    const prev_cwd = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(prev_cwd);
+    try std.process.setCurrentDir(io, tmp.dir);
+    defer std.process.setCurrentPath(io, prev_cwd) catch {};
+
+    var stdout_buf: [65536]u8 = undefined;
+    var stderr_buf: [8192]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    // Writer: doctor --fix → ensure create-if-missing.
+    const fix_code = try command(io, &.{"--fix"}, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, fix_code);
+    try std.testing.expect(doctorFixPathExists(tmp.dir, ".orca/policy.yaml"));
+
+    const before = try tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(64 * 1024));
+    defer allocator.free(before);
+    const before_hash = doctorFixSha256(before);
+
+    // Loader: --check is probe-only (D42) — must not rewrite policy (may fail readiness).
+    stdout_writer = .fixed(&stdout_buf);
+    stderr_writer = .fixed(&stderr_buf);
+    _ = try command(io, &.{"--check"}, &stdout_writer, &stderr_writer);
+    try std.testing.expect(doctorFixPathExists(tmp.dir, ".orca/policy.yaml"));
+
+    const after_check = try tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(64 * 1024));
+    defer allocator.free(after_check);
+    try std.testing.expectEqualStrings(before, after_check);
+    try std.testing.expectEqual(before_hash, doctorFixSha256(after_check));
+
+    // Second --fix leave-alone: core soft-success exit 0 without policy rewrite.
+    stdout_writer = .fixed(&stdout_buf);
+    stderr_writer = .fixed(&stderr_buf);
+    const leave_code = try command(io, &.{"--fix"}, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, leave_code);
+    const after_leave = try tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(64 * 1024));
+    defer allocator.free(after_leave);
+    try std.testing.expectEqualStrings(before, after_leave);
+}
+
+test "doctorFix parse exit map soft partial is success when core_ok (D25 pack)" {
+    // Acceptance: doctor --fix parse/exit — soft host fail keeps process exit 0 when
+    // core_ok; core_failed is non-zero (pure processExitForOutcome contract).
+    const ensure_mod = @import("ensure.zig");
+
+    var hosts = [_]ensure_mod.HostResult{
+        .{
+            .host_id = "claude",
+            .detected = true,
+            .wired = false,
+            .smoke_ok = false,
+            .fix_hint = "ryk doctor --fix",
+            .error_class = .wire,
+        },
+    };
+    const soft = ensure_mod.EnsureOutcome{
+        .core_ok = true,
+        .hosts = hosts[0..],
+        .policy_created = true,
+        .policy_left_alone = false,
+        .protection_label = .partial,
+        .hosts_owned = false,
+    };
+    try std.testing.expectEqual(exit_codes.success, ensure_mod.processExitForOutcome(soft));
+
+    const failed = ensure_mod.EnsureOutcome{
+        .core_ok = false,
+        .hosts = &.{},
+        .policy_created = false,
+        .policy_left_alone = false,
+        .protection_label = .core_failed,
+        .hosts_owned = false,
+    };
+    try std.testing.expect(ensure_mod.processExitForOutcome(failed) != 0);
+}
+
+test "doctorFix host mock fail receipt forbids D06 full phrases requires partial and fix" {
+    // Acceptance (3): Forbidden D06 phrases asserted when host mock fails — receipt
+    // on doctor --fix partial path must teach partial + doctor --fix, never full-protection.
+    const ensure_mod = @import("ensure.zig");
+    var hosts = [_]ensure_mod.HostResult{
+        .{
+            .host_id = "codex",
+            .detected = true,
+            .wired = false,
+            .smoke_ok = false,
+            .fix_hint = "ryk doctor --fix",
+            .error_class = .wire,
+        },
+    };
+    var outcome = ensure_mod.EnsureOutcome{
+        .core_ok = true,
+        .hosts = hosts[0..],
+        .policy_created = false,
+        .policy_left_alone = true,
+        .protection_label = .partial,
+        .hosts_owned = false,
+    };
+    defer outcome.deinit(std.testing.allocator);
+
+    var buf: [8192]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try ensure_mod.writeEnsureReceipt(&writer, outcome);
+    const text = writer.buffered();
+
+    try std.testing.expect(!doctorFixClaimsFullProtection(text));
+    try std.testing.expect(std.ascii.indexOfIgnoreCase(text, "partial") != null);
+    try std.testing.expect(std.ascii.indexOfIgnoreCase(text, "doctor --fix") != null);
+    try std.testing.expect(std.ascii.indexOfIgnoreCase(text, "codex") != null);
+}
+
+// ---------------------------------------------------------------------------
+// MessageMigrate — core CLI fix strings → doctor --fix (w1-message-migrate-core)
+// Named substring `MessageMigrate` for monopath filters. Co-located only; does
+// not implement production. Forbidden start-onboard needle is built via concat
+// so this pack never reintroduces the static rg gate needle in source text.
+// ---------------------------------------------------------------------------
+
+/// Contiguous start-onboard teach string forbidden by D07/D08/D36 for W1 doors.
+/// Constructed via concat so file source never contains the gate needle.
+const message_migrate_forbidden_start: []const u8 = "ryk" ++ " start";
+
+fn messageMigrateForbiddenStartNeedle() []const u8 {
+    return message_migrate_forbidden_start;
+}
+
+/// Full source of this file (prod + co-located tests) — gate polarity surface.
+fn messageMigrateDoctorSource() []const u8 {
+    return @embedFile("doctor.zig");
+}
+
+/// Production region only (everything before the first co-located test).
+fn messageMigrateDoctorProdSource() []const u8 {
+    return doctorFixProdSource();
+}
+
+/// Sibling plugin.zig (exclusive code_path for message migrate; tests live here).
+fn messageMigratePluginSource() []const u8 {
+    return @embedFile("plugin.zig");
+}
+
+/// Count non-overlapping occurrences (same algorithm as doctorFixCount).
+fn messageMigrateCount(hay: []const u8, needle: []const u8) usize {
+    return doctorFixCount(hay, needle);
+}
+
+test "MessageMigrate doctor production has zero start-onboard teach strings" {
+    // Acceptance (1)+(3): user-facing fix hints in doctor.zig must not teach
+    // start as required onboard. rg polarity: zero matches for the forbidden
+    // needle in production region (gate greens only when empty).
+    const prod = messageMigrateDoctorProdSource();
+    const forbidden = messageMigrateForbiddenStartNeedle();
+    try std.testing.expectEqual(@as(usize, 0), messageMigrateCount(prod, forbidden));
+}
+
+test "MessageMigrate doctor full source has zero start-onboard teach strings" {
+    // Acceptance (2)+(3): co-located tests updated off start teach-strings; full
+    // file (prod+tests) matches static gate polarity (empty match only).
+    const src = messageMigrateDoctorSource();
+    const forbidden = messageMigrateForbiddenStartNeedle();
+    try std.testing.expectEqual(@as(usize, 0), messageMigrateCount(src, forbidden));
+}
+
+test "MessageMigrate plugin source has zero start-onboard teach strings" {
+    // Acceptance (1)+(3): plugin.zig user-facing fix/help strings stop teaching
+    // start onboard. Static gate also covers plugin.zig; tested from doctor
+    // co-located pack (exclusive test_paths = doctor.zig only).
+    const src = messageMigratePluginSource();
+    const forbidden = messageMigrateForbiddenStartNeedle();
+    try std.testing.expectEqual(@as(usize, 0), messageMigrateCount(src, forbidden));
+}
+
+test "MessageMigrate doctor production teaches doctor --fix repair door" {
+    // Acceptance (1): fix hints → ryk doctor --fix. Production region must
+    // contain the taught repair door (live_smoke: rg doctor --fix doctor.zig).
+    const prod = messageMigrateDoctorProdSource();
+    try std.testing.expect(std.mem.indexOf(u8, prod, "doctor --fix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prod, "ryk doctor --fix") != null);
+
+    // Pi note is the primary doctor-owned teach string (not host_status residual).
+    const pi_note_marker = "Pi: bundled extension setup is managed by";
+    const pi_idx = std.mem.indexOf(u8, prod, pi_note_marker) orelse {
+        try std.testing.expect(false); // writePiNote must remain
+        return;
+    };
+    // Window around Pi note must teach doctor --fix, not start onboard.
+    const window_end = @min(prod.len, pi_idx + 200);
+    const pi_window = prod[pi_idx..window_end];
+    try std.testing.expect(std.mem.indexOf(u8, pi_window, "doctor --fix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pi_window, messageMigrateForbiddenStartNeedle()) == null);
+}
+
+test "MessageMigrate plugin fix strings teach doctor --fix with host plugin secondary only" {
+    // Acceptance (1): plugin fix hints → ryk doctor --fix; host-specific
+    // `ryk plugin install <host>` may remain as secondary only (not start).
+    const src = messageMigratePluginSource();
+    const forbidden = messageMigrateForbiddenStartNeedle();
+    try std.testing.expectEqual(@as(usize, 0), messageMigrateCount(src, forbidden));
+
+    // Repair door present in plugin user-facing surface.
+    try std.testing.expect(std.mem.indexOf(u8, src, "doctor --fix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "ryk doctor --fix") != null);
+
+    // Every `→ Fix:` line that still mentions plugin install must also teach
+    // doctor --fix on the same line (primary door; host plugin secondary).
+    var rest = src;
+    while (std.mem.indexOf(u8, rest, "→ Fix:")) |idx| {
+        const line_start = rest[idx..];
+        const line_end = std.mem.indexOfScalar(u8, line_start, '\n') orelse line_start.len;
+        const line = line_start[0..line_end];
+        if (std.mem.indexOf(u8, line, "plugin install") != null) {
+            try std.testing.expect(std.mem.indexOf(u8, line, "doctor --fix") != null);
+        }
+        // No Fix line may teach start onboard.
+        try std.testing.expect(std.mem.indexOf(u8, line, forbidden) == null);
+        rest = line_start[line_end..];
+    }
+
+    // Primary flow help must not teach start as required onboard door.
+    // After migrate: doctor --fix is the taught day-one/repair door.
+    if (std.mem.indexOf(u8, src, "Primary flow:")) |pf| {
+        const window_end = @min(src.len, pf + 160);
+        const window = src[pf..window_end];
+        try std.testing.expect(std.mem.indexOf(u8, window, forbidden) == null);
+        try std.testing.expect(std.mem.indexOf(u8, window, "doctor --fix") != null);
+    }
+
+    // Pi note(s) in plugin surface follow the same door.
+    var pi_rest = src;
+    while (std.mem.indexOf(u8, pi_rest, "bundled extension setup is managed by")) |idx| {
+        const window_end = @min(pi_rest.len, idx + 80);
+        const window = pi_rest[idx..window_end];
+        try std.testing.expect(std.mem.indexOf(u8, window, "doctor --fix") != null);
+        try std.testing.expect(std.mem.indexOf(u8, window, forbidden) == null);
+        pi_rest = pi_rest[idx + 1 ..];
+    }
+}
+
+test "MessageMigrate rendered doctor host table teaches doctor --fix not start" {
+    // Acceptance (1)+(2): runtime user-facing repair strings from doctor report
+    // teach doctor --fix; no start-onboard needle in rendered output.
+    var stdout_buf: [16384]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    const report = sandbox.backend.detect(.linux);
+    var context = try testContext(std.testing.allocator, .{});
+    defer context.deinit();
+
+    try writeReport(std.testing.io, &stdout_writer, .linux, report, context, false);
+    const written = stdout_writer.buffered();
+
+    try std.testing.expect(std.mem.indexOf(u8, written, "Host integrations") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "ryk doctor --fix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "Pi: bundled extension setup is managed by `ryk doctor --fix`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, messageMigrateForbiddenStartNeedle()) == null);
+    // Composition: never print "run <start-onboard>" as required next step.
+    const run_forbidden: []const u8 = "run " ++ ("ryk" ++ " start");
+    try std.testing.expect(std.mem.indexOf(u8, written, run_forbidden) == null);
+}
+
+test "MessageMigrate no new required-onboard references to start verb in exclusive files" {
+    // Acceptance (2): no new references to start as required onboard in
+    // doctor.zig + plugin.zig. Guards common teach patterns beyond bare needle.
+    const forbidden = messageMigrateForbiddenStartNeedle();
+    const doctor_src = messageMigrateDoctorSource();
+    const plugin_src = messageMigratePluginSource();
+
+    try std.testing.expectEqual(@as(usize, 0), messageMigrateCount(doctor_src, forbidden));
+    try std.testing.expectEqual(@as(usize, 0), messageMigrateCount(plugin_src, forbidden));
+
+    // Backtick-wrapped start command form used in Pi notes / help.
+    const bt_start = "`" ++ "ryk" ++ " start`";
+    try std.testing.expect(std.mem.indexOf(u8, doctor_src, bt_start) == null);
+    try std.testing.expect(std.mem.indexOf(u8, plugin_src, bt_start) == null);
+
+    // "or <forbidden>" / "re-run <forbidden>" fix-composition patterns.
+    const or_forbidden: []const u8 = "or " ++ ("ryk" ++ " start");
+    const rerun_forbidden: []const u8 = "re-run " ++ ("ryk" ++ " start");
+    try std.testing.expect(std.mem.indexOf(u8, plugin_src, or_forbidden) == null);
+    try std.testing.expect(std.mem.indexOf(u8, plugin_src, rerun_forbidden) == null);
+    try std.testing.expect(std.mem.indexOf(u8, doctor_src, or_forbidden) == null);
+
+    // Presence of the taught door in both exclusive code surfaces.
+    try std.testing.expect(std.mem.indexOf(u8, messageMigrateDoctorProdSource(), "doctor --fix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plugin_src, "doctor --fix") != null);
 }
 
 const TestContextOptions = struct {
@@ -1489,7 +2239,8 @@ fn testHostRows(allocator: std.mem.Allocator) ![]HostDoctorRow {
         const fix = if (std.mem.eql(u8, h.name, "hermes"))
             try allocator.dupe(u8, "export ORCA_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes")
         else if (std.mem.eql(u8, h.name, "pi"))
-            try allocator.dupe(u8, "run ryk start to install the bundled extension")
+            // W1 message-migrate: co-located fixture teaches doctor --fix (not start).
+            try allocator.dupe(u8, "ryk doctor --fix  # install the bundled Pi extension")
         else
             try allocator.dupe(u8, "—");
         try list.append(allocator, .{

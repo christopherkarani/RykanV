@@ -144,6 +144,7 @@ pub fn writeErrorResponse(writer: anytype, id: ?std.json.Value, code: ErrorCode,
         try writer.writeAll("null");
     }
     try writer.writeAll("}\n");
+    try writer.flush();
 }
 
 pub fn errorResponseAlloc(allocator: std.mem.Allocator, id: ?std.json.Value, code: ErrorCode, message: []const u8) ![]u8 {

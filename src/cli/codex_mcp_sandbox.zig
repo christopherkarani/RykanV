@@ -169,14 +169,48 @@ fn runCanonicalInventorySandboxed(
         }
     }
 
+    // Bare "codex" + #!/usr/bin/env node both PATH-search under Seatbelt and
+    // fail (grant-scoped file-read). Expand to absolute interpreter + script.
+    const grant_argv0 = inventory_argv[0];
+    const expanded_inventory_argv = blk: {
+        if (try sandbox.apply.expandEnvShebangLaunch(io, allocator, inventory_argv, env_map)) |expanded| {
+            break :blk expanded;
+        }
+        if (try sandbox.apply.absoluteizeLaunchArgv(io, allocator, inventory_argv, env_map)) |absolute| {
+            break :blk absolute;
+        }
+        break :blk inventory_argv;
+    };
+    defer if (expanded_inventory_argv.ptr != inventory_argv.ptr)
+        sandbox.apply.freeExpandedShellWrapperArgv(allocator, expanded_inventory_argv);
+
     const codex_exec = try sandbox.apply.collectLaunchExecPaths(
         io,
         allocator,
-        inventory_argv[0],
+        grant_argv0,
         env_map,
     );
     defer sandbox.apply.freeLaunchExecPaths(allocator, codex_exec);
     if (codex_exec.len == 0) return error.InventoryCommandFailed;
+
+    // Node/npm Codex needs package-root + interpreter install RO under Seatbelt
+    // (file-only .exec is not enough for nested package loads / node prefix data).
+    const codex_install_ro = try sandbox.apply.collectLaunchInstallRoPaths(
+        io,
+        allocator,
+        grant_argv0,
+        env_map,
+    );
+    defer sandbox.apply.freeLaunchInstallRoPaths(allocator, codex_install_ro);
+    for (codex_install_ro) |path| try ro_paths.append(allocator, path);
+
+    const system_ro = if (trusted_host_key.len > 0)
+        try sandbox.host_config_grants.collectHostSystemRoPaths(allocator, trusted_host_key)
+    else
+        try allocator.alloc([]const u8, 0);
+    defer sandbox.host_config_grants.freeHostSystemRoPaths(allocator, system_ro);
+    for (system_ro) |path| try ro_paths.append(allocator, path);
+
     var compiled = try sandbox.profile.compileProfile(allocator, .{
         .workspace_root = inventory_tmp,
         .exec_paths = codex_exec,
@@ -197,7 +231,7 @@ fn runCanonicalInventorySandboxed(
     var sandbox_argv: std.ArrayList([]const u8) = .empty;
     defer sandbox_argv.deinit(allocator);
     try sandbox_argv.appendSlice(allocator, &.{ "/usr/bin/sandbox-exec", "-p", sbpl });
-    try sandbox_argv.appendSlice(allocator, inventory_argv);
+    try sandbox_argv.appendSlice(allocator, expanded_inventory_argv);
     return std.process.run(allocator, io, .{
         .argv = sandbox_argv.items,
         .cwd = .{ .path = inventory_cwd },

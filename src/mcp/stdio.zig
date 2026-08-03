@@ -22,6 +22,8 @@ pub fn writeRawMessage(writer: anytype, message: []const u8) !void {
     if (std.mem.indexOfAny(u8, message, "\n\r") != null) return error.EmbeddedNewline;
     try writer.writeAll(message);
     try writer.writeByte('\n');
+    // MCP clients on pipes need an immediate flush; full-buffer delay looks like a hung server.
+    try writer.flush();
 }
 
 pub fn isProtocolCleanOutput(output: []const u8, allocator: std.mem.Allocator) !bool {

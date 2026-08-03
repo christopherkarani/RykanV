@@ -20,6 +20,7 @@ const build_options = @import("build_options");
 const suggestions = @import("suggestions.zig");
 const run_os_sandbox = @import("run_os_sandbox.zig");
 const codex_mcp_sandbox = @import("codex_mcp_sandbox.zig");
+const host_mcp_sandbox = @import("host_mcp_sandbox.zig");
 
 const RunOptions = struct {
     workspace: ?[]const u8 = null,
@@ -431,14 +432,49 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     else
         null;
     defer if (codex_mcp_plan) |*plan| plan.deinit(io);
-    if (codex_mcp_plan) |plan| {
-        if (plan.disabled_server_names.len > 0) {
+    var host_mcp_plan: ?host_mcp_sandbox.Plan = if (effective_os_sandbox != .off and codex_mcp_plan == null)
+        host_mcp_sandbox.prepare(
+            io,
+            allocator,
+            options.command_argv,
+            workspace_root_for_policy,
+            loaded_policy.path,
+            effective_policy_mode.toString(),
+            &filtered_env.env_map,
+        ) catch |err| {
             try stderr.print(
-                "ryk run: disabled {d} MCP server(s) that could not be policy-mediated; external scripts need a matching .orca/mcp manifest and HTTP MCP remains unsupported.\n",
-                .{plan.disabled_server_names.len},
+                "ryk run: cannot build protected host MCP launch plan ({s}); refusing direct MCP execution.\n",
+                .{@errorName(err)},
             );
+            return exit_codes.unsupported;
         }
+    else
+        null;
+    defer if (host_mcp_plan) |*plan| plan.deinit(io);
+    const mcp_disabled_count: usize = if (codex_mcp_plan) |plan|
+        plan.disabled_server_names.len
+    else if (host_mcp_plan) |plan|
+        plan.disabled_server_names.len
+    else
+        0;
+    if (mcp_disabled_count > 0) {
+        try stderr.print(
+            "ryk run: disabled {d} MCP server(s) that could not be policy-mediated; external scripts need a matching .orca/mcp manifest and HTTP MCP remains unsupported.\n",
+            .{mcp_disabled_count},
+        );
     }
+    const mcp_exec_paths: []const []const u8 = if (codex_mcp_plan) |plan|
+        plan.exec_paths
+    else if (host_mcp_plan) |plan|
+        plan.exec_paths
+    else
+        &.{};
+    const mcp_ro_paths: []const []const u8 = if (codex_mcp_plan) |plan|
+        plan.ro_paths
+    else if (host_mcp_plan) |plan|
+        plan.ro_paths
+    else
+        &.{};
     const minted_env_lookup: ?sandbox.env_scrub.MintedEnvLookup = if (secret_store) |*store| .{
         .context = store,
         .containsFn = intercept.session_secrets.Store.mintedEnvContains,
@@ -467,8 +503,8 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         // Same bind as empty-backpack / mediation / auth preflight — do not re-resolve
         // under filtered child env (would drop ORCA_TRUSTED_HOST_PREFIXES).
         trusted_host_key,
-        if (codex_mcp_plan) |plan| plan.exec_paths else &.{},
-        if (codex_mcp_plan) |plan| plan.ro_paths else &.{},
+        mcp_exec_paths,
+        mcp_ro_paths,
     )) {
         .require_failed => |code| {
             if (mediate_agent_network) {
@@ -1120,10 +1156,22 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     // PATH honesty (before_process_launch) drops denylisted package trees from the
     // child PATH. Absolute-ize bare argv0 before that filter so spawn does not
     // re-search PATH for brew-installed host aliases (pi, opencode, codex, …).
-    const planned_argv = if (codex_mcp_plan) |plan| plan.argv else options.command_argv;
+    // Host MCP env overlays (e.g. OPENCODE_CONFIG_CONTENT) are ryk-minted after the
+    // launch allowlist so host-supplied blobs cannot ride the empty-backpack path.
+    if (host_mcp_plan) |plan| {
+        for (plan.env_puts) |put| {
+            try filtered_env.env_map.put(put.name, put.value);
+        }
+    }
+    const planned_argv = if (codex_mcp_plan) |plan|
+        plan.argv
+    else if (host_mcp_plan) |plan|
+        plan.argv
+    else
+        options.command_argv;
     var launch_argv_owned: ?[]const []const u8 = null;
     defer if (launch_argv_owned) |a| sandbox.apply.freeExpandedShellWrapperArgv(allocator, a);
-    if (secret_boundary == .empty_backpack and planned_argv.len > 0 and codex_mcp_plan == null) {
+    if (secret_boundary == .empty_backpack and planned_argv.len > 0 and codex_mcp_plan == null and host_mcp_plan == null) {
         launch_argv_owned = sandbox.apply.expandShellWrapperLaunch(
             io,
             allocator,

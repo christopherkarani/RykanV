@@ -14,7 +14,7 @@ set -eu
 #   RYK_ARTIFACT_DIR / ORCA_ARTIFACT_DIR Offline install from a local dist/ folder
 #   RYK_INSTALL_FORCE / ORCA_INSTALL_FORCE=1 Allow overwriting a non-product file at the destination
 #   RYK_INSTALL_QUIET / ORCA_INSTALL_QUIET=1 Suppress non-error UI (still installs; prints activation line)
-#   RYK_INSTALL_SKIP_ONBOARD / ORCA_INSTALL_SKIP_ONBOARD=1  Skip ryk start --auto after install
+#   RYK_INSTALL_SKIP_ONBOARD / ORCA_INSTALL_SKIP_ONBOARD=1  Skip doctor --fix after install
 #   NO_COLOR             Disable ANSI color even on a TTY
 #
 # Robust VERSION resolution (piped-safe):
@@ -77,7 +77,7 @@ ui_err() {
 print_banner() {
   [ "$QUIET" -eq 1 ] && return 0
   printf '\n'
-  printf '  %s🛡  ryk%s · %sv%s%s\n' "$C_BOLD$C_CYAN" "$C_RESET" "$C_BOLD" "$1" "$C_RESET"
+  printf '  %s🛡  Rykan V%s · %sv%s%s\n' "$C_BOLD$C_CYAN" "$C_RESET" "$C_BOLD" "$1" "$C_RESET"
   if [ "$USE_COLOR" -eq 1 ]; then
     printf '  %s────────────────────────────────%s\n' "$C_DIM" "$C_RESET"
   else
@@ -531,8 +531,7 @@ print_success() {
   if [ "$onboarding_ran" -eq 0 ]; then
     printf '\n'
     printf '  %sThen%s\n' "$C_BOLD" "$C_RESET"
-    printf '    ryk doctor\n'
-    printf '    ryk start          %s# guided host wiring (TTY); --auto for CI%s\n' "$C_DIM" "$C_RESET"
+    printf '    ryk doctor --fix   %s# ensure policy + auto-wire hosts%s\n' "$C_DIM" "$C_RESET"
     ui_dim "  (a compatibility alias is also installed for existing automation)"
   fi
 
@@ -652,10 +651,13 @@ ensure_path_entry "$INSTALL_DIR"
 ensure_resource_root_entry "$CURRENT_LINK"
 step_done "Configure shell" "PATH + runtime resource root"
 
-# ── Global onboarding ───────────────────────────────────────────────────────
+# ── Global onboarding (ensure door: doctor --fix) ───────────────────────────
 # Setup is operational, not presentation: run for TTY, non-TTY, and quiet
 # installs. HOME is the global policy/plugin scope; never mutate an arbitrary
-# caller or Homebrew working directory.
+# caller or Homebrew working directory. Trust scope: cd "$HOME" + export
+# RYK_RESOURCE_ROOT/ORCA_RESOURCE_ROOT to the installed share current link.
+# Soft host fails exit 0 with partial honesty from the ensure door — install
+# must not claim full-protection completion copy.
 ONBOARDING_RAN=0
 if [ "${RYK_INSTALL_SKIP_ONBOARD:-${ORCA_INSTALL_SKIP_ONBOARD:-0}}" != "1" ]; then
   step_active "Set up protection"
@@ -668,7 +670,7 @@ if [ "${RYK_INSTALL_SKIP_ONBOARD:-${ORCA_INSTALL_SKIP_ONBOARD:-0}}" != "1" ]; th
       export RYK_RESOURCE_ROOT ORCA_RESOURCE_ROOT
       PATH="$INSTALL_DIR:$PATH"
       export PATH
-      "$DESTINATION" start --auto
+      "$DESTINATION" doctor --fix --from-install
     ) >"$TMP_DIR/.onboarding.out" 2>"$TMP_DIR/.onboarding.err"
   else
     (
@@ -678,7 +680,7 @@ if [ "${RYK_INSTALL_SKIP_ONBOARD:-${ORCA_INSTALL_SKIP_ONBOARD:-0}}" != "1" ]; th
       export RYK_RESOURCE_ROOT ORCA_RESOURCE_ROOT
       PATH="$INSTALL_DIR:$PATH"
       export PATH
-      "$DESTINATION" start --auto
+      "$DESTINATION" doctor --fix --from-install
     )
   fi
   _ob_exit=$?
@@ -686,12 +688,22 @@ if [ "${RYK_INSTALL_SKIP_ONBOARD:-${ORCA_INSTALL_SKIP_ONBOARD:-0}}" != "1" ]; th
   if [ "$_ob_exit" -ne 0 ]; then
     if [ "$QUIET" -eq 1 ]; then
       [ ! -s "$TMP_DIR/.onboarding.err" ] || sed 's/^/    /' "$TMP_DIR/.onboarding.err" >&2
+      [ ! -s "$TMP_DIR/.onboarding.out" ] || sed 's/^/    /' "$TMP_DIR/.onboarding.out" >&2
     fi
     fail "ryk protection setup failed (exit ${_ob_exit})" \
-      "The CLI was installed, but ryk did not claim protection.
-Re-run the installer after resolving the host integration error."
+      "The CLI was installed, but doctor --fix did not finish successfully.
+Re-run: ryk doctor --fix
+Or re-run the installer after resolving the host integration error."
   fi
-  step_done "Set up protection" "ryk start --auto completed; host results shown above"
+  # Exit 0 includes soft/partial host outcomes — never step_done full-protection phrasing.
+  # Quiet path still surfaces partial/core-failed honesty (stdout was captured).
+  if [ "$QUIET" -eq 1 ] && [ -s "$TMP_DIR/.onboarding.out" ]; then
+    if grep -Eiq 'partial|incomplete|core failed|repair:' "$TMP_DIR/.onboarding.out" 2>/dev/null; then
+      printf '    ryk ensure: partial or incomplete host outcomes (quiet install)\n' >&2
+      grep -Ei 'partial|incomplete|core failed|repair:|host ' "$TMP_DIR/.onboarding.out" 2>/dev/null | head -8 | sed 's/^/    /' >&2 || true
+    fi
+  fi
+  step_done "Set up protection" "doctor --fix finished; host results shown above"
   ONBOARDING_RAN=1
 fi
 

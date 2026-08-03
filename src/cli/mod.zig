@@ -34,6 +34,7 @@ pub const plugin_install = @import("plugin_install.zig");
 pub const setup = @import("setup.zig");
 pub const start = @import("start.zig");
 pub const onboarding = @import("onboarding.zig");
+pub const ensure = @import("ensure.zig");
 pub const quickstart = @import("quickstart.zig");
 pub const decide = @import("decide.zig");
 pub const evaluate = @import("evaluate.zig");
@@ -69,6 +70,7 @@ pub const suggestions = @import("suggestions.zig");
 pub const danger_confirmation = @import("danger_confirmation.zig");
 pub const fm_steward_client = @import("fm_steward_client.zig");
 pub const codex_mcp_sandbox = @import("codex_mcp_sandbox.zig");
+pub const host_mcp_sandbox = @import("host_mcp_sandbox.zig");
 
 test {
     _ = brand;
@@ -80,6 +82,8 @@ test {
     // Pull style tests (TDD for color/TTY/NO_COLOR handling).
     _ = style;
     _ = onboarding;
+    // Monopath pull for co-located EnsureCore / Ensure* tests (D73).
+    _ = ensure;
     _ = host_status;
     _ = pi_install;
     _ = grok_install;
@@ -125,6 +129,7 @@ test {
     _ = run_command;
     _ = run_os_sandbox;
     _ = codex_mcp_sandbox;
+    _ = host_mcp_sandbox;
     _ = mcp;
     _ = env_schema_command;
     // Surfaces touched by production-readiness hardening (M1–M4).
@@ -2232,9 +2237,9 @@ test "plugin help and disable re-enable messaging de-emphasize --yes in favor of
     try std.testing.expectEqual(exit_codes.success, code);
 
     const output = stdout_writer.buffered();
-    // Primary path is `ryk start` (guided on TTY); removed setup must not be re-taught.
+    // One-click repair is doctor --fix; guided multi-select remains ryk start. Setup removed.
     try std.testing.expect(std.mem.indexOf(u8, output, "ryk start") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "guided") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "doctor --fix") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "orca setup") == null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
