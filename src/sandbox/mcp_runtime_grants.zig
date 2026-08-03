@@ -365,6 +365,13 @@ pub fn isApprovedRuntimeCommandPath(path: []const u8, home: []const u8) bool {
         "/.cargo/bin",
         "/.grok/bin",
         "/.kimi-code/bin",
+        // Node/runtime trees commonly reached via ~/.local/bin shebang realpaths
+        // (e.g. open-computer-use → env node → ~/.hermes/node or nvm/fnm/volta).
+        "/.hermes",
+        "/.nvm",
+        "/.fnm",
+        "/.volta",
+        "/.asdf",
     };
     for (home_tool_roots) |suffix| {
         if (isStrictDescendantOfHomeRoot(normalized_path, normalized_home, suffix)) return true;
@@ -708,6 +715,8 @@ test "approved runtime commands use only system package app and narrow home tool
     try std.testing.expect(isApprovedRuntimeCommandPath("/Users/synthetic/.cargo/bin/tool", home));
     try std.testing.expect(isApprovedRuntimeCommandPath("/Users/synthetic/.grok/bin/grok", home));
     try std.testing.expect(isApprovedRuntimeCommandPath("/Users/synthetic/.kimi-code/bin/kimi", home));
+    try std.testing.expect(isApprovedRuntimeCommandPath("/Users/synthetic/.hermes/node/bin/node", home));
+    try std.testing.expect(isApprovedRuntimeCommandPath("/Users/synthetic/.nvm/versions/node/v22.0.0/bin/node", home));
 
     try std.testing.expect(!isApprovedRuntimeCommandPath("/usr", home));
     try std.testing.expect(!isApprovedRuntimeCommandPath("/Applications", home));

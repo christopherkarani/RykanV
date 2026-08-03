@@ -625,6 +625,10 @@ pub fn collectLaunchInstallRoPaths(
         }
     }
 
+    // #!/usr/bin/env node (and peers): grant interpreter install root
+    // (e.g. ~/.hermes/node) so the runtime can load prefix data under Seatbelt.
+    try appendShebangInterpreterInstallRo(io, allocator, &list, abs, env_map);
+
     // Shell wrappers (e.g. hermes → venv python outside the wrapper path) need
     // install RO on nested absolute targets + their bin-layout roots (uv cpython).
     try appendShellWrapperNestedInstallRo(io, allocator, &list, abs, env_map);
@@ -707,6 +711,67 @@ pub fn expandShellWrapperLaunch(
 
 /// Free owned launch argv from `expandShellWrapperLaunch` or `absoluteizeLaunchArgv`.
 pub const freeExpandedShellWrapperArgv = freeLaunchExecPaths;
+
+/// Rewrite `argv0` scripts with a non-shell shebang into `[abs_interp, abs_script, …]`.
+///
+/// Under Seatbelt, `#!/usr/bin/env node` still PATH-searches for `node`. Host
+/// package dirs are not content-readable for PATH discovery, so env fails even
+/// when the interpreter was already collected as a file-only `.exec` grant.
+/// Expanding to absolute interpreter + script avoids that residual (codex/npm
+/// agents). Shell wrappers stay on `expandShellWrapperLaunch`.
+///
+/// Returns null when argv0 is not an env/absolute non-shell shebang script.
+/// On success, caller frees with `freeExpandedShellWrapperArgv`.
+pub fn expandEnvShebangLaunch(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!?[]const []const u8 {
+    if (argv.len == 0) return null;
+    const argv0 = argv[0];
+    if (argv0.len == 0) return null;
+
+    const resolved = apply_posix.resolveArgv0(io, allocator, argv0, env_map) catch return null;
+    defer if (resolved.owned) allocator.free(resolved.path);
+    const script_abs = try absolutePathForGrant(io, allocator, resolved.path);
+    defer allocator.free(script_abs);
+    if (script_abs.len == 0) return null;
+
+    // Shell wrappers have their own expander; leave them alone.
+    if (try launchFileIsShellWrapper(io, allocator, script_abs, env_map)) return null;
+
+    const interp_token = (try readShebangInterpreterToken(io, allocator, script_abs)) orelse return null;
+    defer allocator.free(interp_token);
+    // Already an absolute interpreter shebang (#!/usr/bin/node) still needs the
+    // interp as argv0 so Seatbelt does not rely on kernel shebang + PATH.
+    const interp_resolved = apply_posix.resolveArgv0(io, allocator, interp_token, env_map) catch return null;
+    defer if (interp_resolved.owned) allocator.free(interp_resolved.path);
+    const interp_abs = try absolutePathForGrant(io, allocator, interp_resolved.path);
+    defer allocator.free(interp_abs);
+    if (interp_abs.len == 0 or !isRegularFile(io, interp_abs)) return null;
+
+    var list: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (list.items) |p| allocator.free(p);
+        list.deinit(allocator);
+    }
+    var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (realpathInto(interp_abs, &real_buf)) |real| {
+        try list.append(allocator, try allocator.dupe(u8, real));
+    } else {
+        try list.append(allocator, try allocator.dupe(u8, interp_abs));
+    }
+    if (realpathInto(script_abs, &real_buf)) |real| {
+        try list.append(allocator, try allocator.dupe(u8, real));
+    } else {
+        try list.append(allocator, try allocator.dupe(u8, script_abs));
+    }
+    for (argv[1..]) |arg| {
+        try list.append(allocator, try allocator.dupe(u8, arg));
+    }
+    return try list.toOwnedSlice(allocator);
+}
 
 /// Resolve bare argv0 to an absolute path **before** PATH honesty filtering.
 ///
@@ -1012,6 +1077,40 @@ fn appendShebangInterpreterGrants(
     if (realpathInto(abs, &real_buf)) |real| {
         if (!std.mem.eql(u8, real, abs)) {
             try appendLaunchExecCandidate(io, allocator, list, real, env_map);
+        }
+    }
+}
+
+/// Grant install RO for a shebang interpreter (`…/bin/node` → `…` prefix tree).
+/// Complements package-root RO on the script itself; needed when Node lives outside
+/// system paths (nvm, hermes, fnm) and loads prefix-relative data under Seatbelt.
+fn appendShebangInterpreterInstallRo(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList([]const u8),
+    script_path: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+) error{OutOfMemory}!void {
+    const interp_token = (try readShebangInterpreterToken(io, allocator, script_path)) orelse return;
+    defer allocator.free(interp_token);
+
+    const resolved = apply_posix.resolveArgv0(io, allocator, interp_token, env_map) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return,
+    };
+    defer if (resolved.owned) allocator.free(resolved.path);
+
+    const abs = try absolutePathForGrant(io, allocator, resolved.path);
+    defer allocator.free(abs);
+
+    try appendInstallRoForLaunchFile(io, allocator, list, abs, env_map);
+    try appendBinLayoutInstallRo(io, allocator, list, abs, env_map);
+
+    var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (realpathInto(abs, &real_buf)) |real| {
+        if (!std.mem.eql(u8, real, abs)) {
+            try appendInstallRoForLaunchFile(io, allocator, list, real, env_map);
+            try appendBinLayoutInstallRo(io, allocator, list, real, env_map);
         }
     }
 }
@@ -2661,6 +2760,81 @@ test "absoluteizeLaunchArgv is null for absolute and missing bare names" {
     try env_map.put("PATH", "/usr/bin:/bin");
     const missing = [_][]const u8{"ryk-no-such-host-alias-bin"};
     try std.testing.expect((try absoluteizeLaunchArgv(io, allocator, &missing, &env_map)) == null);
+}
+
+test "expandEnvShebangLaunch rewrites node shebang to absolute interpreter plus script" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+
+    try tmp.dir.createDirPath(io, "runtime/bin");
+    try tmp.dir.createDirPath(io, "pkg/bin");
+    // Plant a tiny "node" stand-in the shebang can resolve.
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "runtime/bin/node",
+        .data = "#!/bin/sh\nexec cat \"$1\"\n",
+    });
+    try tmp.dir.setFilePermissions(io, "runtime/bin/node", std.Io.File.Permissions.fromMode(0o755), .{});
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "pkg/bin/cli.js",
+        .data = "#!/usr/bin/env node\nconsole.log('ok');\n",
+    });
+    try tmp.dir.setFilePermissions(io, "pkg/bin/cli.js", std.Io.File.Permissions.fromMode(0o755), .{});
+    try tmp.dir.writeFile(io, .{ .sub_path = "pkg/package.json", .data = "{\"name\":\"cli\"}\n" });
+
+    const node_abs = try std.fs.path.join(allocator, &.{ root, "runtime/bin/node" });
+    defer allocator.free(node_abs);
+    const script_abs = try std.fs.path.join(allocator, &.{ root, "pkg/bin/cli.js" });
+    defer allocator.free(script_abs);
+    const runtime_bin = try std.fs.path.join(allocator, &.{ root, "runtime/bin" });
+    defer allocator.free(runtime_bin);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("PATH", runtime_bin);
+    try env_map.put("HOME", root);
+
+    const argv_in = [_][]const u8{ script_abs, "mcp", "list", "--json" };
+    const expanded = (try expandEnvShebangLaunch(io, allocator, &argv_in, &env_map)) orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    defer freeExpandedShellWrapperArgv(allocator, expanded);
+    try std.testing.expectEqual(@as(usize, 5), expanded.len);
+    var real_buf_a: [std.fs.max_path_bytes]u8 = undefined;
+    var real_buf_b: [std.fs.max_path_bytes]u8 = undefined;
+    const want_node = realpathInto(node_abs, &real_buf_a) orelse node_abs;
+    const want_script = realpathInto(script_abs, &real_buf_b) orelse script_abs;
+    try std.testing.expectEqualStrings(want_node, expanded[0]);
+    try std.testing.expectEqualStrings(want_script, expanded[1]);
+    try std.testing.expectEqualStrings("mcp", expanded[2]);
+    try std.testing.expectEqualStrings("list", expanded[3]);
+    try std.testing.expectEqualStrings("--json", expanded[4]);
+
+    // Install RO must include package root and interpreter bin-layout root.
+    const ro = try collectLaunchInstallRoPaths(io, allocator, script_abs, &env_map);
+    defer freeLaunchInstallRoPaths(allocator, ro);
+    const pkg_root = try std.fs.path.join(allocator, &.{ root, "pkg" });
+    defer allocator.free(pkg_root);
+    const node_root = try std.fs.path.join(allocator, &.{ root, "runtime" });
+    defer allocator.free(node_root);
+    try std.testing.expect(pathsContain(ro, pkg_root));
+    try std.testing.expect(pathsContain(ro, node_root));
+
+    // Shell shebang is not expanded here (expandShellWrapperLaunch owns that).
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "pkg/bin/wrap.sh",
+        .data = "#!/usr/bin/env bash\nexec /bin/true\n",
+    });
+    try tmp.dir.setFilePermissions(io, "pkg/bin/wrap.sh", std.Io.File.Permissions.fromMode(0o755), .{});
+    const wrap = try std.fs.path.join(allocator, &.{ root, "pkg/bin/wrap.sh" });
+    defer allocator.free(wrap);
+    const wrap_argv = [_][]const u8{wrap};
+    try std.testing.expect((try expandEnvShebangLaunch(io, allocator, &wrap_argv, &env_map)) == null);
 }
 
 test "expandShellWrapperLaunch rewrites hermes-style exec to realpath python" {

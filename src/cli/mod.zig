@@ -70,6 +70,7 @@ pub const suggestions = @import("suggestions.zig");
 pub const danger_confirmation = @import("danger_confirmation.zig");
 pub const fm_steward_client = @import("fm_steward_client.zig");
 pub const codex_mcp_sandbox = @import("codex_mcp_sandbox.zig");
+pub const host_mcp_sandbox = @import("host_mcp_sandbox.zig");
 
 test {
     _ = brand;
@@ -128,6 +129,7 @@ test {
     _ = run_command;
     _ = run_os_sandbox;
     _ = codex_mcp_sandbox;
+    _ = host_mcp_sandbox;
     _ = mcp;
     _ = env_schema_command;
     // Surfaces touched by production-readiness hardening (M1–M4).
