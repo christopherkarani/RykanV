@@ -172,7 +172,7 @@ pub const commands =
         .{
             .name = "doctor",
             .summary = "Diagnose protection readiness and platform capabilities",
-            .usage = "ryk doctor [-v|--verbose] [--check] [--json]",
+            .usage = "ryk doctor [-v|--verbose] [--check] [--json] [--fix] [--from-install] [--preset <name>]",
             .category = .getting_started,
             .public = true,
             .examples = &.{
@@ -180,14 +180,17 @@ pub const commands =
                 "ryk doctor --verbose",
                 "ryk doctor --check",
                 "ryk doctor --json",
+                "ryk doctor --fix",
             },
-            .additional_completion_flags = &.{ "--verbose", "-v", "--check", "--json" },
+            .additional_completion_flags = &.{ "--verbose", "-v", "--check", "--json", "--fix", "--from-install", "--preset" },
             .details = &.{
                 "Default output is a one-line summary plus recommended next steps.",
                 "Includes a Packs section (baseline always-on + opt-in enabled) when the daemon is reachable.",
                 "Use --verbose for the full platform, integration, and capability report.",
                 "Use --check for automation: exit non-zero when core readiness fails (daemon not compatible, or policy missing/invalid).",
                 "Use --json for a minimal readiness report (ready, state, policy.valid).",
+                "Use --fix to repair protection (create policy if missing, auto-wire day-one hosts). Exit 0 when core policy is ok; host soft-fails stay partial.",
+                "Optional --from-install scopes ensure to install HOME/resource-root; --preset selects create-if-missing policy preset.",
             },
         },
         .{
