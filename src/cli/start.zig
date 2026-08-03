@@ -7,6 +7,7 @@ const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
 const style = @import("style.zig");
 const onboarding = @import("onboarding.zig");
+const ensure = @import("ensure.zig");
 const pack_state = @import("pack_state.zig");
 const plugin = @import("plugin.zig");
 const child_process = @import("child_process.zig");
@@ -74,7 +75,7 @@ pub fn runStart(
     defer allocator.free(workspace_root);
 
     // Auto-select best available setup path — no interactive grade menu.
-    // Active protection wording is deferred until after ensurePolicy (existing mode may differ).
+    // Active protection wording is deferred until after ensure (existing mode may differ).
     const protection = resolveProtectionMode(flags);
     try stdout.writeAll("Setup path: Ask on risk (auto).\n");
     try stdout.writeAll("  Existing policy is preserved; claims below follow the policy file mode.\n\n");
@@ -91,14 +92,25 @@ pub fn runStart(
     var failures: usize = 0;
     var protection_active = false;
 
+    // Temporary bridge (W1): policy create/leave-alone via shared ensure library — no
+    // parallel onboarding policy-create path (D61). Host auto-wire remains below.
     const policy_existed = onboarding.policyExists(io, workspace_root);
-    const policy_code = try onboarding.ensurePolicy(io, cwd, workspace_root, flags.preset, stdout, stderr, .{
-        .missing = "Creating .orca/policy.yaml...\n",
-        .exists = "Policy already exists — leaving it unchanged.\n",
-    });
+    if (policy_existed) {
+        try stdout.writeAll("Policy already exists — leaving it unchanged.\n");
+    } else {
+        try stdout.writeAll("Creating .orca/policy.yaml...\n");
+    }
+    var ensure_outcome = try ensure.runEnsure(io, allocator, cwd, .{
+        .from_install = false,
+        .quiet = true,
+        .preset = flags.preset,
+        .skip_verify = flags.skip_verify,
+    }, stdout, stderr);
+    defer ensure_outcome.deinit(allocator);
+
     var policy_mode: ?[]const u8 = null;
     defer if (policy_mode) |m| allocator.free(m);
-    if (policy_code != exit_codes.success) {
+    if (!ensure_outcome.core_ok) {
         try tui.render.stepLine(io, stdout, .failed, "Policy", "Policy setup failed.", 80);
         failures += 1;
     } else {
@@ -108,7 +120,11 @@ pub fn runStart(
                 try stdout.print("  Note: policy mode={s} (not Ask) — existing policy left unchanged.\n", .{mode});
             }
         }
-        try tui.render.stepLine(io, stdout, .done, "Policy", if (policy_existed) "Existing policy preserved." else "Policy created.", 80);
+        const policy_step = if (ensure_outcome.policy_left_alone or policy_existed)
+            "Existing policy preserved."
+        else
+            "Policy created.";
+        try tui.render.stepLine(io, stdout, .done, "Policy", policy_step, 80);
     }
 
     // Additive pack enablement from preset (project .orca.toml when in git repo).
