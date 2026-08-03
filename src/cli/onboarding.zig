@@ -6,8 +6,6 @@ const supervisor = core.supervisor;
 const exit_codes = @import("exit_codes.zig");
 const init = @import("init.zig");
 const plugin = @import("plugin.zig");
-const child_process = @import("child_process.zig");
-const grok_install = @import("grok_install.zig");
 const daemon = @import("daemon.zig");
 const shell_eval = @import("shell_eval.zig");
 const resource_root = @import("../resource_root.zig");
@@ -16,15 +14,17 @@ const env_util = @import("../env_util.zig");
 
 pub const default_preset = "generic-agent";
 
-/// Agent hosts detected and wired during setup.
+/// Day-one agent hosts for ensure auto-wire membership (D03/D04 product lock).
+/// Single-source for ensure.HostWireTable.isDayOneMember via isSupportedHost (F2):
+/// cursor is in; grok is out of the default day-one auto-wire list (W3 owns Cursor writer).
 pub const supported_hosts = [_][]const u8{
     "claude",
     "codex",
     "hermes",
     "openclaw",
     "pi",
-    "grok",
     "opencode",
+    "cursor",
 };
 
 pub const Flags = struct {
@@ -270,16 +270,18 @@ pub fn collectHostStatuses(io: std.Io, allocator: std.mem.Allocator, doctor_repo
     errdefer list.deinit(allocator);
 
     for (supported_hosts) |host_name| {
+        // Pi uses extension inspection; all other day-one hosts use PATH + plugin report.
+        // Cursor (W3 writer pending): binary detect ok; hostPluginInstalledFromReport is
+        // false for unknown/plugin-less hosts — never claim wired/✓ without a real writer.
         const detected = if (std.mem.eql(u8, host_name, "pi"))
             @import("host_status.zig").inspectPi(io, allocator).binary_detected
-        else if (std.mem.eql(u8, host_name, "grok"))
-            isSupportedGrokCli(allocator)
         else
             plugin.binaryInPath(io, allocator, host_name);
         const installed = if (std.mem.eql(u8, host_name, "pi"))
             @import("host_status.zig").inspectPi(io, allocator).extension_installed
-        else if (std.mem.eql(u8, host_name, "grok"))
-            detected and grok_install.installed(io, allocator)
+        else if (std.mem.eql(u8, host_name, "cursor"))
+            // Fail-closed until W3 Cursor writer: detect-only, never mark installed.
+            false
         else
             plugin.hostPluginInstalledFromReport(host_name, doctor_report);
         try list.append(allocator, .{
@@ -290,17 +292,6 @@ pub fn collectHostStatuses(io: std.Io, allocator: std.mem.Allocator, doctor_repo
     }
 
     return try list.toOwnedSlice(allocator);
-}
-
-fn isSupportedGrokCli(allocator: std.mem.Allocator) bool {
-    const result = child_process.runHostCommandCaptureTimed(
-        allocator,
-        &.{ "grok", "--help" },
-        2_000,
-    ) catch return false;
-    defer result.deinit(allocator);
-    if (result.timed_out or result.exit_code != 0) return false;
-    return grok_install.isSupportedCliHelp(result.stdout);
 }
 
 pub fn parseHostsCsv(allocator: std.mem.Allocator, csv: []const u8) ![][]const u8 {
@@ -676,7 +667,9 @@ test "onboarding parseHostsCsv validates supported hosts" {
     try std.testing.expectEqual(@as(usize, 2), hosts.len);
     try std.testing.expectEqualStrings("codex", hosts[0]);
     try std.testing.expectEqualStrings("hermes", hosts[1]);
-    try std.testing.expectError(error.UnsupportedHost, parseHostsCsv(allocator, "cursor"));
+    // Day-one product lock (D03/D04): cursor is membership; unknown still rejected.
+    // Former cursor → UnsupportedHost inverted in DayOneHost tests below.
+    try std.testing.expectError(error.UnsupportedHost, parseHostsCsv(allocator, "unknown-host-xyz"));
 }
 
 pub fn mockOnboardingEvaluator(allocator: std.mem.Allocator, shell_event: shell_eval.ShellCommandEvent) daemon.DaemonError!std.json.Parsed(daemon.DaemonResponse) {
@@ -794,11 +787,69 @@ test "onboarding runVerification for maximum protection with mocks" {
     try std.testing.expect(outcome.passed());
 }
 
-test "onboarding supports all seven requested hosts" {
-    for ([_][]const u8{ "claude", "codex", "hermes", "openclaw", "pi", "grok", "opencode" }) |host| {
+// Day-one host matrix (w1-host-matrix / D03/D04): product lock is cursor in,
+// grok out of ensure default auto-wire membership. ensure.HostWireTable.isDayOneMember
+// keys onboarding.isSupportedHost / supported_hosts (F2 single-source) — no ensure-local
+// host id array. Named substring DayOneHost is the monopath gate proof.
+
+test "DayOneHost isSupportedHost cursor is true" {
+    try std.testing.expect(isSupportedHost("cursor"));
+}
+
+test "DayOneHost default day-one auto-wire list includes cursor" {
+    // Membership single-source: supported_hosts (ensure auto-wire keys this list).
+    var found = false;
+    for (supported_hosts) |host| {
+        if (std.mem.eql(u8, host, "cursor")) found = true;
+    }
+    try std.testing.expect(found);
+    try std.testing.expect(isSupportedHost("cursor"));
+}
+
+test "DayOneHost grok not in default day-one auto-wire list" {
+    for (supported_hosts) |host| {
+        try std.testing.expect(!std.mem.eql(u8, host, "grok"));
+    }
+    // ensure day-one membership uses isSupportedHost — grok must not be day-one.
+    try std.testing.expect(!isSupportedHost("grok"));
+}
+
+test "DayOneHost parseHostsCsv accepts cursor inverting former UnsupportedHost" {
+    const allocator = std.testing.allocator;
+    const hosts = try parseHostsCsv(allocator, "cursor");
+    defer deinitHostList(allocator, hosts);
+    try std.testing.expectEqual(@as(usize, 1), hosts.len);
+    try std.testing.expectEqualStrings("cursor", hosts[0]);
+}
+
+test "DayOneHost parseHostsCsv rejects grok as non day-one membership" {
+    const allocator = std.testing.allocator;
+    // Free on unexpected success so RED (current) does not leak under testing.allocator.
+    if (parseHostsCsv(allocator, "grok")) |hosts| {
+        defer deinitHostList(allocator, hosts);
+        try std.testing.expect(false);
+    } else |err| {
+        try std.testing.expect(err == error.UnsupportedHost);
+    }
+}
+
+test "DayOneHost day-one set is former core hosts plus cursor without grok" {
+    // Invert former "seven requested hosts" that included grok and excluded cursor.
+    const expected = [_][]const u8{ "claude", "codex", "hermes", "openclaw", "pi", "opencode", "cursor" };
+    for (expected) |host| {
         try std.testing.expect(isSupportedHost(host));
     }
+    try std.testing.expect(!isSupportedHost("grok"));
     try std.testing.expect(!isSupportedHost("unknown"));
+    try std.testing.expectEqual(@as(usize, expected.len), supported_hosts.len);
+    // Exact membership: every supported_hosts entry is in expected (no stragglers).
+    for (supported_hosts) |host| {
+        var ok = false;
+        for (expected) |want| {
+            if (std.mem.eql(u8, host, want)) ok = true;
+        }
+        try std.testing.expect(ok);
+    }
 }
 
 test "onboarding verifies every selected host before success" {
