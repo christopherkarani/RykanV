@@ -16,6 +16,9 @@ const shell_eval = @import("shell_eval.zig");
 const build_options = @import("build_options");
 const env_util = @import("../env_util.zig");
 const tui = @import("../tui/mod.zig");
+/// Re-export: run adapters for host_keys; regenerate managed store under workspace_root.
+/// Body lives in `policy.network_discovered` (DIS-1 / DIS-7).
+pub const refreshManagedDiscovery = orca_policy.network_discovered.refreshManagedDiscovery;
 
 pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     for (argv) |arg| {
@@ -118,6 +121,10 @@ pub fn runStart(
     if (packs_result.config_path) |path| {
         try stdout.print("  Pack config ({s}): {s}\n", .{ packs_result.scope.?.label(), path });
     }
+
+    // AINA P3 S5: soft-refresh managed discovery for selected/detected pi+opencode.
+    // Parent HOME + abs workspace_root; never fail start; never wipe policy (DIS-1/7).
+    softRefreshStartDiscovery(io, allocator, workspace_root, selected_hosts.items, host_statuses);
 
     var daemon_check: onboarding.DaemonCheck = undefined;
     if (protection.needsCommandGuard()) {
@@ -397,6 +404,49 @@ fn processHome(allocator: std.mem.Allocator) ![]u8 {
     var env_map = try env_util.createProcessMap(allocator);
     defer env_map.deinit();
     return (try env_util.getOwned(&env_map, allocator, "HOME")) orelse error.HomeNotSet;
+}
+
+/// Soft product-path refresh for start (DIS-1). Always unions selected ∪
+/// detected ∪ floor `{pi, opencode}` so a partial selection never clobbers
+/// the other adapter's managed contribution. Errors / empty discovery never
+/// fail start; empty rediscovery leaves managed intact.
+fn softRefreshStartDiscovery(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    selected_hosts: []const []const u8,
+    host_statuses: []const onboarding.HostStatus,
+) void {
+    const home = processHome(allocator) catch return;
+    defer allocator.free(home);
+    if (home.len == 0) return;
+
+    var keys_buf: [8][]const u8 = undefined;
+    var keys_len: usize = 0;
+
+    const append_key = struct {
+        fn go(buf: *[8][]const u8, len: *usize, name: []const u8) void {
+            if (len.* >= buf.len) return;
+            if (!(std.mem.eql(u8, name, "pi") or std.mem.eql(u8, name, "opencode"))) return;
+            for (buf.*[0..len.*]) |existing| {
+                if (std.mem.eql(u8, existing, name)) return;
+            }
+            buf.*[len.*] = name;
+            len.* += 1;
+        }
+    }.go;
+
+    // Union selected ∪ detected ∪ floor (never selected-only replace).
+    for (selected_hosts) |name| append_key(&keys_buf, &keys_len, name);
+    for (host_statuses) |st| {
+        if (st.detected) append_key(&keys_buf, &keys_len, st.name);
+    }
+    append_key(&keys_buf, &keys_len, "pi");
+    append_key(&keys_buf, &keys_len, "opencode");
+
+    // Soft-skip errors — start still succeeds (DIS-1). Warning is logged by
+    // callers that have stderr when needed; silent here to avoid wrong stream.
+    refreshManagedDiscovery(io, allocator, workspace_root, home, keys_buf[0..keys_len]) catch {};
 }
 
 fn runChild(allocator: std.mem.Allocator, argv: []const []const u8) !u8 {
@@ -923,3 +973,10 @@ test "start auto default path has no protection grade menu jargon in stdout" {
     try std.testing.expect(std.mem.indexOf(u8, output, "Firewall-only mode") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Ask on risk") != null);
 }
+
+// ---------------------------------------------------------------------------
+// AINA P3 S5 — start/init discovery refresh (DIS-1 / DIS-7 / A-P3-2 / A-P3-3)
+// Spec: planning/2026-08-02-agent-inference-network-allow-spec.md
+
+// AINA P3 discovery refresh is covered thoroughly in init.zig and
+// policy/network_discovered.zig. start re-exports the shared seam only.

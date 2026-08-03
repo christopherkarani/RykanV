@@ -122,3 +122,49 @@ Policy decision is not the same as transparent network enforcement. `orca doctor
 ## Redaction
 
 URLs are redacted before audit persistence when they contain secret-like material.
+
+## Inference host discovery (AINA P3)
+
+Fail closed to the open web; **fail open to the user’s already-configured model providers.**
+
+Mediated agent launches (`ryk pi`, `ryk opencode`, other trusted host aliases) **discover** inference hostnames from the agent’s real config files (read-only under parent `HOME`) and **add** them to the effective network allow list. Discovery never replaces the static core/overlay floor and never removes user-authored `policy.yaml` allows.
+
+### Effective allow merge order
+
+Deterministic union (exact-host dedupe; first wins):
+
+1. User policy allow (`policy.yaml`)
+2. Core pack + host overlay (static floor)
+3. Managed file (workspace-scoped, **host_key-filtered** by source tags) ∪ launch-time adapter for that host key
+4. CLI `--allow-network`
+
+**effective allow = user policy ∪ core ∪ overlay ∪ discovered(managed∩host_key + live adapter) ∪ CLI**
+
+Managed store path: `<workspace>/.orca/network-discovered.yaml` (optional; soft-skip when missing/corrupt). Contents are hostnames + source tags only — never tokens, keys, or credential-bearing URLs. Load re-validates every host (rejects wildcards, `network_eval` class tokens such as `private` / `metadata` / `direct-ip`, non-loopback IPs). Writes are atomic (temp+rename) and refuse symlink product paths.
+
+### What discovery reads (and does not)
+
+Adapters emit **hostnames only**. They prefer literal hosts from approved URL fields (`baseUrl`, `tokenEndpoint`, discovery endpoints), else map provider **ids** through a static catalog (unknown ids skipped). They **never** harvest MCP, marketplace, plugins, or full-tree URL regexes.
+
+**Hard rejects on extract/load:** reserved policy class tokens (`private`, `metadata`, `direct-ip`, bare `localhost`), cloud-metadata hostnames, bare wildcards, credential-bearing URLs, **all IP literals** (incl. `127.0.0.1` / `::1`), and OS-ambiguous IP-like spellings (`127.1`, `10.1`, `0x7f000001`, decimal dwords, leading-zero octets). Local Ollama must be listed in user `policy.yaml` (avoids allow-before-class-deny SSRF via agent-writable auth).
+
+**Soft-drop sinks:** paste/webhook/tunnel hosts from the shared `network_eval` table never auto-grant (live adapter and managed load).
+
+**Residual (auth trust / DNS):** pi/opencode config dirs remain agent-writable for OAuth refresh. Novel multi-label non-sink hosts from custom `baseUrl` still auto-merge (URL-divergence support). Hostname-class deny does not re-check post-DNS peer address — a discovered name that later resolves to private/IMDS is a known residual; mitigate with catalog-only auto-merge or proxy post-resolve deny (follow-up). Operators can authority write-deny auth paths or pin allows only via `policy.yaml`.
+
+**Deferred residuals:** interactive post-refresh host summary on `ryk start` (DIS-6 optional P1); pi `models.json` / models-store URL harvest (follow-up unit).
+
+### Soft skip on errors
+
+Missing/corrupt managed file, empty `HOME`, unknown host key, or adapter IO/parse failure does **not** fail launch — those sources soft-skip; the static floor and user allows remain. OOM hard-fails. Launch-time discovery is size-bounded.
+
+### Start / init refresh
+
+`ryk start` and `ryk init` refresh managed discovery for **pi ∪ opencode** (start always unions selected + detected + floor so partial selection does not clobber the other adapter):
+
+- Read agent configs under parent `HOME` (process environ map, not libc-only getenv).
+- Regenerate managed YAML (hostnames + source tags); never edit `policy.yaml`.
+- Empty rediscovery leaves the existing managed file untouched.
+- Refresh errors soft-warn and do not fail init/start.
+
+Mediated `ryk <host>` also runs the launch-time adapter for that host key, so OAuth/API hosts work even if start/init was never re-run after a config change.

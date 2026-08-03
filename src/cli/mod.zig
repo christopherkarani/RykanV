@@ -87,6 +87,7 @@ test {
     _ = plugin;
     _ = @import("openclaw_status.zig");
     _ = start;
+    _ = init; // AINA P3 refreshManagedDiscovery suite (was transitively linked via start→init)
     _ = setup;
     _ = quickstart;
     _ = help;
