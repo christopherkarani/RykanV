@@ -120,10 +120,8 @@ pub const Runtime = struct {
         if (!server_closed) {
             self.state.server.deinit(io);
         }
-        // Bound reclaim: force-shutdown client + upstream FDs, then wait a hard
-        // budget. Mid-dial / blackholed upstream must not hang deinit forever.
-        // Residual: if workers remain after the budget, State is still reclaimed
-        // (prefer bounded leak over unbounded hang in agent-grade teardown).
+        // Bound reclaim: force-shutdown client + upstream FDs, then wait a hard budget.
+        // Mid-dial cannot use ConnectOptions.timeout on Zig 0.16 (TODO panic).
         const hard_reclaim_ns: u64 = 5 * std.time.ns_per_s;
         const reclaim_started = std.Io.Clock.Timestamp.now(io, .awake);
         while (self.state.active_connections.load(.acquire) > 0) {
@@ -132,6 +130,12 @@ pub const Runtime = struct {
             self.state.shutdownConnections(io);
             const duration = std.Io.Duration.fromNanoseconds(10 * std.time.ns_per_ms);
             std.Io.sleep(io, duration, .awake) catch {};
+        }
+        // Prefer intentional State leak over free-while-workers-hold-*State (UAF).
+        // Workers still mid-dial after the budget keep State alive until they exit.
+        if (self.state.active_connections.load(.acquire) > 0) {
+            self.* = undefined;
+            return;
         }
         for (self.state.audit_events.items) |ev| ev.deinit(self.state.allocator);
         self.state.audit_events.deinit(self.state.allocator);

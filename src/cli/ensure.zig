@@ -189,12 +189,14 @@ fn coreOkOutcomeWithHosts(
     policy_left_alone: bool,
 ) !EnsureOutcome {
     if (options.skip_host_wire) {
-        // Start bridge: multi-select owns host mutation; ensure must not wire all day-one hosts.
+        // Policy-only: hosts not assessed. Callers must not treat this as host-partial honesty
+        // (start multi-select owns wire; do not print empty-hosts partial receipts).
         return .{
             .core_ok = true,
             .hosts = &.{},
             .policy_created = policy_created,
             .policy_left_alone = policy_left_alone,
+            // Not host-evaluated — callers with skip_host_wire ignore this label for receipts.
             .protection_label = .partial,
             .hosts_owned = false,
         };
@@ -634,7 +636,7 @@ pub fn installOneHost(
         };
     }
     if (std.mem.eql(u8, host_id, "grok")) {
-        // Not day-one auto-wire; kept for explicit non-matrix install callers only.
+        // Day-one native Command Guard: PreToolUse bash hook in ~/.grok/user-settings.json.
         const result = grok_install.installAtHome(io, allocator, home, self_exe) catch return .failed;
         result.deinit(allocator);
         return if (result.changed) .installed else .already_installed;
@@ -716,12 +718,12 @@ fn evaluateHostSmoke(
         return .{ .smoke_ok = false, .error_class = .smoke };
     }
 
-    // Pi / grok: native install paths — host_status returns not_run for pi;
-    // wire evidence is the W1 smoke bar (extension/hook presence).
-    if (std.mem.eql(u8, host_id, "pi") or std.mem.eql(u8, host_id, "grok")) {
+    // Pi: extension-managed; host_status smoke is not_run — wire evidence is presence.
+    if (std.mem.eql(u8, host_id, "pi")) {
         return .{ .smoke_ok = true, .error_class = .none };
     }
 
+    // Grok uses the same PreToolUse hook smoke path as codex (exit-2 deny).
     const smoke = host_status.runHostSmokePair(allocator, host_id) catch {
         return .{ .smoke_ok = false, .error_class = .smoke };
     };
@@ -2084,10 +2086,10 @@ test "EnsureSoft runEnsure zero hosts is soft success not full protection claim"
     }
 }
 
-test "EnsureSoft start bridge receipt driven by protection_label not multi-select ensure path" {
-    // code_paths include start.zig: temporary bridge remains; ensure soft path must not
-    // reintroduce multiSelect for host consent on the ensure library. Start may still
-    // multi-select for legacy interactive start until W4 (dual residual) — ensure must not.
+test "EnsureSoft start bridge is policy-only skip_host_wire not multi-select ensure path" {
+    // Ensure must not multiSelect; start routes policy via runEnsure with skip_host_wire
+    // so multi-select owns host mutation. Policy-only bridge must not print empty-hosts
+    // ensure partial receipts (no writeEnsureReceipt on the start monopath).
     const start_src = @embedFile("start.zig");
     const ensure_src = @embedFile("ensure.zig");
 
@@ -2097,15 +2099,10 @@ test "EnsureSoft start bridge receipt driven by protection_label not multi-selec
     };
     try std.testing.expect(std.mem.indexOf(u8, ensure_prod, "multiSelect") == null);
 
-    // Bridge still routes policy via runEnsure (locked by EnsureCore); soft unit fills
-    // host table + receipt honesty. Start must use skip_host_wire so multi-select owns mutation.
     try std.testing.expect(std.mem.indexOf(u8, start_src, "runEnsure") != null);
     try std.testing.expect(std.mem.indexOf(u8, start_src, "skip_host_wire") != null);
-    try std.testing.expect(
-        std.mem.indexOf(u8, start_src, "protection_label") != null or
-            std.mem.indexOf(u8, start_src, "writeEnsureReceipt") != null or
-            std.mem.indexOf(u8, start_src, "processExitForOutcome") != null,
-    );
+    // Start must not call writeEnsureReceipt for the policy-only bridge.
+    try std.testing.expect(std.mem.indexOf(u8, start_src, "writeEnsureReceipt") == null);
 }
 
 // ---------------------------------------------------------------------------

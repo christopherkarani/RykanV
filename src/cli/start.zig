@@ -124,12 +124,8 @@ pub fn runStart(
         else
             "Policy created.";
         try tui.render.stepLine(io, stdout, .done, "Policy", policy_step, 80);
-
-        // Soft-success honesty (D06/D24): ensure protection_label drives receipt text.
-        // Host fails stay core_ok + partial — never multi-select on ensure path.
-        if (ensure_outcome.protection_label == .partial) {
-            try ensure.writeEnsureReceipt(stdout, ensure_outcome);
-        }
+        // Policy-only ensure (skip_host_wire): do not print ensure host-partial receipt.
+        // Host honesty comes from multi-select install + verify below, not empty wire results.
     }
 
     // Additive pack enablement from preset (project .orca.toml when in git repo).
@@ -226,15 +222,18 @@ pub fn runStart(
         try stdout.writeAll("\nVerification skipped (--skip-verify).\n");
     }
 
-    // Wire applySoftIncomplete on the production start path (packs + global verify honesty).
+    // Packs / global-verify honesty after host wire. skip_host_wire outcomes are not host
+    // receipts — only surface a demotion receipt when packs or verify actually failed.
     if (ensure_outcome.core_ok) {
-        const verify_ok = if (flags.skip_verify) true else if (verification) |v| v.passed() else failures == 0;
-        const demoted = ensure.applySoftIncomplete(ensure_outcome.protection_label, packs_ok, verify_ok);
-        if (demoted == .partial and ensure_outcome.protection_label == .full) {
-            ensure_outcome.protection_label = .partial;
-            try ensure.writeEnsureReceipt(stdout, ensure_outcome);
-        } else {
-            ensure_outcome.protection_label = demoted;
+        const verify_ok = if (flags.skip_verify)
+            true
+        else if (verification) |v|
+            v.passed()
+        else
+            failures == 0;
+        if (!packs_ok or !verify_ok) {
+            try stdout.writeAll("ryk start: protection partial — packs or shell verify incomplete.\n");
+            try stdout.print("  repair: {s}\n", .{ensure.doctor_fix_hint});
         }
     }
 
