@@ -150,7 +150,7 @@ Adapters emit **hostnames only**. They prefer literal hosts from approved URL fi
 
 **Soft-drop sinks:** paste/webhook/tunnel hosts from the shared `network_eval` table never auto-grant (live adapter and managed load).
 
-**Residual (auth trust):** pi/opencode config dirs remain agent-writable for OAuth refresh. Discovery trusts parent-HOME auth at launch, subject to the rejects above. Operators who need stricter control can authority write-deny auth paths or pin allows only via `policy.yaml`. Novel multi-label non-sink hosts from custom `baseUrl` still auto-merge (URL-divergence support).
+**Residual (auth trust / DNS):** pi/opencode config dirs remain agent-writable for OAuth refresh. Novel multi-label non-sink hosts from custom `baseUrl` still auto-merge (URL-divergence support). Hostname-class deny does not re-check post-DNS peer address — a discovered name that later resolves to private/IMDS is a known residual; mitigate with catalog-only auto-merge or proxy post-resolve deny (follow-up). Operators can authority write-deny auth paths or pin allows only via `policy.yaml`.
 
 **Deferred residuals:** interactive post-refresh host summary on `ryk start` (DIS-6 optional P1); pi `models.json` / models-store URL harvest (follow-up unit).
 

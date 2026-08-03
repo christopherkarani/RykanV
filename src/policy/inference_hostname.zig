@@ -34,10 +34,10 @@ const reserved_policy_tokens = [_][]const u8{
 /// - Success: allocator-owned lowercase hostname (no scheme, userinfo, path,
 ///   query, fragment, or port). Caller frees with `allocator.free`.
 /// - Reject (`null`): empty/whitespace, path-only, credential-bearing
-///   (userinfo), invalid UTF-8/NUL, bare wildcards not product-tested,
-///   non-loopback IP literals, reserved policy class tokens (incl. bare
-///   `localhost`), cloud-metadata hostnames. Loopback residual: exact
-///   `127.0.0.1` / `::1` only (not class token `localhost` — SEC class deny).
+///   (userinfo), invalid UTF-8/NUL, bare wildcards, **all IP literals**
+///   (incl. loopback), OS-ambiguous IP-like forms (`127.1`, hex/decimal dwords),
+///   reserved policy class tokens, cloud-metadata hostnames.
+///   Local Ollama / loopback requires explicit user `policy.yaml` allow.
 /// - Errors: allocator failures only (`error.OutOfMemory`).
 pub fn extractHostname(
     allocator: std.mem.Allocator,

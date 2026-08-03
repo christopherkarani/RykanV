@@ -110,6 +110,8 @@ pub fn writeManaged(
     for (hosts) |entry| {
         const normalized = (try inference_hostname.extractHostname(allocator, entry.host)) orelse continue;
         defer allocator.free(normalized);
+        // Same accept path as load/live discover (no dual-path sink drift).
+        if (network_eval.isExfilSinkHostname(normalized)) continue;
 
         try buf.appendSlice(allocator, "  - host: ");
         try buf.appendSlice(allocator, normalized);
