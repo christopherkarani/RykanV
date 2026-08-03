@@ -307,9 +307,11 @@ pub const commands =
             .usage = "ryk allowlist <add|add-command|list|remove|validate|prune> [options]",
             .category = .core_workflow,
             // s-allowlist-cli: live Zig permanent TOML store (no daemon).
+            .public = true,
             .hidden = false,
             .examples = &.{
                 "ryk allowlist list",
+                "ryk allowlist list --plain",
                 "ryk allowlist add core.git:reset-hard -r \"intentional reset\"",
                 "ryk allowlist add-command \"git status\" -r \"CI bootstrap\"",
                 "ryk allow \"core.git:reset-hard\" -r \"intentional reset\"",
@@ -318,7 +320,9 @@ pub const commands =
                 "Permanent pack exceptions (rule id or exact command) with required reason.",
                 "Project file: .orca/allowlist.toml · user: $XDG_CONFIG_HOME/orca/allowlist.toml.",
                 "kind=command short-circuits before packs; kind=rule skips that rule only (E8).",
-                "Shortcuts: 'ryk allow <rule>' and 'ryk unallow <key>'.",
+                "On a colour TTY, bare `ryk allowlist` / `allowlist list` opens a dual-layer browse (project then user).",
+                "Use --plain for a linear list; --json for machine output (no TUI).",
+                "Shortcuts: 'ryk allow <rule>' and 'ryk unallow <key>' (advanced; not on default help).",
                 "Use 'ryk allowlist --help' for actions and options.",
             },
         },
@@ -439,16 +443,18 @@ pub const commands =
             .name = "packs",
             .summary = "Browse, inspect, and enable safety packs",
             .usage =
-            \\ryk packs [--filter <term>] [--enabled|--installed] [--page N] [--page-size N] [--json]
+            \\ryk packs [--filter <term>] [--enabled|--installed] [--page N] [--page-size N] [--json] [--plain]
             \\  ryk packs show <id> [--no-patterns] [--verbose] [--json]
             \\  ryk packs enable <id> [id…]
             \\  ryk packs disable <id> [id…]
             ,
             .category = .diagnostics,
             // Slice 4 / s-packs: live oracle registry + pack_config (no daemon).
+            .public = true,
             .hidden = false,
             .examples = &.{
                 "ryk packs",
+                "ryk packs --plain",
                 "ryk packs --enabled",
                 "ryk packs show core.git",
                 "ryk packs enable containers.docker database.postgresql",
@@ -456,10 +462,12 @@ pub const commands =
                 "ryk packs --filter database --page-size 10",
                 "ryk packs --json",
             },
-            .additional_completion_flags = &.{ "--json", "--no-patterns", "--verbose", "--enabled", "--filter" },
+            .additional_completion_flags = &.{ "--json", "--plain", "--no-patterns", "--verbose", "--enabled", "--filter" },
             .details = &.{
                 "Safety packs are Zig shell_engine oracle rule sets (embedded registry; not policy presets).",
                 "Policy presets use `ryk policy packs` / `ryk policy apply-pack` instead.",
+                "On a colour TTY, bare `ryk packs` opens a browse view (enabled + baseline first; search and toggle all).",
+                "Use --plain for the linear paginated list; --json / --format json for machine output (no TUI).",
                 "List is sorted and paginated locally; --installed is an alias for --enabled.",
                 "Baseline packs (core.*, system.disk) are on by default; list them in `disabled` to opt out (engine honors pack_config).",
                 "Enable/disable writes project `.orca.toml` in a git repo, otherwise user config (`$XDG_CONFIG_HOME/orca/config.toml` or `~/.config/orca/config.toml`).",
@@ -757,7 +765,8 @@ pub const commands =
 /// Prefix of Safe Launch teaching order (host aliases inserted after stop).
 const public_help_prefix = [_][]const u8{ "start", "stop" };
 /// Suffix of Safe Launch teaching order (after host aliases).
-const public_help_suffix = [_][]const u8{ "doctor", "replay", "scan", "explain", "update" };
+/// Day-2 loop: doctor → packs → allowlist, then review/forensics/explain/update.
+const public_help_suffix = [_][]const u8{ "doctor", "packs", "allowlist", "replay", "scan", "explain", "update" };
 
 pub const WriteMode = enum {
     /// Safe Launch surface only (default `ryk` / `ryk help`).
@@ -790,7 +799,7 @@ pub fn writeWithMode(io: std.Io, writer: anytype, mode: WriteMode) !void {
     const Task = struct { label: []const u8, cmd: []const u8 };
     const public_tasks = [_]Task{
         .{ .label = "Get protected", .cmd = "ryk start" },
-        .{ .label = "Run an agent", .cmd = "ryk claude  (or: codex | pi | opencode | openclaw | hermes)" },
+        .{ .label = "Run an agent", .cmd = "ryk claude  (or: codex | pi | opencode | openclaw | hermes | grok)" },
         .{ .label = "Diagnose", .cmd = "ryk doctor" },
         .{ .label = "Review session", .cmd = "ryk replay" },
         .{ .label = "Why blocked?", .cmd = "ryk explain \"…\"" },
@@ -801,7 +810,7 @@ pub fn writeWithMode(io: std.Io, writer: anytype, mode: WriteMode) !void {
         .{ .label = "Get protected", .cmd = "ryk start" },
         .{ .label = "Diagnose", .cmd = "ryk doctor" },
         .{ .label = "Why blocked?", .cmd = "ryk explain \"…\"" },
-        .{ .label = "Run an agent", .cmd = "ryk claude  (or: codex | pi | opencode | openclaw | hermes)" },
+        .{ .label = "Run an agent", .cmd = "ryk claude  (or: codex | pi | opencode | openclaw | hermes | grok)" },
         .{ .label = "Wire a host", .cmd = "ryk plugin install" },
         .{ .label = "Review session", .cmd = "ryk replay" },
         .{ .label = "Stop protection", .cmd = "ryk stop" },
@@ -1114,12 +1123,24 @@ test "default root help shows only public Safe Launch verbs" {
     try std.testing.expect(helpListsPeerCommand(top, "start"));
     try std.testing.expect(helpListsPeerCommand(top, "stop"));
     try std.testing.expect(helpListsPeerCommand(top, "doctor"));
+    try std.testing.expect(helpListsPeerCommand(top, "packs"));
+    try std.testing.expect(helpListsPeerCommand(top, "allowlist"));
     try std.testing.expect(helpListsPeerCommand(top, "replay"));
+    try std.testing.expect(helpListsPeerCommand(top, "scan"));
     try std.testing.expect(helpListsPeerCommand(top, "explain"));
     try std.testing.expect(helpListsPeerCommand(top, "update"));
     for (host_launch.host_launch_aliases) |host| {
         try std.testing.expect(helpListsPeerCommand(top, host));
     }
+
+    // Teaching suffix order: doctor → packs → allowlist → replay → …
+    const doctor_i = std.mem.indexOf(u8, top, "\n    doctor ").?;
+    const packs_i = std.mem.indexOf(u8, top, "\n    packs ").?;
+    const allowlist_i = std.mem.indexOf(u8, top, "\n    allowlist ").?;
+    const replay_i = std.mem.indexOf(u8, top, "\n    replay ").?;
+    try std.testing.expect(doctor_i < packs_i);
+    try std.testing.expect(packs_i < allowlist_i);
+    try std.testing.expect(allowlist_i < replay_i);
 
     // Common tasks teach start → agent → doctor → replay → update
     try std.testing.expect(std.mem.indexOf(u8, top, "ryk start") != null);
@@ -1132,7 +1153,7 @@ test "default root help shows only public Safe Launch verbs" {
     // Progressive disclosure escape hatch
     try std.testing.expect(std.mem.indexOf(u8, top, "help --all") != null);
 
-    // Not Getting Started / public peers
+    // Not Getting Started / public peers — allow/unallow stay advanced
     try std.testing.expect(!helpListsPeerCommand(top, "quickstart"));
     try std.testing.expect(!helpListsPeerCommand(top, "setup"));
     try std.testing.expect(!helpListsPeerCommand(top, "status"));
@@ -1141,6 +1162,9 @@ test "default root help shows only public Safe Launch verbs" {
     try std.testing.expect(!helpListsPeerCommand(top, "history"));
     try std.testing.expect(!helpListsPeerCommand(top, "policy"));
     try std.testing.expect(!helpListsPeerCommand(top, "mcp"));
+    try std.testing.expect(!helpListsPeerCommand(top, "allow"));
+    try std.testing.expect(!helpListsPeerCommand(top, "unallow"));
+    try std.testing.expect(!helpListsPeerCommand(top, "allow-once"));
 }
 
 test "help --all lists full advanced command surface" {
@@ -1292,10 +1316,14 @@ test "P0 honesty: default help and help --all omit hide-list and unfinished P0; 
         try std.testing.expect(!helpListsPeerCommand(top, name));
         try std.testing.expect(!helpAdvertisesUnavailableVerb(top, name));
     }
-    // Default Safe Launch help never listed shutdown / advanced peers (public=false).
+    // Default Safe Launch help never listed shutdown / allow-once / allow shortcuts.
+    // packs + allowlist are public Safe Launch (day-2 protection loop).
     try std.testing.expect(!helpListsPeerCommand(top, "shutdown"));
-    try std.testing.expect(!helpListsPeerCommand(top, "packs"));
+    try std.testing.expect(helpListsPeerCommand(top, "packs"));
+    try std.testing.expect(helpListsPeerCommand(top, "allowlist"));
     try std.testing.expect(!helpListsPeerCommand(top, "allow-once"));
+    try std.testing.expect(!helpListsPeerCommand(top, "allow"));
+    try std.testing.expect(!helpListsPeerCommand(top, "unallow"));
 
     writer = .fixed(&buf);
     try writeAll(std.testing.io, &writer);
@@ -1311,19 +1339,54 @@ test "P0 honesty: default help and help --all omit hide-list and unfinished P0; 
     }
     try std.testing.expect(helpListsPeerCommand(all, "shutdown"));
     try std.testing.expect(helpListsPeerCommand(all, "packs"));
+    try std.testing.expect(helpListsPeerCommand(all, "allowlist"));
     try std.testing.expect(helpListsPeerCommand(all, "allow-once"));
 
-    // Explicit full-text: remediation / teaching copy must not name unfinished P0 verbs.
+    // Explicit full-text: root --all must not teach daemon allowlist wording or
+    // promote allow/unallow shortcuts in Common-tasks / remediation copy.
     try std.testing.expect(std.mem.indexOf(u8, all, "allowlist (daemon)") == null);
-    try std.testing.expect(std.mem.indexOf(u8, all, "ryk allowlist") == null);
     try std.testing.expect(std.mem.indexOf(u8, all, "ryk unallow") == null);
     // "ryk allow " teaches the allow shortcut; does not match allowlist / allow-once.
     try std.testing.expect(std.mem.indexOf(u8, all, "ryk allow ") == null);
     // Live advanced verbs appear as peer columns on --all (name only; usage is per-command).
-    // helpListsPeerCommand already asserted packs / allow-once above.
+    // helpListsPeerCommand already asserted packs / allowlist / allow-once above.
 
     // Live product verbs remain discoverable on the full surface.
     try std.testing.expect(helpListsPeerCommand(all, "test"));
     try std.testing.expect(helpListsPeerCommand(all, "explain"));
     try std.testing.expect(helpListsPeerCommand(all, "start"));
+}
+
+test "public Safe Launch: packs and allowlist help details mention TTY browse and --plain" {
+    const packs_info = findCommand("packs") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(packs_info.public);
+    try std.testing.expect(!packs_info.hidden);
+    var packs_blob: [4096]u8 = undefined;
+    var packs_w: std.Io.Writer = .fixed(&packs_blob);
+    for (packs_info.details) |line| {
+        try packs_w.writeAll(line);
+        try packs_w.writeAll("\n");
+    }
+    const packs_text = packs_w.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, packs_text, "TTY") != null or std.mem.indexOf(u8, packs_text, "browse") != null);
+    try std.testing.expect(std.mem.indexOf(u8, packs_text, "--plain") != null);
+
+    const allowlist_info = findCommand("allowlist") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(allowlist_info.public);
+    try std.testing.expect(!allowlist_info.hidden);
+    var allow_blob: [4096]u8 = undefined;
+    var allow_w: std.Io.Writer = .fixed(&allow_blob);
+    for (allowlist_info.details) |line| {
+        try allow_w.writeAll(line);
+        try allow_w.writeAll("\n");
+    }
+    const allow_text = allow_w.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, allow_text, "TTY") != null or std.mem.indexOf(u8, allow_text, "browse") != null);
+    try std.testing.expect(std.mem.indexOf(u8, allow_text, "--plain") != null);
+
+    // Shortcuts stay non-public
+    const allow_info = findCommand("allow") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!allow_info.public);
+    const unallow_info = findCommand("unallow") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!unallow_info.public);
 }

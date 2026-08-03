@@ -17,6 +17,7 @@ const std = @import("std");
 const core = @import("orca_core").core;
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
+const suggestions = @import("suggestions.zig");
 const shell_engine = @import("../shell_engine/mod.zig");
 
 const allowlist_store = shell_engine.allowlist_store;
@@ -84,8 +85,15 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         return cmdPrune(io, gpa, now_iso, argv[1..], stdout, stderr);
     }
 
-    try stderr.print("ryk allowlist: unknown subcommand '{s}'\n", .{sub});
-    try stderr.writeAll(usage_text);
+    // Suggestion candidates omit "add-command" so short typos like "ad" uniquely
+    // resolve to "add" (closest() aborts on multiple prefix matches).
+    try suggestions.writeUnknownSubcommand(
+        stderr,
+        "ryk allowlist",
+        sub,
+        &.{ "add", "list", "remove", "validate", "prune" },
+        "allowlist",
+    );
     return exit_codes.usage;
 }
 
@@ -1544,6 +1552,15 @@ test "s-allowlist-cli: help and missing subcommand are usage-safe without daemon
         try sAllowlistCliExpectNoDaemonText(run.stdout);
         try sAllowlistCliExpectNoDaemonText(run.stderr);
     }
+}
+
+test "s-allowlist-cli: unknown subcommand suggests add for ad typo" {
+    const run = try sAllowlistCliRunAllowlist(&.{"ad"});
+    defer sAllowlistCliFreeRun(run);
+    try std.testing.expectEqual(exit_codes.usage, run.code);
+    try std.testing.expect(std.mem.indexOf(u8, run.stderr, "unknown subcommand") != null);
+    try std.testing.expect(std.mem.indexOf(u8, run.stderr, "Did you mean 'add'?") != null);
+    try std.testing.expect(std.mem.indexOf(u8, run.stderr, "ryk help allowlist") != null);
 }
 
 // ---------------------------------------------------------------------------

@@ -94,6 +94,17 @@ pub fn commandWithExecutor(comptime execute_cli: anytype, io: std.Io, argv: []co
         if (std.mem.eql(u8, argv[0], "disable")) {
             return runDisable(io, argv[1..], stdout, stderr);
         }
+        // Non-flag first token that is not a known subcommand → suggestion path (not list options).
+        if (!std.mem.startsWith(u8, argv[0], "-")) {
+            try suggestions.writeUnknownSubcommand(
+                stderr,
+                "ryk packs",
+                argv[0],
+                &.{ "show", "info", "enable", "disable" },
+                "packs",
+            );
+            return exit_codes.usage;
+        }
     }
 
     const options = parseListOptions(argv, stderr) catch return exit_codes.usage;
@@ -1455,4 +1466,17 @@ test "s-packs: rejects invalid list options without daemon" {
         const code = try commandWithExecutor(failIfCalled, std.testing.io, args, &stdout_writer, &stderr_writer);
         try std.testing.expectEqual(exit_codes.usage, code);
     }
+}
+
+test "s-packs: unknown subcommand suggests show for shoe typo" {
+    var stdout_buf: [64]u8 = undefined;
+    var stderr_buf: [512]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try commandWithExecutor(failIfCalled, std.testing.io, &.{"shoe"}, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.usage, code);
+    const err = stderr_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, err, "unknown subcommand") != null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "Did you mean 'show'?") != null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "ryk help packs") != null);
 }
