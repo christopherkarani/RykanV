@@ -1,13 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# First-user / curl-door regression (D86) for w1-install-handoff.
+# Executes scripts/install.sh against a mock product binary. After co-migration
+# the post-binary door is `"$DESTINATION" doctor --fix` (not start --auto).
+# Restoring start --auto must not green this harness.
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 VERSION="$(tr -d '[:space:]' < "${REPO_ROOT}/VERSION")"
+INSTALL_SH="${REPO_ROOT}/scripts/install.sh"
 
 fail() {
   printf 'install-first-user-regression: %s\n' "$1" >&2
   exit 1
+}
+
+# D06 full-protection forbid-list (case-insensitive). Soft / partial success
+# receipts and install step copy must never claim these.
+assert_no_d06_full_protection() {
+  local text="$1"
+  local label="${2:-output}"
+  if printf '%s\n' "${text}" | grep -Eiq \
+    'fully protected|all hosts wired|protection complete|full protection'; then
+    fail "${label} claimed a D06 full-protection phrase"
+  fi
 }
 
 case "$(uname -s)" in
@@ -46,16 +63,58 @@ for dir in integrations fixtures schemas policies orca-pi; do
   printf 'fixture\n' > "${release_root}/${dir}/fixture.txt"
 done
 
+# Mock product binary installed as ryk (or orca compat). Implements doctor for
+# the W1 ensure door; start is poison so restoring start --auto cannot green.
 cat > "${release_root}/bin/orca" <<'EOF'
 #!/usr/bin/env sh
+# Log door line + trust-scope env for the first-user harness.
+# Door line for doctor is "doctor <first-flag>" so count gate can use
+# grep -c '^doctor --fix$'. Never require start --auto to pass.
+log_scope() {
+  door_line="$1"
+  shift
+  printf '%s\n' "${door_line}" >> "${RYK_TEST_ONBOARD_LOG:?}"
+  printf 'cwd=%s\n' "$PWD" >> "${RYK_TEST_ONBOARD_LOG}"
+  printf 'ryk_resource=%s\n' "${RYK_RESOURCE_ROOT:-}" >> "${RYK_TEST_ONBOARD_LOG}"
+  printf 'resource=%s\n' "${ORCA_RESOURCE_ROOT:-}" >> "${RYK_TEST_ONBOARD_LOG}"
+  printf 'path=%s\n' "${PATH:-}" >> "${RYK_TEST_ONBOARD_LOG}"
+  printf 'argv=' >> "${RYK_TEST_ONBOARD_LOG}"
+  first=1
+  for a in "$@"; do
+    if [ "$first" -eq 1 ]; then
+      printf '%s' "$a" >> "${RYK_TEST_ONBOARD_LOG}"
+      first=0
+    else
+      printf ' %s' "$a" >> "${RYK_TEST_ONBOARD_LOG}"
+    fi
+  done
+  printf '\n' >> "${RYK_TEST_ONBOARD_LOG}"
+}
+
 case "${1:-}" in
+  doctor)
+    # Anchored door line uses $2 (expected --fix). Optional further flags
+    # (--from-install, --preset) are recorded on the argv= line only.
+    log_scope "doctor${2:+ $2}" "$@"
+    if [ "${RYK_TEST_DOCTOR_EXIT:-0}" -ne 0 ]; then
+      printf 'mock doctor: forced failure (exit %s)\n' "${RYK_TEST_DOCTOR_EXIT}" >&2
+      exit "${RYK_TEST_DOCTOR_EXIT}"
+    fi
+    if [ "${RYK_TEST_DOCTOR_PARTIAL:-0}" = "1" ]; then
+      # Soft host-fail honesty: exit 0, partial label, teach doctor --fix.
+      # Must not emit D06 full-protection phrases.
+      printf 'ryk ensure: protection partial — some hosts incomplete or none detected.\n'
+      printf 'host mock-host: incomplete — ryk doctor --fix\n'
+      exit 0
+    fi
+    printf 'ryk ensure: core ready (mock)\n'
+    ;;
   start)
-    printf 'start%s\n' "${2:+ $2}" >> "${RYK_TEST_ONBOARD_LOG:?}"
-    printf 'cwd=%s\n' "$PWD" >> "${RYK_TEST_ONBOARD_LOG}"
-    printf 'resource=%s\n' "${ORCA_RESOURCE_ROOT:-}" >> "${RYK_TEST_ONBOARD_LOG}"
-    printf 'path=%s\n' "${PATH:-}" >> "${RYK_TEST_ONBOARD_LOG}"
-    if [ "${RYK_TEST_START_EXIT:-0}" -ne 0 ]; then
-      exit "${RYK_TEST_START_EXIT}"
+    # Poison path: log and fail so install.sh cannot green via start --auto.
+    log_scope "start${2:+ $2}" "$@"
+    if [ "${RYK_TEST_START_EXIT:-99}" -ne 0 ]; then
+      printf 'mock start: forbidden install door (exit %s)\n' "${RYK_TEST_START_EXIT:-99}" >&2
+      exit "${RYK_TEST_START_EXIT:-99}"
     fi
     printf "You're now protected by ryk\n"
     ;;
@@ -87,6 +146,7 @@ export PATH='/legacy/ryk/bin':"\$PATH"
 export ORCA_RESOURCE_ROOT='/legacy/ryk/share'
 EOF
 
+# ── Non-TTY install: doctor --fix once under HOME + resource roots (D86) ──
 output="$(
   HOME="${home}" \
   SHELL=/bin/sh \
@@ -96,16 +156,27 @@ output="$(
   ORCA_SHARE_DIR="${share_dir}" \
   ORCA_RESOURCE_ROOT="${escaped}" \
   RYK_TEST_ONBOARD_LOG="${onboard_log}" \
-  sh "${REPO_ROOT}/scripts/install.sh"
+  sh "${INSTALL_SH}"
 )"
 
-# Captured stdout is intentionally non-TTY. Setup must still be automatic.
-[[ "$(grep -c '^start --auto$' "${onboard_log}")" == 1 ]] || fail "non-TTY install did not run onboarding exactly once"
+# Captured stdout is intentionally non-TTY. Setup must still be automatic via
+# doctor --fix (ensure door). start --auto must not appear.
+[[ "$(grep -c '^doctor --fix$' "${onboard_log}")" == 1 ]] ||
+  fail "non-TTY install did not run doctor --fix exactly once (got: $(grep -c '^doctor --fix$' "${onboard_log}" 2>/dev/null || echo 0); log=$(cat "${onboard_log}" 2>/dev/null || true))"
+[[ "$(grep -c '^start --auto$' "${onboard_log}")" == 0 ]] ||
+  fail "install still invoked start --auto (forbidden; restore is not a green path)"
+[[ "$(grep -c '^start' "${onboard_log}")" == 0 ]] ||
+  fail "install invoked start door (forbidden after w1-install-handoff)"
+
 actual_onboard_cwd="$(sed -n 's/^cwd=//p' "${onboard_log}" | head -n 1)"
 [[ -n "${actual_onboard_cwd}" && "${actual_onboard_cwd}" -ef "${home}" ]] ||
   fail "onboarding did not run from the global HOME scope (cwd=${actual_onboard_cwd})"
-grep -qF "resource=${share_dir}/current" "${onboard_log}" || fail "onboarding did not receive the installed resource root"
-grep -qF "${install_dir}" "${onboard_log}" || fail "onboarding PATH did not contain the installed binary directory"
+grep -qF "resource=${share_dir}/current" "${onboard_log}" ||
+  fail "onboarding did not receive ORCA_RESOURCE_ROOT at installed resource root"
+grep -qF "ryk_resource=${share_dir}/current" "${onboard_log}" ||
+  fail "onboarding did not receive RYK_RESOURCE_ROOT at installed resource root"
+grep -qF "${install_dir}" "${onboard_log}" ||
+  fail "onboarding PATH did not contain the installed binary directory"
 
 # Reinstalling must update the managed blocks instead of appending duplicates.
 HOME="${home}" \
@@ -115,7 +186,7 @@ ORCA_ARTIFACT_DIR="${artifact_dir}" \
 ORCA_INSTALL_DIR="${install_dir}" \
 ORCA_SHARE_DIR="${share_dir}" \
 RYK_TEST_ONBOARD_LOG="${onboard_log}" \
-sh "${REPO_ROOT}/scripts/install.sh" >/dev/null
+sh "${INSTALL_SH}" >/dev/null
 [[ "$(grep -c '^# Added by ryk installer$' "${home}/.profile")" == 1 ]] || fail "reinstall duplicated the PATH block"
 [[ "$(grep -c '^# ryk runtime assets$' "${home}/.profile")" == 1 ]] || fail "reinstall duplicated the runtime block"
 [[ "$(grep -ci 'Orca installer\\|Orca runtime assets' "${home}/.profile")" == 0 ]] || fail "legacy profile markers were not migrated"
@@ -130,9 +201,18 @@ activation="$(printf '%s\n' "${output}" | awk '/^    eval / { sub(/^    /, ""); 
 [[ "${activation}" == *"${install_dir}/ryk"* ]] || fail "activation command does not use the absolute installed binary"
 # UX receipt: brand + success + hierarchy (presentation may use ANSI; strip for asserts).
 plain_output="$(printf '%s\n' "${output}" | sed $'s/\x1b\\[[0-9;]*m//g')"
-printf '%s\n' "${plain_output}" | grep -Eq 'ryk' || fail "installer did not print brand header"
+printf '%s\n' "${plain_output}" | grep -Eq 'Rykan V|ryk' || fail "installer did not print brand header"
+printf '%s\n' "${plain_output}" | grep -Eqi 'Rykan V' || fail "installer did not print Rykan V brand"
 printf '%s\n' "${plain_output}" | grep -Eq 'installed|reinstalled' || fail "installer did not print success receipt"
-printf '%s\n' "${plain_output}" | grep -Fq "You're now protected by ryk" || fail "installer did not print the protected completion"
+printf '%s\n' "${plain_output}" | grep -Fqi 'doctor --fix' ||
+  fail "installer did not surface doctor --fix in user-facing copy (step/receipt)"
+if printf '%s\n' "${plain_output}" | grep -Fqi 'ryk start'; then
+  fail "installer still teaches ryk start as user-facing door"
+fi
+if printf '%s\n' "${plain_output}" | grep -Fqi 'start --auto'; then
+  fail "installer still surfaces start --auto in user-facing copy"
+fi
+assert_no_d06_full_protection "${plain_output}" "success receipt"
 printf '%s\n' "${plain_output}" | grep -Eq 'Activate this terminal|Activate this session' || fail "installer did not print activation hero"
 printf '%s\n' "${plain_output}" | grep -Eq 'Details' || fail "installer did not print details section"
 # Dashboard soft-warn belongs on the receipt stdout, without retired branding.
@@ -145,6 +225,8 @@ eval "${activation}"
 [[ "${ORCA_FIRST_USER_ACTIVATED:-}" == 1 ]] || fail "printed activation command did not activate the current shell"
 
 # Quiet mode: only the activation line on stdout (no banner / steps / details).
+# Quiet call site must still invoke doctor --fix under HOME + resource roots.
+: > "${onboard_log}"
 quiet_output="$(
   HOME="${home}" \
   SHELL=/bin/sh \
@@ -154,8 +236,19 @@ quiet_output="$(
   ORCA_SHARE_DIR="${share_dir}" \
   ORCA_INSTALL_QUIET=1 \
   RYK_TEST_ONBOARD_LOG="${onboard_log}" \
-  sh "${REPO_ROOT}/scripts/install.sh" 2>/dev/null
+  sh "${INSTALL_SH}" 2>/dev/null
 )"
+[[ "$(grep -c '^doctor --fix$' "${onboard_log}")" == 1 ]] ||
+  fail "quiet install did not run doctor --fix exactly once"
+[[ "$(grep -c '^start --auto$' "${onboard_log}")" == 0 ]] ||
+  fail "quiet install invoked start --auto"
+actual_quiet_cwd="$(sed -n 's/^cwd=//p' "${onboard_log}" | head -n 1)"
+[[ -n "${actual_quiet_cwd}" && "${actual_quiet_cwd}" -ef "${home}" ]] ||
+  fail "quiet onboarding did not run from HOME (cwd=${actual_quiet_cwd})"
+grep -qF "resource=${share_dir}/current" "${onboard_log}" ||
+  fail "quiet onboarding missing ORCA_RESOURCE_ROOT"
+grep -qF "ryk_resource=${share_dir}/current" "${onboard_log}" ||
+  fail "quiet onboarding missing RYK_RESOURCE_ROOT"
 quiet_activation="$(printf '%s\n' "${quiet_output}" | awk '/^    eval / { sub(/^    /, ""); print; exit }')"
 [[ -n "${quiet_activation}" ]] || fail "quiet mode did not print an activation command"
 if printf '%s\n' "${quiet_output}" | grep -Eq 'Platform|Details|Resolve release|Activate this terminal'; then
@@ -165,8 +258,9 @@ fi
 nonempty_quiet="$(printf '%s\n' "${quiet_output}" | sed '/^[[:space:]]*$/d')"
 [[ "$(printf '%s\n' "${nonempty_quiet}" | wc -l | tr -d ' ')" == "1" ]] || fail "quiet mode printed more than the activation line"
 
-# Protection setup failure must fail the install receipt instead of claiming
+# Core / hard onboarding failure must fail the install receipt instead of claiming
 # success and requiring the user to notice a dim warning.
+: > "${onboard_log}"
 failed_output="${tmp_root}/failed.out"
 if HOME="${home}" \
   SHELL=/bin/sh \
@@ -175,13 +269,68 @@ if HOME="${home}" \
   ORCA_INSTALL_DIR="${install_dir}" \
   ORCA_SHARE_DIR="${share_dir}" \
   RYK_TEST_ONBOARD_LOG="${onboard_log}" \
-  RYK_TEST_START_EXIT=17 \
-  sh "${REPO_ROOT}/scripts/install.sh" >"${failed_output}" 2>&1; then
-  fail "installer succeeded after onboarding failed"
+  RYK_TEST_DOCTOR_EXIT=17 \
+  sh "${INSTALL_SH}" >"${failed_output}" 2>&1; then
+  fail "installer succeeded after doctor --fix failed"
 fi
-if grep -Fq "You're now protected by ryk" "${failed_output}"; then
-  fail "installer claimed protection after onboarding failed"
+failed_plain="$(sed $'s/\x1b\\[[0-9;]*m//g' "${failed_output}")"
+if printf '%s\n' "${failed_plain}" | grep -Fq "You're now protected by ryk"; then
+  fail "installer claimed protection after doctor --fix failed"
 fi
+assert_no_d06_full_protection "${failed_plain}" "failed install"
+
+# Soft host-fail honesty: doctor --fix exits 0 with partial receipt.
+# Install must not step_done / claim D06 full-protection phrases.
+: > "${onboard_log}"
+partial_output="${tmp_root}/partial.out"
+HOME="${home}" \
+SHELL=/bin/sh \
+ORCA_VERSION="${VERSION}" \
+ORCA_ARTIFACT_DIR="${artifact_dir}" \
+ORCA_INSTALL_DIR="${install_dir}" \
+ORCA_SHARE_DIR="${share_dir}" \
+RYK_TEST_ONBOARD_LOG="${onboard_log}" \
+RYK_TEST_DOCTOR_PARTIAL=1 \
+sh "${INSTALL_SH}" >"${partial_output}" 2>&1 ||
+  fail "installer failed on soft host-fail (doctor --fix exit 0 / partial)"
+[[ "$(grep -c '^doctor --fix$' "${onboard_log}")" == 1 ]] ||
+  fail "partial-path install did not run doctor --fix once"
+partial_plain="$(sed $'s/\x1b\\[[0-9;]*m//g' "${partial_output}")"
+assert_no_d06_full_protection "${partial_plain}" "soft host-fail install"
+if printf '%s\n' "${partial_plain}" | grep -Fqi 'ryk start'; then
+  fail "soft host-fail path still teaches ryk start"
+fi
+# Soft path must not claim the old start full-protection completion string.
+if printf '%s\n' "${partial_plain}" | grep -Fq "You're now protected by ryk"; then
+  fail "soft host-fail path claimed full protection completion"
+fi
+
+# SKIP_ONBOARD must suppress the ensure door entirely (both RYK_ and ORCA_ names).
+: > "${onboard_log}"
+HOME="${home}" \
+SHELL=/bin/sh \
+ORCA_VERSION="${VERSION}" \
+ORCA_ARTIFACT_DIR="${artifact_dir}" \
+ORCA_INSTALL_DIR="${install_dir}" \
+ORCA_SHARE_DIR="${share_dir}" \
+RYK_INSTALL_SKIP_ONBOARD=1 \
+RYK_TEST_ONBOARD_LOG="${onboard_log}" \
+sh "${INSTALL_SH}" >/dev/null
+[[ ! -s "${onboard_log}" ]] ||
+  fail "RYK_INSTALL_SKIP_ONBOARD=1 still invoked doctor/start (log not empty)"
+
+: > "${onboard_log}"
+HOME="${home}" \
+SHELL=/bin/sh \
+ORCA_VERSION="${VERSION}" \
+ORCA_ARTIFACT_DIR="${artifact_dir}" \
+ORCA_INSTALL_DIR="${install_dir}" \
+ORCA_SHARE_DIR="${share_dir}" \
+ORCA_INSTALL_SKIP_ONBOARD=1 \
+RYK_TEST_ONBOARD_LOG="${onboard_log}" \
+sh "${INSTALL_SH}" >/dev/null
+[[ ! -s "${onboard_log}" ]] ||
+  fail "ORCA_INSTALL_SKIP_ONBOARD=1 still invoked doctor/start (log not empty)"
 
 # Destination hardening: even force mode must not write through symlinked
 # install/share parents or final binary/runtime targets.
@@ -200,7 +349,7 @@ assert_rejected_without_touching() {
     RYK_SHARE_DIR="${case_share_dir}" \
     RYK_INSTALL_FORCE=1 \
     RYK_INSTALL_SKIP_ONBOARD=1 \
-    sh "${REPO_ROOT}/scripts/install.sh" >"${output_path}" 2>&1; then
+    sh "${INSTALL_SH}" >"${output_path}" 2>&1; then
     fail "${case_name}: installer accepted a symlinked destination"
   fi
   [[ "$(cat "${victim}")" == "untouched" ]] || fail "${case_name}: installer modified the symlink target"
@@ -248,7 +397,7 @@ grep -qF 'version "1.2.9"' "${REPO_ROOT}/packaging/homebrew/Formula/ryk.rb" ||
   fail "primary Homebrew formula version does not match VERSION"
 grep -qF 'brew install christopherkarani/orca/ryk' "${REPO_ROOT}/packaging/homebrew/README.md" ||
   fail "Homebrew README does not provide a one-line primary ryk install"
-grep -qF 'raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh' "${REPO_ROOT}/scripts/install.sh" ||
+grep -qF 'raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh' "${INSTALL_SH}" ||
   fail "curl installer guidance does not use the canonical rykan repository"
 grep -qF 'github.com/christopherkarani/rykan/releases/download' "${REPO_ROOT}/packaging/homebrew/Formula/ryk.rb" ||
   fail "Homebrew release artifacts do not use the canonical rykan repository"
@@ -256,6 +405,35 @@ if git -C "${REPO_ROOT}" grep -nE \
   'github\.com/(christopherkarani|chriskarani)/(Orca|orca|ryk)([^A-Za-z0-9_-]|$)|raw\.githubusercontent\.com/(christopherkarani|chriskarani)/(Orca|orca|ryk)/' \
   -- README.md AGENTS.md scripts packaging integrations schemas macos docs; then
   fail "public metadata still contains a stale main-repository URL"
+fi
+
+# ── Static machine gates on install.sh (D84 adjunct; D86 runtime is above) ──
+# These keep the unit RED until production door swap lands; do not short-circuit.
+if grep -n 'start --auto' "${INSTALL_SH}" >/dev/null 2>&1; then
+  fail "scripts/install.sh still contains start --auto (must invoke doctor --fix)"
+fi
+if ! grep -nF '"$DESTINATION" doctor --fix' "${INSTALL_SH}" >/dev/null 2>&1; then
+  fail 'scripts/install.sh missing invocation-anchored "$DESTINATION" doctor --fix'
+fi
+if ! grep -nF 'cd "$HOME"' "${INSTALL_SH}" >/dev/null 2>&1; then
+  fail 'scripts/install.sh missing cd "$HOME" around ensure invocation'
+fi
+if ! grep -n 'RYK_RESOURCE_ROOT' "${INSTALL_SH}" >/dev/null 2>&1; then
+  fail "scripts/install.sh missing RYK_RESOURCE_ROOT export around ensure"
+fi
+if grep -niE 'fully protected|all hosts wired|protection complete|full protection' "${INSTALL_SH}" >/dev/null 2>&1; then
+  fail "scripts/install.sh contains D06 full-protection forbid phrases"
+fi
+if grep -n 'ryk start' "${INSTALL_SH}" >/dev/null 2>&1; then
+  fail "scripts/install.sh still teaches ryk start"
+fi
+# Harness self-check (D84): must require doctor --fix and must not green on
+# counting start --auto once as the success door.
+if ! grep -nF "grep -c '^doctor --fix$'" "${BASH_SOURCE[0]}" >/dev/null 2>&1; then
+  fail "harness must count doctor --fix (D86)"
+fi
+if grep -nE "grep -c '\\^start --auto\\\$'[[:space:]].*==[[:space:]]*1" "${BASH_SOURCE[0]}" >/dev/null 2>&1; then
+  fail "harness must not treat start --auto count==1 as the green path"
 fi
 
 (
