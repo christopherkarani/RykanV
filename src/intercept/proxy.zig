@@ -102,16 +102,19 @@ pub const Runtime = struct {
         if (self.state.thread_started) {
             self.state.thread.join();
         }
-        // Detached connection workers can stall in readHeaders (5s) and/or tunnel
-        // idle (3s). Wait past those stalls; never free State while workers still
-        // hold *State (M-6 free-before-join).
+        // Force-shutdown active client FDs so tunnel/readHeaders workers observe
+        // HUP/ERR and drain without waiting tunnel_idle_ms (agent-grade quiet
+        // budget, not a deinit drain valve). Never free State while workers
+        // still hold *State (M-6 free-before-join).
+        self.state.shutdownConnections(io);
         const idle_budget_ns: u64 = 8 * std.time.ns_per_s;
         var server_closed = false;
         self.waitForIdle(idle_budget_ns) catch {
             // Force-close the accept socket, then wait once more so half-open
-            // workers can observe peer close / idle timeouts before reclaim.
+            // workers can observe peer close before reclaim.
             self.state.server.deinit(io);
             server_closed = true;
+            self.state.shutdownConnections(io);
             self.waitForIdle(idle_budget_ns) catch {};
         };
         if (!server_closed) {
@@ -121,19 +124,27 @@ pub const Runtime = struct {
         // borrows selected_policy and a caller-owned allocator; returning with
         // a leaked State still UAFs when the caller frees policy/GPA after
         // deinit. Prefer blocking until workers drain over intentional leak.
-        // Note: deinit may block for the lifetime of long-lived tunnels
-        // (continuous traffic defeats the 3s tunnel idle timeout).
+        // Force-shutdown above makes quiet tunnels exit promptly; workers still
+        // mid-dial or under continuous traffic may take a short additional wait.
         while (self.state.active_connections.load(.acquire) > 0) {
+            self.state.shutdownConnections(io);
             const duration = std.Io.Duration.fromNanoseconds(10 * std.time.ns_per_ms);
             std.Io.sleep(io, duration, .awake) catch {};
         }
         for (self.state.audit_events.items) |ev| ev.deinit(self.state.allocator);
         self.state.audit_events.deinit(self.state.allocator);
+        self.state.active_streams.deinit(self.state.allocator);
         self.state.allocator.free(self.state.bind_url);
         self.state.allocator.destroy(self.state);
         self.* = undefined;
     }
 };
+
+/// Quiet-gap idle before `fn tunnel` exits. Agent-grade (LLM think/stream pauses);
+/// was historically 3s (deinit drain shaped) which killed quiet CONNECT streams.
+/// On `Runtime.deinit` / stop, active client FDs are force-shutdown so reclaim does
+/// not wait this full budget.
+const tunnel_idle_ms: usize = 300_000;
 
 const State = struct {
     allocator: std.mem.Allocator,
@@ -146,6 +157,8 @@ const State = struct {
     failed: std.atomic.Value(bool) = .init(false),
     serving: std.atomic.Value(bool) = .init(false),
     active_connections: std.atomic.Value(usize) = .init(0),
+    connections_mutex: std.Io.Mutex = .init,
+    active_streams: std.ArrayList(std.Io.net.Stream) = .empty,
     audit_mutex: std.Io.Mutex = .init,
     audit_events: std.ArrayList(AuditEvent) = .empty,
     threaded: std.Io.Threaded = undefined,
@@ -167,6 +180,30 @@ const State = struct {
             .reason = owned_reason,
             .ci_may_proceed = if (maybe_decision) |decision| decision.ci_may_proceed else true,
         });
+    }
+
+    fn registerConnection(self: *State, io: std.Io, stream: std.Io.net.Stream) !void {
+        try self.connections_mutex.lock(io);
+        defer self.connections_mutex.unlock(io);
+        try self.active_streams.append(self.allocator, stream);
+    }
+
+    fn unregisterConnection(self: *State, io: std.Io, handle: std.Io.net.Socket.Handle) void {
+        self.connections_mutex.lock(io) catch return;
+        defer self.connections_mutex.unlock(io);
+        for (self.active_streams.items, 0..) |stream, index| {
+            if (stream.socket.handle != handle) continue;
+            _ = self.active_streams.swapRemove(index);
+            return;
+        }
+    }
+
+    fn shutdownConnections(self: *State, io: std.Io) void {
+        self.connections_mutex.lock(io) catch return;
+        defer self.connections_mutex.unlock(io);
+        for (self.active_streams.items) |stream| {
+            stream.shutdown(io, .both) catch {};
+        }
     }
 };
 
@@ -262,9 +299,15 @@ fn serverLoop(state: *State) void {
             stream.close(io);
             continue;
         };
+        state.registerConnection(io, stream) catch {
+            stream.close(io);
+            state.allocator.destroy(context);
+            continue;
+        };
         context.* = .{ .state = state, .client = stream };
         _ = state.active_connections.fetchAdd(1, .acq_rel);
         const thread = std.Thread.spawn(.{}, connectionLoop, .{context}) catch {
+            state.unregisterConnection(io, stream.socket.handle);
             _ = state.active_connections.fetchSub(1, .acq_rel);
             stream.close(io);
             state.allocator.destroy(context);
@@ -285,8 +328,12 @@ fn connectionLoop(context: *ConnectionContext) void {
     // M-1: cache allocator before fetchSub. Runtime.deinit reclaims State as
     // soon as active_connections hits 0; touching *State after the last
     // worker's fetchSub is free-before-join UAF.
+    // Unregister + close client here (not in handleConnection) so deinit's
+    // force-shutdown list stays accurate until the worker is done with the FD.
     defer {
         const allocator = context.state.allocator;
+        context.state.unregisterConnection(io, context.client.socket.handle);
+        context.client.close(io);
         _ = context.state.active_connections.fetchSub(1, .acq_rel);
         // Last *State touch was fetchSub; free ConnectionContext only.
         allocator.destroy(context);
@@ -295,7 +342,6 @@ fn connectionLoop(context: *ConnectionContext) void {
 }
 
 fn handleConnection(state: *State, io: std.Io, client: std.Io.net.Stream) !void {
-    defer client.close(io);
     var buffer: [64 * 1024]u8 = undefined;
     const read_len = try readHeaders(io, client, &buffer);
     if (read_len == 0) return;
@@ -316,10 +362,10 @@ fn handleConnection(state: *State, io: std.Io, client: std.Io.net.Stream) !void 
     state.record(.network_connect_allowed, decision.redacted_target, decision.decision) catch {};
 
     if (request.https_connect) {
-        try tunnelConnect(state.allocator, io, client, request.host, request.port orelse 443);
+        try tunnelConnect(state.allocator, io, client, request.host, request.port orelse 443, &state.stop);
         return;
     }
-    try forwardHttp(state.allocator, io, client, request, buffer[0..read_len]);
+    try forwardHttp(state.allocator, io, client, request, buffer[0..read_len], &state.stop);
 }
 
 fn readHeaders(io: std.Io, stream: std.Io.net.Stream, buffer: []u8) !usize {
@@ -421,7 +467,14 @@ fn connectUpstream(io: std.Io, host: []const u8, port: u16) !std.Io.net.Stream {
     }
 }
 
-fn forwardHttp(allocator: std.mem.Allocator, io: std.Io, client: std.Io.net.Stream, request: ParsedRequest, first_read: []const u8) !void {
+fn forwardHttp(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    client: std.Io.net.Stream,
+    request: ParsedRequest,
+    first_read: []const u8,
+    stop: *const std.atomic.Value(bool),
+) !void {
     var upstream = try connectUpstream(io, request.host, request.port orelse 80);
     defer upstream.close(io);
     var upstream_buf: [64 * 1024]u8 = undefined;
@@ -434,10 +487,17 @@ fn forwardHttp(allocator: std.mem.Allocator, io: std.Io, client: std.Io.net.Stre
         try upstream_writer.interface.writeAll(first_read);
     }
     try upstream_writer.interface.flush();
-    try tunnel(io, client, upstream);
+    try tunnel(io, client, upstream, stop);
 }
 
-fn tunnelConnect(allocator: std.mem.Allocator, io: std.Io, client: std.Io.net.Stream, host: []const u8, port: u16) !void {
+fn tunnelConnect(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    client: std.Io.net.Stream,
+    host: []const u8,
+    port: u16,
+    stop: *const std.atomic.Value(bool),
+) !void {
     _ = allocator;
     var upstream = try connectUpstream(io, host, port);
     defer upstream.close(io);
@@ -445,10 +505,12 @@ fn tunnelConnect(allocator: std.mem.Allocator, io: std.Io, client: std.Io.net.St
     var client_writer = client.writer(io, &client_buf);
     try client_writer.interface.writeAll("HTTP/1.1 200 Connection Established\r\nProxy-Agent: Orca\r\n\r\n");
     try client_writer.interface.flush();
-    try tunnel(io, client, upstream);
+    try tunnel(io, client, upstream, stop);
 }
 
-fn tunnel(io: std.Io, a: std.Io.net.Stream, b: std.Io.net.Stream) !void {
+/// Bidirectional byte relay for CONNECT and HTTP forward (shared path).
+/// Exits on peer EOF/HUP/ERR, Runtime stop, or quiet idle ≥ tunnel_idle_ms.
+fn tunnel(io: std.Io, a: std.Io.net.Stream, b: std.Io.net.Stream, stop: *const std.atomic.Value(bool)) !void {
     var fds = [_]std.posix.pollfd{
         .{ .fd = a.socket.handle, .events = std.posix.POLL.IN, .revents = 0 },
         .{ .fd = b.socket.handle, .events = std.posix.POLL.IN, .revents = 0 },
@@ -460,10 +522,11 @@ fn tunnel(io: std.Io, a: std.Io.net.Stream, b: std.Io.net.Stream) !void {
     var a_writer = a.writer(io, &a_buf);
     var idle_ms: usize = 0;
     while (true) {
+        if (stop.load(.acquire)) return;
         const ready = try std.posix.poll(&fds, 200);
         if (ready == 0) {
             idle_ms += 200;
-            if (idle_ms >= 3000) return;
+            if (idle_ms >= tunnel_idle_ms) return;
             continue;
         }
         idle_ms = 0;
@@ -934,8 +997,9 @@ test "proxy deinit reclaims state only after connection workers drain" {
 
 test "proxy deinit blocks until workers drain instead of abandoning state" {
     // M-2/M-3 + M-1: deinit must not return while active_connections > 0
-    // (borrowed selected_policy / last-worker State lifetime). Peer-close the
-    // half-open client so the worker can exit; deinit then reclaims.
+    // (borrowed selected_policy / last-worker State lifetime). Force-shutdown of
+    // active client FDs unblocks readHeaders/tunnel workers; deinit then reclaims
+    // without requiring the test client to peer-close first.
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
 
     var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
@@ -988,15 +1052,26 @@ test "proxy deinit blocks until workers drain instead of abandoning state" {
     const deinit_thread = try std.Thread.spawn(.{}, DeinitCtx.run, .{&deinit_ctx});
     needs_deinit = false;
 
-    // deinit must still be waiting on the live worker (no abandon-return).
-    std.Io.sleep(io, std.Io.Duration.fromNanoseconds(100 * std.time.ns_per_ms), .awake) catch {};
-    try std.testing.expect(!deinit_ctx.done.load(.acquire));
-    try std.testing.expect(runtime.state.active_connections.load(.acquire) > 0);
-
-    client.close(io);
-    client_open = false;
+    // Force-shutdown path: deinit completes without the test peer-closing first.
+    const bound_started = std.Io.Clock.Timestamp.now(io, .awake);
+    const bound_ns: i96 = 5 * std.time.ns_per_s;
+    while (!deinit_ctx.done.load(.acquire)) {
+        if (bound_started.durationFromNow(io).raw.nanoseconds > bound_ns) {
+            if (client_open) {
+                client.close(io);
+                client_open = false;
+            }
+            deinit_thread.join();
+            try std.testing.expect(false); // deinit did not reclaim worker within bound
+        }
+        std.Io.sleep(io, std.Io.Duration.fromNanoseconds(10 * std.time.ns_per_ms), .awake) catch {};
+    }
     deinit_thread.join();
     try std.testing.expect(deinit_ctx.done.load(.acquire));
+    if (client_open) {
+        client.close(io);
+        client_open = false;
+    }
 }
 
 test "proxy scheme-less allowed target does not connect to mismatched Host" {
@@ -1366,4 +1441,214 @@ test "proxy CONNECT allowlisted hostname returns 200 Connection Established" {
     defer runtime.freeAuditEvents(std.testing.allocator, events);
     try std.testing.expect(events.len >= 2);
     try std.testing.expectEqual(@import("orca_core").core.event.EventType.network_connect_allowed, events[1].event_type);
+}
+
+test "proxy tunnel survives mid-stream quiet gap of 5s (CONNECT shares fn tunnel)" {
+    // U1: product bug was idle_ms >= 3000 closing both tunnel ends during LLM
+    // think/stream pauses. CONNECT and HTTP forward both call the same `fn tunnel`;
+    // this exercises CONNECT with first body chunk → pause ≥5s → second chunk.
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    const io = std.testing.io;
+    const upstream_addr = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var upstream = try upstream_addr.listen(io, .{ .reuse_address = true });
+    defer upstream.deinit(io);
+    const upstream_port = upstream.socket.address.getPort();
+
+    const UpstreamState = struct {
+        server: *std.Io.net.Server,
+        io: std.Io,
+        fn run(self: *@This()) void {
+            var stream = self.server.accept(self.io) catch return;
+            defer stream.close(self.io);
+            var write_buf: [64]u8 = undefined;
+            var writer = stream.writer(self.io, &write_buf);
+            writer.interface.writeAll("chunk-a") catch return;
+            writer.interface.flush() catch return;
+            // Quiet gap longer than the old 3s tunnel idle kill.
+            std.Io.sleep(self.io, std.Io.Duration.fromNanoseconds(5 * std.time.ns_per_s), .awake) catch {};
+            writer.interface.writeAll("chunk-b") catch return;
+            writer.interface.flush() catch {};
+        }
+    };
+    var upstream_state: UpstreamState = .{ .server = &upstream, .io = io };
+    const upstream_thread = try std.Thread.spawn(.{}, UpstreamState.run, .{&upstream_state});
+    defer upstream_thread.join();
+
+    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
+        \\version: 1
+        \\mode: observe
+        \\network:
+        \\  mode: open
+        \\  backend: proxy
+    , "proxy-tunnel-quiet-gap.yaml");
+    defer loaded.deinit();
+
+    var runtime = try start(std.testing.allocator, &loaded, .observe);
+    defer runtime.deinit();
+    std.Io.sleep(io, std.Io.Duration.fromNanoseconds(50 * std.time.ns_per_ms), .awake) catch {};
+
+    const proxy_port = try bindPort(runtime.bindUrl());
+    const proxy_addr = try std.Io.net.IpAddress.parse("127.0.0.1", proxy_port);
+    var client = try std.Io.net.IpAddress.connect(&proxy_addr, io, .{ .mode = .stream });
+    defer client.close(io);
+
+    var req_buf: [128]u8 = undefined;
+    const req = try std.fmt.bufPrint(
+        &req_buf,
+        "CONNECT 127.0.0.1:{d} HTTP/1.1\r\nHost: 127.0.0.1:{d}\r\n\r\n",
+        .{ upstream_port, upstream_port },
+    );
+    var write_buf: [256]u8 = undefined;
+    var writer = client.writer(io, &write_buf);
+    try writer.interface.writeAll(req);
+    try writer.interface.flush();
+
+    var head_buf: [512]u8 = undefined;
+    const head_len = try readHttpResponse(io, client, &head_buf);
+    try std.testing.expect(std.mem.indexOf(u8, head_buf[0..head_len], "200 Connection Established") != null);
+
+    // Read tunnel body until both chunks arrive (or 10s deadline).
+    var body_buf: [64]u8 = undefined;
+    var total: usize = 0;
+    const started = std.Io.Clock.Timestamp.now(io, .awake);
+    const deadline_ns: i96 = 10 * std.time.ns_per_s;
+    while (total < body_buf.len and started.durationFromNow(io).raw.nanoseconds < deadline_ns) {
+        if (std.mem.indexOf(u8, body_buf[0..total], "chunk-a") != null and
+            std.mem.indexOf(u8, body_buf[0..total], "chunk-b") != null) break;
+        var fds = [_]std.posix.pollfd{.{
+            .fd = client.socket.handle,
+            .events = std.posix.POLL.IN,
+            .revents = 0,
+        }};
+        const ready = std.posix.poll(&fds, 200) catch break;
+        if (ready == 0) continue;
+        const n = std.posix.read(client.socket.handle, body_buf[total..]) catch |err| switch (err) {
+            error.WouldBlock => continue,
+            else => break,
+        };
+        if (n == 0) break;
+        total += n;
+    }
+    try std.testing.expect(std.mem.indexOf(u8, body_buf[0..total], "chunk-a") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_buf[0..total], "chunk-b") != null);
+    try runtime.waitForIdle(2 * std.time.ns_per_s);
+}
+
+test "proxy deinit reclaims quiet open tunnel within bound" {
+    // U1 / B1: after lengthening tunnel idle, deinit must force-close active
+    // sockets so workers drain without waiting the full idle budget (or hanging).
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    const io = std.testing.io;
+    const upstream_addr = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var upstream = try upstream_addr.listen(io, .{ .reuse_address = true });
+    defer upstream.deinit(io);
+    const upstream_port = upstream.socket.address.getPort();
+
+    // Quiet upstream: accept and hold until peer close / error (no bytes).
+    const QuietUpstream = struct {
+        server: *std.Io.net.Server,
+        io: std.Io,
+        fn run(self: *@This()) void {
+            var stream = self.server.accept(self.io) catch return;
+            defer stream.close(self.io);
+            var buf: [16]u8 = undefined;
+            const hold_started = std.Io.Clock.Timestamp.now(self.io, .awake);
+            while (hold_started.durationFromNow(self.io).raw.nanoseconds < 30 * std.time.ns_per_s) {
+                var fds = [_]std.posix.pollfd{.{
+                    .fd = stream.socket.handle,
+                    .events = std.posix.POLL.IN,
+                    .revents = 0,
+                }};
+                const ready = std.posix.poll(&fds, 200) catch break;
+                if (ready == 0) continue;
+                const n = std.posix.read(stream.socket.handle, &buf) catch break;
+                if (n == 0) break;
+            }
+        }
+    };
+    var quiet: QuietUpstream = .{ .server = &upstream, .io = io };
+    const upstream_thread = try std.Thread.spawn(.{}, QuietUpstream.run, .{&quiet});
+    defer upstream_thread.join();
+
+    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
+        \\version: 1
+        \\mode: observe
+        \\network:
+        \\  mode: open
+        \\  backend: proxy
+    , "proxy-deinit-quiet-tunnel.yaml");
+    defer loaded.deinit();
+
+    var runtime = try start(std.testing.allocator, &loaded, .observe);
+    var needs_deinit = true;
+    errdefer if (needs_deinit) runtime.deinit();
+    std.Io.sleep(io, std.Io.Duration.fromNanoseconds(50 * std.time.ns_per_ms), .awake) catch {};
+
+    const proxy_port = try bindPort(runtime.bindUrl());
+    const proxy_addr = try std.Io.net.IpAddress.parse("127.0.0.1", proxy_port);
+    var client = try std.Io.net.IpAddress.connect(&proxy_addr, io, .{ .mode = .stream });
+    var client_open = true;
+    defer if (client_open) client.close(io);
+
+    var req_buf: [128]u8 = undefined;
+    const req = try std.fmt.bufPrint(
+        &req_buf,
+        "CONNECT 127.0.0.1:{d} HTTP/1.1\r\nHost: 127.0.0.1:{d}\r\n\r\n",
+        .{ upstream_port, upstream_port },
+    );
+    var write_buf: [256]u8 = undefined;
+    var writer = client.writer(io, &write_buf);
+    try writer.interface.writeAll(req);
+    try writer.interface.flush();
+
+    var head_buf: [512]u8 = undefined;
+    const head_len = try readHttpResponse(io, client, &head_buf);
+    try std.testing.expect(std.mem.indexOf(u8, head_buf[0..head_len], "200 Connection Established") != null);
+
+    // Wait until worker is active in the quiet tunnel.
+    {
+        const wait_started = std.Io.Clock.Timestamp.now(io, .awake);
+        while (runtime.state.active_connections.load(.acquire) == 0) {
+            try std.testing.expect(wait_started.durationFromNow(io).raw.nanoseconds <= 2 * std.time.ns_per_s);
+            std.Io.sleep(io, std.Io.Duration.fromNanoseconds(10 * std.time.ns_per_ms), .awake) catch {};
+        }
+    }
+    try std.testing.expect(runtime.state.active_connections.load(.acquire) > 0);
+
+    const DeinitCtx = struct {
+        runtime: *Runtime,
+        done: std.atomic.Value(bool) = .init(false),
+        fn run(ctx: *@This()) void {
+            ctx.runtime.deinit();
+            ctx.done.store(true, .release);
+        }
+    };
+    var deinit_ctx: DeinitCtx = .{ .runtime = &runtime };
+    const deinit_thread = try std.Thread.spawn(.{}, DeinitCtx.run, .{&deinit_ctx});
+    needs_deinit = false;
+
+    // Bound: force-close path must finish well under tunnel_idle (300s) and under
+    // a tight few-second product bound. Do not peer-close the client first.
+    const bound_started = std.Io.Clock.Timestamp.now(io, .awake);
+    const bound_ns: i96 = 5 * std.time.ns_per_s;
+    while (!deinit_ctx.done.load(.acquire)) {
+        if (bound_started.durationFromNow(io).raw.nanoseconds > bound_ns) {
+            // Unblock any stuck worker so the suite can finish, then fail.
+            if (client_open) {
+                client.close(io);
+                client_open = false;
+            }
+            deinit_thread.join();
+            try std.testing.expect(false); // deinit exceeded bound with quiet tunnel
+        }
+        std.Io.sleep(io, std.Io.Duration.fromNanoseconds(10 * std.time.ns_per_ms), .awake) catch {};
+    }
+    deinit_thread.join();
+    try std.testing.expect(deinit_ctx.done.load(.acquire));
+    if (client_open) {
+        client.close(io);
+        client_open = false;
+    }
 }
