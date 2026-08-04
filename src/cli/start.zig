@@ -88,6 +88,8 @@ pub fn runStart(
 
     var failures: usize = 0;
     var protection_active = false;
+    // M-5: when policy ensure core fails, do not install hosts or claim protection active.
+    var policy_core_failed = false;
 
     // Policy-only ensure bridge: create/leave-alone without auto-wiring every day-one host.
     // Multi-select below owns host mutation (skip_host_wire). Full auto-wire is doctor --fix.
@@ -112,6 +114,8 @@ pub fn runStart(
     if (!ensure_outcome.core_ok) {
         try tui.render.stepLine(io, stdout, .failed, "Policy", "Policy setup failed.", 80);
         failures += 1;
+        policy_core_failed = true;
+        protection_active = false;
     } else {
         policy_mode = readWorkspacePolicyMode(io, allocator, workspace_root);
         if (policy_mode) |mode| {
@@ -170,7 +174,11 @@ pub fn runStart(
         configured_hosts.deinit(allocator);
     }
 
-    if (selected_hosts.items.len == 0) {
+    // M-5: policy core_failed must not claim protection or install hosts as a success path.
+    if (policy_core_failed) {
+        protection_active = false;
+        try tui.render.stepLine(io, stdout, .failed, "Hosts", "Skipped because policy setup failed.", 80);
+    } else if (selected_hosts.items.len == 0) {
         try tui.render.stepLine(io, stdout, .done, "Hosts", "No hosts selected.", 80);
     } else if (protection.needsCommandGuard()) {
         const host_failures = try installSelectedHosts(io, allocator, selected_hosts.items, workspace_root, stdout, &configured_hosts);
@@ -185,6 +193,7 @@ pub fn runStart(
         try tui.render.stepLine(io, stdout, .done, "Hosts", "Skipped for this setup path", 80);
         protection_active = onboarding.verifyFirewallReady(io, workspace_root);
     }
+    if (policy_core_failed) protection_active = false;
 
     var verification: ?onboarding.VerificationOutcome = null;
     if (!flags.skip_verify and failures == 0) {
@@ -979,6 +988,52 @@ test "start auto default path has no protection grade menu jargon in stdout" {
     try std.testing.expect(std.mem.indexOf(u8, output, "Maximum Protection") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Firewall-only mode") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Ask on risk") != null);
+}
+
+test "start skips hosts when policy ensure core fails (M-5)" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // Anchor workspace at tmp so start does not walk into the monorepo policy.
+    // Empty workspace + invalid preset → ensure core_failed before host install.
+    try tmp.dir.createDirPath(std.testing.io, ".git");
+
+    var stdout_buf: [16384]u8 = undefined;
+    var stderr_buf: [2048]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    // Hosts selected so the command_guard install path would run without M-5.
+    const flags = onboarding.StartFlags{
+        .auto = true,
+        .protection = .command_guard,
+        .skip_verify = true,
+        .preset = "not-a-real-preset-m5",
+        .hosts_csv = "codex",
+    };
+
+    const mock_checker = struct {
+        fn check(_: std.mem.Allocator, _: bool) !void {}
+    }.check;
+
+    const code = try runStart(
+        std.testing.io,
+        tmp.dir,
+        flags,
+        &stdout_writer,
+        &stderr_writer,
+        mock_checker,
+        onboarding.mockOnboardingEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.general, code);
+
+    const output = stdout_writer.buffered();
+    const err_out = stderr_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "Policy setup failed") != null or std.mem.indexOf(u8, err_out, "invalid --preset") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Skipped because policy setup failed") != null);
+    // Must not claim integrations configured after policy core failure.
+    try std.testing.expect(std.mem.indexOf(u8, output, "Integrations configured") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "You're now protected by ryk") == null);
 }
 
 // ---------------------------------------------------------------------------
