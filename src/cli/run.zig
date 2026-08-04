@@ -867,7 +867,10 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                             .risk_score = command_decision.decision.risk_score,
                             .ci_may_proceed = true,
                         };
-                        try self.auditCommandEvent(session, .user_approval, rust_visibility.target_summary_shell, final_decision, rust_metadata);
+                        // F12: shim soft-allow matches cmd-hash of full display, not redacted summary.
+                        // Redacted summary alone would either never match or match every command.
+                        const approval_fp = intercept.commands.approvalTargetFingerprint(raw_display);
+                        try self.auditCommandEvent(session, .user_approval, &approval_fp, final_decision, rust_metadata);
                     },
                     .deny => {
                         approval_reason = try self.allocator.dupe(u8, "user denied command approval");

@@ -55,7 +55,7 @@ test "hermes plugin source detects stale Orca binaries and version mismatch" {
     try std.testing.expect(std.mem.indexOf(u8, content, "_handle_hook_error") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "ORCA_HERMES_FAIL_OPEN") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "_orca_executable") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "Allowing tool call WITHOUT Orca guardrails") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "Allowing tool call WITHOUT ryk guardrails") != null);
 }
 
 test "hermes plugin readme documents degraded mode and discovery order" {
@@ -64,7 +64,9 @@ test "hermes plugin readme documents degraded mode and discovery order" {
 
     try std.testing.expect(std.mem.indexOf(u8, content, "fail-open") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "ORCA_HERMES_FAIL_OPEN") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "~/.orca/bin/orca") != null);
+    // Discovery: trusted home installs before cwd zig-out (F10/F4).
+    try std.testing.expect(std.mem.indexOf(u8, content, "~/.local/bin/ryk") != null or std.mem.indexOf(u8, content, "~/.orca/bin") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "zig-out") != null);
 }
 
 test "hermes plugin readme documents install and limits" {
@@ -72,9 +74,9 @@ test "hermes plugin readme documents install and limits" {
     const content = try readFile(std.testing.allocator, readme_path);
     defer std.testing.allocator.free(content);
 
-    try std.testing.expect(std.mem.indexOf(u8, content, "install-orca-plugin.sh hermes") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "plugin install hermes") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "pre_gateway_dispatch") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "orca run -- hermes") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "ryk run -- hermes") != null or std.mem.indexOf(u8, content, "orca run -- hermes") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "context-only") != null or std.mem.indexOf(u8, content, "Context-only") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "Telegram and Discord") != null);
     // Native approve-and-resume for tool ask (not block-without-resume).

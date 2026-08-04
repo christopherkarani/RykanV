@@ -196,12 +196,12 @@ pub const host_config_table = [_]HostConfigSpec{
     .{
         .host = "grok",
         // Product state only — not whole ~/.grok (worktrees, agent scratch, etc.) (F19).
-        // user-settings.json stays authority write-deny via authority_home_rel_files.
+        // F40: do not RW-grant ~/.grok/bin (host-identity trust root — plantable privilege).
+        // user-settings.json is RO via collect paths + authority write-deny (F218).
         .home_rel_dirs = &.{
             ".grok/skills",
             ".grok/hooks",
             ".grok/sessions",
-            ".grok/bin",
             ".grok/plugins",
             ".grok/mcp",
         },

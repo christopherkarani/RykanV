@@ -836,7 +836,8 @@ test "help run includes examples section" {
     try std.testing.expect(std.mem.indexOf(u8, output, "Examples:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "ryk run -- <custom-command>") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "ryk claude") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Secretless stays off") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "secretless stays off") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "empty-backpack") != null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 

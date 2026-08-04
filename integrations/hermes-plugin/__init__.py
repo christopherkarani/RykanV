@@ -168,10 +168,14 @@ def _is_degraded_orca_error(error: BaseException) -> bool:
 
 
 def _hook_smoke_passes(stdout: str) -> bool:
-    """Lenient probe: exit 0 and decision is not block (matches install scripts)."""
+    """Probe: exit 0 and non-empty JSON whose decision is not block.
+
+    Empty stdout is *not* a pass — planted binaries that print nothing must not
+    become the policy oracle (F4/F21).
+    """
     trimmed = stdout.strip()
     if not trimmed:
-        return True
+        return False
     try:
         parsed = json.loads(trimmed)
     except json.JSONDecodeError:
@@ -210,14 +214,14 @@ def _supports_hermes_host(orca: str) -> bool:
 
 
 def _orca_candidates() -> list[str]:
-    candidates: list[str] = []
+    trusted: list[str] = []
     # Phase 5a dual-read: prefer RYK_BIN then ORCA_BIN.
     for env_key in ("RYK_BIN", "ORCA_BIN"):
         configured = os.environ.get(env_key)
         if configured:
             resolved = _orca_executable(configured)
             if resolved:
-                candidates.append(resolved)
+                trusted.append(resolved)
 
     # Trusted installs and PATH before cwd zig-out (F10): a planted
     # ./zig-out/bin/ryk must not beat ~/.local/bin or PATH when both exist.
@@ -226,26 +230,29 @@ def _orca_candidates() -> list[str]:
         for path in (home / ".local" / "bin" / name, home / ".orca" / "bin" / name, home / ".ryk" / "bin" / name):
             resolved = _orca_executable(str(path))
             if resolved:
-                candidates.append(resolved)
+                trusted.append(resolved)
 
     for name in ("ryk", "orca"):
         found = shutil.which(name)
         if found:
             resolved = _orca_executable(found)
             if resolved:
-                candidates.append(resolved)
+                trusted.append(resolved)
 
-    # Dev tree last: only used when no install/PATH hit exists.
-    directory = Path.cwd()
-    for _ in range(3):
-        for name in ("ryk", "orca"):
-            zig_out = directory / "zig-out" / "bin" / name
-            resolved = _orca_executable(str(zig_out))
-            if resolved:
-                candidates.append(resolved)
-        if directory.parent == directory:
-            break
-        directory = directory.parent
+    # F4: when any trusted candidate exists, never fall through to cwd zig-out
+    # (planted binary must not become oracle after trusted smoke fails).
+    candidates: list[str] = list(trusted)
+    if not trusted:
+        directory = Path.cwd()
+        for _ in range(3):
+            for name in ("ryk", "orca"):
+                zig_out = directory / "zig-out" / "bin" / name
+                resolved = _orca_executable(str(zig_out))
+                if resolved:
+                    candidates.append(resolved)
+            if directory.parent == directory:
+                break
+            directory = directory.parent
 
     deduped: list[str] = []
     seen: set[str] = set()
@@ -389,8 +396,12 @@ def _call_orca(event: str, data: Any) -> dict[str, Any]:
         raise RuntimeError(f"failed to run ryk at {orca}: {exc}") from exc
     if completed.returncode != 0:
         raise RuntimeError(completed.stderr.strip() or f"ryk exited {completed.returncode}")
+    # F21: empty successful stdout is not an allow — fail closed so fail-open stance applies.
     if not completed.stdout.strip():
-        return {"decision": "allow"}
+        raise RuntimeError(
+            f"ryk at {orca} returned empty stdout for hermes {event}; "
+            "refusing hard-allow on empty policy response"
+        )
     return json.loads(completed.stdout)
 
 

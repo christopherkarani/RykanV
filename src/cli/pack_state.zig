@@ -187,7 +187,7 @@ pub fn writeDoctorPacksSectionWithConfig(
         try stdout.writeAll("  Next: ryk packs --enabled  ·  ryk doctor  (retry packs inventory)\n");
         return;
     }
-    try stdout.writeAll("  baseline: core.*, system.disk (always on)\n");
+    try stdout.writeAll("  baseline: core.*, system.disk (default on; user config may opt out)\n");
     if (summary.opt_in_ids.len == 0) {
         try stdout.writeAll("  opt-in: none enabled (baseline only)\n");
         try stdout.writeAll("  Next: ryk packs enable <id>  ·  ryk packs --enabled  ·  ryk packs show <id>\n");
@@ -239,8 +239,13 @@ pub fn queryPacksSummaryInProcess(io: std.Io, allocator: std.mem.Allocator) !Pac
     var loaded: ?pack_config.LoadedPackIds = null;
     defer if (loaded) |*l| l.deinit(allocator);
 
+    // F9: pack-config load failure must not paint baseline-only known inventory
+    // while shell_eval hard-denies the same load error.
     if (workspace_root) |root| {
-        loaded = pack_config.loadPackIdsForWorkspace(io, allocator, root) catch null;
+        loaded = pack_config.loadPackIdsForWorkspace(io, allocator, root) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return unknownPacksSummary(),
+        };
         if (loaded) |l| {
             enabled_ids = l.enabled;
             disabled_ids = l.disabled;

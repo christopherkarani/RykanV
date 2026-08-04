@@ -38,7 +38,7 @@ fn hostAliasCommand(comptime host: []const u8) CommandInfo {
         .examples = &.{"ryk " ++ host},
         .details = &.{
             "Public protected launch path for " ++ host ++ "; internally uses the run engine for session setup.",
-            "Inherits agent-primary defaults: network allowlist + proxy mediation (empty backpack for secrets is not the default; secretless stays off unless --secretless). ryk run flags stay on `ryk run` only — everything after the host name is agent argv.",
+            "Inherits agent-primary defaults: network allowlist + proxy mediation + empty-backpack secret boundary (trusted host binaries only; basename spoofs do not). Non-alias `ryk run` secretless stays off unless --secretless. ryk run flags stay on `ryk run` only — everything after the host name is agent argv.",
         },
     };
 }
@@ -71,7 +71,7 @@ pub const commands =
             .additional_completion_flags = &.{ "--workspace", "--policy", "--session-name", "--secretless", "--with-host-secrets", "--inherit-env", "--allow-network", "--network", "--network-backend", "--os-sandbox", "--seatbelt-profile", "--require-backend" },
             .details = &.{
                 "Starts a protected session, filters the child environment through policy, checks the command through a command safety check, writes audit artifacts, and mirrors the child exit code.",
-                "Agent-primary defaults for host aliases (ryk pi, ryk claude, …): network mode allowlist + proxy backend + OS route-force (fail closed if mediation cannot start). Non-alias `ryk run -- <cmd>` still defaults network mode to ask without forcing proxy. Secretless stays off unless --secretless. Mode overrides: --network allowlist|observe|off|ask, --no-network (still mediate on host aliases). Mediation escapes: --network open (loud unrestricted egress), ORCA_AGENT_NETWORK_DEFAULT=legacy (loud, one-release).",
+                "Agent-primary defaults for host aliases (ryk pi, ryk claude, …): network mode allowlist + proxy backend + OS route-force (fail closed if mediation cannot start) + empty-backpack secret boundary for trusted host binaries. Non-alias `ryk run -- <cmd>` still defaults network mode to ask without forcing proxy, and secretless stays off unless --secretless. Mode overrides: --network allowlist|observe|off|ask, --no-network (still mediate on host aliases). Mediation escapes: --network open (loud unrestricted egress), ORCA_AGENT_NETWORK_DEFAULT=legacy (loud, one-release).",
                 "Host launch aliases rewrite to this command with no extra flags — security defaults live here. Pass ryk run flags only on `ryk run`, not after a host alias name (e.g. `ryk run --network open -- pi`). One-release kill switch: ORCA_AGENT_NETWORK_DEFAULT=legacy restores pre-mediation agent net defaults.",
                 "Options: --workspace <path>, --mode observe|ask|yolo|strict|ci, --policy <path>, --session-name <name>, --no-secrets, --secretless, --with-host-secrets, --inherit-env, --no-network, --allow-network <domain>, --network observe|ask|allowlist|open|off, --network-backend decision-only|proxy, --os-sandbox auto|on|off, --seatbelt-profile compatible|hardened|strict, --require-backend <capability>, --help",
                 "Strict and CI modes default to environments without secret access. --secretless is empty-backpack: public host env only (no raw secrets, no orca-secret:// rewrite), OS sandbox required, and workspace .env forms denied at the OS layer when attach succeeds. --with-host-secrets is an explicit escape that may expose host secrets and always emits a warning. --inherit-env is allowed only when the selected policy permits inheritance.",
@@ -1085,7 +1085,8 @@ test "host launch allowlist is the single source for help alias entries" {
         try std.testing.expect(std.mem.indexOf(u8, info.usage, host) != null);
         try std.testing.expect(std.mem.indexOf(u8, info.details[0], "Public protected launch path") != null);
         try std.testing.expect(std.mem.indexOf(u8, info.details[1], "network allowlist") != null);
-        try std.testing.expect(std.mem.indexOf(u8, info.details[1], "secretless stays off") != null);
+        try std.testing.expect(std.mem.indexOf(u8, info.details[1], "empty-backpack") != null);
+        try std.testing.expect(std.mem.indexOf(u8, info.details[1], "secretless stays off unless") != null);
         try std.testing.expect(std.mem.indexOf(u8, info.details[1], "network ask") == null);
     }
     try std.testing.expect(findCommand("notanagent") == null);
@@ -1106,7 +1107,7 @@ test "top help and per-host help surface claude and pi aliases" {
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "ryk claude") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "Public protected launch path") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "network allowlist") != null);
-    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "secretless stays off") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "empty-backpack") != null);
 
     writer = .fixed(&buf);
     try std.testing.expect(try writeCommand(std.testing.io, &writer, "pi"));

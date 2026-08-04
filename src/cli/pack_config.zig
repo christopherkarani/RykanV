@@ -62,6 +62,18 @@ pub fn isBaselinePackId(id: []const u8) bool {
     return false;
 }
 
+/// True when a `disabled` list token would deactivate any baseline pack via
+/// category shorthand (`disabled=["system"]` → `system.disk`) or exact id (F30/M-8).
+pub fn isBaselineDisabledToken(id: []const u8) bool {
+    if (isBaselinePackId(id)) return true;
+    // Category tokens without `.` match pack_id prefix in packIdListed.
+    if (std.mem.indexOfScalar(u8, id, '.') != null or id.len == 0) return false;
+    // Known baseline leaves under this category prefix.
+    if (std.mem.eql(u8, id, "system")) return true; // system.disk
+    if (std.mem.eql(u8, id, "core")) return true; // already baseline; defensive
+    return false;
+}
+
 /// True when `ORCA_OPERATOR=1` (or `true`/`yes`) is set — CLI break-glass for
 /// baseline pack disable and other operator-only mutations.
 pub fn isOperatorBreakGlass() bool {
@@ -206,11 +218,12 @@ fn mergeUserBaselineDisabled(
     }
 }
 
-/// Free and remove baseline pack ids from an owned id list.
+/// Free and remove baseline pack ids **and** category tokens that would
+/// deactivate baseline packs (F30: `disabled=["system"]` must not drop `system.disk`).
 fn stripBaselineIdsFromList(allocator: std.mem.Allocator, list: *std.ArrayListUnmanaged([]const u8)) !void {
     var i: usize = 0;
     while (i < list.items.len) {
-        if (isBaselinePackId(list.items[i])) {
+        if (isBaselineDisabledToken(list.items[i])) {
             allocator.free(list.items[i]);
             _ = list.orderedRemove(i);
             continue;
@@ -1055,6 +1068,47 @@ test "isBaselinePackId covers core and system.disk only" {
     try std.testing.expect(!isBaselinePackId("containers.docker"));
     try std.testing.expect(!isBaselinePackId("system.services"));
     try std.testing.expect(!isBaselinePackId("package_managers"));
+}
+
+test "isBaselineDisabledToken strips category system for M-8" {
+    // F30: disabled=["system"] must not survive project load (deactivates system.disk).
+    try std.testing.expect(isBaselineDisabledToken("system"));
+    try std.testing.expect(isBaselineDisabledToken("system.disk"));
+    try std.testing.expect(isBaselineDisabledToken("core"));
+    try std.testing.expect(!isBaselineDisabledToken("containers"));
+    try std.testing.expect(!isBaselineDisabledToken("package_managers"));
+}
+
+test "loadPackIdsForWorkspace strips project category disabled system token" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, ".git");
+    const body =
+        \\[packs]
+        \\disabled = ["system", "strict_git"]
+        \\
+    ;
+    const file = try tmp.dir.createFile(std.testing.io, ".orca.toml", .{});
+    defer file.close(std.testing.io);
+    try file.writeStreamingAll(std.testing.io, body);
+
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var xdg = try testIsolateXdg();
+    defer xdg.deinit();
+
+    var loaded = try loadPackIdsForWorkspace(std.testing.io, std.testing.allocator, root);
+    defer loaded.deinit(std.testing.allocator);
+
+    var saw_system = false;
+    var saw_strict = false;
+    for (loaded.disabled) |id| {
+        if (std.mem.eql(u8, id, "system")) saw_system = true;
+        if (std.mem.eql(u8, id, "strict_git")) saw_strict = true;
+    }
+    try std.testing.expect(!saw_system);
+    try std.testing.expect(saw_strict);
 }
 
 test "loadPackIdsForWorkspace reads project .orca.toml packs" {
