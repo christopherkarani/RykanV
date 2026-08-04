@@ -375,12 +375,47 @@ fn parseDoctorOptions(argv: []const []const u8, stderr: anytype) !DoctorOptions 
                 try stderr.writeAll("ryk doctor: --preset requires a preset name.\n");
                 return error.Usage;
             }
-            options.preset = argv[i];
+            const name = argv[i];
+            // Same names as init.zig; brand as doctor so invalid values never leak ryk init:.
+            if (orca_policy.presets.AgentPreset.parse(name) == null) {
+                try suggestions.writeInvalidValue(
+                    stderr,
+                    "ryk doctor",
+                    "--preset",
+                    name,
+                    &.{
+                        "generic-agent", "claude-code",  "codex",           "cursor-agent",
+                        "opencode",      "cline-roo",    "mcp-dev",         "github-actions",
+                        "solo-dev",      "strict-local", "team-ci",         "openclaw-hermes",
+                        "trusted-local",
+                    },
+                    "doctor",
+                );
+                return error.Usage;
+            }
+            options.preset = name;
             continue;
         }
         try suggestions.writeUnknownOption(stderr, "ryk doctor", arg, &.{
             "--verbose", "-v", "--check", "--json", "--plain", "--no-rich", "--tui", "--fix", "--from-install", "--preset", "--help", "-h",
         }, "doctor");
+        return error.Usage;
+    }
+
+    // --fix must not silently dominate probe contracts (--check/--json).
+    if (options.fix and (options.check or options.json)) {
+        try stderr.writeAll("ryk doctor: cannot combine --fix with --check/--json.\n");
+        return error.Usage;
+    }
+    // Ensure-only flags are not silent no-ops without --fix.
+    if ((options.from_install or options.preset != null) and !options.fix) {
+        if (options.from_install and options.preset != null) {
+            try stderr.writeAll("ryk doctor: --from-install and --preset require --fix.\n");
+        } else if (options.from_install) {
+            try stderr.writeAll("ryk doctor: --from-install requires --fix.\n");
+        } else {
+            try stderr.writeAll("ryk doctor: --preset requires --fix.\n");
+        }
         return error.Usage;
     }
     return options;
@@ -841,12 +876,12 @@ fn writeRecommendations(stdout: anytype, context: IntegrationContext) !void {
             try stdout.writeAll("  Reinstall ryk or rebuild with `./scripts/build-all.sh`, then re-run `ryk doctor`.\n");
         }
         if (!context.policy_present) {
-            try stdout.writeAll("  Then run `ryk init --preset generic-agent` and review .orca/policy.yaml.\n");
+            try stdout.writeAll("  Then run `ryk doctor --fix` and review .orca/policy.yaml.\n");
         } else if (!context.policy_valid) {
             try stdout.writeAll("  After the daemon is healthy, fix `.orca/policy.yaml`, then run `ryk policy check .orca/policy.yaml`.\n");
         }
     } else if (!context.policy_present) {
-        try stdout.writeAll("  Run `ryk init --preset generic-agent` and review .orca/policy.yaml.\n");
+        try stdout.writeAll("  Run `ryk doctor --fix` and review .orca/policy.yaml.\n");
     } else if (!context.policy_valid) {
         try stdout.writeAll("  Fix `.orca/policy.yaml`, then run `ryk policy check .orca/policy.yaml`.\n");
     } else if (context.mcp_manifest_invalid_count > 0) {
@@ -1500,7 +1535,9 @@ test "doctor recommendations prioritize daemon remediation over missing policy" 
     const written = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, written, "Daemon health issue: no running daemon answered on the expected socket.") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "./scripts/build-all.sh") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ryk init --preset generic-agent") != null);
+    // After daemon remediation, missing policy teaches sole repair door doctor --fix.
+    try std.testing.expect(std.mem.indexOf(u8, written, "ryk doctor --fix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "ryk init --preset") == null);
 }
 
 test "doctor packs section stays known when daemon is unavailable" {
@@ -1750,6 +1787,116 @@ test "doctorFix parseDoctorOptions accepts --fix and optional --from-install / -
     }
 }
 
+test "doctorFix parseDoctorOptions rejects --fix combined with --check or --json" {
+    // PR #95: --fix must not silently dominate probe contracts.
+    var stderr_buf: [512]u8 = undefined;
+    const combos = [_][]const []const u8{
+        &.{ "--fix", "--check" },
+        &.{ "--check", "--fix" },
+        &.{ "--fix", "--json" },
+        &.{ "--json", "--fix" },
+        &.{ "--fix", "--check", "--json" },
+    };
+    for (combos) |args| {
+        var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+        try std.testing.expectError(error.Usage, parseDoctorOptions(args, &stderr_writer));
+        const err = stderr_writer.buffered();
+        try std.testing.expect(std.mem.indexOf(u8, err, "ryk doctor:") != null);
+        try std.testing.expect(std.mem.indexOf(u8, err, "cannot combine --fix with --check/--json") != null);
+    }
+}
+
+test "doctorFix parseDoctorOptions rejects --from-install or --preset without --fix" {
+    // Ensure-only flags must not be silent no-ops without --fix.
+    var stderr_buf: [512]u8 = undefined;
+
+    {
+        var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+        try std.testing.expectError(error.Usage, parseDoctorOptions(&.{"--from-install"}, &stderr_writer));
+        const err = stderr_writer.buffered();
+        try std.testing.expect(std.mem.indexOf(u8, err, "ryk doctor:") != null);
+        try std.testing.expect(std.mem.indexOf(u8, err, "--from-install") != null);
+        try std.testing.expect(std.mem.indexOf(u8, err, "--fix") != null);
+    }
+    {
+        var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+        try std.testing.expectError(error.Usage, parseDoctorOptions(&.{ "--preset", "generic-agent" }, &stderr_writer));
+        const err = stderr_writer.buffered();
+        try std.testing.expect(std.mem.indexOf(u8, err, "ryk doctor:") != null);
+        try std.testing.expect(std.mem.indexOf(u8, err, "--preset") != null);
+        try std.testing.expect(std.mem.indexOf(u8, err, "--fix") != null);
+    }
+    {
+        var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+        try std.testing.expectError(
+            error.Usage,
+            parseDoctorOptions(&.{ "--from-install", "--preset", "generic-agent" }, &stderr_writer),
+        );
+        const err = stderr_writer.buffered();
+        try std.testing.expect(std.mem.indexOf(u8, err, "ryk doctor:") != null);
+        try std.testing.expect(std.mem.indexOf(u8, err, "--fix") != null);
+    }
+}
+
+test "doctorFix parseDoctorOptions rejects invalid --preset with doctor branding" {
+    // Invalid preset must fail at doctor parse with ryk doctor: branding (not init).
+    var stderr_buf: [1024]u8 = undefined;
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    try std.testing.expectError(
+        error.Usage,
+        parseDoctorOptions(&.{ "--fix", "--preset", "not-a-real-preset" }, &stderr_writer),
+    );
+    const err = stderr_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, err, "ryk doctor:") != null or std.mem.indexOf(u8, err, "ryk doctor") != null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "invalid --preset value") != null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "not-a-real-preset") != null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "ryk init") == null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "help doctor") != null);
+}
+
+test "doctorFix missing policy recommendation teaches doctor --fix sole repair door" {
+    // Diagnose missing-policy teach: sole/primary repair door is ryk doctor --fix.
+    var stdout_buf: [32768]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    const report = sandbox.backend.detect(.linux);
+    var context = try testContext(std.testing.allocator, .{
+        .policy_present = false,
+    });
+    defer context.deinit();
+
+    try writeReport(std.testing.io, &stdout_writer, .linux, report, context, false);
+    const written = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, written, "ryk doctor --fix") != null);
+    // Must not sole-teach ryk init as the missing-policy repair door.
+    try std.testing.expect(std.mem.indexOf(u8, written, "ryk init --preset") == null);
+}
+
+test "doctorFix testHostRows builds fix strings via host_status.formatFix" {
+    // Co-located host table fixtures must call formatFix (no hand-authored Pi green-paint).
+    const allocator = std.testing.allocator;
+    const rows = try testHostRows(allocator);
+    defer {
+        for (rows) |row| {
+            allocator.free(row.host);
+            allocator.free(row.wired);
+            allocator.free(row.shell_gate);
+            allocator.free(row.fail_stance);
+            allocator.free(row.smoke_allow);
+            allocator.free(row.smoke_deny);
+            allocator.free(row.fix);
+        }
+        allocator.free(rows);
+    }
+
+    const smoke = host_status.HostSmokePair{};
+    const hermes_fail_open = true;
+    for (rows) |row| {
+        const expected = try host_status.formatFix(allocator, row.host, row.wired, smoke, hermes_fail_open);
+        defer allocator.free(expected);
+        try std.testing.expectEqualStrings(expected, row.fix);
+    }
+}
+
 test "doctorFix help documents --fix" {
     // Acceptance (1): help documents --fix (usage + completion flags).
     // Exclusive production edit is help.zig doctor section; seam is findCommand.
@@ -1771,6 +1918,25 @@ test "doctorFix help documents --fix" {
         if (std.mem.indexOf(u8, line, "--fix") != null) teaches_fix = true;
     }
     try std.testing.expect(teaches_fix);
+
+    // Exclusivity: --fix vs --check/--json; ensure-only flags only with --fix.
+    var documents_exclusivity = false;
+    var documents_ensure_only_with_fix = false;
+    for (info.details) |line| {
+        if (std.mem.indexOf(u8, line, "--fix") != null and
+            std.mem.indexOf(u8, line, "--check") != null and
+            std.mem.indexOf(u8, line, "--json") != null)
+        {
+            documents_exclusivity = true;
+        }
+        if ((std.mem.indexOf(u8, line, "--from-install") != null or std.mem.indexOf(u8, line, "--preset") != null) and
+            std.mem.indexOf(u8, line, "--fix") != null)
+        {
+            documents_ensure_only_with_fix = true;
+        }
+    }
+    try std.testing.expect(documents_exclusivity);
+    try std.testing.expect(documents_ensure_only_with_fix);
 }
 
 test "doctor help documents --tui four-pane deep-dive" {
@@ -2465,17 +2631,16 @@ fn testHostRows(allocator: std.mem.Allocator) ![]HostDoctorRow {
         }
         list.deinit(allocator);
     }
+    // Match production collectHostDoctorRows: fix strings from host_status.formatFix only
+    // (no hand-authored Pi/hermes strings that green-paint message migration).
+    const smoke = host_status.HostSmokePair{};
+    const hermes_fail_open = true;
     for (hosts) |h| {
-        const fix = if (std.mem.eql(u8, h.name, "hermes"))
-            try allocator.dupe(u8, "export ORCA_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes")
-        else if (std.mem.eql(u8, h.name, "pi"))
-            // W1 message-migrate: co-located fixture teaches doctor --fix (not start).
-            try allocator.dupe(u8, "ryk doctor --fix  # install the bundled Pi extension")
-        else
-            try allocator.dupe(u8, "—");
+        const wired = "—";
+        const fix = try host_status.formatFix(allocator, h.name, wired, smoke, hermes_fail_open);
         try list.append(allocator, .{
             .host = try allocator.dupe(u8, h.name),
-            .wired = try allocator.dupe(u8, "—"),
+            .wired = try allocator.dupe(u8, wired),
             .shell_gate = try allocator.dupe(u8, h.gate),
             .fail_stance = try allocator.dupe(u8, h.stance),
             .smoke_allow = try allocator.dupe(u8, "not-run"),

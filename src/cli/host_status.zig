@@ -173,6 +173,19 @@ pub fn formatFix(
         }
         return try allocator.dupe(u8, "install Pi, then run: ryk doctor --fix");
     }
+    if (std.mem.eql(u8, host, "grok")) {
+        if (smoke.deny == .fail or smoke.allow == .fail) {
+            return try allocator.dupe(u8, "ryk doctor  # grok PreToolUse smoke failed — check ryk hook grok PreToolUse");
+        }
+        if (std.mem.eql(u8, wired, "yes") or std.mem.eql(u8, wired, "partial")) {
+            return try allocator.dupe(u8, "—");
+        }
+        // Sole repair door is doctor --fix (never teach ryk start as required primary).
+        if (std.mem.eql(u8, wired, "no")) {
+            return try allocator.dupe(u8, "ryk doctor --fix  # installs ~/.grok PreToolUse Command Guard");
+        }
+        return try allocator.dupe(u8, "install grok CLI, then run: ryk doctor --fix");
+    }
     // Degraded first: deny works but allow failed → daemon/policy, not reinstall.
     if (smoke.isDegraded() or (smoke.deny == .pass and smoke.allow == .fail)) {
         return try allocator.dupe(u8, "ryk doctor  # fix daemon/policy (deny ok, allow failed — not ready)");
@@ -638,6 +651,24 @@ test "formatFix prefers smoke failure and hermes fail-open remediation" {
     try std.testing.expect(std.mem.indexOf(u8, pi_fix, "doctor --fix") != null);
     try std.testing.expect(std.mem.indexOf(u8, pi_fix, "ryk start") == null);
     try std.testing.expect(std.mem.indexOf(u8, pi_fix, "coverage") == null);
+
+    // PR #97 residual: grok repair door is doctor --fix — never teach ryk start as primary.
+    const grok_unwired = try formatFix(allocator, "grok", "no", .{}, true);
+    defer allocator.free(grok_unwired);
+    try std.testing.expect(std.mem.indexOf(u8, grok_unwired, "ryk doctor --fix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, grok_unwired, "ryk start") == null);
+    try std.testing.expect(std.mem.indexOf(u8, grok_unwired, "plugin install grok") == null);
+
+    const grok_missing = try formatFix(allocator, "grok", "—", .{}, true);
+    defer allocator.free(grok_missing);
+    try std.testing.expect(std.mem.indexOf(u8, grok_missing, "ryk doctor --fix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, grok_missing, "ryk start") == null);
+
+    // Cursor / hermes already on doctor --fix or env remediation — no start teach.
+    const cursor_fix = try formatFix(allocator, "cursor", "no", .{}, true);
+    defer allocator.free(cursor_fix);
+    try std.testing.expect(std.mem.indexOf(u8, cursor_fix, "ryk doctor --fix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, cursor_fix, "ryk start") == null);
 }
 
 test "Pi status distinguishes host detection from extension installation" {

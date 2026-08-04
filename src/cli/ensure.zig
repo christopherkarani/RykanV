@@ -143,6 +143,11 @@ pub fn runEnsure(
     defer root_dir.close(io);
 
     const preset = options.preset orelse onboarding.default_preset;
+    // Validate before init.command so invalid names never leak `ryk init:` branding (PR #95).
+    if (orca_policy.presets.AgentPreset.parse(preset) == null) {
+        try stderr.print("ryk ensure: invalid --preset value '{s}'\n", .{preset});
+        return coreFailedOutcome();
+    }
     var init_argv_buf: [3][]const u8 = undefined;
     const init_argv: []const []const u8 = if (options.quiet) blk: {
         init_argv_buf[0] = "--preset";
@@ -2322,4 +2327,47 @@ test "EnsureSoft mock host smoke fail receipt forbids D06 full phrases requires 
     try std.testing.expect(ensureSoftHasDoctorRepair(text));
     try std.testing.expect(containsIgnoreCase(text, "pi"));
     try std.testing.expectEqual(@as(u8, exit_codes.success), processExitForOutcome(outcome));
+}
+
+// ---------------------------------------------------------------------------
+// Ensure preset branding — invalid --preset must never leak `ryk init:` (PR #95)
+// ---------------------------------------------------------------------------
+
+test "Ensure invalid preset fails with ensure branding not init" {
+    // Create-if-missing path with a bad preset name must surface `ryk ensure:`
+    // (never `ryk init:`) and return core_failed without creating policy.
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [2048]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    var outcome = try runEnsure(io, allocator, tmp.dir, .{
+        .from_install = false,
+        .quiet = false,
+        .preset = "not-a-real-preset",
+        .skip_verify = true,
+        .skip_host_wire = true,
+    }, &stdout_writer, &stderr_writer);
+    defer outcome.deinit(allocator);
+
+    try std.testing.expect(!outcome.core_ok);
+    try std.testing.expect(!outcome.policy_created);
+    try std.testing.expect(!outcome.policy_left_alone);
+    try std.testing.expectEqual(ProtectionLabel.core_failed, outcome.protection_label);
+
+    const err = stderr_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, err, "ryk ensure:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "ryk init:") == null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "not-a-real-preset") != null);
+
+    // Must not have created policy via init.
+    if (tmp.dir.access(io, ".orca/policy.yaml", .{})) |_| {
+        try std.testing.expect(false);
+    } else |_| {}
 }

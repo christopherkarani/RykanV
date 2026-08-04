@@ -288,8 +288,9 @@ test "s-product-wire: shell_test loads permanent allowlist and allows with attri
     const root = try std.testing.allocator.dupe(u8, root_z);
     defer std.testing.allocator.free(root);
 
+    // Medium permanent skip (critical cannot unlock — product hard fence).
     const reason = "s-product-wire shell_test permanent rule marker";
-    try sProductWireWriteProjectRuleAllow(root, "core.git:reset-hard", reason);
+    try sProductWireWriteProjectRuleAllow(root, "core.git:branch-force-delete", reason);
 
     const previous_cwd = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(previous_cwd);
@@ -301,7 +302,7 @@ test "s-product-wire: shell_test loads permanent allowlist and allows with attri
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
-    const code = try command(std.testing.io, &.{"git reset --hard HEAD"}, &stdout_writer, &stderr_writer);
+    const code = try command(std.testing.io, &.{"git branch -D feature"}, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(@as(u8, 0), code);
     const out = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "allow") != null);
