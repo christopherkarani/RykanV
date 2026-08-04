@@ -211,6 +211,12 @@ brew install christopherkarani/orca/ryk
 Or use the install script:
 
 ```bash
+curl -fsSL https://rykanv.com/install | sh
+```
+
+Same script via GitHub raw (fallback):
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh | sh
 ```
 

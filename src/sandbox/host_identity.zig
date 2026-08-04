@@ -92,8 +92,9 @@ fn genericTakePath(path: []const u8, reason: []const u8) HostIdentity {
 /// 2. PATH/cwd resolve + realpath (fail → generic)
 /// 3. Basename of realpath must match `host_config_table`
 /// 4. Realpath must not be under workspace / tmp
-/// 5. Realpath must match a trusted install prefix (builtin, HOME/.local/bin,
-///    optional nvm pattern, ORCA_TRUSTED_HOST_PREFIXES, extra_trusted_prefixes)
+/// 5. Realpath must match a trusted install prefix (builtin, HOME/.local/…,
+///    HOME/.grok, HOME/.opencode, optional nvm pattern, ORCA_TRUSTED_HOST_PREFIXES,
+///    extra_trusted_prefixes)
 pub fn resolveHostIdentity(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -409,6 +410,8 @@ fn isTrustedInstallPath(
             ".local/lib",
             ".local/share",
             ".opencode",
+            // Grok CLI: ~/.grok/bin wrapper + ~/.grok/downloads/<versioned binary>.
+            ".grok",
             ".npm-global/bin",
         };
         for (homes_buf[0..homes_len]) |home| {
@@ -452,6 +455,8 @@ fn allowsLinkBasenameFallback(realpath: []const u8) bool {
     if (std.mem.indexOf(u8, realpath, "/node_modules/") != null) return true;
     if (std.mem.indexOf(u8, realpath, "/versions/") != null) return true;
     if (std.mem.indexOf(u8, realpath, "/Cellar/") != null) return true;
+    // Grok downloads layout: ~/.grok/downloads/grok-<ver>-<platform>.
+    if (std.mem.indexOf(u8, realpath, "/.grok/") != null) return true;
     const base = host_config_grants.hostBasename(realpath);
     if (base.len == 0) return false;
     // Script-like leaves (cli.js, codex.js, …).
@@ -462,6 +467,10 @@ fn allowsLinkBasenameFallback(realpath: []const u8) bool {
         return true;
     // Version-id leaf (e.g. claude …/versions/2.1.196).
     if (std.ascii.isDigit(base[0])) return true;
+    // Versioned product leaf: `grok-0.2.118-macos-aarch64` → stem `grok`.
+    if (std.mem.indexOfScalar(u8, base, '-')) |dash| {
+        if (dash > 0 and host_config_grants.specForHost(base[0..dash]) != null) return true;
+    }
     return false;
 }
 
@@ -815,6 +824,50 @@ test "resolveHostIdentity trusted grok table host" {
     var id = try resolveHostIdentity(io, allocator, binary, &env_map, .{
         .extra_trusted_prefixes = &.{trust_root},
     });
+    defer id.deinit(allocator);
+    try std.testing.expect(id.isTrusted());
+    try std.testing.expectEqualStrings("grok", id.host.?);
+}
+
+test "resolveHostIdentity trusts HOME/.grok downloads layout via link basename" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    const home = try home_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+
+    try home_tmp.dir.createDirPath(io, ".local/bin");
+    try home_tmp.dir.createDirPath(io, ".grok/downloads");
+    try home_tmp.dir.writeFile(io, .{
+        .sub_path = ".grok/downloads/grok-0.2.118-macos-aarch64",
+        .data = "#!/bin/sh\necho grok\n",
+    });
+    try home_tmp.dir.setFilePermissions(
+        io,
+        ".grok/downloads/grok-0.2.118-macos-aarch64",
+        std.Io.File.Permissions.fromMode(0o755),
+        .{},
+    );
+    const real_bin = try std.fs.path.join(allocator, &.{ home, ".grok/downloads/grok-0.2.118-macos-aarch64" });
+    defer allocator.free(real_bin);
+    const link = try std.fs.path.join(allocator, &.{ home, ".local/bin/grok" });
+    defer allocator.free(link);
+    std.Io.Dir.cwd().symLink(io, real_bin, link, .{}) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return error.SkipZigTest,
+    };
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+    const path_val = try std.fs.path.join(allocator, &.{ home, ".local/bin" });
+    defer allocator.free(path_val);
+    try env_map.put("PATH", path_val);
+    try env_map.put("TMPDIR", test_tmpdir_sentinel);
+
+    var id = try resolveHostIdentity(io, allocator, "grok", &env_map, .{});
     defer id.deinit(allocator);
     try std.testing.expect(id.isTrusted());
     try std.testing.expectEqualStrings("grok", id.host.?);
