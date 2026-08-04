@@ -1062,6 +1062,84 @@ test "decide command pack fence: critical under ask defaults is block" {
     try std.testing.expect(std.mem.indexOf(u8, output, "core.git:reset-hard") != null);
 }
 
+test "decide command pack fence: critical under pure commands.allow is block" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "policy.yaml",
+        .data =
+        \\version: 1
+        \\mode: ask
+        \\commands:
+        \\  default: ask
+        \\  allow:
+        \\    - "git *"
+        \\
+        ,
+    });
+    const policy_path = try tmp.dir.realPathFileAlloc(std.testing.io, "policy.yaml", std.testing.allocator);
+    defer std.testing.allocator.free(policy_path);
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [512]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try decideCommandWithPolicy(
+        std.testing.io,
+        .command,
+        &.{ "--json", "{\"command\":\"git reset --hard HEAD\"}" },
+        &stdout_writer,
+        &stderr_writer,
+        policy_path,
+    );
+    try std.testing.expectEqual(exit_codes.denial, code);
+
+    const output = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"decision\": \"block\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"decision\": \"allow\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "core.git:reset-hard") != null);
+}
+
+test "decide command pack fence: high severity under pure allow is block" {
+    // Node wipe of /tmp is high (not critical); fence must still beat pure allow.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "policy.yaml",
+        .data =
+        \\version: 1
+        \\mode: ask
+        \\commands:
+        \\  default: allow
+        \\  allow:
+        \\    - "node *"
+        \\
+        ,
+    });
+    const policy_path = try tmp.dir.realPathFileAlloc(std.testing.io, "policy.yaml", std.testing.allocator);
+    defer std.testing.allocator.free(policy_path);
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [512]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try decideCommandWithPolicy(
+        std.testing.io,
+        .command,
+        &.{ "--json", "{\"command\":\"node -e \\\"require('fs').rmSync('/tmp/x',{recursive:true})\\\"\"}" },
+        &stdout_writer,
+        &stderr_writer,
+        policy_path,
+    );
+    try std.testing.expectEqual(exit_codes.denial, code);
+
+    const output = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"decision\": \"block\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"decision\": \"allow\"") == null);
+}
+
 test "decide file write to protected path returns block" {
     var stdout_buf: [2048]u8 = undefined;
     var stderr_buf: [256]u8 = undefined;

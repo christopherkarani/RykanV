@@ -685,6 +685,7 @@ pub const commands =
             "  ryk decide tool    --json '{\"name\":\"<name>\"}'",
             "  ryk decide <kind> --stdin",
             "  ryk decide <kind> --json <payload> [--ci]",
+            "Command kind: default shell packs also fence medium+ denials over pure commands.allow (medium→ask, CI→block; high/critical→block). Permanent/allow-once product stores are not loaded on this path.",
             "Default output is stable JSON; add --human for a decision badge, details, and risk meter.",
             "Debug logs go to stderr only.",
         } },

