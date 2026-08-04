@@ -16,8 +16,15 @@ set -eu
 #   RYK_ARTIFACT_DIR / ORCA_ARTIFACT_DIR Offline install from a local dist/ folder
 #   RYK_INSTALL_FORCE / ORCA_INSTALL_FORCE=1 Allow overwriting a non-product file at the destination
 #   RYK_INSTALL_QUIET / ORCA_INSTALL_QUIET=1 Suppress non-error UI (still installs; prints activation line)
-#   RYK_INSTALL_SKIP_ONBOARD / ORCA_INSTALL_SKIP_ONBOARD=1  Skip doctor --fix after install
+#   RYK_INSTALL_SKIP_ONBOARD / ORCA_INSTALL_SKIP_ONBOARD=1  Skip post-install ensure
 #   NO_COLOR             Disable ANSI color even on a TTY
+#
+# Ensure door (release/install contract):
+# - Prefer W1: `doctor --fix --from-install` when the installed CLI supports it.
+# - Pre-W1 binaries (e.g. tagged v1.2.9 without --fix) fall back to
+#   `start --auto --skip-verify` (soft-success parity with doctor --fix).
+# - install.sh on main / the public curl door can lead the release binary; never
+#   hard-fail solely because the ensure flag set is newer than the artifact.
 #
 # Robust VERSION resolution (piped-safe):
 # - File execution (dev, local checkout): read ../VERSION when present.
@@ -653,14 +660,43 @@ ensure_path_entry "$INSTALL_DIR"
 ensure_resource_root_entry "$CURRENT_LINK"
 step_done "Configure shell" "PATH + runtime resource root"
 
-# ── Global onboarding (ensure door: doctor --fix) ───────────────────────────
+# ── Global onboarding (ensure door) ──────────────────────────────────────────
 # Setup is operational, not presentation: run for TTY, non-TTY, and quiet
 # installs. HOME is the global policy/plugin scope; never mutate an arbitrary
 # caller or Homebrew working directory. Trust scope: cd "$HOME" + export
 # RYK_RESOURCE_ROOT/ORCA_RESOURCE_ROOT to the installed share current link.
 # Soft host fails exit 0 with partial honesty from the ensure door — install
 # must not claim full-protection completion copy.
+#
+# Release/install contract: prefer doctor --fix --from-install; fall back to
+# start --auto only when the installed binary's doctor help does not advertise
+# --fix (version skew between curl install.sh and an older release artifact).
+# Never fall back when --fix is present but ensure fails for other reasons.
+
+# Returns 0 when BIN supports the W1 ensure door (help advertises --fix).
+cli_supports_doctor_fix() {
+  _cli_bin="$1"
+  _cli_help="$("$_cli_bin" doctor --help 2>&1)" || true
+  printf '%s\n' "$_cli_help" | grep -Eq -- '(^|[[:space:]|/`[,[])--fix([[:space:]|]/],[]|]|$)'
+}
+
+# Run the best available ensure door for the installed binary.
+# Sets ENSURE_MODE to doctor_fix or start_auto_legacy (for receipts/remediation).
+run_install_ensure() {
+  if cli_supports_doctor_fix "$DESTINATION"; then
+    ENSURE_MODE=doctor_fix
+    "$DESTINATION" doctor --fix --from-install
+  else
+    # Pre-W1 / pre-doctor --fix release binary (e.g. v1.2.9).
+    # --skip-verify: install soft-success matches doctor --fix (host verify is not a
+    # hard install failure; operators can re-run start --auto / doctor later).
+    ENSURE_MODE=start_auto_legacy
+    "$DESTINATION" start --auto --skip-verify
+  fi
+}
+
 ONBOARDING_RAN=0
+ENSURE_MODE=doctor_fix
 if [ "${RYK_INSTALL_SKIP_ONBOARD:-${ORCA_INSTALL_SKIP_ONBOARD:-0}}" != "1" ]; then
   step_active "Set up protection"
   set +e
@@ -672,8 +708,20 @@ if [ "${RYK_INSTALL_SKIP_ONBOARD:-${ORCA_INSTALL_SKIP_ONBOARD:-0}}" != "1" ]; th
       export RYK_RESOURCE_ROOT ORCA_RESOURCE_ROOT
       PATH="$INSTALL_DIR:$PATH"
       export PATH
-      "$DESTINATION" doctor --fix --from-install
+      # Probe + ensure in the same subshell so ENSURE_MODE is not needed here.
+      if cli_supports_doctor_fix "$DESTINATION"; then
+        "$DESTINATION" doctor --fix --from-install
+      else
+        "$DESTINATION" start --auto --skip-verify
+      fi
     ) >"$TMP_DIR/.onboarding.out" 2>"$TMP_DIR/.onboarding.err"
+    _ob_exit=$?
+    # Quiet subshell cannot export ENSURE_MODE; re-probe for messaging only.
+    if cli_supports_doctor_fix "$DESTINATION"; then
+      ENSURE_MODE=doctor_fix
+    else
+      ENSURE_MODE=start_auto_legacy
+    fi
   else
     (
       cd "$HOME"
@@ -682,23 +730,37 @@ if [ "${RYK_INSTALL_SKIP_ONBOARD:-${ORCA_INSTALL_SKIP_ONBOARD:-0}}" != "1" ]; th
       export RYK_RESOURCE_ROOT ORCA_RESOURCE_ROOT
       PATH="$INSTALL_DIR:$PATH"
       export PATH
-      "$DESTINATION" doctor --fix --from-install
+      run_install_ensure
     )
+    _ob_exit=$?
+    # Parent needs ENSURE_MODE for fail/step copy; re-probe (help is cheap).
+    if cli_supports_doctor_fix "$DESTINATION"; then
+      ENSURE_MODE=doctor_fix
+    else
+      ENSURE_MODE=start_auto_legacy
+    fi
   fi
-  _ob_exit=$?
   set -e
   if [ "$_ob_exit" -ne 0 ]; then
     if [ "$QUIET" -eq 1 ]; then
       [ ! -s "$TMP_DIR/.onboarding.err" ] || sed 's/^/    /' "$TMP_DIR/.onboarding.err" >&2
       [ ! -s "$TMP_DIR/.onboarding.out" ] || sed 's/^/    /' "$TMP_DIR/.onboarding.out" >&2
     fi
-    # Re-teach install trust scope: HOME cwd + --from-install (same as the
-    # installer ensure door). Bare `ryk doctor --fix` drops that scope.
-    fail "ryk protection setup failed (exit ${_ob_exit})" \
-      "The CLI was installed, but doctor --fix did not finish successfully.
+    if [ "$ENSURE_MODE" = "doctor_fix" ]; then
+      # Re-teach install trust scope: HOME cwd + --from-install (same as the
+      # installer ensure door). Bare `ryk doctor --fix` drops that scope.
+      fail "ryk protection setup failed (exit ${_ob_exit})" \
+        "The CLI was installed, but doctor --fix did not finish successfully.
 Re-run from your home directory: ryk doctor --fix --from-install
 (cd \"\$HOME\" first; keep RYK_RESOURCE_ROOT/ORCA_RESOURCE_ROOT on the installed share current link if you set them.)
 Or re-run the installer after resolving the host integration error."
+    else
+      fail "ryk protection setup failed (exit ${_ob_exit})" \
+        "The CLI was installed, but start --auto --skip-verify (legacy ensure; this binary predates doctor --fix) did not finish successfully.
+Re-run from your home directory: cd \"\$HOME\" && $(shell_quote "$DESTINATION") start --auto --skip-verify
+(keep RYK_RESOURCE_ROOT/ORCA_RESOURCE_ROOT on the installed share current link if you set them.)
+Or upgrade to a release that supports doctor --fix, then re-run the installer."
+    fi
   fi
   # Exit 0 includes soft/partial host outcomes — never step_done full-protection phrasing.
   # Quiet path still surfaces partial/core-failed honesty (stdout was captured).
@@ -708,7 +770,11 @@ Or re-run the installer after resolving the host integration error."
       grep -Ei 'partial|incomplete|core failed|repair:|host ' "$TMP_DIR/.onboarding.out" 2>/dev/null | head -8 | sed 's/^/    /' >&2 || true
     fi
   fi
-  step_done "Set up protection" "doctor --fix finished; host results shown above"
+  if [ "$ENSURE_MODE" = "doctor_fix" ]; then
+    step_done "Set up protection" "doctor --fix finished; host results shown above"
+  else
+    step_done "Set up protection" "start --auto --skip-verify finished (legacy binary; doctor --fix unavailable)"
+  fi
   ONBOARDING_RAN=1
 fi
 
