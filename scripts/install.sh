@@ -690,9 +690,12 @@ if [ "${RYK_INSTALL_SKIP_ONBOARD:-${ORCA_INSTALL_SKIP_ONBOARD:-0}}" != "1" ]; th
       [ ! -s "$TMP_DIR/.onboarding.err" ] || sed 's/^/    /' "$TMP_DIR/.onboarding.err" >&2
       [ ! -s "$TMP_DIR/.onboarding.out" ] || sed 's/^/    /' "$TMP_DIR/.onboarding.out" >&2
     fi
+    # Re-teach install trust scope: HOME cwd + --from-install (same as the
+    # installer ensure door). Bare `ryk doctor --fix` drops that scope.
     fail "ryk protection setup failed (exit ${_ob_exit})" \
       "The CLI was installed, but doctor --fix did not finish successfully.
-Re-run: ryk doctor --fix
+Re-run from your home directory: ryk doctor --fix --from-install
+(cd \"\$HOME\" first; keep RYK_RESOURCE_ROOT/ORCA_RESOURCE_ROOT on the installed share current link if you set them.)
 Or re-run the installer after resolving the host integration error."
   fi
   # Exit 0 includes soft/partial host outcomes — never step_done full-protection phrasing.

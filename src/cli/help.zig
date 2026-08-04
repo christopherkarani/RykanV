@@ -190,7 +190,8 @@ pub const commands =
                 "Use --check for automation: exit non-zero when core readiness fails (daemon not compatible, or policy missing/invalid).",
                 "Use --json for a minimal readiness report (ready, state, policy.valid).",
                 "Use --fix to repair protection (create policy if missing, auto-wire day-one hosts). Exit 0 when core policy is ok; host soft-fails stay partial.",
-                "Optional --from-install scopes ensure to install HOME/resource-root; --preset selects create-if-missing policy preset.",
+                "--fix is exclusive with --check and --json (cannot combine; probe contracts stay pure).",
+                "Optional --from-install scopes ensure to install HOME/resource-root; --preset selects create-if-missing policy preset. Both require --fix.",
             },
         },
         .{
