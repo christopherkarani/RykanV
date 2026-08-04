@@ -47,7 +47,8 @@ test "phase45 start idempotent second run preserves policy" {
         onboarding.mockOnboardingEvaluator,
     );
     try std.testing.expectEqual(exit_codes.success, second);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Policy already exists") != null);
+    // M-4: create/leave messaging comes only from ensure_outcome (no pre policyExists text).
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Existing policy preserved") != null);
 }
 
 test "phase45 maximum protection verifies shell path with mock evaluator" {

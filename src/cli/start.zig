@@ -91,20 +91,18 @@ pub fn runStart(
 
     var failures: usize = 0;
     var protection_active = false;
+    var policy_core_failed = false;
 
     // Temporary bridge (W1): policy create/leave-alone via shared ensure library — no
     // parallel onboarding policy-create path (D61). Host auto-wire remains below.
-    const policy_existed = onboarding.policyExists(io, workspace_root);
-    if (policy_existed) {
-        try stdout.writeAll("Policy already exists — leaving it unchanged.\n");
-    } else {
-        try stdout.writeAll("Creating .orca/policy.yaml...\n");
-    }
+    // Pin start-resolved root so ensure does not re-walk with zig-cache ceiling (M-3).
+    // Messaging comes only from ensure_outcome (no pre policyExists split) (M-4).
     var ensure_outcome = try ensure.runEnsure(io, allocator, cwd, .{
         .from_install = false,
         .quiet = true,
         .preset = flags.preset,
         .skip_verify = flags.skip_verify,
+        .workspace_root_override = workspace_root,
     }, stdout, stderr);
     defer ensure_outcome.deinit(allocator);
 
@@ -113,6 +111,8 @@ pub fn runStart(
     if (!ensure_outcome.core_ok) {
         try tui.render.stepLine(io, stdout, .failed, "Policy", "Policy setup failed.", 80);
         failures += 1;
+        policy_core_failed = true;
+        protection_active = false;
     } else {
         policy_mode = readWorkspacePolicyMode(io, allocator, workspace_root);
         if (policy_mode) |mode| {
@@ -120,10 +120,12 @@ pub fn runStart(
                 try stdout.print("  Note: policy mode={s} (not Ask) — existing policy left unchanged.\n", .{mode});
             }
         }
-        const policy_step = if (ensure_outcome.policy_left_alone or policy_existed)
+        const policy_step = if (ensure_outcome.policy_left_alone)
             "Existing policy preserved."
+        else if (ensure_outcome.policy_created)
+            "Policy created."
         else
-            "Policy created.";
+            "Policy ready.";
         try tui.render.stepLine(io, stdout, .done, "Policy", policy_step, 80);
     }
 
@@ -165,7 +167,11 @@ pub fn runStart(
         configured_hosts.deinit(allocator);
     }
 
-    if (selected_hosts.items.len == 0) {
+    // M-5: policy core_failed must not claim protection or install hosts as success path.
+    if (policy_core_failed) {
+        protection_active = false;
+        try tui.render.stepLine(io, stdout, .failed, "Hosts", "Skipped because policy setup failed.", 80);
+    } else if (selected_hosts.items.len == 0) {
         try tui.render.stepLine(io, stdout, .done, "Hosts", "No hosts selected.", 80);
     } else if (protection.needsCommandGuard()) {
         const host_failures = try installSelectedHosts(io, allocator, selected_hosts.items, stdout, &configured_hosts);
@@ -180,6 +186,7 @@ pub fn runStart(
         try tui.render.stepLine(io, stdout, .done, "Hosts", "Skipped for this setup path", 80);
         protection_active = onboarding.verifyFirewallReady(io, workspace_root);
     }
+    if (policy_core_failed) protection_active = false;
 
     var verification: ?onboarding.VerificationOutcome = null;
     if (!flags.skip_verify and failures == 0) {

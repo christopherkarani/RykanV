@@ -10,6 +10,7 @@ const onboarding = @import("onboarding.zig");
 const init = @import("init.zig");
 const exit_codes = @import("exit_codes.zig");
 const env_util = @import("../env_util.zig");
+const readiness = @import("readiness.zig");
 
 // ---------------------------------------------------------------------------
 // Frozen API surface (plan §2 / D20)
@@ -22,7 +23,11 @@ pub const EnsureOptions = struct {
     quiet: bool = false,
     /// Create-only when policy missing; null → `onboarding.default_preset`.
     preset: ?[]const u8 = null,
+    /// Reserved for later W1 host-verify fill; currently unused by runEnsure.
     skip_verify: bool = false,
+    /// When set, pin workspace root to this path (caller-owned borrow).
+    /// `runEnsure` dupes for return-path ownership consistency and skips cwd ceiling walk.
+    workspace_root_override: ?[]const u8 = null,
     // Honor RYK_RESOURCE_ROOT / ORCA_RESOURCE_ROOT when set (resource_root helpers).
 };
 
@@ -41,11 +46,13 @@ pub const ProtectionLabel = enum {
 };
 
 pub const HostResult = struct {
+    /// Borrowed string (static or caller-owned) until hosts deep-free exists.
     host_id: []const u8,
     detected: bool,
     wired: bool,
     smoke_ok: bool,
     /// Teach `ryk doctor --fix` — never "ryk start" as required repair.
+    /// Borrowed string (static or caller-owned) until hosts deep-free exists.
     fix_hint: []const u8,
     error_class: HostErrorClass,
 };
@@ -57,8 +64,12 @@ pub const EnsureOutcome = struct {
     policy_left_alone: bool,
     protection_label: ProtectionLabel,
     /// When true, `hosts` was allocated with `allocator` and is freed in `deinit`.
+    /// Nested `HostResult.host_id` / `fix_hint` are borrowed (not freed here) until
+    /// a deep-free path owns those strings.
     hosts_owned: bool = false,
 
+    /// Frees the owned `hosts` slice only. Does not free nested `host_id`/`fix_hint`
+    /// (those remain borrowed until host-wire deep free exists).
     pub fn deinit(self: *EnsureOutcome, allocator: std.mem.Allocator) void {
         if (self.hosts_owned) {
             allocator.free(self.hosts);
@@ -94,7 +105,7 @@ pub fn runEnsure(
     defer allocator.free(workspace_root);
 
     if (onboarding.policyExists(io, workspace_root)) {
-        return leaveAloneOutcome();
+        return try assessExistingPolicyOutcome(io, allocator, workspace_root, options, stderr);
     }
 
     var root_dir = std.Io.Dir.openDirAbsolute(io, workspace_root, .{}) catch |err| {
@@ -118,11 +129,16 @@ pub fn runEnsure(
         break :blk init_argv_buf[0..2];
     };
 
+    // Policy file is written relative to this Dir (opened at ensure-resolved workspace_root).
+    // init.command only rewalks after write for packs/discovery — not for policy placement.
+    // Callers that need a hard pin (e.g. start) pass workspace_root_override so ensure and
+    // the openDirAbsolute path agree before init sees the Dir.
     const code = try init.command(io, root_dir, init_argv, stdout, stderr);
     if (code != exit_codes.success) {
-        // Multi-process race: peer may have won exclusive create. Present policy is leave-alone (D23).
+        // Multi-process race: peer may have won exclusive create. Present+valid → leave-alone (D23).
+        // Present+invalid → core_failed (never soft-success unloadable policy).
         if (onboarding.policyExists(io, workspace_root)) {
-            return leaveAloneOutcome();
+            return try assessExistingPolicyOutcome(io, allocator, workspace_root, options, stderr);
         }
         return coreFailedOutcome();
     }
@@ -136,6 +152,35 @@ pub fn runEnsure(
         .protection_label = .partial,
         .hosts_owned = false,
     };
+}
+
+/// After existence, load/parse: present+valid → leave-alone; present+invalid → core_failed.
+/// Not present must not leave-alone (caller falls through or fails). Propagates OutOfMemory.
+fn assessExistingPolicyOutcome(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    options: EnsureOptions,
+    stderr: anytype,
+) !EnsureOutcome {
+    var validity = try readiness.assessWorkspacePolicy(io, allocator, workspace_root);
+    defer validity.deinit(allocator);
+
+    if (validity.present and validity.valid) {
+        return leaveAloneOutcome();
+    }
+    if (validity.present and !validity.valid) {
+        if (!options.quiet) {
+            const detail = validity.error_name orelse "invalid";
+            try stderr.print(
+                "ryk ensure: existing policy is present but unloadable ({s}); not overwriting — fix policy or remove it, then re-run\n",
+                .{detail},
+            );
+        }
+        return coreFailedOutcome();
+    }
+    // Existence race: gone between policyExists and assess — not leave-alone.
+    return coreFailedOutcome();
 }
 
 fn leaveAloneOutcome() EnsureOutcome {
@@ -163,6 +208,9 @@ fn coreFailedOutcome() EnsureOutcome {
 
 /// Install door requires absolute HOME (D32/D33 fail-closed); interactive door walks from cwd (D29/D31).
 ///
+/// When `workspace_root_override` is set, that path is duped and used as the root
+/// (caller-owned borrow → owned return). Ceiling walk / install HOME path are skipped.
+///
 /// When cwd lives under a Zig `.zig-cache/tmp/<id>` tree (test fixtures and local
 /// build caches), the walk is capped at that tmp root so we never treat the
 /// enclosing monorepo as the ensure workspace. Nested project dirs still resolve
@@ -170,12 +218,17 @@ fn coreFailedOutcome() EnsureOutcome {
 ///
 /// Errors: `error.InstallHomeUnavailable` when `from_install` and HOME is missing,
 /// empty, or non-absolute — caller maps to `core_failed` and must not walk cwd.
+/// Propagates allocator / env-map errors from `homeDirOwned` (not soft-null).
 fn resolveEnsureWorkspaceRoot(
     io: std.Io,
     allocator: std.mem.Allocator,
     cwd: std.Io.Dir,
     options: EnsureOptions,
 ) ![]u8 {
+    if (options.workspace_root_override) |override| {
+        return try allocator.dupe(u8, override);
+    }
+
     if (options.from_install) {
         // D32/D33: never fall through to process-cwd mutation from the install door.
         const home = (try homeDirOwned(allocator)) orelse return error.InstallHomeUnavailable;
@@ -196,10 +249,12 @@ fn resolveEnsureWorkspaceRoot(
     return onboarding.resolveWorkspaceRootFromCwd(io, allocator, cwd);
 }
 
+/// Owned HOME from process env, or null only when unset.
+/// Propagates OutOfMemory / env-map failures (never collapse into "missing HOME").
 fn homeDirOwned(allocator: std.mem.Allocator) !?[]u8 {
-    var env_map = env_util.createProcessMap(allocator) catch return null;
+    var env_map = try env_util.createProcessMap(allocator);
     defer env_map.deinit();
-    return env_util.getOwned(&env_map, allocator, "HOME") catch return null;
+    return try env_util.getOwned(&env_map, allocator, "HOME");
 }
 
 /// If `path` is under `.../.zig-cache/tmp/<entry>/...`, return the absolute
@@ -236,7 +291,7 @@ fn resolveWorkspaceRootWithCeiling(
     errdefer allocator.free(current);
 
     while (true) {
-        if (workspaceMarkerAt(io, current)) {
+        if (try workspaceMarkerAt(io, current)) {
             return current;
         }
 
@@ -271,12 +326,12 @@ fn resolveWorkspaceRootWithCeiling(
     }
 }
 
-fn workspaceMarkerAt(io: std.Io, dir_path: []const u8) bool {
-    const git_path = std.fs.path.join(std.heap.page_allocator, &.{ dir_path, ".git" }) catch return false;
+fn workspaceMarkerAt(io: std.Io, dir_path: []const u8) !bool {
+    const git_path = try std.fs.path.join(std.heap.page_allocator, &.{ dir_path, ".git" });
     defer std.heap.page_allocator.free(git_path);
     if (absoluteExists(io, git_path)) return true;
 
-    const policy_path = std.fs.path.join(std.heap.page_allocator, &.{ dir_path, ".orca", "policy.yaml" }) catch return false;
+    const policy_path = try std.fs.path.join(std.heap.page_allocator, &.{ dir_path, ".orca", "policy.yaml" });
     defer std.heap.page_allocator.free(policy_path);
     return absoluteExists(io, policy_path);
 }
@@ -323,11 +378,13 @@ test "EnsureCore API surface freezes EnsureOptions Outcome HostResult fields" {
         .quiet = true,
         .preset = "generic-agent",
         .skip_verify = true,
+        .workspace_root_override = null,
     };
     try std.testing.expect(!opts.from_install);
     try std.testing.expect(opts.quiet);
     try std.testing.expectEqualStrings("generic-agent", opts.preset.?);
     try std.testing.expect(opts.skip_verify);
+    try std.testing.expect(opts.workspace_root_override == null);
 
     // Enum members required by plan §2 / soft-success map.
     try std.testing.expectEqual(ProtectionLabel.full, ProtectionLabel.full);
@@ -435,6 +492,7 @@ test "EnsureCore leave-alone when policy exists" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
+    // Minimal loadable policy (assessWorkspacePolicy / loadPolicyFile must succeed).
     const sentinel =
         \\version: 1
         \\mode: observe
@@ -466,6 +524,131 @@ test "EnsureCore leave-alone when policy exists" {
     try std.testing.expectEqualStrings(sentinel, policy);
     try std.testing.expect(std.mem.indexOf(u8, policy, "ensure-core-leave-alone-marker-9f3a") != null);
     try std.testing.expect(std.mem.indexOf(u8, policy, "mode: observe") != null);
+}
+
+// ---------------------------------------------------------------------------
+// EnsureCore — unloadable existing policy → core_failed (never leave-alone)
+// ---------------------------------------------------------------------------
+
+test "EnsureCore unloadable policy is core_failed not leave-alone" {
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // Corrupt / empty / invalid — present on disk but must not soft-succeed leave-alone.
+    const corrupt =
+        \\this is not valid policy yaml: [[[
+        \\# ensure-core-unloadable-marker-c0ff
+        \\
+    ;
+    try ensureCoreWritePolicy(tmp.dir, corrupt);
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [2048]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    var outcome = try runEnsure(io, allocator, tmp.dir, .{
+        .from_install = false,
+        .quiet = true,
+        .preset = "generic-agent",
+        .skip_verify = true,
+    }, &stdout_writer, &stderr_writer);
+    defer outcome.deinit(allocator);
+
+    try std.testing.expect(!outcome.core_ok);
+    try std.testing.expectEqual(ProtectionLabel.core_failed, outcome.protection_label);
+    try std.testing.expect(!outcome.policy_left_alone);
+    try std.testing.expect(!outcome.policy_created);
+
+    // Bytes must be unchanged (never overwrite unloadable policy).
+    const policy = try ensureCoreReadPolicy(tmp.dir);
+    defer allocator.free(policy);
+    try std.testing.expectEqualStrings(corrupt, policy);
+    try std.testing.expect(std.mem.indexOf(u8, policy, "ensure-core-unloadable-marker-c0ff") != null);
+}
+
+test "EnsureCore empty policy file is core_failed not leave-alone" {
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const empty = "";
+    try ensureCoreWritePolicy(tmp.dir, empty);
+
+    var stdout_buf: [1024]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    var outcome = try runEnsure(io, allocator, tmp.dir, .{
+        .from_install = false,
+        .quiet = true,
+        .preset = onboarding.default_preset,
+        .skip_verify = true,
+    }, &stdout_writer, &stderr_writer);
+    defer outcome.deinit(allocator);
+
+    try std.testing.expect(!outcome.core_ok);
+    try std.testing.expectEqual(ProtectionLabel.core_failed, outcome.protection_label);
+    try std.testing.expect(!outcome.policy_left_alone);
+
+    const policy = try ensureCoreReadPolicy(tmp.dir);
+    defer allocator.free(policy);
+    try std.testing.expectEqualStrings(empty, policy);
+}
+
+// ---------------------------------------------------------------------------
+// EnsureCore — workspace_root_override pin
+// ---------------------------------------------------------------------------
+
+test "EnsureCore workspace_root_override pins root and skips cwd walk" {
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // Parent has a git marker; nested is the pin target. Without override, walk
+    // would prefer parent — override must force nested.
+    try tmp.dir.createDirPath(io, ".git");
+    try tmp.dir.createDirPath(io, "nested");
+    var nested = try tmp.dir.openDir(io, "nested", .{});
+    defer nested.close(io);
+
+    const nested_abs = try nested.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(nested_abs);
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    // Pass parent as cwd but pin nested via override.
+    var outcome = try runEnsure(io, allocator, tmp.dir, .{
+        .from_install = false,
+        .quiet = true,
+        .preset = onboarding.default_preset,
+        .skip_verify = true,
+        .workspace_root_override = nested_abs,
+    }, &stdout_writer, &stderr_writer);
+    defer outcome.deinit(allocator);
+
+    try std.testing.expect(outcome.core_ok);
+    try std.testing.expect(outcome.policy_created);
+
+    // Policy under nested, not parent.
+    const nested_policy = try ensureCoreReadPolicy(nested);
+    defer allocator.free(nested_policy);
+    try std.testing.expect(nested_policy.len > 0);
+
+    if (tmp.dir.access(io, ".orca/policy.yaml", .{})) |_| {
+        try std.testing.expect(false); // must not write at unpinned parent
+    } else |_| {}
 }
 
 // ---------------------------------------------------------------------------
@@ -631,6 +814,9 @@ test "EnsureCore start bridge routes policy create through runEnsure without par
     // No parallel create: policy step must not invoke onboarding.ensurePolicy
     // (that path creates via init.command independently of the ensure library).
     try std.testing.expect(std.mem.indexOf(u8, start_src, "onboarding.ensurePolicy") == null);
+
+    // M-3/M-4: start must pin workspace root into ensure (no dual-root re-resolve).
+    try std.testing.expect(std.mem.indexOf(u8, start_src, "workspace_root_override") != null);
 }
 
 test "EnsureCore start command and runStart remain public no delete" {
