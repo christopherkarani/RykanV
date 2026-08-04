@@ -4,6 +4,8 @@ set -eu
 # ryk installer (macOS / Linux) — Phase 5a brand cut; orca is a PATH compat alias.
 #
 # Documented one-liner:
+#   curl -fsSL https://rykanv.com/install | sh
+# Fallback (same script, GitHub raw):
 #   curl -fsSL https://raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh | sh
 #
 # Environment (prefer RYK_*; fall back ORCA_* for one major):
@@ -230,7 +232,7 @@ download() {
       # Fall back if --show-progress is unsupported.
       wget --show-progress -q "$url" -O "$output" 2>&1 || wget -q "$url" -O "$output" || \
         fail "download failed: $url" "Check network access and that release v${VERSION} exists.
-	Retry: RYK_VERSION=${VERSION} curl -fsSL https://raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh | sh"
+	Retry: RYK_VERSION=${VERSION} curl -fsSL https://rykanv.com/install | sh"
       return 0
     fi
     set -- wget -q "$url" -O "$output"
@@ -239,7 +241,7 @@ download() {
       "Install curl, then re-run the installer."
   fi
   "$@" || fail "download failed: $url" "Check network access and that release v${VERSION} exists.
-	Retry: RYK_VERSION=${VERSION} curl -fsSL https://raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh | sh"
+	Retry: RYK_VERSION=${VERSION} curl -fsSL https://rykanv.com/install | sh"
 }
 
 sha256_file() {
@@ -275,7 +277,7 @@ Offline: set RYK_ARTIFACT_DIR to a folder containing the archive + checksums.txt
       "Expected: ${expected}
 Got:      ${actual}
 Refuse to install a corrupted or tampered archive.
-	Retry:    RYK_VERSION=${VERSION} curl -fsSL https://raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh | sh
+	Retry:    RYK_VERSION=${VERSION} curl -fsSL https://rykanv.com/install | sh
 	Offline:  set RYK_ARTIFACT_DIR after verifying checksums by hand."
   fi
 }

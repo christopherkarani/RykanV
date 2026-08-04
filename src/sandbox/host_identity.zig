@@ -958,7 +958,6 @@ test "resolveHostIdentity rejects binary under HOME/.grok/worktrees (not install
     try std.testing.expect(!id.isTrusted());
 }
 
-
 test "resolveHostIdentity trusted pi table host via extra prefix" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
