@@ -170,6 +170,8 @@ Agent budget: prefer **512–1024** for implementor. Low budget → warn and **e
 | `implementor.rhai` | Automated multi-unit TDD workflow (min 4 code lanes + integration); **per-unit unit live smoke + draft `gh stack` PR** (default `submit_stack=true`) |
 | `scripts/implementor-disk-gate.sh` | **Host-native** conjunctive VERDICT gate (missing/FAIL ⇒ exit 1) |
 | `scripts/implementor-metrics.sh` | Local per-run residual-class + VERDICT inventory → `metrics.md` |
+| Hand prompts under `planning/` | Must reference this floor; untracked |
+| `docs/dev/phase-handoff-format.md` | Lighter phase template — does **not** replace unit handoff schema |
 
 ### Stacked draft PRs (delivery)
 
@@ -177,5 +179,3 @@ Agent budget: prefer **512–1024** for implementor. Low budget → warn and **e
 - **One draft PR per unit**, only after: dual/min-4 PASS → path-scoped merge → **build OK** → **unit live product smoke PASS** (operator role). Suite-green alone is not enough.
 - Commands: `gh extension install github/gh-stack`, then `gh stack init/add` + `gh stack submit --auto` (drafts). Requires `gh` ≥2.90 ideally.
 - Opt out: `submit_stack=false`. Never merge from the implementor.
-| Hand prompts under `planning/` | Must reference this floor; untracked |
-| `docs/dev/phase-handoff-format.md` | Lighter phase template — does **not** replace unit handoff schema |

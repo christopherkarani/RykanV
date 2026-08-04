@@ -94,10 +94,9 @@ The plugin resolves ryk once per process (cached until `ORCA_BIN` changes), prob
 
 1. `RYK_BIN`
 2. `ORCA_BIN` (legacy environment compatibility)
-3. `./zig-out/bin/ryk` (current repo and parents)
-4. `~/.local/bin/ryk`
-5. `~/.ryk/bin/ryk`
-6. `ryk` on `PATH`
+3. `~/.local/bin/ryk` / `~/.orca/bin` / `~/.ryk/bin`
+4. `ryk` / `orca` on `PATH`
+5. `./zig-out/bin/ryk` (current repo and parents — last; avoids planted cwd binary beating installs)
 
 Only regular files that are executable and pass a Hermes `pre_tool_call` smoke test are selected (exit 0 and hook decision is not `block`, matching `tests/fixtures/hook-safe.json`). `ryk plugin doctor` uses a stricter allow-only check on the running ryk binary.
 

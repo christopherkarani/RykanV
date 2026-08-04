@@ -501,8 +501,8 @@ fn runBrowseLoop(
     return exit_codes.success;
 }
 
-/// Apply enable/disable. Enable is one-shot; disable leaves alt-screen for
-/// confirm default No (baseline uses CLI danger confirm / ORCA_OPERATOR).
+/// Apply enable/disable. Both leave alt-screen for confirm default No (freeze #3).
+/// Baseline disable uses CLI danger confirm / ORCA_OPERATOR.
 /// On successful disable, marks sticky so enabled-only view keeps the row.
 fn applyMutate(
     io: std.Io,
@@ -520,17 +520,17 @@ fn applyMutate(
     first_frame: *bool,
     frame_lines: *usize,
 ) !void {
-    if (kind == .disable) {
-        // Leave alt-screen + restore cooked mode for line confirm (allowlist pattern).
-        stdout.writeAll(vaxis.ctlseqs.show_cursor) catch {};
-        stdout.writeAll(vaxis.ctlseqs.rmcup) catch {};
-        if (comptime builtin.os.tag != .windows) {
-            if (saved_termios) |s| {
-                std.posix.tcsetattr(tty.fd.handle, .NOW, s) catch {};
-            }
+    // Leave alt-screen + restore cooked mode for line confirm (allowlist pattern).
+    stdout.writeAll(vaxis.ctlseqs.show_cursor) catch {};
+    stdout.writeAll(vaxis.ctlseqs.rmcup) catch {};
+    if (comptime builtin.os.tag != .windows) {
+        if (saved_termios) |s| {
+            std.posix.tcsetattr(tty.fd.handle, .NOW, s) catch {};
         }
+    }
 
-        var proceed = false;
+    var proceed = false;
+    if (kind == .disable) {
         if (pack_config.isBaselinePackId(pack.id)) {
             if (pack_config.isOperatorBreakGlass()) {
                 proceed = true;
@@ -550,18 +550,28 @@ fn applyMutate(
             const msg = std.fmt.bufPrint(&msg_buf, "Disable pack '{s}'?", .{pack.id}) catch "Disable pack?";
             proceed = tui.prompt.confirm(io, stdout, .normal, msg, null) catch false;
         }
+    } else {
+        // F285: enable also requires confirm default No (freeze #3).
+        var msg_buf: [160]u8 = undefined;
+        const msg = std.fmt.bufPrint(&msg_buf, "Enable pack '{s}'?", .{pack.id}) catch "Enable pack?";
+        proceed = tui.prompt.confirm(io, stdout, .normal, msg, null) catch false;
+    }
 
-        // Re-enter raw alt-screen for continued browsing.
-        configureReadTimeout(tty);
-        stdout.writeAll(vaxis.ctlseqs.smcup) catch {};
-        stdout.writeAll(vaxis.ctlseqs.hide_cursor) catch {};
-        first_frame.* = true;
-        frame_lines.* = 0;
+    // Re-enter raw alt-screen for continued browsing.
+    configureReadTimeout(tty);
+    stdout.writeAll(vaxis.ctlseqs.smcup) catch {};
+    stdout.writeAll(vaxis.ctlseqs.hide_cursor) catch {};
+    first_frame.* = true;
+    frame_lines.* = 0;
 
-        if (!proceed) {
-            setStatus(allocator, status_owned, status_msg, "disable cancelled");
-            return;
-        }
+    if (!proceed) {
+        setStatus(
+            allocator,
+            status_owned,
+            status_msg,
+            if (kind == .disable) "disable cancelled" else "enable cancelled",
+        );
+        return;
     }
 
     const workspace_root = onboarding.resolveWorkspaceRoot(io, allocator) catch {

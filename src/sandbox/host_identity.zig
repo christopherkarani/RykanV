@@ -145,6 +145,11 @@ pub fn resolveHostIdentity(
         }
         break :blk from_real;
     };
+    // F29: ~/.grok/{bin,downloads} is a Grok install layout only — do not treat
+    // planted table-host leaves (claude/codex/…) under those dirs as trusted hosts.
+    if (isGrokInstallLayoutPath(path) and !std.mem.eql(u8, base, "grok")) {
+        return genericTakePath(path, deny_untrusted_prefix);
+    }
     const spec = host_config_grants.specForHost(base) orelse {
         return genericTakePath(path, deny_unknown_host);
     };
@@ -450,6 +455,14 @@ fn hostNameFromResolvedPath(path: []const u8) []const u8 {
     return base;
 }
 
+/// True when path is under Grok CLI install dirs (not product home / worktrees).
+fn isGrokInstallLayoutPath(path: []const u8) bool {
+    return std.mem.indexOf(u8, path, "/.grok/downloads/") != null or
+        std.mem.indexOf(u8, path, "/.grok/bin/") != null or
+        std.mem.endsWith(u8, path, "/.grok/downloads") or
+        std.mem.endsWith(u8, path, "/.grok/bin");
+}
+
 /// True when realpath looks like an agent install wrapper (not a system binary).
 /// Required before adopting a trusted symlink's basename as the host key.
 fn allowsLinkBasenameFallback(realpath: []const u8) bool {
@@ -457,8 +470,7 @@ fn allowsLinkBasenameFallback(realpath: []const u8) bool {
     if (std.mem.indexOf(u8, realpath, "/versions/") != null) return true;
     if (std.mem.indexOf(u8, realpath, "/Cellar/") != null) return true;
     // Grok install layouts only (downloads + bin wrappers), not worktrees/skills.
-    if (std.mem.indexOf(u8, realpath, "/.grok/downloads/") != null) return true;
-    if (std.mem.indexOf(u8, realpath, "/.grok/bin/") != null) return true;
+    if (isGrokInstallLayoutPath(realpath)) return true;
     const base = host_config_grants.hostBasename(realpath);
     if (base.len == 0) return false;
     // Script-like leaves (cli.js, codex.js, …).
@@ -833,6 +845,40 @@ test "resolveHostIdentity trusted grok table host" {
     defer id.deinit(allocator);
     try std.testing.expect(id.isTrusted());
     try std.testing.expectEqualStrings("grok", id.host.?);
+}
+
+test "resolveHostIdentity rejects non-grok leaf under HOME/.grok/downloads" {
+    // F29: planting claude under .grok/downloads must not unlock Claude host grants.
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var home_tmp = std.testing.tmpDir(.{});
+    defer home_tmp.cleanup();
+    const home = try home_tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(home);
+
+    try home_tmp.dir.createDirPath(io, ".grok/downloads");
+    try home_tmp.dir.writeFile(io, .{
+        .sub_path = ".grok/downloads/claude",
+        .data = "#!/bin/sh\necho planted\n",
+    });
+    try home_tmp.dir.setFilePermissions(
+        io,
+        ".grok/downloads/claude",
+        std.Io.File.Permissions.fromMode(0o755),
+        .{},
+    );
+    const planted = try std.fs.path.join(allocator, &.{ home, ".grok/downloads/claude" });
+    defer allocator.free(planted);
+
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+    try env_map.put("TMPDIR", test_tmpdir_sentinel);
+
+    var id = try resolveHostIdentity(io, allocator, planted, &env_map, .{});
+    defer id.deinit(allocator);
+    try std.testing.expect(!id.isTrusted());
 }
 
 test "resolveHostIdentity trusts HOME/.grok downloads layout via link basename" {

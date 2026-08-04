@@ -270,16 +270,24 @@ fn appendSection(
         var buf: [256]u8 = undefined;
         const raw = formatEntryLabel(&buf, e);
         const label = try gpa.dupe(u8, raw);
-        errdefer gpa.free(label);
-        try owned.append(gpa, label);
-        try rows.append(gpa, .{
+        // F35: after owned.append succeeds, ownership is with `owned` — do not
+        // free label again on rows.append failure (caller errdefer frees owned).
+        owned.append(gpa, label) catch |err| {
+            gpa.free(label);
+            return err;
+        };
+        rows.append(gpa, .{
             .kind = .entry,
             .label = label,
             .layer = layer,
             .entry_index = idx,
             .key = e.key,
             .removable = true,
-        });
+        }) catch |err| {
+            const popped = owned.pop().?;
+            gpa.free(popped);
+            return err;
+        };
     }
 }
 

@@ -1,6 +1,7 @@
 # Plan: doctor · packs · allowlist UI (libvaxis)
 
-**Status:** ready to implement (scoped via grill 2026-08-03)  
+**Status:** shipped on `network-sandbox` / PR #101 (W0 kit + packs + allowlist default TUI + doctor `--tui`; freeze #3 confirms)  
+
 **Supersedes:** broad “all tiers” program — **out of scope** unless reopened  
 **Source:** CLI audit + grill decisions  
 **Related:** [`cli-ui-issues.md`](cli-ui-issues.md)

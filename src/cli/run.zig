@@ -945,7 +945,9 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 session.id.slice(),
                 self.effective_mode,
             );
-            // Parent-attested audit mode (F36): env alone is child-forgable.
+            // Parent-attested audit mode (F36/F200): env alone is child-forgable.
+            // If the session file cannot be written, drop the env claim so the
+            // banner does not advertise degraded without attestation.
             if (self.env_map.get("ORCA_SHIM_AUDIT_MODE")) |mode| {
                 if (std.ascii.eqlIgnoreCase(mode, "degraded") or std.ascii.eqlIgnoreCase(mode, "skip")) {
                     shim_mod.writeSessionShimAuditMode(
@@ -954,7 +956,9 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                         session.workspace_root,
                         session.id.slice(),
                         "degraded",
-                    ) catch {};
+                    ) catch {
+                        _ = self.env_map.swapRemove("ORCA_SHIM_AUDIT_MODE");
+                    };
                 }
             }
         }

@@ -192,6 +192,22 @@ pub fn ruleIdFromDaemonResult(allocator: std.mem.Allocator, result: std.json.Val
 /// Tip, when present, is a separate advisory line above the numbered What-now block.
 /// Order is product law: explain first; allow-once if the prompt is gone; rule-id
 /// allowlist last (not the day-1 primary path).
+/// POSIX single-quote so paste into a shell cannot expand `$()`, backticks, or `"`.
+pub fn shellSingleQuoteAlloc(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.append(allocator, '\'');
+    for (value) |byte| {
+        if (byte == '\'') {
+            try out.appendSlice(allocator, "'\"'\"'");
+        } else {
+            try out.append(allocator, byte);
+        }
+    }
+    try out.append(allocator, '\'');
+    return out.toOwnedSlice(allocator);
+}
+
 pub fn formatDenyNextSteps(
     allocator: std.mem.Allocator,
     command_display: []const u8,
@@ -218,10 +234,13 @@ pub fn formatDenyNextStepsWithCode(
             try list.appendSlice(allocator, tip_line);
         }
     }
-    // Progressive hierarchy labels (what now) — commands stay copy-pasteable.
+    // Progressive hierarchy labels (what now). Quote for paste safety so
+    // operators pasting into a shell do not expand $(…) / backticks (F23).
     try list.appendSlice(allocator, "What now:\n");
     {
-        const line = try std.fmt.allocPrint(allocator, "  1. Understand\n     ryk explain \"{s}\"\n", .{command_display});
+        const quoted = try shellSingleQuoteAlloc(allocator, command_display);
+        defer allocator.free(quoted);
+        const line = try std.fmt.allocPrint(allocator, "  1. Understand\n     ryk explain {s}\n", .{quoted});
         defer allocator.free(line);
         try list.appendSlice(allocator, line);
     }
@@ -663,7 +682,7 @@ test "formatDenyNextSteps includes explain allowlist and allow-once" {
     try std.testing.expect(std.mem.indexOf(u8, footer, "Tip: Consider using 'git stash'") != null);
     try std.testing.expect(std.mem.indexOf(u8, footer, "What now:") != null);
     try std.testing.expect(std.mem.indexOf(u8, footer, "1. Understand") != null);
-    try std.testing.expect(std.mem.indexOf(u8, footer, "ryk explain \"git reset --hard\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "ryk explain 'git reset --hard'") != null);
     try std.testing.expect(std.mem.indexOf(u8, footer, "ryk allowlist add core.git:reset-hard") != null);
     try std.testing.expect(std.mem.indexOf(u8, footer, "ryk allow-once") != null);
     // Progressive hierarchy: temporary before permanent; permanent labelled advanced.
@@ -675,6 +694,14 @@ test "formatDenyNextSteps includes explain allowlist and allow-once" {
     const allowlist_at = std.mem.indexOf(u8, footer, "ryk allowlist add").?;
     try std.testing.expect(explain_at < once_at);
     try std.testing.expect(once_at < allowlist_at);
+}
+
+test "formatDenyNextSteps single-quotes hostile paste payloads" {
+    const allocator = std.testing.allocator;
+    const footer = try formatDenyNextSteps(allocator, "echo $(id)", null, null);
+    defer allocator.free(footer);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "ryk explain 'echo $(id)'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "ryk explain \"echo $(id)\"") == null);
 }
 
 test "formatDenyNextStepsWithCode emits concrete allow-once code" {

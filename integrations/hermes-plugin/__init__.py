@@ -219,17 +219,8 @@ def _orca_candidates() -> list[str]:
             if resolved:
                 candidates.append(resolved)
 
-    directory = Path.cwd()
-    for _ in range(3):
-        for name in ("ryk", "orca"):
-            zig_out = directory / "zig-out" / "bin" / name
-            resolved = _orca_executable(str(zig_out))
-            if resolved:
-                candidates.append(resolved)
-        if directory.parent == directory:
-            break
-        directory = directory.parent
-
+    # Trusted installs and PATH before cwd zig-out (F10): a planted
+    # ./zig-out/bin/ryk must not beat ~/.local/bin or PATH when both exist.
     home = Path.home()
     for name in ("ryk", "orca"):
         for path in (home / ".local" / "bin" / name, home / ".orca" / "bin" / name, home / ".ryk" / "bin" / name):
@@ -243,6 +234,18 @@ def _orca_candidates() -> list[str]:
             resolved = _orca_executable(found)
             if resolved:
                 candidates.append(resolved)
+
+    # Dev tree last: only used when no install/PATH hit exists.
+    directory = Path.cwd()
+    for _ in range(3):
+        for name in ("ryk", "orca"):
+            zig_out = directory / "zig-out" / "bin" / name
+            resolved = _orca_executable(str(zig_out))
+            if resolved:
+                candidates.append(resolved)
+        if directory.parent == directory:
+            break
+        directory = directory.parent
 
     deduped: list[str] = []
     seen: set[str] = set()

@@ -38,7 +38,7 @@ fn hostAliasCommand(comptime host: []const u8) CommandInfo {
         .examples = &.{"ryk " ++ host},
         .details = &.{
             "Public protected launch path for " ++ host ++ "; internally uses the run engine for session setup.",
-            "Inherits agent-primary defaults (network ask; secretless off). ryk run flags stay on `ryk run` only — everything after the host name is agent argv.",
+            "Inherits agent-primary defaults: network allowlist + proxy mediation (empty backpack for secrets is not the default; secretless stays off unless --secretless). ryk run flags stay on `ryk run` only — everything after the host name is agent argv.",
         },
     };
 }
@@ -1079,7 +1079,9 @@ test "host launch allowlist is the single source for help alias entries" {
         try std.testing.expect(std.mem.indexOf(u8, info.summary, host) != null);
         try std.testing.expect(std.mem.indexOf(u8, info.usage, host) != null);
         try std.testing.expect(std.mem.indexOf(u8, info.details[0], "Public protected launch path") != null);
-        try std.testing.expect(std.mem.indexOf(u8, info.details[1], "secretless off") != null);
+        try std.testing.expect(std.mem.indexOf(u8, info.details[1], "network allowlist") != null);
+        try std.testing.expect(std.mem.indexOf(u8, info.details[1], "secretless stays off") != null);
+        try std.testing.expect(std.mem.indexOf(u8, info.details[1], "network ask") == null);
     }
     try std.testing.expect(findCommand("notanagent") == null);
     try std.testing.expect(!host_launch.isHostLaunchAlias("notanagent"));
@@ -1098,7 +1100,8 @@ test "top help and per-host help surface claude and pi aliases" {
     try std.testing.expect(try writeCommand(std.testing.io, &writer, "claude"));
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "ryk claude") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "Public protected launch path") != null);
-    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "secretless off") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "network allowlist") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "secretless stays off") != null);
 
     writer = .fixed(&buf);
     try std.testing.expect(try writeCommand(std.testing.io, &writer, "pi"));
