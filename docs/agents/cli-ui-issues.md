@@ -1,7 +1,7 @@
 # ryk CLI / UI issues catalog
 
 **Status:** open backlog from 2026-08-03 full CLI audit  
-**Evidence:** `docs/agents/cli-command-audit-report.md` (every public/dispatch command exercised)  
+**Evidence:** CLI inventory + implementation plan (audit session dump removed; durable issues live here)  
 **UI implementation plan (scoped):** `docs/agents/cli-ui-libvaxis-implementation-plan.md`  
 → Focus: **doctor · packs · allowlist** only (grill freeze). Full-tier items remain backlog here until that plan is reopened.  
 
@@ -56,13 +56,15 @@ IDs are stable for planning (`ISS-*`); not GitHub numbers unless filed.
 - **Plan link:** T1-D
 
 ### ISS-UX-02 — `packs` is a long linear list with no browse TUI
-- **Symptom:** Default list is a wall of pack IDs; enable/disable not discoverable in-session.
+- **Status:** **Shipped** (PR #101) — default dual-layer browse TUI on colour TTY; `--plain`/`--json`/`--no-rich` stay linear.
+- **Symptom (historical):** Default list is a wall of pack IDs; enable/disable not discoverable in-session.
 - **Impact:** Power feature underused; “no libvaxis where expected.”
 - **Fix direction:** TTY list/detail/actions TUI; `--plain`/`--json` remain.
 - **Plan link:** T1-A
 
 ### ISS-UX-03 — `doctor` deep output is tables-only (no progressive TUI)
-- **Symptom:** Useful but dense; hard to scan hosts vs capabilities vs next steps on small terminals.
+- **Status:** **Shipped** (PR #101) — opt-in `ryk doctor --tui` four-pane deep-dive; linear doctor remains default.
+- **Symptom (historical):** Useful but dense; hard to scan hosts vs capabilities vs next steps on small terminals.
 - **Impact:** Primary diagnose verb less teachable than scan.
 - **Fix direction:** Multi-pane doctor TUI on TTY; keep `--json`.
 - **Plan link:** T1-C

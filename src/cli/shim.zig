@@ -40,10 +40,19 @@ fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const [
         try stderr.writeAll("ryk shim exec: missing ORCA_SESSION_ID; shims only work inside a ryk session.\n");
         return exit_codes.general;
     };
+    // F27: reject path-traversal / empty session ids before any path join under .orca/sessions/.
+    core.session.validateSessionIdText(session_id) catch {
+        try stderr.writeAll("ryk shim exec: invalid ORCA_SESSION_ID; refusing path traversal into session control plane.\n");
+        return exit_codes.general;
+    };
     const workspace_root = env_map.get("ORCA_WORKSPACE_ROOT") orelse {
         try stderr.writeAll("ryk shim exec: missing ORCA_WORKSPACE_ROOT; shims only work inside a ryk session.\n");
         return exit_codes.general;
     };
+    if (workspace_root.len == 0 or !std.fs.path.isAbsolute(workspace_root)) {
+        try stderr.writeAll("ryk shim exec: ORCA_WORKSPACE_ROOT must be an absolute path.\n");
+        return exit_codes.general;
+    }
     const shim_dir = env_map.get("ORCA_SHIM_DIR") orelse {
         try stderr.writeAll("ryk shim exec: missing ORCA_SHIM_DIR; refusing unsafe delegation.\n");
         return exit_codes.general;
@@ -100,14 +109,15 @@ fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const [
 
     var final_decision = command_decision.decision;
     if (command_decision.decision.result != .allow and command_decision.decision.result != .observe) {
-        // Child can forge ORCA_APPROVED_COMMAND_SESSION; durable audit record is required for
-        // session-scoped approval. ORCA_APPROVED_COMMAND_ONCE is parent-set immediately before spawn.
-        // Fail-closed Evaluate failures (daemon unavailable / protocol mismatch / malformed) are never
-        // softened by parent approval — only pack Deny / SoftBlock outcomes may be approved.
-        const parent_approved = !command_decision.fail_closed and (try approvalRecordedForCommand(io, allocator, workspace_root, session_id, display) or
-            intercept.commands.onceApprovalEnvMatches(env_map, display));
+        // F26: bare ORCA_APPROVED_COMMAND_ONCE is a SHA-256 of the display string — child-forgeable.
+        // Durable parent `user_approval` in events.jsonl is required (same as session approval).
+        // Once-env is only consumed for hygiene after the durable record matches; it never alone allows.
+        // Fail-closed Evaluate failures are never softened by parent approval.
+        const parent_approved = !command_decision.fail_closed and
+            try approvalRecordedForCommand(io, allocator, workspace_root, session_id, display);
         if (parent_approved) {
-            try intercept.commands.consumeOnceApproval(allocator, @constCast(env_map), display);
+            // Best-effort consume once-hash if parent also planted it for the spawn.
+            intercept.commands.consumeOnceApproval(allocator, @constCast(env_map), display) catch {};
             final_decision = .{
                 .result = .allow,
                 .reason = "parent approval matched command hash",
@@ -247,16 +257,11 @@ fn shimAuditModeIsDegraded(
     session_id: []const u8,
     env_map: *const std.process.Environ.Map,
 ) bool {
-    // Session file is parent-attested; env alone is hostile (child can set it).
+    _ = env_map;
+    // F36/F207: session file is the only parent attestation. Env alone is hostile
+    // (child can set ORCA_SHIM_AUDIT_MODE). Empty session_id is rejected at entry.
     const session = readSessionShimAuditMode(io, allocator, workspace_root, session_id) catch null;
-    if (session != null) return true;
-    // Tests / legacy without a session recording: allow env only when session_id
-    // is empty (no session context) — production always has a session id.
-    if (session_id.len == 0) {
-        const raw = env_map.get(shim_audit_mode_env) orelse return false;
-        return std.ascii.eqlIgnoreCase(raw, "degraded") or std.ascii.eqlIgnoreCase(raw, "skip");
-    }
-    return false;
+    return session != null;
 }
 
 /// Best-effort session audit open for in-sandbox shims.
@@ -612,6 +617,61 @@ test "shim callback rejects forged approval hash from child environment" {
     const events = try readSessionEvents(std.testing.allocator, fx.root, fx.session_id);
     defer std.testing.allocator.free(events);
     try std.testing.expect(std.mem.indexOf(u8, events, "\"type\":\"command_denied\"") != null);
+}
+
+test "shim rejects forged ORCA_APPROVED_COMMAND_ONCE without durable user_approval" {
+    // F26: bare once-hash is forgeable; only events.jsonl user_approval allows.
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var fx = try prepareShimExecFixture(.{ .mode = "strict", .real_bin = "git" });
+    defer fx.deinit();
+
+    const display = try intercept.commands.displayArgvAlloc(std.testing.allocator, &.{ "git", "push" });
+    defer std.testing.allocator.free(display);
+    try intercept.commands.appendApprovalHashEnv(
+        std.testing.allocator,
+        &fx.env_map,
+        intercept.commands.approved_once_env,
+        display,
+    );
+    try std.testing.expect(intercept.commands.onceApprovalEnvMatches(&fx.env_map, display));
+    try std.testing.expect(!(try approvalRecordedForCommand(std.testing.io, std.testing.allocator, fx.root, fx.session_id, display)));
+
+    var stderr_buf: [1024]u8 = undefined;
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try execWithEnv(
+        std.testing.io,
+        std.testing.allocator,
+        &.{ "git", "push" },
+        &fx.env_map,
+        &stderr_writer,
+        shell_eval.mockDaemonSoftBlockAllowEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.denial, code);
+    const events = try readSessionEvents(std.testing.allocator, fx.root, fx.session_id);
+    defer std.testing.allocator.free(events);
+    try std.testing.expect(std.mem.indexOf(u8, events, "\"type\":\"command_denied\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "\"type\":\"command_allowed\"") == null);
+}
+
+test "shim rejects path-traversal ORCA_SESSION_ID" {
+    // F27: ../../ must not plant shim_mode outside sessions/.
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var fx = try prepareShimExecFixture(.{ .mode = "strict", .real_bin = "true", .shim_bin = "true" });
+    defer fx.deinit();
+    try fx.env_map.put("ORCA_SESSION_ID", "../../evil");
+
+    var stderr_buf: [1024]u8 = undefined;
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try execWithEnv(
+        std.testing.io,
+        std.testing.allocator,
+        &.{"true"},
+        &fx.env_map,
+        &stderr_writer,
+        shell_eval.mockDaemonAllowEvaluator,
+    );
+    try std.testing.expectEqual(exit_codes.general, code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "invalid ORCA_SESSION_ID") != null);
 }
 
 test "shim callback rejects forged policy path from child environment" {

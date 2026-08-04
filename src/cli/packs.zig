@@ -187,16 +187,16 @@ fn runPacksBrowse(
         } else |_| {}
     } else |_| {}
 
-    // Default enabled+baseline (freeze / U04); `a` toggles full catalog. Sticky (A)
+    // Default enabled+baseline (freeze #9 / U04); `a` toggles full catalog. Sticky (A)
     // keeps just-disabled rows when the user narrows with enabled-only.
-    // `--enabled` / `--installed` keep linear filter semantics via start mode.
+    // `--enabled` / `--installed` still affect linear fallback filter only.
     return packs_tui.runBrowse(io, allocator, stdout, stderr, .{
         .packs = refs,
         .enabled = enabled,
         .write_scope = write_scope,
         .write_path = write_path,
         .initial_query = options.filter,
-        .start_all = !options.installed,
+        .start_all = false,
     });
 }
 

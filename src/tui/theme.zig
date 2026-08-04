@@ -663,8 +663,9 @@ test "parseOsc11Reply: malformed payload is unknown" {
 }
 
 test "sequence: none capability emits empty string for every token" {
-    inline for (@typeInfo(Token).@"enum".decls) |d| {
-        const t = @field(Token, d.name);
+    // Enum *fields* (variants), not decls — decls can be empty and vacuous-pass (F281).
+    inline for (@typeInfo(Token).@"enum".fields) |f| {
+        const t: Token = @enumFromInt(f.value);
         try std.testing.expectEqualStrings("", sequence(t, .none, .dark));
     }
 }
