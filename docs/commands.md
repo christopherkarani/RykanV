@@ -15,7 +15,12 @@ ORCA_NO_RICH=1 ryk replay
 
 `--no-rich` disables colour and animation but keeps the full information content — panels become ASCII, badges become `[ALLOW]`/`[DENY]`, and risk meters become text bars. It never affects `--json`/`--robot` machine output, which stays byte-stable regardless.
 
-Interactive alt-screen views are opt-in: `ryk replay --tui` shows a scrollable timeline for the last session (or `ryk replay --session <id> --tui`). Advanced `ryk history --live` remains available via `ryk help --all`. Alt-screen views require an interactive rich terminal and are rejected with machine output modes such as `--json`.
+Interactive alt-screen views:
+
+- **Default on colour TTY:** `ryk packs` and `ryk allowlist` open dual-layer browse TUIs (linear/`--json`/`--plain`/`--no-rich` stay non-TUI).
+- **Opt-in:** `ryk doctor --tui` (linear doctor remains the default) and `ryk replay --tui` (scrollable timeline for the last session or `ryk replay --session <id> --tui`). Advanced `ryk history --live` remains available via `ryk help --all`.
+
+Alt-screen views require an interactive rich terminal and are rejected under machine/plain/no-rich modes (`--json`, `--plain`, `--no-rich`, `RYK_NO_RICH` / `ORCA_NO_RICH`).
 
 ## Dashboard
 

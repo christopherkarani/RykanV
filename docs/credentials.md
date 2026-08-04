@@ -4,7 +4,7 @@ Orca implements defense-in-depth credential protection across eight layers. This
 
 ## Overview
 
-When you run an AI agent through Orca, your environment variables, files, and network requests may contain sensitive credentials. Orca detects and protects these automatically—before they reach the agent process, before they are written to disk, and (for non-allowlisted destinations) before they leave your machine. **Allowlisted HTTPS** still completes by default: exfiltration detection is annotate/audit by default and does not deny allowlisted hosts unless enforce is explicitly enabled.
+When you run an AI agent through Orca, your environment variables, files, and network requests may contain sensitive credentials. Orca detects and protects these automatically—before they reach the agent process, before they are written to disk, and (for non-allowlisted destinations) before they leave your machine. **Allowlisted HTTPS** still completes by default: network exfiltration detection is **annotate/audit only** (findings are recorded; there is no config switch that denies allowlisted hosts for secret-like URL surfaces).
 
 The protection layers are:
 

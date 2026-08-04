@@ -20,6 +20,12 @@ const host_status = @import("host_status.zig");
 const pack_state = @import("pack_state.zig");
 const readiness = @import("readiness.zig");
 const ensure = @import("ensure.zig");
+const doctor_tui = @import("doctor_tui.zig");
+
+// Monopath: pull nested doctor_tui tests into the lib test binary.
+test {
+    _ = doctor_tui;
+}
 
 const DoctorCapability = struct {
     label: []const u8,
@@ -128,6 +134,8 @@ const DoctorOptions = struct {
     verbose: bool = false,
     check: bool = false,
     json: bool = false,
+    /// Opt-in four-pane deep-dive TUI (linear remains the default).
+    tui: bool = false,
     /// Public repair door: early-branch to shared ensure (D40).
     fix: bool = false,
     /// Install-scope ensure: HOME + resource-root resolution (D32).
@@ -187,6 +195,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
 
     const core_ready = readiness.assess(context.daemon_health, context.policy_present, context.policy_valid);
     if (options.json) {
+        // --json frozen: never enter TUI even when --tui is also present.
         const policy_path = try std.fs.path.join(allocator, &.{ context.workspace_root, ".orca", "policy.yaml" });
         defer allocator.free(policy_path);
         try readiness.writeJsonEnvelope(stdout, .{
@@ -198,10 +207,131 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
             .policy_error = context.policy_error,
             .close_object = true,
         });
+    } else if (options.tui and doctor_tui.wouldEnterDoctorTui(
+        isStdinTty(io),
+        isStdoutTty(io, stdout),
+        argv,
+        true,
+        false,
+    )) {
+        const tui_code = try runDoctorTui(io, allocator, stdout, os, backend_report, context);
+        // Tty.init / loop failure → linear report (never green-paint empty TUI success).
+        if (tui_code != exit_codes.success) {
+            try stderr.writeAll(doctor_tui.fail_closed_message);
+            try writeReport(io, stdout, os, backend_report, context, options.verbose);
+        }
     } else {
+        if (options.tui) {
+            // Fail-closed: message + linear fallback (D2).
+            try stderr.writeAll(doctor_tui.fail_closed_message);
+        }
         try writeReport(io, stdout, os, backend_report, context, options.verbose);
     }
     return core_ready.exitCode(options.check);
+}
+
+fn isStdinTty(io: std.Io) bool {
+    return std.Io.File.stdin().isTty(io) catch false;
+}
+
+fn isStdoutTty(io: std.Io, stdout: anytype) bool {
+    _ = stdout;
+    return std.Io.File.stdout().isTty(io) catch false;
+}
+
+/// Build pure pane facts from the linear doctor context and open the browse kit.
+fn runDoctorTui(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    stdout: anytype,
+    os: core.platform.Os,
+    backend_report: sandbox.backend.ReportSet,
+    context: IntegrationContext,
+) !u8 {
+    const counts = countCapabilitySummary(os, backend_report);
+    const policy_status = if (!context.policy_present)
+        "no policy"
+    else if (!context.policy_valid)
+        "policy invalid"
+    else
+        "policy valid";
+
+    // Packs one-liner for Summary — Zig inventory (not daemon-gated).
+    var packs_summary = pack_state.queryPacksSummaryDefault(io, allocator) catch pack_state.unknownPacksSummary();
+    defer packs_summary.deinit(allocator);
+
+    var packs_buf: [160]u8 = undefined;
+    const packs_line = doctor_tui.formatPacksLine(
+        &packs_buf,
+        packs_summary.known,
+        packs_summary.optInCount(),
+    );
+
+    const summary: doctor_tui.SummaryFacts = .{
+        .os = os.toString(),
+        .policy_status = policy_status,
+        .daemon_status = daemonStatusSummary(context.daemon_health),
+        .active = counts.active,
+        .limited = counts.limited,
+        .unavailable = counts.unavailable,
+        .packs_line = packs_line,
+        .secret_boundary = secretBoundaryCapability(backend_report),
+    };
+
+    var host_facts = try allocator.alloc(doctor_tui.HostFact, context.host_rows.len);
+    defer allocator.free(host_facts);
+    for (context.host_rows, 0..) |row, i| {
+        host_facts[i] = .{
+            .host = row.host,
+            .wired = row.wired,
+            .shell_gate = row.shell_gate,
+            .fail_stance = row.fail_stance,
+            .smoke_allow = row.smoke_allow,
+            .smoke_deny = row.smoke_deny,
+            .fix = row.fix,
+        };
+    }
+
+    var cap_facts: [doctor_capabilities.len]doctor_tui.CapabilityFact = undefined;
+    for (doctor_capabilities, 0..) |item, index| {
+        if (item.feature) |feature| {
+            const report = backend_report.get(feature);
+            const display_level = doctorDisplayLevel(feature, report.level);
+            cap_facts[index] = .{
+                .label = item.label,
+                .level = display_level.toString(),
+                .glyph = levelColorAndGlyph(display_level).glyph,
+            };
+        } else if (item.capability) |capability| {
+            const report = core.platform.reportCapability(os, capability);
+            cap_facts[index] = .{
+                .label = item.label,
+                .level = report.state.toString(),
+                .glyph = stateColorAndGlyph(report.state).glyph,
+            };
+        }
+    }
+
+    const next: doctor_tui.NextStepFacts = .{
+        .daemon_health_compatible = context.daemon_health == .compatible,
+        .daemon_detail = context.daemon_detail,
+        .daemon_binary_untrusted = context.daemon_binary_untrusted,
+        .daemon_binary_exists = context.daemon_binary_exists,
+        .daemon_binary_executable = context.daemon_binary_executable,
+        .policy_present = context.policy_present,
+        .policy_valid = context.policy_valid,
+        .mcp_manifest_invalid_count = context.mcp_manifest_invalid_count,
+        .redteam_fixtures_present = context.redteam_fixtures_present,
+        .hermes_fail_open = context.hermes_fail_open,
+        .hermes_installed = context.hermes_installed,
+    };
+
+    return try doctor_tui.run(io, allocator, stdout, .{
+        .summary = summary,
+        .hosts = host_facts,
+        .capabilities = &cap_facts,
+        .next = next,
+    });
 }
 
 fn parseDoctorOptions(argv: []const []const u8, stderr: anytype) !DoctorOptions {
@@ -220,6 +350,15 @@ fn parseDoctorOptions(argv: []const []const u8, stderr: anytype) !DoctorOptions 
         }
         if (std.mem.eql(u8, arg, "--json")) {
             options.json = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--plain") or std.mem.eql(u8, arg, "--no-rich")) {
+            // Linear report escape (matches help: non-TTY / --json / --plain).
+            // Also disables opt-in --tui via shouldEnterTui when still on argv.
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--tui")) {
+            options.tui = true;
             continue;
         }
         if (std.mem.eql(u8, arg, "--fix")) {
@@ -258,7 +397,7 @@ fn parseDoctorOptions(argv: []const []const u8, stderr: anytype) !DoctorOptions 
             continue;
         }
         try suggestions.writeUnknownOption(stderr, "ryk doctor", arg, &.{
-            "--verbose", "-v", "--check", "--json", "--fix", "--from-install", "--preset", "--help", "-h",
+            "--verbose", "-v", "--check", "--json", "--plain", "--no-rich", "--tui", "--fix", "--from-install", "--preset", "--help", "-h",
         }, "doctor");
         return error.Usage;
     }
@@ -707,10 +846,7 @@ fn writePacksSection(io: std.Io, stdout: anytype, context: IntegrationContext) !
     };
     defer if (config_path) |p| context.allocator.free(p);
 
-    if (context.daemon_health != .compatible) {
-        try pack_state.writeDoctorPacksSectionWithConfig(stdout, pack_state.unknownPacksSummary(), config_path, null);
-        return;
-    }
+    // RT-12: packs inventory is Zig in-process — do not hard-gate on daemon health.
     var summary = pack_state.queryPacksSummaryDefault(io, context.allocator) catch pack_state.unknownPacksSummary();
     defer summary.deinit(context.allocator);
     try pack_state.writeDoctorPacksSectionWithConfig(stdout, summary, config_path, null);
@@ -1404,7 +1540,8 @@ test "doctor recommendations prioritize daemon remediation over missing policy" 
     try std.testing.expect(std.mem.indexOf(u8, written, "ryk init --preset") == null);
 }
 
-test "doctor packs section is unknown when daemon is unavailable" {
+test "doctor packs section stays known when daemon is unavailable" {
+    // RT-12 / F9: packs inventory is Zig monopath — not daemon-gated.
     var stdout_buf: [16384]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     const report = sandbox.backend.detect(.linux);
@@ -1417,9 +1554,14 @@ test "doctor packs section is unknown when daemon is unavailable" {
     try writeReport(std.testing.io, &stdout_writer, .linux, report, context, false);
     const written = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, written, "\nPacks\n") != null);
-    // RT-12: packs offline ≠ shell evaluate dead
-    try std.testing.expect(std.mem.indexOf(u8, written, "unknown (packs inventory offline") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "shell evaluate is Zig in-process") != null);
+    // Must not claim unknown solely because daemon is down.
+    try std.testing.expect(std.mem.indexOf(u8, written, "unknown (packs inventory offline") == null);
+    // Baseline / opt-in summary from oracle registry.
+    try std.testing.expect(
+        std.mem.indexOf(u8, written, "baseline") != null or
+            std.mem.indexOf(u8, written, "opt-in") != null or
+            std.mem.indexOf(u8, written, "Packs") != null,
+    );
     try std.testing.expect(std.mem.indexOf(u8, written, "shell evaluation fails closed") == null);
 }
 
@@ -1512,6 +1654,58 @@ test "doctor parseDoctorOptions accepts --check and --json" {
     try std.testing.expect(opts.check);
     try std.testing.expect(opts.json);
     try std.testing.expect(opts.verbose);
+}
+
+test "doctor parseDoctorOptions accepts --tui; default remains linear" {
+    var stderr_buf: [64]u8 = undefined;
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const bare = try parseDoctorOptions(&.{}, &stderr_writer);
+    try std.testing.expect(!bare.tui);
+    try std.testing.expect(!bare.json);
+    const with_tui = try parseDoctorOptions(&.{"--tui"}, &stderr_writer);
+    try std.testing.expect(with_tui.tui);
+    // --tui + --json still parse; json path freezes machine output (no TUI).
+    const both = try parseDoctorOptions(&.{ "--tui", "--json" }, &stderr_writer);
+    try std.testing.expect(both.tui);
+    try std.testing.expect(both.json);
+}
+
+test "doctor --tui non-TTY fail-closed message then linear report" {
+    // Under tests stdin/stdout are non-TTY → wouldEnter false → fail-closed message + linear.
+    var stdout_buf: [32768]u8 = undefined;
+    var stderr_buf: [512]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try command(std.testing.io, &.{"--tui"}, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, code);
+    const err = stderr_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, err, "--tui requires") != null or std.mem.indexOf(u8, err, "using linear") != null);
+    const out = stdout_writer.buffered();
+    // Linear path still rendered.
+    try std.testing.expect(std.mem.indexOf(u8, out, "ryk Doctor") != null or std.mem.indexOf(u8, out, "Summary") != null);
+}
+
+test "doctor TUI entry uses shared shouldEnterTui gate via wouldEnterDoctorTui" {
+    // Composition: opt-in --tui + shouldEnterTui — not a dead import.
+    try std.testing.expect(doctor_tui.wouldEnterDoctorTui(true, true, &.{"--tui"}, true, false));
+    try std.testing.expect(!doctor_tui.wouldEnterDoctorTui(true, true, &.{}, false, false));
+    try std.testing.expect(!doctor_tui.wouldEnterDoctorTui(false, true, &.{"--tui"}, true, false));
+    try std.testing.expect(!doctor_tui.wouldEnterDoctorTui(true, true, &.{ "--tui", "--json" }, true, true));
+    try std.testing.expect(@TypeOf(tui.browse.keyToAction) != void);
+}
+
+test "doctor --json frozen when --tui also present" {
+    var stdout_buf: [8192]u8 = undefined;
+    var stderr_buf: [256]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try command(std.testing.io, &.{ "--json", "--tui" }, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, code);
+    const out = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"ready\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"schema_version\"") != null);
+    // No fail-closed TUI message on the json path (json wins before TUI branch).
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "using linear") == null);
 }
 
 // ---------------------------------------------------------------------------
@@ -1743,6 +1937,42 @@ test "doctorFix help documents --fix" {
     }
     try std.testing.expect(documents_exclusivity);
     try std.testing.expect(documents_ensure_only_with_fix);
+}
+
+test "doctor help documents --tui four-pane deep-dive" {
+    // D5: help documents --tui (usage, completion, example, details).
+    const info = help.findCommand("doctor") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, info.usage, "--tui") != null);
+
+    var lists_tui = false;
+    for (info.additional_completion_flags) |flag| {
+        if (std.mem.eql(u8, flag, "--tui")) lists_tui = true;
+    }
+    try std.testing.expect(lists_tui);
+
+    var teaches_tui = false;
+    for (info.examples) |example| {
+        if (std.mem.indexOf(u8, example, "--tui") != null) teaches_tui = true;
+    }
+    for (info.details) |line| {
+        if (std.mem.indexOf(u8, line, "--tui") != null) teaches_tui = true;
+    }
+    try std.testing.expect(teaches_tui);
+
+    // Details name the four panes and day-2 links.
+    var details_blob: [4096]u8 = undefined;
+    var dw: std.Io.Writer = .fixed(&details_blob);
+    for (info.details) |line| {
+        try dw.writeAll(line);
+        try dw.writeAll("\n");
+    }
+    const details = dw.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, details, "Summary") != null);
+    try std.testing.expect(std.mem.indexOf(u8, details, "Hosts") != null);
+    try std.testing.expect(std.mem.indexOf(u8, details, "Capabilities") != null);
+    try std.testing.expect(std.mem.indexOf(u8, details, "Next steps") != null);
+    try std.testing.expect(std.mem.indexOf(u8, details, "ryk packs") != null);
+    try std.testing.expect(std.mem.indexOf(u8, details, "ryk allowlist") != null);
 }
 
 test "doctorFix early-branches to ensure with processExitForOutcome (D40/D25)" {

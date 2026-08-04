@@ -117,9 +117,11 @@ The `credentials.use` value is a reference name for policy, audit, and external 
 
 Orca flags long query strings, base64-like URL parts, high-entropy DNS labels, paste sites, request bins, tunneling services, direct IP destinations, secret-like values, and repeated unknown domains.
 
+These findings are **annotate/audit by default**: they are recorded for operators and do not deny allowlisted HTTPS destinations. There is no separate “enforce secrets in URL” config switch on the proxy path (see also `docs/credentials.md`).
+
 ## Enforcement Levels
 
-Policy decision is not the same as transparent network enforcement. `orca doctor` distinguishes decision engine, observation, proxy-mediated enforcement, and transparent enforcement.
+Policy decision is not the same as transparent network enforcement. `ryk doctor` distinguishes decision engine, observation, proxy-mediated enforcement, and transparent enforcement.
 
 ## Redaction
 

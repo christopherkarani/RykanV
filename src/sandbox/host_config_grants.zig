@@ -195,9 +195,16 @@ pub const host_config_table = [_]HostConfigSpec{
     },
     .{
         .host = "grok",
-        // Grok Build loads hooks, skills, and session state from this root;
-        // its canonical user settings path is installed by grok_install.zig.
-        .home_rel_dirs = &.{".grok"},
+        // Product state only — not whole ~/.grok (worktrees, agent scratch, etc.) (F19).
+        // F40: do not RW-grant ~/.grok/bin (host-identity trust root — plantable privilege).
+        // user-settings.json is RO via collect paths + authority write-deny (F218).
+        .home_rel_dirs = &.{
+            ".grok/skills",
+            ".grok/hooks",
+            ".grok/sessions",
+            ".grok/plugins",
+            ".grok/mcp",
+        },
         .authority_home_rel_files = &.{".grok/user-settings.json"},
     },
 };
@@ -1249,14 +1256,15 @@ test "collectHostConfigPaths grants pi lens and opencode roots when present" {
     try std.testing.expect(saw_dot);
 }
 
-test "collectHostConfigPaths grants the existing Grok config root only" {
+test "collectHostConfigPaths grants existing Grok product dirs not whole tree" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var home_tmp = std.testing.tmpDir(.{});
     defer home_tmp.cleanup();
     const home = try home_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(home);
-    try home_tmp.dir.createDirPath(io, ".grok");
+    try home_tmp.dir.createDirPath(io, ".grok/skills");
+    try home_tmp.dir.createDirPath(io, ".grok/worktrees/evil");
     try home_tmp.dir.writeFile(io, .{
         .sub_path = ".grok/user-settings.json",
         .data = "{}\n",
@@ -1265,8 +1273,15 @@ test "collectHostConfigPaths grants the existing Grok config root only" {
     const paths = try collectHostConfigPaths(io, allocator, "grok", home);
     defer freeHostConfigPaths(allocator, paths);
     try std.testing.expectEqual(@as(usize, 1), paths.len);
-    try std.testing.expect(std.mem.endsWith(u8, paths[0], "/.grok"));
-    try std.testing.expect(!std.mem.eql(u8, paths[0], home));
+    try std.testing.expect(std.mem.endsWith(u8, paths[0], "/.grok/skills"));
+    for (paths) |p| {
+        // Grant leaf must not be the worktrees tree (tmp homes may live under a path
+        // that itself contains the substring "worktrees").
+        try std.testing.expect(!std.mem.endsWith(u8, p, "/.grok/worktrees"));
+        try std.testing.expect(!std.mem.endsWith(u8, p, "/.grok/worktrees/evil"));
+        try std.testing.expect(!std.mem.eql(u8, p, home));
+        try std.testing.expect(!std.mem.endsWith(u8, p, "/.grok"));
+    }
 }
 
 test "isForbiddenHostConfigPath rejects root home and ssh" {

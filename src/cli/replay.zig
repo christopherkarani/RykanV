@@ -6,6 +6,7 @@ const core_api = @import("orca_core").api;
 const brand = @import("brand.zig");
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
+const rust_visibility = @import("rust_visibility.zig");
 const tui = @import("../tui/mod.zig");
 const suggestions = @import("suggestions.zig");
 
@@ -150,14 +151,25 @@ fn writeReplayHuman(
         defer deny_body.deinit(allocator);
         try deny_body.print(allocator, "{d} action(s) blocked:", .{denied_count});
         var listed: usize = 0;
+        var first_target: ?[]const u8 = null;
         for (session.events) |event| {
             if (!isDeniedEvent(event)) continue;
+            if (first_target == null) first_target = event.target_value;
             if (listed == 0) {
                 try deny_body.print(allocator, " {s}", .{event.target_value});
-            } else {
+            } else if (listed < 4) {
                 try deny_body.print(allocator, " · {s}", .{event.target_value});
+            } else if (listed == 4) {
+                try deny_body.print(allocator, " · …", .{});
             }
             listed += 1;
+        }
+        // Progressive what-now pointer (same pack tools as run deny block).
+        // Single-quote for paste safety (F24) — matches formatDenyNextSteps.
+        if (first_target) |target| {
+            const quoted = try rust_visibility.shellSingleQuoteAlloc(allocator, target);
+            defer allocator.free(quoted);
+            try deny_body.print(allocator, "\nUnderstand: ryk explain {s}", .{quoted});
         }
         try tui.render.callout(io, stdout, .danger, "Denied actions", deny_body.items);
         try stdout.writeByte('\n');

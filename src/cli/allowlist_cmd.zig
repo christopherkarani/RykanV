@@ -17,9 +17,16 @@ const std = @import("std");
 const core = @import("orca_core").core;
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
+const suggestions = @import("suggestions.zig");
 const shell_engine = @import("../shell_engine/mod.zig");
+const allowlist_browse = @import("../tui/allowlist_browse.zig");
 
 const allowlist_store = shell_engine.allowlist_store;
+
+// Pull pure browse tests into the allowlist test filter set.
+test {
+    _ = allowlist_browse;
+}
 
 /// Same oracle as shell_engine.registry / packs CLI — known rule ids for validate --strict.
 const packs_json = @embedFile("../shell_engine/oracle_packs.json");
@@ -27,10 +34,13 @@ const packs_json = @embedFile("../shell_engine/oracle_packs.json");
 const usage_text =
     \\Usage: ryk allowlist add <rule-id> -r|--reason <reason> [--project|--user] [--expires <iso>]
     \\       ryk allowlist add-command <cmd> -r|--reason <reason> [--project|--user] [--expires <iso>]
-    \\       ryk allowlist list [--project|--user] [--json]
+    \\       ryk allowlist list [--project|--user] [--json] [--plain]
     \\       ryk allowlist remove <rule-id|exact-command> [--project|--user]
     \\       ryk allowlist validate [--strict] [--project|--user]
     \\       ryk allowlist prune [--dry-run] [--project|--user]
+    \\
+    \\Bare `ryk allowlist` defaults to list. On a colour TTY, list opens dual-layer
+    \\browse (project then user); --plain / --json / non-TTY stay linear.
     \\
     \\Shortcuts: ryk allow <rule-id> …   → add rule
     \\           ryk unallow <key> …     → remove rule or exact command
@@ -47,14 +57,16 @@ const usage_text =
 // ---------------------------------------------------------------------------
 
 /// Top-level `ryk allowlist …` (argv after the verb).
+///
+/// Bare `ryk allowlist` / flag-only argv defaults to **list** (TTY dual-layer
+/// browse when `shouldEnterTui`; linear / `--json` / `--plain` otherwise).
 pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
-    if (argv.len == 0) {
-        try stdout.writeAll(usage_text);
-        return exit_codes.success;
-    }
-    if (std.mem.eql(u8, argv[0], "--help") or std.mem.eql(u8, argv[0], "-h")) {
-        try stdout.writeAll(usage_text);
-        return exit_codes.success;
+    // Help anywhere in argv (consistent with packs).
+    for (argv) |arg| {
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            try stdout.writeAll(usage_text);
+            return exit_codes.success;
+        }
     }
 
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
@@ -63,6 +75,11 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
 
     var now_buf: [32]u8 = undefined;
     const now_iso = try core.time.Timestamp.now(io).formatIso(&now_buf);
+
+    // Bare / flag-only → list (default TUI on colour TTY via shouldEnterTui).
+    if (argv.len == 0 or std.mem.startsWith(u8, argv[0], "-")) {
+        return cmdList(io, gpa, now_iso, argv, stdout, stderr);
+    }
 
     const sub = argv[0];
     if (std.mem.eql(u8, sub, "add")) {
@@ -84,8 +101,15 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         return cmdPrune(io, gpa, now_iso, argv[1..], stdout, stderr);
     }
 
-    try stderr.print("ryk allowlist: unknown subcommand '{s}'\n", .{sub});
-    try stderr.writeAll(usage_text);
+    // Suggestion candidates omit "add-command" so short typos like "ad" uniquely
+    // resolve to "add" (closest() aborts on multiple prefix matches).
+    try suggestions.writeUnknownSubcommand(
+        stderr,
+        "ryk allowlist",
+        sub,
+        &.{ "add", "list", "remove", "validate", "prune" },
+        "allowlist",
+    );
     return exit_codes.usage;
 }
 
@@ -134,6 +158,8 @@ const LayerChoice = enum { auto, project, user };
 const CommonFlags = struct {
     layer: LayerChoice = .auto,
     as_json: bool = false,
+    /// Linear human list escape (never open TUI).
+    as_plain: bool = false,
     strict: bool = false,
     dry_run: bool = false,
     reason: ?[]const u8 = null,
@@ -161,6 +187,8 @@ fn parseCommonFlags(gpa: std.mem.Allocator, argv: []const []const u8, stderr: an
             flags.layer = .user;
         } else if (std.mem.eql(u8, arg, "--json")) {
             flags.as_json = true;
+        } else if (std.mem.eql(u8, arg, "--plain")) {
+            flags.as_plain = true;
         } else if (std.mem.eql(u8, arg, "--strict")) {
             flags.strict = true;
         } else if (std.mem.eql(u8, arg, "--dry-run")) {
@@ -450,6 +478,17 @@ fn cmdList(
     var flags = parsed[0];
     defer flags.deinit(gpa);
 
+    // Machine / plain / non-TTY: linear frozen. TTY + shouldEnterTui → dual-layer browse.
+    // Gate argv must include escape flags (--json/--plain/--no-rich/…) from the list path.
+    const want_tui = !flags.as_json and !flags.as_plain and
+        allowlist_browse.shouldEnterAllowlistBrowseIo(io, argv);
+
+    if (want_tui) {
+        const entered = try tryEnterAllowlistBrowse(io, gpa, now_iso, flags, stdout, stderr);
+        if (entered) return exit_codes.success;
+        // TtyUnavailable → fall through to linear so findings are never dropped.
+    }
+
     // --project / --user: single layer. auto: merge both (project wins).
     var outcome: allowlist_store.LoadOutcome = undefined;
     if (flags.layer == .auto) {
@@ -499,6 +538,118 @@ fn cmdList(
         }
     }
     return exit_codes.success;
+}
+
+/// Load dual-layer views and open browse kit. Returns true if browse ran (or
+/// no-op under tests after gate). False on TtyUnavailable (caller falls linear).
+fn tryEnterAllowlistBrowse(
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    now_iso: []const u8,
+    flags: CommonFlags,
+    stdout: anytype,
+    stderr: anytype,
+) !bool {
+    const project_path = try resolveProjectPath(gpa, io);
+    defer gpa.free(project_path);
+    const user_path_owned = try resolveUserPath(gpa);
+    defer if (user_path_owned) |p| gpa.free(p);
+    const user_path = user_path_owned orelse "";
+
+    var project_outcome = try allowlist_store.loadFile(io, gpa, project_path, .project);
+    defer project_outcome.store.deinit(gpa);
+    var user_outcome: allowlist_store.LoadOutcome = .{ .store = .{}, .corrupt = false };
+    if (user_path_owned) |up| {
+        user_outcome = try allowlist_store.loadFile(io, gpa, up, .user);
+    }
+    defer user_outcome.store.deinit(gpa);
+
+    // Match linear list honesty: corrupt files still open TUI empty, but warn (F193).
+    if (project_outcome.corrupt or user_outcome.corrupt) {
+        try stderr.writeAll("ryk allowlist: warning: allowlist file corrupt or unreadable; treating as empty\n");
+    }
+
+    // Layer filter: --project / --user show one section only by emptying the other view.
+    const write_layer: allowlist_browse.Layer = switch (resolveLayer(flags, io, gpa)) {
+        .project => .project,
+        .user => .user,
+    };
+
+    const project_views = try entriesToViews(gpa, project_outcome.store.entries, now_iso);
+    defer gpa.free(project_views);
+    const user_views = try entriesToViews(gpa, user_outcome.store.entries, now_iso);
+    defer gpa.free(user_views);
+
+    // --project / --user: single section; default auto: dual-layer project then user.
+    const project_slice: []const allowlist_browse.EntryView = if (flags.layer == .user) &.{} else project_views;
+    const user_slice: []const allowlist_browse.EntryView = if (flags.layer == .project) &.{} else user_views;
+
+    var remove_ctx: RemoveCtx = .{
+        .io = io,
+        .gpa = gpa,
+        .project_path = project_path,
+        .user_path = user_path,
+    };
+
+    allowlist_browse.run(io, gpa, stdout, .{
+        .project_entries = project_slice,
+        .user_entries = user_slice,
+        .project_path = project_path,
+        .user_path = if (user_path.len > 0) user_path else "(user path unresolved)",
+        .write_layer = write_layer,
+        .hooks = .{
+            .remove = removeHook,
+            .ctx = &remove_ctx,
+        },
+    }) catch |err| switch (err) {
+        error.TtyUnavailable => return false,
+        else => return err,
+    };
+    return true;
+}
+
+const RemoveCtx = struct {
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    project_path: []const u8,
+    user_path: []const u8,
+};
+
+fn removeHook(ctx: *anyopaque, req: allowlist_browse.RemoveRequest) anyerror!bool {
+    const self: *RemoveCtx = @ptrCast(@alignCast(ctx));
+    const path = switch (req.layer) {
+        .project => self.project_path,
+        .user => self.user_path,
+    };
+    if (path.len == 0) return false;
+    const layer: allowlist_store.Layer = switch (req.layer) {
+        .project => .project,
+        .user => .user,
+    };
+    return allowlist_store.removeEntry(self.io, self.gpa, path, layer, req.key);
+}
+
+fn entriesToViews(
+    gpa: std.mem.Allocator,
+    entries: []const allowlist_store.PermanentEntry,
+    now_iso: []const u8,
+) ![]allowlist_browse.EntryView {
+    const out = try gpa.alloc(allowlist_browse.EntryView, entries.len);
+    for (entries, 0..) |e, i| {
+        out[i] = .{
+            .kind = kindName(e.kind),
+            .key = allowlist_store.entryKey(e),
+            .reason = e.reason,
+            .layer = switch (e.layer) {
+                .project => .project,
+                .user => .user,
+            },
+            .expired = allowlist_store.isExpired(e, now_iso),
+            .created_at = e.created_at,
+            .expires_at = e.expires_at,
+        };
+    }
+    return out;
 }
 
 fn writeListJson(stdout: anytype, gpa: std.mem.Allocator, store: allowlist_store.Store, now_iso: []const u8) !void {
@@ -1546,6 +1697,15 @@ test "s-allowlist-cli: help and missing subcommand are usage-safe without daemon
     }
 }
 
+test "s-allowlist-cli: unknown subcommand suggests add for ad typo" {
+    const run = try sAllowlistCliRunAllowlist(&.{"ad"});
+    defer sAllowlistCliFreeRun(run);
+    try std.testing.expectEqual(exit_codes.usage, run.code);
+    try std.testing.expect(std.mem.indexOf(u8, run.stderr, "unknown subcommand") != null);
+    try std.testing.expect(std.mem.indexOf(u8, run.stderr, "Did you mean 'add'?") != null);
+    try std.testing.expect(std.mem.indexOf(u8, run.stderr, "ryk help allowlist") != null);
+}
+
 // ---------------------------------------------------------------------------
 // Acceptance 2 — allow rule then evaluate allows; compound still denies (E8)
 // ---------------------------------------------------------------------------
@@ -2095,4 +2255,108 @@ test "s-allowlist-cli: default layer is user outside git workspace (no layer fla
     var project_loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, project_path, .project);
     defer project_loaded.store.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 0), project_loaded.store.entries.len);
+}
+
+// ---------------------------------------------------------------------------
+// U05 allowlist browse — command wiring + remove cancel fixture
+// ---------------------------------------------------------------------------
+
+test "s-allowlist browse: bare allowlist and --plain stay linear non-TTY" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    {
+        const add = try sAllowlistCliRunAllowlist(&.{
+            "add",
+            "core.git:reset-hard",
+            "-r",
+            "bare list fixture",
+            "--project",
+        });
+        defer sAllowlistCliFreeRun(add);
+        try std.testing.expectEqual(exit_codes.success, add.code);
+    }
+
+    // Bare `ryk allowlist` → list (linear under test buffers / non-TTY).
+    {
+        const bare = try sAllowlistCliRunAllowlist(&.{});
+        defer sAllowlistCliFreeRun(bare);
+        try std.testing.expectEqual(exit_codes.success, bare.code);
+        try std.testing.expect(std.mem.indexOf(u8, bare.stdout, "core.git:reset-hard") != null);
+        // Never alt-screen on non-TTY path.
+        try std.testing.expect(std.mem.indexOf(u8, bare.stdout, "\x1b[?1049h") == null);
+    }
+
+    // --plain linear escape.
+    {
+        const plain = try sAllowlistCliRunAllowlist(&.{ "list", "--plain" });
+        defer sAllowlistCliFreeRun(plain);
+        try std.testing.expectEqual(exit_codes.success, plain.code);
+        try std.testing.expect(std.mem.indexOf(u8, plain.stdout, "core.git:reset-hard") != null);
+    }
+
+    // --json frozen machine shape.
+    {
+        const json = try sAllowlistCliRunAllowlist(&.{ "list", "--json" });
+        defer sAllowlistCliFreeRun(json);
+        try std.testing.expectEqual(exit_codes.success, json.code);
+        try std.testing.expect(std.mem.indexOf(u8, json.stdout, "schema_version") != null);
+        try std.testing.expect(std.mem.indexOf(u8, json.stdout, "core.git:reset-hard") != null);
+    }
+}
+
+test "s-allowlist browse: remove cancel leaves allowlist file unchanged" {
+    var xdg = try sAllowlistCliIsolateXdg();
+    defer xdg.deinit();
+    var ws = try sAllowlistCliGitWorkspace();
+    defer ws.deinit();
+
+    const reason = "remove cancel fixture permanent entry";
+    {
+        const add = try sAllowlistCliRunAllowlist(&.{
+            "add",
+            "core.git:reset-hard",
+            "-r",
+            reason,
+            "--project",
+        });
+        defer sAllowlistCliFreeRun(add);
+        try std.testing.expectEqual(exit_codes.success, add.code);
+    }
+
+    const project_path = try sAllowlistCliProjectPath(ws.root);
+    defer std.testing.allocator.free(project_path);
+    const before = try sAllowlistCliReadFile(project_path);
+    defer std.testing.allocator.free(before);
+    try std.testing.expect(std.mem.indexOf(u8, before, "core.git:reset-hard") != null);
+
+    // Cancel path: confirm default No → applyRemoveIfConfirmed skips write.
+    const confirmed = allowlist_browse.confirmRemoveDefaultNo("");
+    try std.testing.expect(!confirmed);
+
+    var wrote = false;
+    const remove_fn = struct {
+        var flag: *bool = undefined;
+        var io_ref: std.Io = undefined;
+        var path_ref: []const u8 = undefined;
+        fn call() anyerror!bool {
+            flag.* = true;
+            return allowlist_store.removeEntry(io_ref, std.testing.allocator, path_ref, .project, "core.git:reset-hard");
+        }
+    };
+    remove_fn.flag = &wrote;
+    remove_fn.io_ref = std.testing.io;
+    remove_fn.path_ref = project_path;
+
+    const removed = try allowlist_browse.applyRemoveIfConfirmed(confirmed, remove_fn.call);
+    try std.testing.expect(!removed);
+    try std.testing.expect(!wrote);
+
+    const after = try sAllowlistCliReadFile(project_path);
+    defer std.testing.allocator.free(after);
+    try std.testing.expectEqualStrings(before, after);
+    try std.testing.expect(std.mem.indexOf(u8, after, "core.git:reset-hard") != null);
+    try std.testing.expect(std.mem.indexOf(u8, after, reason) != null);
 }

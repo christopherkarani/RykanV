@@ -547,6 +547,8 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     const shim_audit_degraded = apply_result.requiresChildApply();
     if (shim_audit_degraded) {
         try filtered_env.env_map.put("ORCA_SHIM_AUDIT_MODE", "degraded");
+        // Session-file attestation is written when the session id is known
+        // (see prepareSessionEnv next to writeSessionShimMode) — env alone is child-forgable.
     }
     // Phase 5: effective session sandbox grade for operators/agents (env + banner).
     // Escape (--network open / legacy) never reports strong-mediated.
@@ -865,7 +867,10 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                             .risk_score = command_decision.decision.risk_score,
                             .ci_may_proceed = true,
                         };
-                        try self.auditCommandEvent(session, .user_approval, rust_visibility.target_summary_shell, final_decision, rust_metadata);
+                        // F12: shim soft-allow matches cmd-hash of full display, not redacted summary.
+                        // Redacted summary alone would either never match or match every command.
+                        const approval_fp = intercept.commands.approvalTargetFingerprint(raw_display);
+                        try self.auditCommandEvent(session, .user_approval, &approval_fp, final_decision, rust_metadata);
                     },
                     .deny => {
                         approval_reason = try self.allocator.dupe(u8, "user denied command approval");
@@ -943,6 +948,22 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 session.id.slice(),
                 self.effective_mode,
             );
+            // Parent-attested audit mode (F36/F200): env alone is child-forgable.
+            // If the session file cannot be written, drop the env claim so the
+            // banner does not advertise degraded without attestation.
+            if (self.env_map.get("ORCA_SHIM_AUDIT_MODE")) |mode| {
+                if (std.ascii.eqlIgnoreCase(mode, "degraded") or std.ascii.eqlIgnoreCase(mode, "skip")) {
+                    shim_mod.writeSessionShimAuditMode(
+                        self.audit_context.io,
+                        self.allocator,
+                        session.workspace_root,
+                        session.id.slice(),
+                        "degraded",
+                    ) catch {
+                        _ = self.env_map.swapRemove("ORCA_SHIM_AUDIT_MODE");
+                    };
+                }
+            }
         }
 
         fn auditBackendCapability(self: *@This(), session: core.session.Session) !void {
@@ -2267,10 +2288,9 @@ fn printSessionEnd(
 ///
 /// Graceful degrade: when `rule_id` is null (fail-closed / user-denial paths) or
 /// not in the reason table, a generic reason + medium risk meter are used and
-/// safe alternatives still derive from the command shape when possible.
-///
-/// This is presentation only — it never changes the decision, audit output, or
-/// exit code. `--json`/robot output never reaches here.
+/// Progressive deny presentation (ISS-DENY-01): What → Why → Risk → Safer
+/// shape → What now. Presentation only — never changes the decision, audit
+/// output, or exit code. `--json`/robot output never reaches here.
 fn renderDenyBlock(
     io: std.Io,
     stdout: anytype,
@@ -2281,7 +2301,6 @@ fn renderDenyBlock(
     policy_path: ?[]const u8,
     policy_mode: []const u8,
 ) !void {
-    // Header.
     try stdout.writeAll("\n");
     try tui.render.callout(io, stdout, .danger, "ryk blocked a command", "");
     try stdout.writeAll("\n");
@@ -2310,34 +2329,31 @@ fn renderDenyBlock(
     }
     try body.append(allocator, try std.fmt.allocPrint(allocator, "Policy     {s} · mode {s}", .{ policy_path orelse "built-in", policy_mode }));
 
-    // Panel title = the denied command, prefixed with the deny glyph.
+    // Panel title = the denied command (What), prefixed with the deny glyph.
     const command_display = try intercept.commands.displayArgvRedactedAlloc(allocator, command_argv);
     defer allocator.free(command_display);
     const title = try std.fmt.allocPrint(allocator, "✗  {s}", .{command_display});
     defer allocator.free(title);
     try tui.render.panel(io, stdout, title, body.items);
     try stdout.writeAll("\n");
-
-    // Risk meter (standalone — colour-safe; degrades to plain on non-TTY).
     const risk = if (reason_key) |rid| tui.reasons.riskForRule(rid) else .medium;
     try stdout.writeAll("  ");
-    try tui.theme.paint(io, stdout, .muted, "Risk   ");
+    try tui.theme.paintBold(io, stdout, .danger, "Risk");
+    try stdout.writeAll("   ");
     try tui.render.meter(io, stdout, tui.reasons.riskFraction(risk), tui.reasons.riskLabel(risk));
     try stdout.writeAll("\n\n");
-
-    // Safe alternatives: prefer daemon suggestion tip, then command-shape heuristics.
     const alts = try tui.reasons.safeAlternatives(allocator, command_display);
     defer {
         for (alts) |a| allocator.free(a.command);
         allocator.free(alts);
     }
     if (remediation_tip) |tip| {
-        try tui.theme.paintBold(io, stdout, .info, "  Tip");
+        try tui.theme.paintBold(io, stdout, .info, "  Safer shape");
         try stdout.writeAll("\n  ");
         try stdout.writeAll(tip);
         try stdout.writeAll("\n\n");
     } else if (alts.len > 0) {
-        try tui.theme.paintBold(io, stdout, .info, "  Safe alternatives");
+        try tui.theme.paintBold(io, stdout, .info, "  Safer shape");
         try stdout.writeAll("\n");
         for (alts) |a| {
             try stdout.writeAll("  → ");
@@ -2346,17 +2362,17 @@ fn renderDenyBlock(
         }
         try stdout.writeAll("\n");
     }
-
-    // Next-step footer: daemon pack tools (explain / allowlist / allow-once).
+    // Tip is not re-injected here — safer shape above already showed remediation.
     const next_steps = try rust_visibility.formatDenyNextSteps(allocator, command_display, rule_id, null);
     defer allocator.free(next_steps);
-    try tui.theme.paintBold(io, stdout, .muted, "  Next");
+    try tui.theme.paintBold(io, stdout, .text_bright, "  What now");
     try stdout.writeAll("\n");
     // Indent each line of the footer for the panel-adjacent layout.
     var line_iter = std.mem.splitScalar(u8, next_steps, '\n');
     while (line_iter.next()) |line| {
         if (line.len == 0) continue;
-        if (std.mem.startsWith(u8, line, "Next:")) continue; // title already printed
+        // Title already painted above (handles both legacy "Next:" and "What now:").
+        if (std.mem.startsWith(u8, line, "Next:") or std.mem.startsWith(u8, line, "What now:")) continue;
         if (std.mem.startsWith(u8, line, "  ")) {
             try stdout.writeAll(line);
             try stdout.writeAll("\n");
@@ -5365,7 +5381,7 @@ test "deny block renders rich guardian block for rm -rf /" {
     try std.testing.expectEqual(exit_codes.denial, code);
     const err = stderr_writer.buffered();
 
-    // Hero header.
+    // Hero header (What).
     try std.testing.expect(std.mem.indexOf(u8, err, "✗") != null);
     try std.testing.expect(std.mem.indexOf(u8, err, "ryk blocked") != null);
     // The denied command appears as the panel headline.
@@ -5376,11 +5392,11 @@ test "deny block renders rich guardian block for rm -rf /" {
     try std.testing.expect(std.mem.indexOf(u8, err, "Policy") != null);
     // Risk meter label is present.
     try std.testing.expect(std.mem.indexOf(u8, err, "Risk") != null);
-    // Daemon suggestion tip (mock includes safer alternative).
-    try std.testing.expect(std.mem.indexOf(u8, err, "Tip") != null);
+    // Safer shape (daemon tip or heuristic alternatives).
+    try std.testing.expect(std.mem.indexOf(u8, err, "Safer shape") != null or std.mem.indexOf(u8, err, "Tip") != null);
     try std.testing.expect(std.mem.indexOf(u8, err, "rm -rf ./build") != null or std.mem.indexOf(u8, err, "./build") != null);
-    // Next-step footer with pack tools (not policy.yaml explain).
-    try std.testing.expect(std.mem.indexOf(u8, err, "Next") != null);
+    // Progressive What-now footer (explain → allow-once → allowlist).
+    try std.testing.expect(std.mem.indexOf(u8, err, "What now") != null);
     try std.testing.expect(std.mem.indexOf(u8, err, "ryk explain") != null);
     try std.testing.expect(std.mem.indexOf(u8, err, "ryk allowlist add") != null);
     try std.testing.expect(std.mem.indexOf(u8, err, "ryk allow-once") != null);

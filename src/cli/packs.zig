@@ -6,7 +6,14 @@ const suggestions = @import("suggestions.zig");
 const pack_config = @import("pack_config.zig");
 const onboarding = @import("onboarding.zig");
 const danger_confirmation = @import("danger_confirmation.zig");
+const packs_tui = @import("packs_tui.zig");
 const util = @import("orca_core").core.util;
+
+// Zig 0.16 monopath: nested module tests need an explicit test-block reference
+// (same pattern as tui.mod → browse) so `packs browse` filters discover them.
+test {
+    _ = packs_tui;
+}
 
 /// Embedded oracle pack definitions (same source as `shell_engine.registry`).
 const packs_json = @embedFile("../shell_engine/oracle_packs.json");
@@ -94,13 +101,24 @@ pub fn commandWithExecutor(comptime execute_cli: anytype, io: std.Io, argv: []co
         if (std.mem.eql(u8, argv[0], "disable")) {
             return runDisable(io, argv[1..], stdout, stderr);
         }
+        // Non-flag first token that is not a known subcommand → suggestion path (not list options).
+        if (!std.mem.startsWith(u8, argv[0], "-")) {
+            try suggestions.writeUnknownSubcommand(
+                stderr,
+                "ryk packs",
+                argv[0],
+                &.{ "show", "info", "enable", "disable" },
+                "packs",
+            );
+            return exit_codes.usage;
+        }
     }
 
     const options = parseListOptions(argv, stderr) catch return exit_codes.usage;
-    return runList(io, options, stdout, stderr);
+    return runList(io, argv, options, stdout, stderr);
 }
 
-fn runList(io: std.Io, options: Options, stdout: anytype, stderr: anytype) !u8 {
+fn runList(io: std.Io, argv: []const []const u8, options: Options, stdout: anytype, stderr: anytype) !u8 {
     const allocator = std.heap.smp_allocator;
     var catalog = loadCatalog(allocator) catch |err| {
         try stderr.print("ryk packs: failed to load pack registry ({s}).\n", .{@errorName(err)});
@@ -113,7 +131,73 @@ fn runList(io: std.Io, options: Options, stdout: anytype, stderr: anytype) !u8 {
     if (options.machine_json) {
         return renderListJson(stdout, catalog.packs);
     }
+
+    // Default browse TUI on interactive TTY (W1 / U04). --plain/--no-rich/--json
+    // and non-TTY stay on the frozen linear list path.
+    const stdin_tty = std.Io.File.stdin().isTty(io) catch false;
+    const stdout_tty = std.Io.File.stdout().isTty(io) catch false;
+    if (packs_tui.wouldEnterPacksBrowse(stdin_tty, stdout_tty, argv, options.machine_json)) {
+        const code = try runPacksBrowse(io, allocator, &catalog, options, stdout, stderr);
+        // Tty.init failure after gate: fall through to linear (never green-paint empty success).
+        if (code != exit_codes.general) return code;
+    }
+
     return renderHuman(allocator, io, options, catalog.packs, stdout, stderr);
+}
+
+fn runPacksBrowse(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    catalog: *Catalog,
+    options: Options,
+    stdout: anytype,
+    stderr: anytype,
+) !u8 {
+    // Build borrowed PackRef view + mutable enabled parallel array for live refresh.
+    const n = catalog.packs.len;
+    const refs = try allocator.alloc(packs_tui.PackRef, n);
+    defer allocator.free(refs);
+    const enabled = try allocator.alloc(bool, n);
+    defer allocator.free(enabled);
+    for (catalog.packs, 0..) |pack, i| {
+        refs[i] = .{
+            .id = pack.id,
+            .name = pack.name,
+            .category = pack.category,
+            .description = pack.description,
+            .enabled = pack.enabled,
+            .safe_pattern_count = pack.safe_pattern_count,
+            .destructive_pattern_count = pack.destructive_pattern_count,
+        };
+        enabled[i] = pack.enabled;
+    }
+
+    // Write-target status (project .orca.toml vs user config).
+    var write_scope: pack_config.ConfigScope = .user;
+    var write_path: []const u8 = "user config";
+    var write_path_owned: ?[]u8 = null;
+    defer if (write_path_owned) |p| allocator.free(p);
+
+    if (onboarding.resolveWorkspaceRoot(io, allocator)) |workspace_root| {
+        defer allocator.free(workspace_root);
+        if (pack_config.resolvePackConfigPath(io, allocator, workspace_root)) |resolved| {
+            write_scope = resolved.scope;
+            write_path_owned = resolved.path;
+            write_path = resolved.path;
+        } else |_| {}
+    } else |_| {}
+
+    // Default enabled+baseline (freeze #9 / U04); `a` toggles full catalog. Sticky (A)
+    // keeps just-disabled rows when the user narrows with enabled-only.
+    // `--enabled` / `--installed` still affect linear fallback filter only.
+    return packs_tui.runBrowse(io, allocator, stdout, stderr, .{
+        .packs = refs,
+        .enabled = enabled,
+        .write_scope = write_scope,
+        .write_path = write_path,
+        .initial_query = options.filter,
+        .start_all = false,
+    });
 }
 
 fn runShow(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
@@ -287,6 +371,10 @@ fn parseListOptions(argv: []const []const u8, stderr: anytype) !Options {
             options.machine_json = true;
         } else if (std.mem.eql(u8, arg, "--robot")) {
             options.machine_json = true;
+        } else if (std.mem.eql(u8, arg, "--plain")) {
+            // Linear list escape (disables TUI via shouldEnterTui / argvDisablesTui).
+        } else if (std.mem.eql(u8, arg, "--no-rich")) {
+            // Global hatch may still appear on argv in some call paths; accept as linear.
         } else if (std.mem.eql(u8, arg, "--format") or std.mem.eql(u8, arg, "-f")) {
             i += 1;
             if (i >= argv.len) return usageError(stderr, "--format requires a value");
@@ -316,7 +404,7 @@ fn parseListOptions(argv: []const []const u8, stderr: anytype) !Options {
             if (options.page_size == 0) return usageError(stderr, "--page-size requires a positive integer");
         } else {
             suggestions.writeUnknownOption(stderr, "ryk packs", arg, &.{
-                "--installed", "--enabled", "--filter", "--page", "--page-size", "--json", "--format",
+                "--installed", "--enabled", "--filter", "--page", "--page-size", "--json", "--format", "--plain",
             }, "packs") catch {};
             return error.InvalidArguments;
         }
@@ -976,6 +1064,10 @@ test "s-packs: list real packs without daemon includes core.git enabled" {
 }
 
 test "s-packs: list --json stable schema with schema_version packs and counts" {
+    // Isolate XDG so developer user config (baseline opt-outs) cannot flip core.git.
+    var xdg = try sPacksIsolateXdgWithOperator();
+    defer xdg.deinit();
+
     var stdout_buf: [256 * 1024]u8 = undefined;
     var stderr_buf: [1024]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
@@ -1455,4 +1547,43 @@ test "s-packs: rejects invalid list options without daemon" {
         const code = try commandWithExecutor(failIfCalled, std.testing.io, args, &stdout_writer, &stderr_writer);
         try std.testing.expectEqual(exit_codes.usage, code);
     }
+}
+
+test "s-packs: unknown subcommand suggests show for shoe typo" {
+    var stdout_buf: [64]u8 = undefined;
+    var stderr_buf: [512]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try commandWithExecutor(failIfCalled, std.testing.io, &.{"shoe"}, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.usage, code);
+    const err = stderr_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, err, "unknown subcommand") != null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "Did you mean 'show'?") != null);
+    try std.testing.expect(std.mem.indexOf(u8, err, "ryk help packs") != null);
+}
+
+test "s-packs: --plain is accepted and stays on linear list path" {
+    // Help documents --plain as the linear escape; non-TTY tests always take linear
+    // path, so this proves the flag parses and still lists packs without usage error.
+    var stdout_buf: [64 * 1024]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    const code = try commandWithExecutor(failIfCalled, std.testing.io, &.{"--plain"}, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, code);
+    try std.testing.expectEqualStrings("", stderr_writer.buffered());
+    const out = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "core.git") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "[enabled]") != null);
+}
+
+test "s-packs: packs list TUI entry uses shared shouldEnterTui gate" {
+    // Composition: list path decides via packs_tui.wouldEnterPacksBrowse which
+    // wraps tui.output_policy.shouldEnterTui — not a dead import.
+    try std.testing.expect(packs_tui.wouldEnterPacksBrowse(true, true, &.{}, false));
+    try std.testing.expect(!packs_tui.wouldEnterPacksBrowse(true, true, &.{"--plain"}, false));
+    try std.testing.expect(!packs_tui.wouldEnterPacksBrowse(true, true, &.{"--json"}, true));
+    try std.testing.expect(!packs_tui.wouldEnterPacksBrowse(false, true, &.{}, false));
+    // Browse kit is the frame chassis used by the TUI helper.
+    try std.testing.expect(@TypeOf(tui.browse.keyToAction) != void);
 }

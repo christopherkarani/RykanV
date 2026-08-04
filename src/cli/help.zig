@@ -38,7 +38,7 @@ fn hostAliasCommand(comptime host: []const u8) CommandInfo {
         .examples = &.{"ryk " ++ host},
         .details = &.{
             "Public protected launch path for " ++ host ++ "; internally uses the run engine for session setup.",
-            "Inherits agent-primary defaults (network ask; secretless off). ryk run flags stay on `ryk run` only — everything after the host name is agent argv.",
+            "Inherits agent-primary defaults: network allowlist + proxy mediation + empty-backpack secret boundary (trusted host binaries only; basename spoofs do not). Non-alias `ryk run` secretless stays off unless --secretless. ryk run flags stay on `ryk run` only — everything after the host name is agent argv.",
         },
     };
 }
@@ -71,7 +71,7 @@ pub const commands =
             .additional_completion_flags = &.{ "--workspace", "--policy", "--session-name", "--secretless", "--with-host-secrets", "--inherit-env", "--allow-network", "--network", "--network-backend", "--os-sandbox", "--seatbelt-profile", "--require-backend" },
             .details = &.{
                 "Starts a protected session, filters the child environment through policy, checks the command through a command safety check, writes audit artifacts, and mirrors the child exit code.",
-                "Agent-primary defaults for host aliases (ryk pi, ryk claude, …): network mode allowlist + proxy backend + OS route-force (fail closed if mediation cannot start). Non-alias `ryk run -- <cmd>` still defaults network mode to ask without forcing proxy. Secretless stays off unless --secretless. Mode overrides: --network allowlist|observe|off|ask, --no-network (still mediate on host aliases). Mediation escapes: --network open (loud unrestricted egress), ORCA_AGENT_NETWORK_DEFAULT=legacy (loud, one-release).",
+                "Agent-primary defaults for host aliases (ryk pi, ryk claude, …): network mode allowlist + proxy backend + OS route-force (fail closed if mediation cannot start) + empty-backpack secret boundary for trusted host binaries. Non-alias `ryk run -- <cmd>` still defaults network mode to ask without forcing proxy, and secretless stays off unless --secretless. Mode overrides: --network allowlist|observe|off|ask, --no-network (still mediate on host aliases). Mediation escapes: --network open (loud unrestricted egress), ORCA_AGENT_NETWORK_DEFAULT=legacy (loud, one-release).",
                 "Host launch aliases rewrite to this command with no extra flags — security defaults live here. Pass ryk run flags only on `ryk run`, not after a host alias name (e.g. `ryk run --network open -- pi`). One-release kill switch: ORCA_AGENT_NETWORK_DEFAULT=legacy restores pre-mediation agent net defaults.",
                 "Options: --workspace <path>, --mode observe|ask|yolo|strict|ci, --policy <path>, --session-name <name>, --no-secrets, --secretless, --with-host-secrets, --inherit-env, --no-network, --allow-network <domain>, --network observe|ask|allowlist|open|off, --network-backend decision-only|proxy, --os-sandbox auto|on|off, --seatbelt-profile compatible|hardened|strict, --require-backend <capability>, --help",
                 "Strict and CI modes default to environments without secret access. --secretless is empty-backpack: public host env only (no raw secrets, no orca-secret:// rewrite), OS sandbox required, and workspace .env forms denied at the OS layer when attach succeeds. --with-host-secrets is an explicit escape that may expose host secrets and always emits a warning. --inherit-env is allowed only when the selected policy permits inheritance.",
@@ -172,7 +172,7 @@ pub const commands =
         .{
             .name = "doctor",
             .summary = "Diagnose protection readiness and platform capabilities",
-            .usage = "ryk doctor [-v|--verbose] [--check] [--json] [--fix] [--from-install] [--preset <name>]",
+            .usage = "ryk doctor [-v|--verbose] [--check] [--json] [--tui] [--fix] [--from-install] [--preset <name>]",
             .category = .getting_started,
             .public = true,
             .examples = &.{
@@ -180,15 +180,18 @@ pub const commands =
                 "ryk doctor --verbose",
                 "ryk doctor --check",
                 "ryk doctor --json",
+                "ryk doctor --tui",
                 "ryk doctor --fix",
             },
-            .additional_completion_flags = &.{ "--verbose", "-v", "--check", "--json", "--fix", "--from-install", "--preset" },
+            .additional_completion_flags = &.{ "--verbose", "-v", "--check", "--json", "--tui", "--fix", "--from-install", "--preset" },
             .details = &.{
-                "Default output is a one-line summary plus recommended next steps.",
+                "Default output is a one-line summary plus recommended next steps (linear; fast glance).",
                 "Includes a Packs section (baseline always-on + opt-in enabled) when the daemon is reachable.",
                 "Use --verbose for the full platform, integration, and capability report.",
                 "Use --check for automation: exit non-zero when core readiness fails (daemon not compatible, or policy missing/invalid).",
                 "Use --json for a minimal readiness report (ready, state, policy.valid).",
+                "Use --tui for a four-pane deep-dive (Summary · Hosts · Capabilities · Next steps) on an interactive TTY; non-TTY / --json / --plain falls back to linear.",
+                "Next steps in --tui deep-link `ryk packs` and `ryk allowlist`.",
                 "Use --fix to repair protection (create policy if missing, auto-wire day-one hosts). Exit 0 when core policy is ok; host soft-fails stay partial.",
                 "--fix is exclusive with --check and --json (cannot combine; probe contracts stay pure).",
                 "Optional --from-install scopes ensure to install HOME/resource-root; --preset selects create-if-missing policy preset. Both require --fix.",
@@ -308,9 +311,11 @@ pub const commands =
             .usage = "ryk allowlist <add|add-command|list|remove|validate|prune> [options]",
             .category = .core_workflow,
             // s-allowlist-cli: live Zig permanent TOML store (no daemon).
+            .public = true,
             .hidden = false,
             .examples = &.{
                 "ryk allowlist list",
+                "ryk allowlist list --plain",
                 "ryk allowlist add core.git:branch-force-delete -r \"cleanup stale local branches\"",
                 "ryk allowlist add-command \"git status\" -r \"CI bootstrap\"",
                 "ryk allow \"core.git:branch-force-delete\" -r \"cleanup stale local branches\"",
@@ -321,7 +326,9 @@ pub const commands =
                 "kind=command short-circuits before packs; kind=rule skips that rule only (E8).",
                 "Critical pack hits (e.g. core.git:reset-hard / git reset --hard) cannot be permanently unlocked — use allow-once or a safer workflow.",
                 "Examples use medium rules (e.g. core.git:branch-force-delete / git branch -D).",
-                "Shortcuts: 'ryk allow <rule>' and 'ryk unallow <key>'.",
+                "On a colour TTY, bare `ryk allowlist` / `allowlist list` opens a dual-layer browse (project then user).",
+                "Use --plain for a linear list; --json for machine output (no TUI).",
+                "Shortcuts: 'ryk allow <rule>' and 'ryk unallow <key>' (advanced; not on default help).",
                 "Use 'ryk allowlist --help' for actions and options.",
             },
         },
@@ -443,16 +450,18 @@ pub const commands =
             .name = "packs",
             .summary = "Browse, inspect, and enable safety packs",
             .usage =
-            \\ryk packs [--filter <term>] [--enabled|--installed] [--page N] [--page-size N] [--json]
+            \\ryk packs [--filter <term>] [--enabled|--installed] [--page N] [--page-size N] [--json] [--plain]
             \\  ryk packs show <id> [--no-patterns] [--verbose] [--json]
             \\  ryk packs enable <id> [id…]
             \\  ryk packs disable <id> [id…]
             ,
             .category = .diagnostics,
             // Slice 4 / s-packs: live oracle registry + pack_config (no daemon).
+            .public = true,
             .hidden = false,
             .examples = &.{
                 "ryk packs",
+                "ryk packs --plain",
                 "ryk packs --enabled",
                 "ryk packs show core.git",
                 "ryk packs enable containers.docker database.postgresql",
@@ -460,10 +469,12 @@ pub const commands =
                 "ryk packs --filter database --page-size 10",
                 "ryk packs --json",
             },
-            .additional_completion_flags = &.{ "--json", "--no-patterns", "--verbose", "--enabled", "--filter" },
+            .additional_completion_flags = &.{ "--json", "--plain", "--no-patterns", "--verbose", "--enabled", "--filter" },
             .details = &.{
                 "Safety packs are Zig shell_engine oracle rule sets (embedded registry; not policy presets).",
                 "Policy presets use `ryk policy packs` / `ryk policy apply-pack` instead.",
+                "On a colour TTY, bare `ryk packs` opens a browse view (enabled + baseline first; search and toggle all).",
+                "Use --plain for the linear paginated list; --json / --format json for machine output (no TUI).",
                 "List is sorted and paginated locally; --installed is an alias for --enabled.",
                 "Baseline packs (core.*, system.disk) are on by default; list them in `disabled` to opt out (engine honors pack_config).",
                 "Enable/disable writes project `.orca.toml` in a git repo, otherwise user config (`$XDG_CONFIG_HOME/orca/config.toml` or `~/.config/orca/config.toml`).",
@@ -762,7 +773,8 @@ pub const commands =
 /// Prefix of Safe Launch teaching order (host aliases inserted after stop).
 const public_help_prefix = [_][]const u8{ "start", "stop" };
 /// Suffix of Safe Launch teaching order (after host aliases).
-const public_help_suffix = [_][]const u8{ "doctor", "replay", "scan", "explain", "update" };
+/// Day-2 loop: doctor → packs → allowlist, then review/forensics/explain/update.
+const public_help_suffix = [_][]const u8{ "doctor", "packs", "allowlist", "replay", "scan", "explain", "update" };
 
 pub const WriteMode = enum {
     /// Safe Launch surface only (default `ryk` / `ryk help`).
@@ -1072,7 +1084,10 @@ test "host launch allowlist is the single source for help alias entries" {
         try std.testing.expect(std.mem.indexOf(u8, info.summary, host) != null);
         try std.testing.expect(std.mem.indexOf(u8, info.usage, host) != null);
         try std.testing.expect(std.mem.indexOf(u8, info.details[0], "Public protected launch path") != null);
-        try std.testing.expect(std.mem.indexOf(u8, info.details[1], "secretless off") != null);
+        try std.testing.expect(std.mem.indexOf(u8, info.details[1], "network allowlist") != null);
+        try std.testing.expect(std.mem.indexOf(u8, info.details[1], "empty-backpack") != null);
+        try std.testing.expect(std.mem.indexOf(u8, info.details[1], "secretless stays off unless") != null);
+        try std.testing.expect(std.mem.indexOf(u8, info.details[1], "network ask") == null);
     }
     try std.testing.expect(findCommand("notanagent") == null);
     try std.testing.expect(!host_launch.isHostLaunchAlias("notanagent"));
@@ -1091,7 +1106,8 @@ test "top help and per-host help surface claude and pi aliases" {
     try std.testing.expect(try writeCommand(std.testing.io, &writer, "claude"));
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "ryk claude") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "Public protected launch path") != null);
-    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "secretless off") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "network allowlist") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "empty-backpack") != null);
 
     writer = .fixed(&buf);
     try std.testing.expect(try writeCommand(std.testing.io, &writer, "pi"));
@@ -1121,12 +1137,24 @@ test "default root help shows only public Safe Launch verbs" {
     try std.testing.expect(helpListsPeerCommand(top, "start"));
     try std.testing.expect(helpListsPeerCommand(top, "stop"));
     try std.testing.expect(helpListsPeerCommand(top, "doctor"));
+    try std.testing.expect(helpListsPeerCommand(top, "packs"));
+    try std.testing.expect(helpListsPeerCommand(top, "allowlist"));
     try std.testing.expect(helpListsPeerCommand(top, "replay"));
+    try std.testing.expect(helpListsPeerCommand(top, "scan"));
     try std.testing.expect(helpListsPeerCommand(top, "explain"));
     try std.testing.expect(helpListsPeerCommand(top, "update"));
     for (host_launch.host_launch_aliases) |host| {
         try std.testing.expect(helpListsPeerCommand(top, host));
     }
+
+    // Teaching suffix order: doctor → packs → allowlist → replay → …
+    const doctor_i = std.mem.indexOf(u8, top, "\n    doctor ").?;
+    const packs_i = std.mem.indexOf(u8, top, "\n    packs ").?;
+    const allowlist_i = std.mem.indexOf(u8, top, "\n    allowlist ").?;
+    const replay_i = std.mem.indexOf(u8, top, "\n    replay ").?;
+    try std.testing.expect(doctor_i < packs_i);
+    try std.testing.expect(packs_i < allowlist_i);
+    try std.testing.expect(allowlist_i < replay_i);
 
     // Common tasks teach start → agent → doctor → replay → update
     try std.testing.expect(std.mem.indexOf(u8, top, "ryk start") != null);
@@ -1139,7 +1167,7 @@ test "default root help shows only public Safe Launch verbs" {
     // Progressive disclosure escape hatch
     try std.testing.expect(std.mem.indexOf(u8, top, "help --all") != null);
 
-    // Not Getting Started / public peers
+    // Not Getting Started / public peers — allow/unallow stay advanced
     try std.testing.expect(!helpListsPeerCommand(top, "quickstart"));
     try std.testing.expect(!helpListsPeerCommand(top, "setup"));
     try std.testing.expect(!helpListsPeerCommand(top, "status"));
@@ -1148,6 +1176,9 @@ test "default root help shows only public Safe Launch verbs" {
     try std.testing.expect(!helpListsPeerCommand(top, "history"));
     try std.testing.expect(!helpListsPeerCommand(top, "policy"));
     try std.testing.expect(!helpListsPeerCommand(top, "mcp"));
+    try std.testing.expect(!helpListsPeerCommand(top, "allow"));
+    try std.testing.expect(!helpListsPeerCommand(top, "unallow"));
+    try std.testing.expect(!helpListsPeerCommand(top, "allow-once"));
 }
 
 test "help --all lists full advanced command surface" {
@@ -1299,10 +1330,14 @@ test "P0 honesty: default help and help --all omit hide-list and unfinished P0; 
         try std.testing.expect(!helpListsPeerCommand(top, name));
         try std.testing.expect(!helpAdvertisesUnavailableVerb(top, name));
     }
-    // Default Safe Launch help never listed shutdown / advanced peers (public=false).
+    // Default Safe Launch help never listed shutdown / allow-once / allow shortcuts.
+    // packs + allowlist are public Safe Launch (day-2 protection loop).
     try std.testing.expect(!helpListsPeerCommand(top, "shutdown"));
-    try std.testing.expect(!helpListsPeerCommand(top, "packs"));
+    try std.testing.expect(helpListsPeerCommand(top, "packs"));
+    try std.testing.expect(helpListsPeerCommand(top, "allowlist"));
     try std.testing.expect(!helpListsPeerCommand(top, "allow-once"));
+    try std.testing.expect(!helpListsPeerCommand(top, "allow"));
+    try std.testing.expect(!helpListsPeerCommand(top, "unallow"));
 
     writer = .fixed(&buf);
     try writeAll(std.testing.io, &writer);
@@ -1318,19 +1353,54 @@ test "P0 honesty: default help and help --all omit hide-list and unfinished P0; 
     }
     try std.testing.expect(helpListsPeerCommand(all, "shutdown"));
     try std.testing.expect(helpListsPeerCommand(all, "packs"));
+    try std.testing.expect(helpListsPeerCommand(all, "allowlist"));
     try std.testing.expect(helpListsPeerCommand(all, "allow-once"));
 
-    // Explicit full-text: remediation / teaching copy must not name unfinished P0 verbs.
+    // Explicit full-text: root --all must not teach daemon allowlist wording or
+    // promote allow/unallow shortcuts in Common-tasks / remediation copy.
     try std.testing.expect(std.mem.indexOf(u8, all, "allowlist (daemon)") == null);
-    try std.testing.expect(std.mem.indexOf(u8, all, "ryk allowlist") == null);
     try std.testing.expect(std.mem.indexOf(u8, all, "ryk unallow") == null);
     // "ryk allow " teaches the allow shortcut; does not match allowlist / allow-once.
     try std.testing.expect(std.mem.indexOf(u8, all, "ryk allow ") == null);
     // Live advanced verbs appear as peer columns on --all (name only; usage is per-command).
-    // helpListsPeerCommand already asserted packs / allow-once above.
+    // helpListsPeerCommand already asserted packs / allowlist / allow-once above.
 
     // Live product verbs remain discoverable on the full surface.
     try std.testing.expect(helpListsPeerCommand(all, "test"));
     try std.testing.expect(helpListsPeerCommand(all, "explain"));
     try std.testing.expect(helpListsPeerCommand(all, "start"));
+}
+
+test "public Safe Launch: packs and allowlist help details mention TTY browse and --plain" {
+    const packs_info = findCommand("packs") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(packs_info.public);
+    try std.testing.expect(!packs_info.hidden);
+    var packs_blob: [4096]u8 = undefined;
+    var packs_w: std.Io.Writer = .fixed(&packs_blob);
+    for (packs_info.details) |line| {
+        try packs_w.writeAll(line);
+        try packs_w.writeAll("\n");
+    }
+    const packs_text = packs_w.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, packs_text, "TTY") != null or std.mem.indexOf(u8, packs_text, "browse") != null);
+    try std.testing.expect(std.mem.indexOf(u8, packs_text, "--plain") != null);
+
+    const allowlist_info = findCommand("allowlist") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(allowlist_info.public);
+    try std.testing.expect(!allowlist_info.hidden);
+    var allow_blob: [4096]u8 = undefined;
+    var allow_w: std.Io.Writer = .fixed(&allow_blob);
+    for (allowlist_info.details) |line| {
+        try allow_w.writeAll(line);
+        try allow_w.writeAll("\n");
+    }
+    const allow_text = allow_w.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, allow_text, "TTY") != null or std.mem.indexOf(u8, allow_text, "browse") != null);
+    try std.testing.expect(std.mem.indexOf(u8, allow_text, "--plain") != null);
+
+    // Shortcuts stay non-public
+    const allow_info = findCommand("allow") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!allow_info.public);
+    const unallow_info = findCommand("unallow") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!unallow_info.public);
 }

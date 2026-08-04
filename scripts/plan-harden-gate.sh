@@ -205,7 +205,8 @@ if [[ -x "$DISK_GATE" ]] || [[ -f "$DISK_GATE" ]]; then
         blocking+=("missing:$(basename "$p")")
         continue
       fi
-      n=$(grep -E '^\*{0,2}VERDICT: (PASS|FAIL)\*{0,2}$' "$p" 2>/dev/null | wc -l | tr -d ' ')
+      # Avoid set -e + pipefail abort on grep miss (F253): capture without failing the script.
+      n=$(grep -E '^\*{0,2}VERDICT: (PASS|FAIL)\*{0,2}$' "$p" 2>/dev/null | wc -l | tr -d ' ' || true)
       if [[ -z "$n" ]]; then n=0; fi
       if [[ "$n" -ne 1 ]]; then
         missing+=("$p")
@@ -213,7 +214,7 @@ if [[ -x "$DISK_GATE" ]] || [[ -f "$DISK_GATE" ]]; then
         blocking+=("bad-verdict:$(basename "$p")")
         continue
       fi
-      line=$(grep -E '^\*{0,2}VERDICT: (PASS|FAIL)\*{0,2}$' "$p" | head -n 1)
+      line=$(grep -E '^\*{0,2}VERDICT: (PASS|FAIL)\*{0,2}$' "$p" 2>/dev/null | head -n 1 || true)
       norm=$line
       norm=${norm#\*\*}
       norm=${norm%\*\*}
@@ -275,12 +276,17 @@ def is_productish(u):
     return any(k in blob or k in acc or k in goal for k in keys)
 
 def has_live_smoke(u):
-    if u.get("live_smoke"):
+    # Explicit live_smoke flag only when truthy (not bare string "./").
+    ls = u.get("live_smoke")
+    if ls is True:
+        return True
+    if isinstance(ls, str) and ls.strip() and ls.strip().lower() not in ("./", ".", "false", "0", "no"):
         return True
     acc = u.get("acceptance") or []
     for a in acc:
         s = str(a)
-        if re.search(r"(ryk|zig-out|./|live.?smoke|product.?oracle)", s, re.I):
+        # Require a real product/binary token — bare "./" or truthy alone is not smoke.
+        if re.search(r"(ryk\b|zig-out/|live[ _-]?smoke|product[ _-]?oracle|`ryk )", s, re.I):
             return True
     return False
 

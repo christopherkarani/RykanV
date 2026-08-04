@@ -54,8 +54,9 @@ if [[ ${#paths[@]} -eq 0 ]]; then
 fi
 
 json_escape() {
-  # Escape a string for JSON (paths should not contain newlines)
-  local s=$1
+  # Escape a string for JSON (paths should not contain newlines).
+  # Quote $1 so paths with spaces are not word-split (F186).
+  local s="$1"
   s=${s//\\/\\\\}
   s=${s//\"/\\\"}
   s=${s//$'\n'/\\n}

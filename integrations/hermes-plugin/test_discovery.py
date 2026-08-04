@@ -59,6 +59,9 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
     def test_hook_smoke_passes_blocks_only(self) -> None:
         self.assertTrue(_PLUGIN._hook_smoke_passes('{"decision":"allow"}'))
         self.assertFalse(_PLUGIN._hook_smoke_passes('{"decision":"block"}'))
+        # F21: empty stdout must not pass smoke (planted binary oracle).
+        self.assertFalse(_PLUGIN._hook_smoke_passes(""))
+        self.assertFalse(_PLUGIN._hook_smoke_passes("   "))
 
     def test_find_orca_skips_oserror_from_smoke_probe(self) -> None:
         with mock.patch.object(_PLUGIN, "_orca_candidates", return_value=["/tmp/orca"]):

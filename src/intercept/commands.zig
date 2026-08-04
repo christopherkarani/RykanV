@@ -296,7 +296,9 @@ pub fn pathWithoutShimAlloc(allocator: std.mem.Allocator, path_value: []const u8
     var parts = std.mem.splitScalar(u8, path_value, pathDelimiter());
     var first = true;
     while (parts.next()) |part| {
-        if (part.len == 0 or pathPartEquals(part, shim_dir)) continue;
+        if (part.len == 0) continue;
+        // F50: lexical + trailing-sep normalize so symlink dual-forms still strip parent shim_dir.
+        if (pathPartEquals(part, shim_dir) or pathPartEqualsNormalized(part, shim_dir)) continue;
         if (!first) try list.append(allocator, pathDelimiter());
         try list.appendSlice(allocator, part);
         first = false;
@@ -327,6 +329,16 @@ pub fn approvalHash(command_display: []const u8) [64]u8 {
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(command_display, &digest, .{});
     return std.fmt.bytesToHex(digest, .lower);
+}
+
+/// Durable `user_approval` audit target for shim soft-allow (F12).
+/// Format: `cmd-hash:` + sha256 hex of full command display.
+pub fn approvalTargetFingerprint(command_display: []const u8) [64 + 9]u8 {
+    const hash = approvalHash(command_display);
+    var out: [64 + 9]u8 = undefined;
+    @memcpy(out[0..9], "cmd-hash:");
+    @memcpy(out[9..], &hash);
+    return out;
 }
 
 pub fn appendApprovalHashEnv(
@@ -461,6 +473,13 @@ fn isWithinDir(path: []const u8, dir: []const u8) bool {
 fn pathPartEquals(left: []const u8, right: []const u8) bool {
     if (builtin.os.tag == .windows) return std.ascii.eqlIgnoreCase(left, right);
     return std.mem.eql(u8, left, right);
+}
+
+fn pathPartEqualsNormalized(left: []const u8, right: []const u8) bool {
+    const l = std.mem.trimEnd(u8, left, "/\\");
+    const r = std.mem.trimEnd(u8, right, "/\\");
+    if (l.len == 0 or r.len == 0) return false;
+    return pathPartEquals(l, r);
 }
 
 fn isAbsoluteOrExplicitPath(command_name: []const u8) bool {

@@ -122,11 +122,14 @@ test {
     _ = daemon_contracts;
     _ = packs;
     _ = pack_state;
+    _ = @import("packs_tui.zig");
     _ = readiness;
     _ = doctor;
+    _ = @import("doctor_tui.zig");
     _ = history;
     _ = danger_confirmation;
     _ = run_command;
+    _ = shim; // PATH-shim audit mode session attestation (F36)
     _ = run_os_sandbox;
     _ = codex_mcp_sandbox;
     _ = host_mcp_sandbox;
@@ -833,7 +836,8 @@ test "help run includes examples section" {
     try std.testing.expect(std.mem.indexOf(u8, output, "Examples:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "ryk run -- <custom-command>") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "ryk claude") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Secretless stays off") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "secretless stays off") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "empty-backpack") != null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 
