@@ -284,7 +284,8 @@ test "s-product-wire: shell_explain loads permanent allowlist (attribution, exit
     const root = try std.testing.allocator.dupe(u8, root_z);
     defer std.testing.allocator.free(root);
 
-    const cmd = "git reset --hard HEAD";
+    // Medium permanent FULL ALLOW (critical cannot unlock — product hard fence).
+    const cmd = "git branch -D feature";
     const reason = "s-product-wire shell_explain permanent command marker";
     // User-layer command (project kind=command is stripped on product load — M-10).
     try sProductWireWriteUserCommandAllow(xdg.config_root, cmd, reason);

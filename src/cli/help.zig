@@ -311,14 +311,16 @@ pub const commands =
             .hidden = false,
             .examples = &.{
                 "ryk allowlist list",
-                "ryk allowlist add core.git:reset-hard -r \"intentional reset\"",
+                "ryk allowlist add core.git:branch-force-delete -r \"cleanup stale local branches\"",
                 "ryk allowlist add-command \"git status\" -r \"CI bootstrap\"",
-                "ryk allow \"core.git:reset-hard\" -r \"intentional reset\"",
+                "ryk allow \"core.git:branch-force-delete\" -r \"cleanup stale local branches\"",
             },
             .details = &.{
                 "Permanent pack exceptions (rule id or exact command) with required reason.",
                 "Project file: .orca/allowlist.toml · user: $XDG_CONFIG_HOME/orca/allowlist.toml.",
                 "kind=command short-circuits before packs; kind=rule skips that rule only (E8).",
+                "Critical pack hits (e.g. core.git:reset-hard / git reset --hard) cannot be permanently unlocked — use allow-once or a safer workflow.",
+                "Examples use medium rules (e.g. core.git:branch-force-delete / git branch -D).",
                 "Shortcuts: 'ryk allow <rule>' and 'ryk unallow <key>'.",
                 "Use 'ryk allowlist --help' for actions and options.",
             },
@@ -331,10 +333,11 @@ pub const commands =
             // s-allowlist-cli: live Zig permanent TOML store (no daemon).
             .hidden = false,
             .examples = &.{
-                "ryk allow core.git:reset-hard -r \"recovering local branch\"",
+                "ryk allow core.git:branch-force-delete -r \"cleanup stale local branches\"",
             },
             .details = &.{
                 "Shortcut for 'ryk allowlist add'. Writes project or user allowlist.toml.",
+                "Critical pack hits cannot be permanently unlocked (hard fence).",
             },
         },
         .{
@@ -345,7 +348,7 @@ pub const commands =
             // s-allowlist-cli: live Zig permanent TOML store (no daemon).
             .hidden = false,
             .examples = &.{
-                "ryk unallow core.git:reset-hard",
+                "ryk unallow core.git:branch-force-delete",
             },
             .details = &.{
                 "Shortcut for 'ryk allowlist remove'. Key is rule id or exact command string.",
@@ -686,6 +689,7 @@ pub const commands =
             "  ryk decide tool    --json '{\"name\":\"<name>\"}'",
             "  ryk decide <kind> --stdin",
             "  ryk decide <kind> --json <payload> [--ci]",
+            "Command kind: default shell packs also fence medium+ denials over pure commands.allow (medium→ask, CI→block; high/critical→block). Permanent/allow-once product stores are not loaded on this path.",
             "Default output is stable JSON; add --human for a decision badge, details, and risk meter.",
             "Debug logs go to stderr only.",
         } },

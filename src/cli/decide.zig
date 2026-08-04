@@ -3,6 +3,7 @@ const core = @import("orca_core").core;
 const supervisor = core.supervisor;
 const core_api = @import("orca_core").api;
 const policy = @import("orca_core").policy;
+const shell_engine = @import("../shell_engine/mod.zig");
 
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
@@ -314,6 +315,45 @@ fn evaluateDecision(
             const evaluation = try core_api.explainAction(allocator, @ptrCast(policy_value), .command, command_text);
             defer evaluation.deinit(allocator);
 
+            // Shell pack fence: medium/high/critical pack denials take the more
+            // restrictive of policy vs shell-derived plugin decision. Critical/high
+            // → block (closer to hook hard fence for critical); medium → ask
+            // (CI hardens ask→block). Not a full mode×severity matrix.
+            //
+            // evaluateCommand error set is allocator-only (OOM). Registry init and
+            // other evaluator failures already return a fail-closed deny Evaluation
+            // (e.g. zig.shell:init) — do not re-wrap OOM into a synthetic block
+            // DecisionOutput that allocates under the same memory pressure.
+            var shell = try shell_engine.evaluateCommand(allocator, command_text, .{});
+            defer shell.deinit(allocator);
+
+            if (shell.decision == .deny and packSeverityBlocksPolicyAllow(shell.severity)) {
+                const shell_derived: PluginDecision = switch (shell.severity) {
+                    .critical, .high => .block,
+                    .medium => if (ci_mode) .block else .ask,
+                    .low => unreachable, // excluded by packSeverityBlocksPolicyAllow
+                };
+                const policy_decision = PluginDecision.fromDecisionResult(evaluation.decision.result, ci_mode);
+                // When shell is at least as restrictive as policy, surface the
+                // pack fence (rule/reason). Policy-stricter cases fall through.
+                if (pluginDecisionRestrictiveness(shell_derived) >= pluginDecisionRestrictiveness(policy_decision)) {
+                    const risk: RiskLevel = switch (shell.severity) {
+                        .critical => .critical,
+                        .high => .high,
+                        .medium => .medium,
+                        .low => unreachable,
+                    };
+                    return try buildCommandDecisionOutput(
+                        allocator,
+                        shell_derived,
+                        risk,
+                        shell.reason,
+                        shell.rule_id,
+                        &redactions,
+                    );
+                }
+            }
+
             const decision = PluginDecision.fromDecisionResult(evaluation.decision.result, ci_mode);
             const risk = RiskLevel.fromScore(evaluation.decision.risk_score);
 
@@ -449,6 +489,56 @@ fn evaluateDecision(
             };
         },
     }
+}
+
+/// Pack deny at medium+ participates in the decide pack fence.
+fn packSeverityBlocksPolicyAllow(severity: shell_engine.Severity) bool {
+    return switch (severity) {
+        .critical, .high, .medium => true,
+        .low => false,
+    };
+}
+
+/// Higher = more restrictive. Used to merge policy vs shell-derived plugin decisions.
+fn pluginDecisionRestrictiveness(decision: PluginDecision) u8 {
+    return switch (decision) {
+        .allow => 0,
+        .context_only => 1,
+        .warn => 2,
+        .ask => 3,
+        .block => 4,
+        .err => 5,
+    };
+}
+
+/// Build a command-path DecisionOutput with full errdefer cleanup on partial alloc.
+/// Mirrors `buildFileNormalizationBlock` ownership discipline.
+fn buildCommandDecisionOutput(
+    allocator: std.mem.Allocator,
+    decision: PluginDecision,
+    risk: RiskLevel,
+    reason: []const u8,
+    rule: ?[]const u8,
+    redactions: *std.ArrayList(RedactionEntry),
+) !DecisionOutput {
+    const category = try allocator.dupe(u8, "command");
+    errdefer allocator.free(category);
+    const reason_owned = try allocator.dupe(u8, reason);
+    errdefer allocator.free(reason_owned);
+    const rule_owned: ?[]const u8 = if (rule) |r| try allocator.dupe(u8, r) else null;
+    errdefer if (rule_owned) |r| allocator.free(r);
+    const message = try buildMessage(allocator, decision, "command");
+    errdefer allocator.free(message);
+    const redactions_owned = try redactions.toOwnedSlice(allocator);
+    return .{
+        .decision = decision,
+        .risk = risk,
+        .category = category,
+        .reason = reason_owned,
+        .rule = rule_owned,
+        .message = message,
+        .redactions = redactions_owned,
+    };
 }
 
 fn buildFileNormalizationBlock(allocator: std.mem.Allocator, category: []const u8) !DecisionOutput {
@@ -864,6 +954,190 @@ test "decide command with dangerous command returns block" {
     const output = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "\"decision\": \"block\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"category\": \"command\"") != null);
+}
+
+test "decide command pack fence: git branch -D under commands.allow is ask (CI block)" {
+    // Pin policy so medium pack hit cannot pure-allow via broad `git branch *`.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "policy.yaml",
+        .data =
+        \\version: 1
+        \\mode: ask
+        \\commands:
+        \\  default: ask
+        \\  allow:
+        \\    - "git branch *"
+        \\
+        ,
+    });
+    const policy_path = try tmp.dir.realPathFileAlloc(std.testing.io, "policy.yaml", std.testing.allocator);
+    defer std.testing.allocator.free(policy_path);
+
+    // Non-CI: medium pack fence → ask (not allow), with pack rule id.
+    {
+        var stdout_buf: [4096]u8 = undefined;
+        var stderr_buf: [512]u8 = undefined;
+        var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+        var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+        const code = try decideCommandWithPolicy(
+            std.testing.io,
+            .command,
+            &.{ "--json", "{\"command\":\"git branch -D feature\"}" },
+            &stdout_writer,
+            &stderr_writer,
+            policy_path,
+        );
+        try std.testing.expectEqual(exit_codes.ask, code);
+
+        const output = stdout_writer.buffered();
+        try std.testing.expect(std.mem.indexOf(u8, output, "\"decision\": \"ask\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output, "\"decision\": \"allow\"") == null);
+        try std.testing.expect(std.mem.indexOf(u8, output, "core.git:branch-force-delete") != null);
+    }
+
+    // CI: medium fence hardens ask → block.
+    {
+        var stdout_buf: [4096]u8 = undefined;
+        var stderr_buf: [512]u8 = undefined;
+        var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+        var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+        const code = try decideCommandWithPolicy(
+            std.testing.io,
+            .command,
+            &.{ "--json", "{\"command\":\"git branch -D feature\"}", "--ci" },
+            &stdout_writer,
+            &stderr_writer,
+            policy_path,
+        );
+        try std.testing.expectEqual(exit_codes.denial, code);
+
+        const output = stdout_writer.buffered();
+        try std.testing.expect(std.mem.indexOf(u8, output, "\"decision\": \"block\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output, "core.git:branch-force-delete") != null);
+    }
+}
+
+test "decide command pack fence: critical under ask defaults is block" {
+    // Policy default ask (no pure allow for reset --hard) must still hard-fence
+    // pack-critical to block — not soften to ask.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "policy.yaml",
+        .data =
+        \\version: 1
+        \\mode: ask
+        \\commands:
+        \\  default: ask
+        \\  allow:
+        \\    - "git branch *"
+        \\
+        ,
+    });
+    const policy_path = try tmp.dir.realPathFileAlloc(std.testing.io, "policy.yaml", std.testing.allocator);
+    defer std.testing.allocator.free(policy_path);
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [512]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try decideCommandWithPolicy(
+        std.testing.io,
+        .command,
+        &.{ "--json", "{\"command\":\"git reset --hard HEAD\"}" },
+        &stdout_writer,
+        &stderr_writer,
+        policy_path,
+    );
+    try std.testing.expectEqual(exit_codes.denial, code);
+
+    const output = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"decision\": \"block\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"decision\": \"ask\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "core.git:reset-hard") != null);
+}
+
+test "decide command pack fence: critical under pure commands.allow is block" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "policy.yaml",
+        .data =
+        \\version: 1
+        \\mode: ask
+        \\commands:
+        \\  default: ask
+        \\  allow:
+        \\    - "git *"
+        \\
+        ,
+    });
+    const policy_path = try tmp.dir.realPathFileAlloc(std.testing.io, "policy.yaml", std.testing.allocator);
+    defer std.testing.allocator.free(policy_path);
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [512]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try decideCommandWithPolicy(
+        std.testing.io,
+        .command,
+        &.{ "--json", "{\"command\":\"git reset --hard HEAD\"}" },
+        &stdout_writer,
+        &stderr_writer,
+        policy_path,
+    );
+    try std.testing.expectEqual(exit_codes.denial, code);
+
+    const output = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"decision\": \"block\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"decision\": \"allow\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "core.git:reset-hard") != null);
+}
+
+test "decide command pack fence: high severity under pure allow is block" {
+    // Node wipe of /tmp is high (not critical); fence must still beat pure allow.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "policy.yaml",
+        .data =
+        \\version: 1
+        \\mode: ask
+        \\commands:
+        \\  default: allow
+        \\  allow:
+        \\    - "node *"
+        \\
+        ,
+    });
+    const policy_path = try tmp.dir.realPathFileAlloc(std.testing.io, "policy.yaml", std.testing.allocator);
+    defer std.testing.allocator.free(policy_path);
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [512]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try decideCommandWithPolicy(
+        std.testing.io,
+        .command,
+        &.{ "--json", "{\"command\":\"node -e \\\"require('fs').rmSync('/tmp/x',{recursive:true})\\\"\"}" },
+        &stdout_writer,
+        &stderr_writer,
+        policy_path,
+    );
+    try std.testing.expectEqual(exit_codes.denial, code);
+
+    const output = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"decision\": \"block\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"decision\": \"allow\"") == null);
 }
 
 test "decide file write to protected path returns block" {

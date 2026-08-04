@@ -325,6 +325,9 @@ pub fn matchCommandDetailedOpts(cmd: []const u8, opts: MatchOptions) MatchResult
             const span = pat.regex.findMatch(cmd) catch return matchInfraDeny();
             if (span) |m| {
                 // E8: permanent kind=rule skips this rule only; keep scanning.
+                // Product permanent path filters critical rule ids out of skip lists
+                // (evaluateCommand collectPermanentRuleSkipIds) — this matcher still
+                // honors skipped_rule_ids as given for unit tests / callers.
                 if (ruleIdIsSkipped(pack.id, pat.name, opts.skipped_rule_ids)) continue;
                 return .{ .deny = .{
                     .pack_id = pack.id,
@@ -353,8 +356,25 @@ pub fn defaultEnabledPackCount() usize {
     return n;
 }
 
+/// Look up severity for a permanent rule id `{pack_id}:{pattern_name}`.
+/// Unknown / unloadable rules are treated as critical (fail closed for skip).
+pub fn severityForRuleId(rule_id: []const u8) Severity {
+    const colon = std.mem.indexOfScalar(u8, rule_id, ':') orelse return .critical;
+    const pack_id = rule_id[0..colon];
+    const pattern = rule_id[colon + 1 ..];
+    if (pack_id.len == 0 or pattern.len == 0) return .critical;
+    for (g_packs) |pack| {
+        if (!std.mem.eql(u8, pack.id, pack_id)) continue;
+        for (pack.destructive) |pat| {
+            if (std.mem.eql(u8, pat.name, pattern)) return pat.severity;
+        }
+        return .critical; // pack known, pattern unknown → fail closed
+    }
+    return .critical;
+}
+
 /// Embedded oracle pattern totals (must match extract from frozen orca-rs packs).
-pub const expected_destructive_patterns: usize = 792;
+pub const expected_destructive_patterns: usize = 793;
 pub const expected_safe_patterns: usize = 830;
 
 fn compileOnePattern(a: std.mem.Allocator, pat: std.json.Value) !CompiledPattern {
@@ -420,6 +440,37 @@ test "registry loads packs and matches git reset" {
     const r = matchCommandDetailed("git reset --hard");
     try std.testing.expect(r == .deny);
     try std.testing.expectEqualStrings("core.git", r.deny.pack_id);
+}
+
+test "default pack keywords are non-empty semantic tokens (no garbage)" {
+    try ensureInit();
+    for (g_packs) |pack| {
+        if (!pack.default_enabled) continue;
+        for (pack.keywords) |kw| {
+            try std.testing.expect(kw.len > 0);
+            // Reject comma/whitespace/newline garbage that never aids mightMatch.
+            try std.testing.expect(std.mem.indexOfScalar(u8, kw, '\n') == null);
+            try std.testing.expect(!std.mem.eql(u8, std.mem.trim(u8, kw, " \t"), ","));
+            try std.testing.expect(!std.mem.eql(u8, kw, ", "));
+            var has_semantic = false;
+            for (kw) |c| {
+                if (std.ascii.isAlphanumeric(c) or c == '/' or c == '>' or c == '~' or c == '$' or c == '\\' or c == '-' or c == '_' or c == '.') {
+                    has_semantic = true;
+                    break;
+                }
+            }
+            try std.testing.expect(has_semantic);
+        }
+    }
+    // system.disk must keyword-gate lvconvert so bare lvconvert --merge matches.
+    var found_lv = false;
+    for (g_packs) |pack| {
+        if (!std.mem.eql(u8, pack.id, "system.disk")) continue;
+        for (pack.keywords) |kw| {
+            if (std.mem.eql(u8, kw, "lvconvert")) found_lv = true;
+        }
+    }
+    try std.testing.expect(found_lv);
 }
 
 // Phase 1 hard fence: g_packs must follow Rust expand_enabled_ordered (pack_tier then lex)
