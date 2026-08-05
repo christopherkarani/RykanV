@@ -1203,9 +1203,9 @@ fn matchLangDestruct(cmd: []const u8) ?registry.Hit {
     if (langDestructApiPresent(cmd)) {
         // Catastrophe paths → critical so product hard-fence / permanent fence apply.
         const critical_paths = [_][]const u8{
-            "/home", "/etc", "/usr", "/var", "/root",
-            "~",     "$HOME",
-            "'/'",   "\"/\"", "('/'", "(\"/\"" ,
+            "/home",  "/etc",  "/usr", "/var",  "/root",
+            "~",      "$HOME", "'/'",  "\"/\"", "('/'",
+            "(\"/\"",
         };
         for (critical_paths) |s| {
             if (std.mem.indexOf(u8, cmd, s) != null) {
@@ -2001,6 +2001,56 @@ test "phase1 hard-fence catastrophe table Mode A" {
         try std.testing.expect(eval.decision == .deny);
         try std.testing.expect(eval.rule_id != null);
         try std.testing.expectEqualStrings(c.rule_id, eval.rule_id.?);
+    }
+}
+
+// Phase 2 — Mode A core.credentials:cat-env (exact .env peeks).
+// rule_id pins are mandatory: corpora use enforce_rule_id=false.
+test "phase2 credentials cat-env Mode A" {
+    const Case = struct {
+        cmd: []const u8,
+        expect_deny: bool,
+        rule_id: ?[]const u8 = null,
+    };
+    const cases = [_]Case{
+        // Deny + exact rule_id (bare + multi-segment + all pack readers)
+        .{ .cmd = "cat .env", .expect_deny = true, .rule_id = "core.credentials:cat-env" },
+        .{ .cmd = "cat ./.env", .expect_deny = true, .rule_id = "core.credentials:cat-env" },
+        .{ .cmd = "head -n 5 .env", .expect_deny = true, .rule_id = "core.credentials:cat-env" },
+        .{ .cmd = "less .env", .expect_deny = true, .rule_id = "core.credentials:cat-env" },
+        .{ .cmd = "more .env", .expect_deny = true, .rule_id = "core.credentials:cat-env" },
+        .{ .cmd = "bat .env", .expect_deny = true, .rule_id = "core.credentials:cat-env" },
+        .{ .cmd = "cat secrets/.env", .expect_deny = true, .rule_id = "core.credentials:cat-env" },
+        // Embed + compound (mandatory rule_id pins)
+        .{ .cmd = "bash -c 'cat .env'", .expect_deny = true, .rule_id = "core.credentials:cat-env" },
+        .{ .cmd = "cat .env && true", .expect_deny = true, .rule_id = "core.credentials:cat-env" },
+        // Templates / benign / near-misses / data-only FP immunity for less/more
+        .{ .cmd = "cat .env.example", .expect_deny = false },
+        .{ .cmd = "cat ./.env.example", .expect_deny = false },
+        .{ .cmd = "cat .env.sample", .expect_deny = false },
+        .{ .cmd = "cat .env.template", .expect_deny = false },
+        .{ .cmd = "cat README.md", .expect_deny = false },
+        .{ .cmd = "cat package.json", .expect_deny = false },
+        .{ .cmd = "printenv", .expect_deny = false },
+        .{ .cmd = "cat foo.env", .expect_deny = false },
+        .{ .cmd = "cat .envrc", .expect_deny = false },
+        .{ .cmd = "cat .env.bak", .expect_deny = false },
+        .{ .cmd = "echo 'cat .env'", .expect_deny = false },
+        .{ .cmd = "less rm -rf /", .expect_deny = false },
+        .{ .cmd = "more rm -rf /", .expect_deny = false },
+    };
+    for (cases) |c| {
+        var eval = try evaluateCommand(std.testing.allocator, c.cmd, .{});
+        defer eval.deinit(std.testing.allocator);
+        if (c.expect_deny) {
+            try std.testing.expect(eval.decision == .deny);
+            try std.testing.expect(eval.rule_id != null);
+            if (c.rule_id) |want| {
+                try std.testing.expectEqualStrings(want, eval.rule_id.?);
+            }
+        } else {
+            try std.testing.expect(eval.decision == .allow);
+        }
     }
 }
 

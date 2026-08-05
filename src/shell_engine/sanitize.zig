@@ -5,9 +5,13 @@ const std = @import("std");
 
 /// Return a heap-owned command with safe data arguments replaced by spaces.
 pub fn sanitizeForMatching(allocator: std.mem.Allocator, command: []const u8) ![]u8 {
+    // Keep this list in lockstep with isDataOnlyCommand / isSearchCommand words that
+    // need masking or restore. less/more/bat must be present so pure `less …`
+    // commands enter the data-only arm (FP immunity + exact `.env` restore).
     const needs = containsAnyWord(command, &[_][]const u8{
-        "rg", "grep", "egrep", "fgrep", "ag", "ack", "echo", "printf",
-        "git", "sed", "awk", "cat", "head", "tail", "wc", "sort", "tee", "sponge",
+        "rg",  "grep",   "egrep", "fgrep", "ag",   "ack",  "echo", "printf",
+        "git", "sed",    "awk",   "cat",   "head", "tail", "wc",   "sort",
+        "tee", "sponge", "less",  "more",  "bat",
     }) or std.mem.indexOfScalar(u8, command, '#') != null;
     if (!needs) return try allocator.dupe(u8, command);
 
@@ -100,7 +104,11 @@ fn isDataOnlyCommand(cmd: []const u8) bool {
     var i: usize = 0;
     while (i < t.len and !std.ascii.isWhitespace(t[i])) : (i += 1) {}
     const word = basename(t[0..i]);
-    const data = [_][]const u8{ "echo", "printf", "cat", "tee", "head", "tail", "wc", "sort", "base64", "md5sum", "sha256sum", "less", "more" };
+    const data = [_][]const u8{
+        "echo", "printf", "cat",    "tee",    "head",      "tail",
+        "wc",   "sort",   "base64", "md5sum", "sha256sum", "less",
+        "more", "bat",
+    };
     for (data) |d| {
         if (std.mem.eql(u8, word, d)) return true;
     }
@@ -109,7 +117,7 @@ fn isDataOnlyCommand(cmd: []const u8) bool {
 
 fn isInterpreterBasename(base: []const u8) bool {
     const names = [_][]const u8{
-        "sh", "bash", "zsh", "ksh", "dash", "fish",
+        "sh",     "bash",    "zsh",  "ksh",  "dash", "fish",
         "python", "python3", "ruby", "perl", "node",
     };
     for (names) |n| {
@@ -150,8 +158,7 @@ fn pipesIntoInterpreter(cmd: []const u8) bool {
         while (j < cmd.len) {
             var end = j;
             while (end < cmd.len and !std.ascii.isWhitespace(cmd[end]) and cmd[end] != '|' and
-                cmd[end] != ';' and cmd[end] != '&' and cmd[end] != '<' and cmd[end] != '>')
-                : (end += 1)
+                cmd[end] != ';' and cmd[end] != '&' and cmd[end] != '<' and cmd[end] != '>') : (end += 1)
             {}
             if (end == j) break;
             const word = cmd[j..end];
@@ -331,9 +338,10 @@ fn restoreWriteSinks(buf: []u8, original: []const u8) void {
     }
 }
 
-/// For write-path argv sinks (`tee`), re-copy absolute/sensitive path-shaped
-/// argv tokens that masking blanked. Skips redirect targets (handled elsewhere)
-/// and does **not** restore herestring/heredoc bodies.
+/// After data-only masking, re-copy argv tokens pack matchers must still see:
+/// absolute/home write sinks (`tee /etc/passwd`) and exact `.env` basenames
+/// (`cat .env` / `less path/.env`) for `core.credentials:cat-env`.
+/// Skips redirect targets (handled elsewhere) and herestring/heredoc bodies.
 fn restorePathShapedArgs(buf: []u8, original: []const u8) void {
     if (buf.len != original.len) return;
     var i: usize = 0;
@@ -359,21 +367,40 @@ fn restorePathShapedArgs(buf: []u8, original: []const u8) void {
             continue;
         }
         const tok_end = redirectTargetEnd(buf, i);
-        if (tok_end > i and isPathShapedArg(original[i..tok_end])) {
-            @memcpy(buf[i..tok_end], original[i..tok_end]);
+        if (tok_end > i) {
+            const tok = original[i..tok_end];
+            if (isPackVisibleArgvToken(tok)) {
+                @memcpy(buf[i..tok_end], tok);
+            }
         }
         i = tok_end;
     }
 }
 
-/// True when `tok` (possibly quoted / $'...') looks like an absolute or
-/// home-relative path that pack matchers need to see for write sinks.
+/// True when a masked argv token must be restored for pack match.
+fn isPackVisibleArgvToken(tok: []const u8) bool {
+    return isPathShapedArg(tok) or isExactEnvBasename(tok);
+}
+
+/// Absolute or home-relative path for write-sink pack matchers.
 fn isPathShapedArg(tok: []const u8) bool {
     const inner = unwrapShellQuotes(tok);
     if (inner.len == 0) return false;
     if (inner[0] == '/') return true;
     if (inner[0] == '~') return true;
     if (inner.len >= 5 and std.mem.startsWith(u8, inner, "$HOME")) return true;
+    return false;
+}
+
+/// Exact basename `.env` (optional `./` or any directory prefix ending `/.env`).
+/// Templates (`.env.example` / `.sample` / `.template`) and near-misses
+/// (`.envrc`, `foo.env`, `.env.bak`) stay masked so packs do not see them.
+fn isExactEnvBasename(tok: []const u8) bool {
+    const inner = unwrapShellQuotes(tok);
+    if (inner.len == 0) return false;
+    if (std.mem.eql(u8, inner, ".env")) return true;
+    if (std.mem.eql(u8, inner, "./.env")) return true;
+    if (std.mem.endsWith(u8, inner, "/.env")) return true;
     return false;
 }
 
@@ -507,8 +534,7 @@ fn firstWriterSinkPath(span: []const u8) ?[]const u8 {
     while (j < span.len) {
         var end = j;
         while (end < span.len and !std.ascii.isWhitespace(span[end]) and span[end] != '|' and
-            span[end] != ';' and span[end] != '&')
-            : (end += 1)
+            span[end] != ';' and span[end] != '&') : (end += 1)
         {}
         if (end == j) break;
         const word = span[j..end];
@@ -571,8 +597,7 @@ fn firstWriterSinkPath(span: []const u8) ?[]const u8 {
         if (isPathShapedArgAt(span, j)) {
             const start = j;
             while (j < span.len and !std.ascii.isWhitespace(span[j]) and span[j] != '|' and
-                span[j] != ';' and span[j] != '&')
-                : (j += 1)
+                span[j] != ';' and span[j] != '&') : (j += 1)
             {}
             return span[start..j];
         }
@@ -723,8 +748,7 @@ fn pipeRhsIsWriter(buf: []const u8, after_pipe: usize) bool {
         }
         var end = j;
         while (end < buf.len and !std.ascii.isWhitespace(buf[end]) and buf[end] != '|' and
-            buf[end] != ';' and buf[end] != '&' and buf[end] != '<' and buf[end] != '>')
-            : (end += 1)
+            buf[end] != ';' and buf[end] != '&' and buf[end] != '<' and buf[end] != '>') : (end += 1)
         {}
         if (end == j) return false;
         const word = buf[j..end];
@@ -971,6 +995,53 @@ test "sanitize preserves tee absolute path argv for pack match" {
     const tmp = try sanitizeForMatching(std.testing.allocator, "tee /tmp/log");
     defer std.testing.allocator.free(tmp);
     try std.testing.expect(std.mem.indexOf(u8, tmp, "/tmp/log") != null);
+}
+
+// Phase 2: data-only readers mask argv; exact `.env` must stay visible for
+// core.credentials:cat-env. Templates and near-misses stay masked.
+test "sanitize preserves exact .env basename for credential peek packs" {
+    const restore = [_][]const u8{
+        "cat .env",
+        "cat ./.env",
+        "head -n 5 .env",
+        "cat -- .env",
+        "less .env",
+        "more .env",
+        "bat .env",
+        "cat secrets/.env",
+        "cat /tmp/x/.env",
+    };
+    for (restore) |cmd| {
+        const s = try sanitizeForMatching(std.testing.allocator, cmd);
+        defer std.testing.allocator.free(s);
+        try std.testing.expect(std.mem.indexOf(u8, s, ".env") != null);
+    }
+    // Templates / near-misses: not exact `.env` — leave masked (no literal `.env`).
+    const no_restore = [_][]const u8{ "cat .env.example", "cat foo.env", "cat .envrc", "cat .env.bak" };
+    for (no_restore) |cmd| {
+        const s = try sanitizeForMatching(std.testing.allocator, cmd);
+        defer std.testing.allocator.free(s);
+        try std.testing.expect(std.mem.indexOf(u8, s, ".env") == null);
+    }
+    // Data-only echo of the text must not re-surface a readable `cat .env` surface.
+    const echo = try sanitizeForMatching(std.testing.allocator, "echo 'cat .env'");
+    defer std.testing.allocator.free(echo);
+    try std.testing.expect(std.mem.indexOf(u8, echo, "cat .env") == null);
+}
+
+// less/more/bat must enter the sanitize gate (needs list) so data-only masking
+// applies; otherwise argv substrings like `rm -rf /` false-deny via filesystem packs.
+test "sanitize masks destructive argv for less more bat data-only" {
+    const cases = [_][]const u8{
+        "less rm -rf /",
+        "more rm -rf /",
+        "bat rm -rf /",
+    };
+    for (cases) |cmd| {
+        const s = try sanitizeForMatching(std.testing.allocator, cmd);
+        defer std.testing.allocator.free(s);
+        try std.testing.expect(std.mem.indexOf(u8, s, "rm -rf") == null);
+    }
 }
 
 test "sanitize preserves pipe-to-busybox/stdbuf/sponge writer sinks" {

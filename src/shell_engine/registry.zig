@@ -374,7 +374,7 @@ pub fn severityForRuleId(rule_id: []const u8) Severity {
 }
 
 /// Embedded oracle pattern totals (must match extract from frozen orca-rs packs).
-pub const expected_destructive_patterns: usize = 793;
+pub const expected_destructive_patterns: usize = 794;
 pub const expected_safe_patterns: usize = 830;
 
 fn compileOnePattern(a: std.mem.Allocator, pat: std.json.Value) !CompiledPattern {
@@ -478,8 +478,9 @@ test "default pack keywords are non-empty semantic tokens (no garbage)" {
 test "default-enabled packs are ordered tier then lex not apigateway-first" {
     try ensureInit();
     try std.testing.expect(g_packs.len >= 3);
-    // Full registry order: tier-1 core.* first, never apigateway (tier 4) first.
-    try std.testing.expectEqualStrings("core.filesystem", g_packs[0].id);
+    // Full registry order: tier-1 core.* first (lex), never apigateway (tier 4) first.
+    // core.credentials sorts before core.filesystem (tier+lex).
+    try std.testing.expectEqualStrings("core.credentials", g_packs[0].id);
     try std.testing.expect(!std.mem.startsWith(u8, g_packs[0].id, "apigateway."));
 
     var enabled_ids: [16][]const u8 = undefined;
@@ -491,9 +492,9 @@ test "default-enabled packs are ordered tier then lex not apigateway-first" {
         n += 1;
     }
     try std.testing.expect(n >= 2);
-    // First default-enabled is core.filesystem; every entry is core.* or system.disk;
+    // First default-enabled is core.credentials; every entry is core.* or system.disk;
     // system.disk present and after all core.* (tier order). No fixed core cardinality.
-    try std.testing.expectEqualStrings("core.filesystem", enabled_ids[0]);
+    try std.testing.expectEqualStrings("core.credentials", enabled_ids[0]);
     var saw_system_disk = false;
     for (enabled_ids[0..n]) |id| {
         if (std.mem.eql(u8, id, "system.disk")) {
