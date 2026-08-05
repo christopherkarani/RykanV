@@ -133,6 +133,31 @@ async function flushAsyncWork(): Promise<void> {
 	await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
 }
 
+type MessageRenderer = (
+	message: {
+		customType: string;
+		content: string;
+		display: boolean;
+		details?: unknown;
+	},
+	options: { expanded: boolean; outputPad: number },
+	theme: {
+		fg: (color: string, text: string) => string;
+		bg?: (color: string, text: string) => string;
+		bold?: (text: string) => string;
+		dim?: (text: string) => string;
+	},
+) => unknown;
+
+function makeThemeStub() {
+	return {
+		fg: (color: string, text: string) => `[${color}]${text}[/${color}]`,
+		bg: (color: string, text: string) => `{${color}}${text}{/${color}}`,
+		bold: (text: string) => text,
+		dim: (text: string) => text,
+	};
+}
+
 function makePi() {
 	const handlers = new Map<string, Handler[]>();
 	const commands = new Map<
@@ -148,6 +173,7 @@ function makePi() {
 		};
 		options?: { triggerTurn?: boolean; deliverAs?: string };
 	}> = [];
+	const renderers = new Map<string, MessageRenderer>();
 	const pi = {
 		on(event: string, handler: Handler) {
 			const list = handlers.get(event) ?? [];
@@ -160,8 +186,11 @@ function makePi() {
 		sendMessage(message: any, options?: any) {
 			messages.push({ message, options });
 		},
+		registerMessageRenderer(customType: string, renderer: MessageRenderer) {
+			renderers.set(customType, renderer);
+		},
 	};
-	return { pi, handlers, commands, messages };
+	return { pi, handlers, commands, messages, renderers };
 }
 
 function makeCtx(overrides: Record<string, unknown> = {}) {
@@ -2512,4 +2541,27 @@ test("Orca timeout follows unavailable policy", async () => {
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(result.block, true);
 	assert.match(result.reason, /timed out/);
+});
+
+test("makePi records registerMessageRenderer", () => {
+	const { pi, renderers } = makePi();
+	pi.registerMessageRenderer("probe-type", (_message, _options, theme) =>
+		theme.fg("error", "x"),
+	);
+	assert.equal(renderers.has("probe-type"), true);
+	const renderer = renderers.get("probe-type")!;
+	const result = renderer(
+		{ customType: "probe-type", content: "body", display: true },
+		{ expanded: false, outputPad: 0 },
+		makeThemeStub(),
+	);
+	assert.match(String(result), /\[error\]/);
+});
+
+test("installOrcaExtension registers decision message renderer", () => {
+	const { pi, renderers } = makePi();
+	const { spawn } = makeSpawn();
+	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	assert.equal(renderers.size, 1);
+	assert.equal(renderers.has("rykanv-decision"), true);
 });
