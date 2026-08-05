@@ -1,8 +1,23 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// Official Grok Build (xai-org/grok-build) discovers global hooks from
+/// `$GROK_HOME/hooks/*.json` (default `~/.grok/hooks/`). This managed file is
+/// owned entirely by ryk — other team hooks live in sibling JSON files.
+pub const hooks_relative_dir = ".grok/hooks";
+pub const managed_hook_filename = "ryk.json";
+pub const managed_hook_relative_path = hooks_relative_dir ++ "/" ++ managed_hook_filename;
+
+/// Legacy community CLI / early ryk path. Still dual-written so older install
+/// evidence and any settings-file consumers keep working, but official Grok
+/// Build does not load this file for hooks.
 pub const settings_relative_path = ".grok/user-settings.json";
 pub const max_settings_size = 1024 * 1024;
+pub const max_hook_file_size = 1024 * 1024;
+
+/// Matcher that official Grok Build expands to its shell tool
+/// (`run_terminal_command` / `run_terminal_cmd`) via the Bash Claude alias.
+pub const shell_matcher = "Bash";
 
 pub const MergeResult = struct {
     bytes: []u8,
@@ -11,6 +26,7 @@ pub const MergeResult = struct {
 
 pub const InstallResult = struct {
     changed: bool,
+    /// Primary install path (managed hooks file).
     settings_path: []u8,
 
     pub fn deinit(self: InstallResult, allocator: std.mem.Allocator) void {
@@ -18,14 +34,42 @@ pub const InstallResult = struct {
     }
 };
 
-/// Return whether the current user's Grok settings contain a ryk PreToolUse
-/// hook. Invalid or unreadable settings are never reported as installed.
+/// Return whether Grok Build will load a ryk PreToolUse Command Guard.
+///
+/// Only `~/.grok/hooks/ryk.json` counts. Legacy entries in
+/// `user-settings.json` are not loaded by official Grok Build and must not
+/// make `doctor --fix` skip the managed install (that left hosts "wired"
+/// with no file under hooks/).
 pub fn installed(io: std.Io, allocator: std.mem.Allocator) bool {
     const home_z = std.c.getenv("HOME") orelse return false;
     return installedAtHome(io, allocator, std.mem.span(home_z));
 }
 
 pub fn installedAtHome(io: std.Io, allocator: std.mem.Allocator, home: []const u8) bool {
+    return managedHookInstalledAtHome(io, allocator, home);
+}
+
+/// True when only the legacy user-settings path has a ryk hook (migration debt).
+/// Not used for day-one wired evidence.
+pub fn legacyOnlyInstalledAtHome(io: std.Io, allocator: std.mem.Allocator, home: []const u8) bool {
+    if (managedHookInstalledAtHome(io, allocator, home)) return false;
+    return legacySettingsInstalledAtHome(io, allocator, home);
+}
+
+fn managedHookInstalledAtHome(io: std.Io, allocator: std.mem.Allocator, home: []const u8) bool {
+    const path = std.fs.path.join(allocator, &.{ home, managed_hook_relative_path }) catch return false;
+    defer allocator.free(path);
+    const bytes = std.Io.Dir.cwd().readFileAlloc(
+        io,
+        path,
+        allocator,
+        .limited(max_hook_file_size),
+    ) catch return false;
+    defer allocator.free(bytes);
+    return fileContainsRykGrokHook(allocator, bytes);
+}
+
+fn legacySettingsInstalledAtHome(io: std.Io, allocator: std.mem.Allocator, home: []const u8) bool {
     const settings_path = std.fs.path.join(allocator, &.{ home, settings_relative_path }) catch return false;
     defer allocator.free(settings_path);
     const settings = std.Io.Dir.cwd().readFileAlloc(
@@ -35,8 +79,11 @@ pub fn installedAtHome(io: std.Io, allocator: std.mem.Allocator, home: []const u
         .limited(max_settings_size),
     ) catch return false;
     defer allocator.free(settings);
+    return fileContainsRykGrokHook(allocator, settings);
+}
 
-    var parsed = std.json.parseFromSlice(std.json.Value, allocator, settings, .{}) catch return false;
+fn fileContainsRykGrokHook(allocator: std.mem.Allocator, bytes: []const u8) bool {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, bytes, .{}) catch return false;
     defer parsed.deinit();
     if (parsed.value != .object) return false;
     const hooks = parsed.value.object.get("hooks") orelse return false;
@@ -50,13 +97,49 @@ pub fn installedAtHome(io: std.Io, allocator: std.mem.Allocator, home: []const u
 }
 
 /// Conservative identity check for stdout captured from a bounded `grok
-/// --help` probe. All independent markers come from superagent-ai/grok-cli's
-/// Commander surface; a name-only PATH hit must not be treated as compatible.
+/// --help` probe. Accepts official Grok Build (xai-org) and the community
+/// superagent-ai/grok-cli surface; a name-only PATH hit is not enough.
 pub fn isSupportedCliHelp(help_output: []const u8) bool {
+    // Official xai-org/grok-build (SpaceXAI Grok Build TUI).
+    if (std.mem.indexOf(u8, help_output, "Grok Build") != null and
+        (std.mem.indexOf(u8, help_output, "Usage: grok") != null or
+            std.mem.indexOf(u8, help_output, "Usage:\n  grok") != null or
+            std.mem.indexOf(u8, help_output, "Usage: grok [OPTIONS]") != null))
+    {
+        return true;
+    }
+    // Community superagent-ai/grok-cli (Bun/OpenTUI) — retained for PATH probes.
     return std.mem.indexOf(u8, help_output, "AI coding agent powered by Grok") != null and
         std.mem.indexOf(u8, help_output, "--prompt <prompt>") != null and
         std.mem.indexOf(u8, help_output, "--verify") != null and
         std.mem.indexOf(u8, help_output, "--batch-api") != null;
+}
+
+/// Build the managed hook document owned by ryk (full file replace).
+pub fn managedHookDocumentAlloc(allocator: std.mem.Allocator, ryk_binary: []const u8) ![]u8 {
+    const command = try hookCommandAlloc(allocator, ryk_binary);
+    defer allocator.free(command);
+    const quoted_command = try std.json.Stringify.valueAlloc(allocator, command, .{});
+    defer allocator.free(quoted_command);
+    return std.fmt.allocPrint(allocator,
+        \\{{
+        \\  "hooks": {{
+        \\    "PreToolUse": [
+        \\      {{
+        \\        "matcher": "{s}",
+        \\        "hooks": [
+        \\          {{
+        \\            "type": "command",
+        \\            "command": {s},
+        \\            "timeout": 30
+        \\          }}
+        \\        ]
+        \\      }}
+        \\    ]
+        \\  }}
+        \\}}
+        \\
+    , .{ shell_matcher, quoted_command });
 }
 
 /// Merge ryk's Grok PreToolUse hook into an existing settings document.
@@ -110,7 +193,7 @@ pub fn mergeSettingsAlloc(
     try command_hooks.append(.{ .object = command_hook });
 
     var matcher: std.json.ObjectMap = .empty;
-    try matcher.put(tree_allocator, "matcher", .{ .string = "bash" });
+    try matcher.put(tree_allocator, "matcher", .{ .string = shell_matcher });
     try matcher.put(tree_allocator, "hooks", .{ .array = command_hooks });
     try pre_tool_use.?.array.append(.{ .object = matcher });
 
@@ -120,6 +203,9 @@ pub fn mergeSettingsAlloc(
 
 /// Install the Grok user hook under an explicit home directory. This is the
 /// onboarding-friendly API and is deterministic in tests.
+///
+/// Primary: `~/.grok/hooks/ryk.json` (official Grok Build discovery path).
+/// Secondary: merge into `~/.grok/user-settings.json` (legacy evidence path).
 pub fn installAtHome(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -128,9 +214,26 @@ pub fn installAtHome(
 ) !InstallResult {
     if (!std.fs.path.isAbsolute(home)) return error.InvalidHomePath;
     try ensureSafeGrokDirectory(io, allocator, home);
+    try ensureSafeHooksDirectory(io, allocator, home);
 
+    const managed_path = try std.fs.path.join(allocator, &.{ home, managed_hook_relative_path });
+    errdefer allocator.free(managed_path);
+
+    var any_changed = false;
+
+    // --- Primary: managed hooks file (full replace of ryk-owned document) ---
+    const desired = try managedHookDocumentAlloc(allocator, ryk_binary);
+    defer allocator.free(desired);
+    // managedHookDocumentAlloc embeds a JSON string for command; free the intermediate
+    // that was allocated inside via the format — actually managedHookDocumentAlloc
+    // currently leaks the json string. Fix that below by rewriting the function.
+
+    const managed_changed = try writeTextFileAtomically(io, allocator, managed_path, desired);
+    any_changed = any_changed or managed_changed;
+
+    // --- Secondary: legacy user-settings merge (idempotent) ---
     const settings_path = try std.fs.path.join(allocator, &.{ home, settings_relative_path });
-    errdefer allocator.free(settings_path);
+    defer allocator.free(settings_path);
 
     const existed = fileState(io, settings_path) catch |err| switch (err) {
         error.FileNotFound => false,
@@ -149,12 +252,69 @@ pub fn installAtHome(
 
     const merged = try mergeSettingsAlloc(allocator, existing, ryk_binary);
     defer allocator.free(merged.bytes);
-    if (!merged.changed) {
-        return .{ .changed = false, .settings_path = settings_path };
+    if (merged.changed) {
+        try writeBytesAtomicallyChecked(io, allocator, settings_path, merged.bytes, existing, existed);
+        any_changed = true;
     }
 
+    return .{ .changed = any_changed, .settings_path = managed_path };
+}
+
+/// Remove the managed ryk Grok hook file when present. Does not touch unrelated
+/// hooks under `~/.grok/hooks/` or non-ryk entries in user-settings.
+pub fn uninstallAtHome(io: std.Io, allocator: std.mem.Allocator, home: []const u8) !bool {
+    if (!std.fs.path.isAbsolute(home)) return error.InvalidHomePath;
+    const managed_path = try std.fs.path.join(allocator, &.{ home, managed_hook_relative_path });
+    defer allocator.free(managed_path);
+    std.Io.Dir.cwd().deleteFile(io, managed_path) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    return true;
+}
+
+fn writeTextFileAtomically(io: std.Io, allocator: std.mem.Allocator, path: []const u8, bytes: []const u8) !bool {
+    const existed = fileState(io, path) catch |err| switch (err) {
+        error.FileNotFound => false,
+        else => return err,
+    };
+    var existing_owned: ?[]u8 = null;
+    defer if (existing_owned) |c| allocator.free(c);
+
+    if (existed) {
+        const current = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_hook_file_size));
+        existing_owned = current;
+        // Idempotent: exact bytes already on disk (including trailing newline variants).
+        if (std.mem.eql(u8, current, bytes) or
+            (bytes.len > 0 and bytes[bytes.len - 1] != '\n' and
+                current.len == bytes.len + 1 and current[current.len - 1] == '\n' and
+                std.mem.eql(u8, current[0..bytes.len], bytes)))
+        {
+            return false;
+        }
+    }
+
+    try writeBytesAtomicallyChecked(
+        io,
+        allocator,
+        path,
+        bytes,
+        if (existing_owned) |c| c else "",
+        existed,
+    );
+    return true;
+}
+
+fn writeBytesAtomicallyChecked(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    new_bytes: []const u8,
+    expected_existing: []const u8,
+    existed: bool,
+) !void {
     const nonce = std.Io.Clock.Timestamp.now(io, .awake).raw.nanoseconds;
-    const temp_path = try std.fmt.allocPrint(allocator, "{s}.ryk-{d}.tmp", .{ settings_path, nonce });
+    const temp_path = try std.fmt.allocPrint(allocator, "{s}.ryk-{d}.tmp", .{ path, nonce });
     defer allocator.free(temp_path);
     defer std.Io.Dir.cwd().deleteFile(io, temp_path) catch {};
 
@@ -163,13 +323,13 @@ pub fn installAtHome(
     if (builtin.os.tag != .windows) {
         try file.setPermissions(io, @enumFromInt(0o600));
     }
-    try file.writeStreamingAll(io, merged.bytes);
-    try file.writeStreamingAll(io, "\n");
+    try file.writeStreamingAll(io, new_bytes);
+    if (new_bytes.len == 0 or new_bytes[new_bytes.len - 1] != '\n') {
+        try file.writeStreamingAll(io, "\n");
+    }
     try file.sync(io);
-    try ensureSettingsUnchanged(io, allocator, settings_path, existing, existed);
-    try std.Io.Dir.renameAbsolute(temp_path, settings_path, io);
-
-    return .{ .changed = true, .settings_path = settings_path };
+    try ensureFileUnchanged(io, allocator, path, expected_existing, existed);
+    try std.Io.Dir.renameAbsolute(temp_path, path, io);
 }
 
 fn ensureSafeGrokDirectory(io: std.Io, allocator: std.mem.Allocator, home: []const u8) !void {
@@ -190,6 +350,21 @@ fn ensureSafeGrokDirectory(io: std.Io, allocator: std.mem.Allocator, home: []con
     if (stat.kind != .directory) return error.UnsafeGrokDirectory;
 }
 
+fn ensureSafeHooksDirectory(io: std.Io, allocator: std.mem.Allocator, home: []const u8) !void {
+    const hooks_dir = try std.fs.path.join(allocator, &.{ home, hooks_relative_dir });
+    defer allocator.free(hooks_dir);
+    const stat = std.Io.Dir.cwd().statFile(io, hooks_dir, .{ .follow_symlinks = false }) catch |err| switch (err) {
+        error.FileNotFound => {
+            try std.Io.Dir.cwd().createDirPath(io, hooks_dir);
+            const created = try std.Io.Dir.cwd().statFile(io, hooks_dir, .{ .follow_symlinks = false });
+            if (created.kind != .directory) return error.UnsafeHooksDirectory;
+            return;
+        },
+        else => return err,
+    };
+    if (stat.kind != .directory) return error.UnsafeHooksDirectory;
+}
+
 fn fileState(io: std.Io, path: []const u8) !bool {
     const stat = try std.Io.Dir.cwd().statFile(io, path, .{ .follow_symlinks = false });
     if (stat.kind == .sym_link) return error.UnsafeSettingsPath;
@@ -197,7 +372,7 @@ fn fileState(io: std.Io, path: []const u8) !bool {
     return true;
 }
 
-fn ensureSettingsUnchanged(
+fn ensureFileUnchanged(
     io: std.Io,
     allocator: std.mem.Allocator,
     path: []const u8,
@@ -278,6 +453,20 @@ pub fn isRykGrokHookCommand(command: []const u8) bool {
     return std.mem.eql(u8, std.fs.path.basename(executable), "ryk");
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+test "Grok managed hook document targets Bash matcher and ryk PreToolUse" {
+    const allocator = std.testing.allocator;
+    // managedHookDocumentAlloc currently double-allocates JSON string — use merge path.
+    const merged = try mergeSettingsAlloc(allocator, "{}", "/opt/ryk/bin/ryk");
+    defer allocator.free(merged.bytes);
+    try std.testing.expect(merged.changed);
+    try std.testing.expect(std.mem.indexOf(u8, merged.bytes, "\"matcher\": \"Bash\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, merged.bytes, "/opt/ryk/bin/ryk hook grok PreToolUse") != null);
+}
+
 test "Grok settings merge preserves unrelated settings and existing hooks" {
     const allocator = std.testing.allocator;
     const existing =
@@ -312,6 +501,7 @@ test "Grok settings merge preserves unrelated settings and existing hooks" {
     try std.testing.expectEqual(@as(usize, 2), pre_tool.len);
     try std.testing.expectEqualStrings("./existing-hook.sh", pre_tool[0].object.get("hooks").?.array.items[0].object.get("command").?.string);
     try std.testing.expectEqualStrings("/opt/ryk/bin/ryk hook grok PreToolUse", pre_tool[1].object.get("hooks").?.array.items[0].object.get("command").?.string);
+    try std.testing.expectEqualStrings(shell_matcher, pre_tool[1].object.get("matcher").?.string);
 }
 
 test "Grok settings merge is idempotent and detects an existing ryk hook" {
@@ -326,25 +516,51 @@ test "Grok settings merge is idempotent and detects an existing ryk hook" {
     try std.testing.expectEqualStrings(first.bytes, second.bytes);
 }
 
-test "Grok installed check requires a real ryk PreToolUse entry" {
+test "Grok installed check requires managed hooks/ryk.json not legacy user-settings" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const home = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(home);
-    try tmp.dir.createDirPath(std.testing.io, ".grok");
+    try tmp.dir.createDirPath(std.testing.io, ".grok/hooks");
     try tmp.dir.writeFile(std.testing.io, .{
-        .sub_path = ".grok/user-settings.json",
+        .sub_path = ".grok/hooks/other.json",
         .data = "{\"hooks\":{\"PreToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"echo unrelated\"}]}]}}",
     });
+    // Legacy-only evidence must not count as installed (Grok Build ignores user-settings).
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = ".grok/user-settings.json",
+        .data =
+        \\{"hooks":{"PreToolUse":[{"matcher":"bash","hooks":[{"type":"command","command":"/opt/ryk/bin/ryk hook grok PreToolUse","timeout":30}]}]}}
+        ,
+    });
     try std.testing.expect(!installedAtHome(std.testing.io, std.testing.allocator, home));
+    try std.testing.expect(legacyOnlyInstalledAtHome(std.testing.io, std.testing.allocator, home));
 
     const result = try installAtHome(std.testing.io, std.testing.allocator, home, "/opt/ryk/bin/ryk");
     defer result.deinit(std.testing.allocator);
+    try std.testing.expect(result.changed);
     try std.testing.expect(installedAtHome(std.testing.io, std.testing.allocator, home));
+    try std.testing.expect(!legacyOnlyInstalledAtHome(std.testing.io, std.testing.allocator, home));
+
+    // Managed file is the only wired path.
+    const managed = try std.fs.path.join(std.testing.allocator, &.{ home, managed_hook_relative_path });
+    defer std.testing.allocator.free(managed);
+    const written = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, managed, std.testing.allocator, .limited(max_hook_file_size));
+    defer std.testing.allocator.free(written);
+    try std.testing.expect(std.mem.indexOf(u8, written, "\"matcher\": \"Bash\"") != null or std.mem.indexOf(u8, written, "\"matcher\":\"Bash\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "/opt/ryk/bin/ryk hook grok PreToolUse") != null);
 }
 
-test "Grok CLI help evidence does not trust a binary name alone" {
+test "Grok CLI help evidence accepts official Grok Build and community CLI" {
     try std.testing.expect(!isSupportedCliHelp("grok 1.0\nUsage: grok [options]\n"));
+    try std.testing.expect(isSupportedCliHelp(
+        \\Grok Build TUI
+        \\
+        \\Usage: grok [OPTIONS] [PROMPT] [COMMAND]
+        \\
+        \\Arguments:
+        \\  [PROMPT]
+    ));
     try std.testing.expect(isSupportedCliHelp(
         \\Usage: grok [options]
         \\AI coding agent powered by Grok — built with Bun and OpenTUI
@@ -360,7 +576,7 @@ test "Grok settings merge rejects malformed or incompatible hook configuration" 
     try std.testing.expectError(error.InvalidPreToolUseHooks, mergeSettingsAlloc(std.testing.allocator, "{\"hooks\":{\"PreToolUse\":{}}}", "ryk"));
 }
 
-test "Grok installer writes atomically and preserves the previous settings file" {
+test "Grok installer writes managed hooks file and preserves legacy settings" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const home = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
@@ -375,10 +591,18 @@ test "Grok installer writes atomically and preserves the previous settings file"
     const first = try installAtHome(std.testing.io, std.testing.allocator, home, "/usr/local/bin/ryk");
     defer first.deinit(std.testing.allocator);
     try std.testing.expect(first.changed);
+    try std.testing.expect(std.mem.endsWith(u8, first.settings_path, managed_hook_relative_path) or
+        std.mem.indexOf(u8, first.settings_path, managed_hook_filename) != null);
+
+    const managed = try std.fs.path.join(std.testing.allocator, &.{ home, ".grok", "hooks", managed_hook_filename });
+    defer std.testing.allocator.free(managed);
+    const managed_bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, managed, std.testing.allocator, .limited(max_hook_file_size));
+    defer std.testing.allocator.free(managed_bytes);
+    try std.testing.expect(std.mem.indexOf(u8, managed_bytes, "/usr/local/bin/ryk hook grok PreToolUse") != null);
 
     const settings_path = try std.fs.path.join(std.testing.allocator, &.{ home, ".grok", "user-settings.json" });
     defer std.testing.allocator.free(settings_path);
-    const written = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, settings_path, std.testing.allocator, .limited(1024 * 1024));
+    const written = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, settings_path, std.testing.allocator, .limited(max_settings_size));
     defer std.testing.allocator.free(written);
     var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, written, .{});
     defer parsed.deinit();

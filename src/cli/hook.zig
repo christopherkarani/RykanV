@@ -144,18 +144,21 @@ const GrokHookPayloadError = error{
 };
 
 /// Validate Grok's raw hook object and return it as the host-adapter payload.
-/// Grok's PreToolUse schema is Claude-compatible: tool_name + tool_input,
-/// with hook_event_name/cwd/session_id at the same object level.
+///
+/// Official Grok Build (xai-org/grok-build) serializes the envelope in camelCase
+/// (`hookEventName`, `toolName`, `toolInput`, `sessionId`) with snake_case event
+/// values (`pre_tool_use`). Claude-compat snake_case keys and PascalCase event
+/// names are also accepted so legacy fixtures and dual-format hosts keep working.
 fn grokHookPayload(value: std.json.Value, event: Event) GrokHookPayloadError!std.json.Value {
     if (value != .object) return error.InvalidGrokHookPayload;
 
-    const hook_event_name = extractString(value, "hook_event_name") orelse return error.InvalidGrokHookPayload;
-    if (!std.mem.eql(u8, hook_event_name, @tagName(event))) return error.GrokHookEventMismatch;
+    const hook_event_name = extractGrokEventName(value) orelse return error.InvalidGrokHookPayload;
+    if (!grokEventNameMatches(hook_event_name, event)) return error.GrokHookEventMismatch;
 
     if (event == .PreToolUse) {
         const cwd = extractString(value, "cwd") orelse return error.InvalidGrokHookPayload;
-        const tool_name = extractString(value, "tool_name") orelse return error.InvalidGrokHookPayload;
-        const tool_input = value.object.get("tool_input") orelse return error.InvalidGrokHookPayload;
+        const tool_name = extractGrokToolName(value) orelse return error.InvalidGrokHookPayload;
+        const tool_input = extractGrokToolInput(value) orelse return error.InvalidGrokHookPayload;
         if (std.mem.trim(u8, cwd, " \t\r\n").len == 0 or
             std.mem.trim(u8, tool_name, " \t\r\n").len == 0 or
             tool_input != .object)
@@ -166,6 +169,40 @@ fn grokHookPayload(value: std.json.Value, event: Event) GrokHookPayloadError!std
     }
 
     return value;
+}
+
+fn extractGrokEventName(value: std.json.Value) ?[]const u8 {
+    return extractString(value, "hook_event_name") orelse
+        extractString(value, "hookEventName");
+}
+
+fn extractGrokToolName(value: std.json.Value) ?[]const u8 {
+    return extractString(value, "tool_name") orelse
+        extractString(value, "toolName");
+}
+
+fn extractGrokToolInput(value: std.json.Value) ?std.json.Value {
+    if (value != .object) return null;
+    if (value.object.get("tool_input")) |v| return v;
+    if (value.object.get("toolInput")) |v| return v;
+    return null;
+}
+
+/// Accept PascalCase (`PreToolUse`), snake_case (`pre_tool_use`), and camelCase
+/// (`preToolUse`) spellings that official Grok Build and Claude-compat sources emit.
+fn grokEventNameMatches(name: []const u8, event: Event) bool {
+    if (std.mem.eql(u8, name, @tagName(event))) return true;
+    return switch (event) {
+        .SessionStart => std.mem.eql(u8, name, "session_start") or std.mem.eql(u8, name, "sessionStart"),
+        .UserPromptSubmit => std.mem.eql(u8, name, "user_prompt_submit") or std.mem.eql(u8, name, "userPromptSubmit") or std.mem.eql(u8, name, "beforeSubmitPrompt"),
+        .PreToolUse => std.mem.eql(u8, name, "pre_tool_use") or std.mem.eql(u8, name, "preToolUse") or
+            std.mem.eql(u8, name, "beforeShellExecution") or std.mem.eql(u8, name, "beforeMCPExecution") or std.mem.eql(u8, name, "beforeReadFile"),
+        .PermissionRequest => std.mem.eql(u8, name, "permission_request") or std.mem.eql(u8, name, "permissionRequest"),
+        .PostToolUse => std.mem.eql(u8, name, "post_tool_use") or std.mem.eql(u8, name, "postToolUse") or
+            std.mem.eql(u8, name, "afterShellExecution") or std.mem.eql(u8, name, "afterMCPExecution") or std.mem.eql(u8, name, "afterFileEdit"),
+        .Stop => std.mem.eql(u8, name, "stop"),
+        .SessionEnd => std.mem.eql(u8, name, "session_end") or std.mem.eql(u8, name, "sessionEnd"),
+    };
 }
 
 // OpenCode uses dot-separated event names. Map them to internal events.
@@ -418,26 +455,29 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
         }
     }
 
-    // Validate event matches (for OpenCode/OpenClaw, compare against original event name)
+    // Validate event matches (for OpenCode/OpenClaw, compare against original event name).
+    // Grok event names are already validated in grokHookPayload (camelCase + aliases).
     const request_event = if (host == .grok)
-        extractString(parsed.value, "hook_event_name") orelse ""
+        extractGrokEventName(parsed.value) orelse ""
     else
         extractString(parsed.value, "event") orelse "";
-    const expected_event = if (host == .opencode or host == .openclaw or host == .hermes) original_event_name else @tagName(event);
-    if (!std.mem.eql(u8, request_event, expected_event)) {
-        if (shouldFailClosedOnPreEval(host, event)) {
-            return try emitPreEvalFailClosed(
-                allocator,
-                host,
-                stdout,
-                stderr,
-                "hook",
-                "event mismatch",
-                "ryk hook: event mismatch; ryk blocked it before evaluation.",
-            );
+    if (host != .grok) {
+        const expected_event = if (host == .opencode or host == .openclaw or host == .hermes) original_event_name else @tagName(event);
+        if (!std.mem.eql(u8, request_event, expected_event)) {
+            if (shouldFailClosedOnPreEval(host, event)) {
+                return try emitPreEvalFailClosed(
+                    allocator,
+                    host,
+                    stdout,
+                    stderr,
+                    "hook",
+                    "event mismatch",
+                    "ryk hook: event mismatch; ryk blocked it before evaluation.",
+                );
+            }
+            try stderr.print("ryk hook: event mismatch. Expected '{s}', got '{s}'.\n", .{ expected_event, request_event });
+            return exit_codes.general;
         }
-        try stderr.print("ryk hook: event mismatch. Expected '{s}', got '{s}'.\n", .{ expected_event, request_event });
-        return exit_codes.general;
     }
 
     // Handle informational OpenCode events that don't need policy evaluation
@@ -527,13 +567,15 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
     if (host == .hermes) recordHermesHookActivity(io, allocator, root, request_event, hook_payload, result);
 
     if (usesExitTwoDenyOutput(host, result.decision)) {
-        // Codex ignores stdout JSON on deny and Grok defines exit 2 as its block path.
-        // Sentinel-first so agents scraping stderr can distinguish a guard block from a
-        // program error: provenance (guard) + consequence (no side effects) + recourse.
-        // Keep agent-visible Codex stderr thin (no full explain tree / regex dump).
-        // Dynamic policy output crosses an agent-visible boundary here; redact it before
-        // presentation so native Zig routes cannot disclose matched patterns or targets.
-        try writeCodexGuardBlock(allocator, stderr, result.message, result.reason);
+        // Codex: exit 2 + thin agent stderr (ignores stdout JSON on deny).
+        // Grok: exit 2 + native stdout {"decision":"deny","reason":…} so the TUI/model
+        // surface the pack/rule reason (empty stdout used to yield a generic exit-2 string).
+        // Dynamic policy text is redacted before any agent-visible emit.
+        if (host == .grok) {
+            try writeGrokDenyOutput(allocator, stdout, stderr, result);
+        } else {
+            try writeExitTwoGuardBlock(allocator, stderr, result.message, result.reason);
+        }
     } else {
         try writeHookResponse(stdout, result);
         // Human-facing hosts: rich explain on stderr; agent protocol stays on stdout JSON.
@@ -547,26 +589,32 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
     return hookExitCode(host, result.decision, ci_mode);
 }
 
-/// Machine-readable sentinel prepended to the *agent-audience* deny stderr so an agent
-/// scraping stderr can distinguish a guard block from a program error. Provenance +
-/// consequence + recourse, parse-friendly, stable. Never shown to humans — it is emitted
-/// only on an exit-two deny path, not the JSON host path.
-const guard_sentinel_prefix: []const u8 =
-    "[[RYK-GUARD]] blocked. Command did not execute; no side effects. " ++
-    "Recourse: ryk explain \"<command>\"; ryk allow-once <code>; ryk allowlist list\n";
-const guard_sentinel_tag = "[[RYK-GUARD]]";
-const legacy_guard_sentinel_tag = "[[ORCA-GUARD]]";
+/// Product brand for agent-facing / host-UI guard text (not the CLI binary name).
+pub const guard_product_tag = "RYKAN-V-GUARD";
 
-/// True when stderr/agent text contains the guard sentinel.
+/// Machine-readable sentinel prepended to *agent-audience* deny stderr so an agent
+/// scraping stderr can distinguish a guard block from a program error. Provenance +
+/// consequence + recourse, parse-friendly, stable.
+const guard_sentinel_prefix: []const u8 =
+    "[[" ++ guard_product_tag ++ "]] blocked. Command did not execute; no side effects. " ++
+    "Recourse: ryk explain \"<command>\"; ryk allow-once <code>; ryk allowlist list\n";
+const guard_sentinel_tag = "[[" ++ guard_product_tag ++ "]]";
+/// Prior product tags still recognized when reading historical logs / dual-read hosts.
+const legacy_guard_sentinel_tags = [_][]const u8{ "[[RYK-GUARD]]", "[[ORCA-GUARD]]" };
+
+/// True when stderr/agent text contains a current or legacy guard sentinel.
 pub fn containsGuardSentinel(text: []const u8) bool {
-    return std.mem.indexOf(u8, text, guard_sentinel_tag) != null or
-        std.mem.indexOf(u8, text, legacy_guard_sentinel_tag) != null;
+    if (std.mem.indexOf(u8, text, guard_sentinel_tag) != null) return true;
+    for (legacy_guard_sentinel_tags) |tag| {
+        if (std.mem.indexOf(u8, text, tag) != null) return true;
+    }
+    return false;
 }
 
-/// Codex hook deny exit code (documented Codex CLI contract; distinct from usage errors).
+/// Codex / Grok exit-two deny code (host contract; distinct from usage errors).
 const codex_deny_exit_code: u8 = 2;
 
-fn writeCodexGuardBlock(allocator: std.mem.Allocator, stderr: anytype, message: []const u8, reason: ?[]const u8) !void {
+fn writeExitTwoGuardBlock(allocator: std.mem.Allocator, stderr: anytype, message: []const u8, reason: ?[]const u8) !void {
     const safe_message = try core_api.redactAlloc(allocator, message);
     defer allocator.free(safe_message);
     const safe_reason = if (reason) |value| try core_api.redactAlloc(allocator, value) else null;
@@ -584,11 +632,62 @@ fn writeCodexGuardBlock(allocator: std.mem.Allocator, stderr: anytype, message: 
     }
 }
 
-/// Compact human deny block for non-Codex hosts (agent JSON remains on stdout).
+/// Alias retained for tests and call sites that name the Codex path.
+const writeCodexGuardBlock = writeExitTwoGuardBlock;
+
+/// Official Grok Build PreToolUse contract: stdout JSON decision + reason (UI/model),
+/// exit 2 to hard-block. Also emit stderr sentinel for scrapers / dual-read agents.
+fn writeGrokDenyOutput(allocator: std.mem.Allocator, stdout: anytype, stderr: anytype, result: HookResponse) !void {
+    const reason = try formatGrokDenyReasonAlloc(allocator, result);
+    defer allocator.free(reason);
+    const safe_reason = try core_api.redactAlloc(allocator, reason);
+    defer allocator.free(safe_reason);
+
+    try stdout.writeAll("{\"decision\":\"deny\",\"reason\":");
+    try writeJsonString(stdout, safe_reason);
+    try stdout.writeAll("}\n");
+
+    try writeExitTwoGuardBlock(allocator, stderr, result.message, result.reason);
+}
+
+/// Compact reason string Grok surfaces in the TUI and feeds back to the model.
+fn formatGrokDenyReasonAlloc(allocator: std.mem.Allocator, result: HookResponse) ![]u8 {
+    const detail = pickGrokDenyDetail(result);
+    if (result.rule) |rule| {
+        return std.fmt.allocPrint(
+            allocator,
+            "{s}: {s} — {s}. Command did not execute. Recourse: ryk explain \"<command>\"; ryk allow-once <code>.",
+            .{ guard_product_tag, rule, detail },
+        );
+    }
+    return std.fmt.allocPrint(
+        allocator,
+        "{s}: {s}. Command did not execute. Recourse: ryk explain \"<command>\"; ryk allow-once <code>.",
+        .{ guard_product_tag, detail },
+    );
+}
+
+fn firstLineTrimmed(text: []const u8) []const u8 {
+    const line = if (std.mem.indexOfScalar(u8, text, '\n')) |nl| text[0..nl] else text;
+    return std.mem.trimEnd(u8, std.mem.trim(u8, line, " \t\r\n"), ".");
+}
+
+/// Prefer a substantive first line: message often has pack prose; reason can be terse.
+fn pickGrokDenyDetail(result: HookResponse) []const u8 {
+    const msg = firstLineTrimmed(result.message);
+    const why = firstLineTrimmed(result.reason);
+    if (msg.len > why.len + 8) return msg;
+    if (why.len > 0) return why;
+    if (msg.len > 0) return msg;
+    return "blocked by policy";
+}
+
+/// Compact human deny block for JSON hosts (Claude / OpenCode / OpenClaw / Hermes).
+/// Agent protocol remains versioned JSON on stdout; this stderr block is operator-facing.
 fn writeHumanShellExplain(io: std.Io, allocator: std.mem.Allocator, stderr: anytype, result: HookResponse) !void {
     _ = io;
     try stderr.writeAll("\n");
-    try stderr.writeAll("RYK BLOCKED\n");
+    try stderr.print("{s} BLOCKED\n", .{guard_product_tag});
     if (result.rule) |rule| {
         const safe = try core_api.redactAlloc(allocator, rule);
         defer allocator.free(safe);
@@ -648,7 +747,8 @@ fn shouldFailClosedOnPreEval(host: Host, event: Event) bool {
 }
 
 /// Emit a structured fail-closed hook response for pre-eval failures.
-/// Codex: sentinel stderr + exit 2. Other hosts: JSON `decision: block` on stdout.
+/// Codex: sentinel stderr + exit 2. Grok: native deny JSON + sentinel + exit 2.
+/// Other hosts: JSON `decision: block` on stdout.
 fn emitPreEvalFailClosed(
     allocator: std.mem.Allocator,
     host: Host,
@@ -666,7 +766,11 @@ fn emitPreEvalFailClosed(
     defer result.deinit(allocator);
 
     if (usesExitTwoDenyOutput(host, result.decision)) {
-        try writeCodexGuardBlock(allocator, stderr, result.message, result.reason);
+        if (host == .grok) {
+            try writeGrokDenyOutput(allocator, stdout, stderr, result);
+        } else {
+            try writeExitTwoGuardBlock(allocator, stderr, result.message, result.reason);
+        }
         return codex_deny_exit_code;
     }
     try writeHookResponse(stdout, result);
@@ -2261,6 +2365,7 @@ fn extractNestedValue(payload: std.json.Value, keys: []const []const u8) ?std.js
 fn extractToolArgsObject(payload: std.json.Value) ?std.json.Value {
     const paths = [_][]const []const u8{
         &.{"tool_input"},
+        &.{"toolInput"}, // Official Grok Build camelCase envelope
         &.{"args"},
         &.{"params"},
         &.{"input"},
@@ -2292,6 +2397,7 @@ const command_field_paths = [_][]const []const u8{
     &.{"command"},
     &.{ "tool", "command" },
     &.{ "tool_input", "command" },
+    &.{ "toolInput", "command" }, // Official Grok Build camelCase envelope
     &.{ "args", "command" },
     &.{ "params", "command" },
     &.{ "input", "command" },
@@ -2471,6 +2577,26 @@ test "hook adapts raw Grok PreToolUse input to the Claude-compatible payload" {
 
     const payload = try grokHookPayload(parsed.value, .PreToolUse);
     try std.testing.expectEqualStrings("bash", extractToolName(payload).?);
+    try std.testing.expectEqualStrings("git status", extractShellCommand(payload).found.command);
+    try std.testing.expectEqualStrings("/tmp/project", extractCwd(payload).?);
+    try std.testing.expectEqualStrings("grok-session", extractHookSessionId(payload).?);
+}
+
+test "hook accepts official Grok Build camelCase PreToolUse envelope" {
+    const allocator = std.testing.allocator;
+    // xai-org/grok-build HookEventEnvelope: camelCase keys, snake_case event value,
+    // toolName run_terminal_cmd (or run_terminal_command via alias expansion).
+    var parsed = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"hookEventName":"pre_tool_use","sessionId":"grok-session","cwd":"/tmp/project","workspaceRoot":"/tmp/project","toolName":"run_terminal_cmd","toolUseId":"tu-1","toolInput":{"command":"git status"},"toolInputTruncated":false,"timestamp":"2026-08-05T00:00:00Z"}
+    ,
+        .{},
+    );
+    defer parsed.deinit();
+
+    const payload = try grokHookPayload(parsed.value, .PreToolUse);
+    try std.testing.expectEqualStrings("run_terminal_cmd", extractToolName(payload).?);
     try std.testing.expectEqualStrings("git status", extractShellCommand(payload).found.command);
     try std.testing.expectEqualStrings("/tmp/project", extractCwd(payload).?);
     try std.testing.expectEqualStrings("grok-session", extractHookSessionId(payload).?);
@@ -3295,12 +3421,18 @@ test "hook codex deny output skips stdout JSON" {
 test "hook guard sentinel format is machine-parseable and stable" {
     // The sentinel is the single recognisable signal an agent scraping stderr can branch on.
     // Provenance + consequence + recourse, newline-terminated, starts with the parse tag.
-    try std.testing.expect(std.mem.startsWith(u8, guard_sentinel_prefix, "[[RYK-GUARD]]"));
+    try std.testing.expect(std.mem.startsWith(u8, guard_sentinel_prefix, "[[RYKAN-V-GUARD]]"));
+    try std.testing.expectEqualStrings(guard_product_tag, "RYKAN-V-GUARD");
     try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "did not execute") != null);
     try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "no side effects") != null);
     try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "Recourse") != null);
     try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "ryk explain") != null);
     try std.testing.expect(guard_sentinel_prefix[guard_sentinel_prefix.len - 1] == '\n');
+    // Dual-read legacy product tags from older sessions / dual-stack hosts.
+    try std.testing.expect(containsGuardSentinel("[[RYKAN-V-GUARD]] blocked."));
+    try std.testing.expect(containsGuardSentinel("[[RYK-GUARD]] blocked."));
+    try std.testing.expect(containsGuardSentinel("[[ORCA-GUARD]] blocked."));
+    try std.testing.expect(!containsGuardSentinel("random stderr"));
 }
 
 test "hook Codex guard block redacts dynamic presentation fields" {
@@ -3405,7 +3537,7 @@ test "hook pre-eval fail-closed Codex emits sentinel and exit 2" {
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "invalid JSON") != null);
 }
 
-test "hook pre-eval fail-closed Grok emits sentinel and exit 2" {
+test "hook pre-eval fail-closed Grok emits native deny JSON reason and exit 2" {
     const allocator = std.testing.allocator;
     var stdout_buf: [2048]u8 = undefined;
     var stderr_buf: [2048]u8 = undefined;
@@ -3422,9 +3554,44 @@ test "hook pre-eval fail-closed Grok emits sentinel and exit 2" {
         "ryk hook: no JSON payload received; ryk blocked it before evaluation.",
     );
     try std.testing.expectEqual(codex_deny_exit_code, code);
-    try std.testing.expectEqual(@as(usize, 0), stdout_writer.buffered().len);
+    const out = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"decision\":\"deny\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "RYKAN-V-GUARD") != null);
+    // Reason prefers policy `reason` ("empty payload"); message still on stderr.
+    try std.testing.expect(std.mem.indexOf(u8, out, "empty payload") != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), guard_sentinel_prefix) != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "no JSON payload") != null);
+}
+
+test "hook Grok deny stdout is Grok-native decision deny with branded reason" {
+    const allocator = std.testing.allocator;
+    var result = HookResponse{
+        .version = 1,
+        .decision = .block,
+        .risk = .critical,
+        .category = try allocator.dupe(u8, "command"),
+        .reason = try allocator.dupe(u8, "Matched destructive pattern core.filesystem:rm-rf-root-home."),
+        .rule = try allocator.dupe(u8, "core.filesystem:rm-rf-root-home"),
+        .message = try allocator.dupe(u8, "command blocked by ryk policy: Matched destructive pattern core.filesystem:rm-rf-root-home."),
+        .redactions = &.{},
+        .host_limitations = &.{},
+        .suggestions = &.{},
+        .remediation_commands = &.{},
+    };
+    defer result.deinit(allocator);
+
+    var stdout_buf: [2048]u8 = undefined;
+    var stderr_buf: [2048]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    try writeGrokDenyOutput(allocator, &stdout_writer, &stderr_writer, result);
+
+    const out = stdout_writer.buffered();
+    try std.testing.expect(std.mem.startsWith(u8, out, "{\"decision\":\"deny\",\"reason\":"));
+    try std.testing.expect(std.mem.indexOf(u8, out, "RYKAN-V-GUARD") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "core.filesystem:rm-rf-root-home") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "Command did not execute") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "[[RYKAN-V-GUARD]]") != null);
 }
 
 test "hook pre-eval fail-closed Claude emits block JSON on stdout" {
@@ -4256,7 +4423,7 @@ test "hook Codex deny protocol unchanged for block after FM soft path" {
     try std.testing.expect(!isCodexDenyOutput(.codex, .allow));
     try std.testing.expectEqual(codex_deny_exit_code, hookExitCode(.codex, .block, false));
     try std.testing.expectEqual(exit_codes.success, hookExitCode(.codex, .ask, false));
-    try std.testing.expect(std.mem.startsWith(u8, guard_sentinel_prefix, "[[RYK-GUARD]]"));
+    try std.testing.expect(std.mem.startsWith(u8, guard_sentinel_prefix, "[[RYKAN-V-GUARD]]"));
 }
 
 test "hook PreToolUse denies send_email when effects.deny includes comms.message" {
@@ -4596,7 +4763,7 @@ test "s-once-cli: human deny panel redacts allow-once code (operator path only)"
     defer stderr_alloc.deinit();
     try writeHumanShellExplain(std.testing.io, allocator, &stderr_alloc.writer, result);
     const human = stderr_alloc.written();
-    try std.testing.expect(std.mem.indexOf(u8, human, "RYK BLOCKED") != null or
+    try std.testing.expect(std.mem.indexOf(u8, human, "RYKAN-V-GUARD BLOCKED") != null or
         std.mem.indexOf(u8, human, "BLOCKED") != null);
     // Teaches allow-once recourse without embedding redeemable digits (M-1).
     try std.testing.expect(std.mem.indexOf(u8, human, "allow-once") != null);

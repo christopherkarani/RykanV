@@ -576,6 +576,8 @@ pub fn writeEnsureReceipt(writer: anytype, outcome: EnsureOutcome) !void {
 /// - `deferred_w3` → detect-only (Cursor writer lands in W3; no doomed plugin install)
 const HostInstaller = enum {
     pi_extension,
+    /// Native PreToolUse Command Guard → `~/.grok/hooks/ryk.json` (Grok Build).
+    grok_hooks,
     plugin_yes,
     deferred_w3,
 };
@@ -596,6 +598,8 @@ const HostWireTable = struct {
         if (!isDayOneMember(host_id)) return null;
         const installer: HostInstaller = if (std.mem.eql(u8, host_id, "pi"))
             .pi_extension
+        else if (std.mem.eql(u8, host_id, "grok"))
+            .grok_hooks
         else if (std.mem.eql(u8, host_id, "cursor"))
             .deferred_w3
         else
@@ -641,7 +645,8 @@ pub fn installOneHost(
         };
     }
     if (std.mem.eql(u8, host_id, "grok")) {
-        // Day-one native Command Guard: PreToolUse bash hook in ~/.grok/user-settings.json.
+        // Day-one native Command Guard: PreToolUse Bash hook in ~/.grok/hooks/ryk.json
+        // (official Grok Build discovery path; also dual-writes legacy user-settings).
         const result = grok_install.installAtHome(io, allocator, home, self_exe) catch return .failed;
         result.deinit(allocator);
         return if (result.changed) .installed else .already_installed;
@@ -694,7 +699,7 @@ fn attemptHostInstall(
 ) bool {
     return switch (entry.installer) {
         .deferred_w3 => false,
-        .pi_extension, .plugin_yes => switch (installOneHost(io, allocator, entry.host_id, home, self_exe, workspace_root)) {
+        .pi_extension, .grok_hooks, .plugin_yes => switch (installOneHost(io, allocator, entry.host_id, home, self_exe, workspace_root)) {
             .installed, .upgraded, .already_installed => true,
             .assets_unavailable, .failed, .deferred => false,
         },
@@ -810,8 +815,10 @@ pub fn wireDetectedHosts(
             continue;
         }
 
+        // Grok: always re-run install when we can mutate. Managed `~/.grok/hooks/ryk.json`
+        // is the only live path; legacy user-settings must not skip repair.
         var wired = st.installed;
-        if (!wired and can_mutate) {
+        if (can_mutate and (entry.installer == .grok_hooks or !wired)) {
             wired = attemptHostInstall(io, allocator, entry, home_opt.?, self_exe_opt.?, workspace_root);
         }
 

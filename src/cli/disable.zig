@@ -10,7 +10,7 @@ const suggestions = @import("suggestions.zig");
 // Top-level dispatch
 // ---------------------------------------------------------------------------
 
-const DisableTarget = enum { codex, claude, cursor, opencode, openclaw, hermes, all };
+const DisableTarget = enum { codex, claude, cursor, opencode, openclaw, hermes, grok, all };
 
 pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     var target: DisableTarget = .all;
@@ -55,6 +55,10 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
             target = .hermes;
             continue;
         }
+        if (std.mem.eql(u8, arg, "grok")) {
+            target = .grok;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "all") or std.mem.eql(u8, arg, "-all")) {
             target = .all;
             continue;
@@ -63,7 +67,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
             stderr,
             "ryk stop",
             arg,
-            &.{ "codex", "claude", "cursor", "opencode", "openclaw", "hermes", "all", "--yes", "--help" },
+            &.{ "codex", "claude", "cursor", "opencode", "openclaw", "hermes", "grok", "all", "--yes", "--help" },
             "stop",
         );
         return exit_codes.usage;
@@ -100,7 +104,8 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         .opencode => &[_]DisableTarget{.opencode},
         .openclaw => &[_]DisableTarget{.openclaw},
         .hermes => &[_]DisableTarget{.hermes},
-        .all => &[_]DisableTarget{ .codex, .claude, .cursor, .opencode, .openclaw, .hermes },
+        .grok => &[_]DisableTarget{.grok},
+        .all => &[_]DisableTarget{ .codex, .claude, .cursor, .opencode, .openclaw, .hermes, .grok },
     };
 
     var success_count: usize = 0;
@@ -115,6 +120,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
             .hermes => try disableHermes(io, allocator, stdout),
             .codex => try disableCodex(io, allocator, stdout),
             .claude => try disableClaude(io, allocator, stdout),
+            .grok => try disableGrok(io, allocator, stdout),
             .all => unreachable,
         };
         if (did_disable) {
@@ -245,6 +251,26 @@ pub fn disableClaude(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) 
     return try removeKnownPluginPaths(io, allocator, stdout, "claude", &[_][]const u8{
         ".claude/plugins/orca",
     });
+}
+
+/// Remove the managed Grok Build Command Guard hook (`~/.grok/hooks/ryk.json`).
+/// Does not delete unrelated hooks under `~/.grok/hooks/`.
+pub fn disableGrok(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) !bool {
+    const home_z = std.c.getenv("HOME") orelse {
+        try stdout.writeAll("  grok: HOME not set; skipped\n");
+        return false;
+    };
+    const home = std.mem.span(home_z);
+    const removed = @import("grok_install.zig").uninstallAtHome(io, allocator, home) catch |err| {
+        try stdout.print("  grok hooks: failed to remove managed ryk hook ({s})\n", .{@errorName(err)});
+        return false;
+    };
+    if (removed) {
+        try stdout.writeAll("  grok hooks: removed ~/.grok/hooks/ryk.json\n");
+    } else {
+        try stdout.writeAll("  grok hooks: managed ryk hook not present\n");
+    }
+    return removed;
 }
 
 pub fn disableCursor(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) !bool {

@@ -260,10 +260,12 @@ fn extractDecision(stdout: []const u8) ?[]const u8 {
 /// Minimal shell veto fixtures matching each host envelope (command in payload).
 pub fn buildHookFixture(allocator: std.mem.Allocator, host: []const u8, event: []const u8, command: []const u8) ![]u8 {
     if (std.mem.eql(u8, host, "grok")) {
-        // Grok sends its Claude-compatible hook object directly on stdin.
+        // Official Grok Build envelope (camelCase + snake_case event value).
+        // ryk also accepts Claude-compat snake_case; smoke uses the live wire shape.
+        const grok_event = if (std.mem.eql(u8, event, "PreToolUse")) "pre_tool_use" else event;
         return try std.fmt.allocPrint(allocator,
-            \\{{"hook_event_name":"{s}","session_id":"ryk-smoke","cwd":"/tmp","tool_name":"bash","tool_input":{{"command":"{s}"}}}}
-        , .{ event, command });
+            \\{{"hookEventName":"{s}","sessionId":"ryk-smoke","cwd":"/tmp","workspaceRoot":"/tmp","toolName":"run_terminal_cmd","toolUseId":"smoke-1","toolInput":{{"command":"{s}"}},"toolInputTruncated":false}}
+        , .{ grok_event, command });
     }
     if (std.mem.eql(u8, host, "hermes")) {
         return try std.fmt.allocPrint(allocator,
@@ -590,9 +592,11 @@ test "Grok host status uses raw PreToolUse fixtures and exit-two deny" {
 
     const fixture = try buildHookFixture(std.testing.allocator, "grok", "PreToolUse", "git status");
     defer std.testing.allocator.free(fixture);
-    try std.testing.expect(std.mem.startsWith(u8, fixture, "{\"hook_event_name\":\"PreToolUse\""));
+    // Official Grok Build wire shape (camelCase + snake_case event value).
+    try std.testing.expect(std.mem.startsWith(u8, fixture, "{\"hookEventName\":\"pre_tool_use\""));
     try std.testing.expect(std.mem.indexOf(u8, fixture, "\"cwd\":\"/tmp\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, fixture, "\"tool_input\":{\"command\":\"git status\"}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture, "\"toolName\":\"run_terminal_cmd\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fixture, "\"toolInput\":{\"command\":\"git status\"}") != null);
     try std.testing.expect(std.mem.indexOf(u8, fixture, "\"payload\"") == null);
 }
 

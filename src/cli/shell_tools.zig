@@ -13,7 +13,8 @@ pub const shell_tool_names = [_][]const u8{
     "terminal",
     "run_shell_command",
     "run-shell-command",
-    "run_terminal_cmd",
+    "run_terminal_cmd", // Grok Build tool id (xai-org/grok-build)
+    "run_terminal_command", // Grok Build Claude-alias expansion name
     "powershell",
     "pwsh",
     "launch-process",
@@ -35,6 +36,7 @@ test "isShellTool covers OpenClaw exec and common hosts" {
     try std.testing.expect(isShellTool("zsh"));
     try std.testing.expect(isShellTool("exec"));
     try std.testing.expect(isShellTool("run_terminal_cmd"));
+    try std.testing.expect(isShellTool("run_terminal_command"));
     try std.testing.expect(isShellTool("run-shell-command"));
     try std.testing.expect(!isShellTool("Write"));
     try std.testing.expect(!isShellTool("Read"));

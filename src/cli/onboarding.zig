@@ -17,7 +17,8 @@ pub const default_preset = "generic-agent";
 /// Day-one agent hosts for ensure auto-wire membership (D03/D04 product lock).
 /// Single-source for ensure.HostWireTable.isDayOneMember via isSupportedHost (F2).
 /// cursor is in (W3 writer deferred — detect-only). grok is in via native
-/// `grok_install` PreToolUse Command Guard (not a marketplace plugin).
+/// `grok_install` PreToolUse Command Guard under `~/.grok/hooks/ryk.json`
+/// (official Grok Build discovery path; not a marketplace plugin).
 pub const supported_hosts = [_][]const u8{
     "claude",
     "codex",
@@ -800,8 +801,9 @@ test "onboarding runVerification for maximum protection with mocks" {
 }
 
 // Day-one host matrix (w1-host-matrix / D03/D04): cursor in (detect-only until W3),
-// grok in via native grok_install Command Guard. ensure.HostWireTable.isDayOneMember
-// keys onboarding.isSupportedHost / supported_hosts (F2 single-source) — no ensure-local
+// grok in via native grok_install Command Guard (~/.grok/hooks/ryk.json).
+// ensure.HostWireTable.isDayOneMember keys onboarding.isSupportedHost /
+// supported_hosts (F2 single-source) — no ensure-local
 // host id array. Named substring DayOneHost is the monopath gate proof.
 
 test "DayOneHost isSupportedHost cursor is true" {
