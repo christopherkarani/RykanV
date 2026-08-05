@@ -249,18 +249,16 @@ test("resolveOrcaBin prefers the bundled runtime and requires opt-in for PATH", 
 		daemonBin: resolve("/package/vendor/ryk-daemon"),
 		source: "bundled",
 	});
-	// When only legacy ryk vendor exists (no ryk), fall back to orca.
+	// Hard-cut: orca vendor alone is not a bundled runtime.
 	assert.deepEqual(
 		resolveOrcaBin({
 			...defaults,
-			isExecutable: (path: string) =>
-				path.includes("/vendor/ryk") && !path.includes("/vendor/ryk"),
+			isExecutable: (path: string) => path.includes("/vendor/orca"),
 			env: {},
 		}),
 		{
-			rykBin: resolve("/package/vendor/ryk"),
-			daemonBin: resolve("/package/vendor/ryk-daemon"),
-			source: "bundled",
+			rykBin: "__ryk_bundled_runtime_missing__",
+			source: "missing",
 		},
 	);
 	assert.deepEqual(
@@ -445,7 +443,7 @@ test("/ryk-setup ensures policy and probes health without invoking start", async
 	const context = makeCtx({ cwd });
 	installRykExtension(pi, { spawn, rykBin: "ryk" });
 
-	await commands.get("orca-setup")!.handler("", context.ctx);
+	await commands.get("ryk-setup")!.handler("", context.ctx);
 
 	assert.deepEqual(
 		calls.map((call) => call.args),
@@ -816,7 +814,7 @@ test("write tool is evaluated via ryk decide file", async () => {
 	assert.equal(payload.operation, "write");
 	assert.ok(payload.path.includes(".ryk/policy.yaml"));
 	assert.equal(messages.length, 1);
-	assert.equal(messages[0].message.customType, "orca-decision");
+	assert.equal(messages[0].message.customType, "ryk-decision");
 	assert.match(messages[0].message.content, /Rule: files\.write\.deny\[2\]/);
 });
 
@@ -1003,7 +1001,7 @@ test("strict mode policy ask omits once-bypass", async () => {
 	]);
 	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx();
-	await commands.get("orca-mode")!.handler("strict", ctx);
+	await commands.get("ryk-mode")!.handler("strict", ctx);
 	let offered: string[] = [];
 	(ctx.ui as any).select = async (_title: string, options: string[]) => {
 		offered = options;
@@ -1047,11 +1045,11 @@ test("once-bypass records an audit event", async () => {
 	assert.ok(
 		notifications.some((n) => /ryk audit: once-bypass/i.test(n.message)),
 	);
-	const audit = messages.find((m) => m.message.customType === "orca.audit");
+	const audit = messages.find((m) => m.message.customType === "ryk.audit");
 	assert.ok(audit);
 	assert.equal(
 		(audit?.message.details as { event?: string } | undefined)?.event,
-		"orca_once_bypass",
+		"ryk_once_bypass",
 	);
 	assert.equal(
 		(audit?.message.details as { tool?: string } | undefined)?.tool,
@@ -1154,11 +1152,11 @@ test("policy ask auto-denies noninteractive sessions without calling select", as
 	assert.match(result?.reason ?? "", /auto-denied/i);
 	assert.match(result?.reason ?? "", /non-interactive/i);
 	assert.notEqual(result, undefined, "auto-deny must never proceed");
-	const audit = messages.find((m) => m.message.customType === "orca.audit");
-	assert.ok(audit, "expected orca.audit transcript event");
+	const audit = messages.find((m) => m.message.customType === "ryk.audit");
+	assert.ok(audit, "expected ryk.audit transcript event");
 	assert.equal(
 		(audit?.message.details as { event?: string } | undefined)?.event,
-		"orca_ask_auto_deny",
+		"ryk_ask_auto_deny",
 	);
 });
 
@@ -1219,10 +1217,10 @@ test("policy ask auto-denies subagent sessions even when hasUI is true", async (
 		assert.match(result?.reason ?? "", /auto-denied/i);
 		assert.match(result?.reason ?? "", /subagent/i);
 		assert.notEqual(result, undefined);
-		const audit = messages.find((m) => m.message.customType === "orca.audit");
+		const audit = messages.find((m) => m.message.customType === "ryk.audit");
 		assert.equal(
 			(audit?.message.details as { event?: string } | undefined)?.event,
-			"orca_ask_auto_deny",
+			"ryk_ask_auto_deny",
 		);
 		assert.equal(
 			(audit?.message.details as { session_class?: string } | undefined)
@@ -1388,7 +1386,7 @@ test("session bypass skips write and read evaluation", async () => {
 	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx, notifications } = makeCtx();
 
-	await commands.get("orca-stop")!.handler("", ctx);
+	await commands.get("ryk-stop")!.handler("", ctx);
 	const writeResult = await fireToolCall(
 		handlers.get("tool_call")![0],
 		ctx,
@@ -1477,11 +1475,11 @@ test("bash dangerous command with ryk deny returns block", async () => {
 			"ryk blocked this bash command: destructive filesystem command • rule core.filesystem:destructive-rm",
 	});
 	assert.equal(messages.length, 1);
-	assert.equal(messages[0].message.customType, "orca-decision");
+	assert.equal(messages[0].message.customType, "ryk-decision");
 	assert.equal(messages[0].message.display, true);
 	assert.deepEqual(messages[0].options, { triggerTurn: false });
 	assert.equal(
-		widgets.some((entry) => entry.key === "orca-block" && entry.value !== undefined),
+		widgets.some((entry) => entry.key === "ryk-block" && entry.value !== undefined),
 		false,
 		"expected deny output to avoid the docked widget surface",
 	);
@@ -1583,7 +1581,7 @@ test("ryk error in interactive mode waits for the user's decision", async () => 
 	);
 	await flushAsyncWork();
 	assert.equal(settled, false, "expected bash tool call to wait for select()");
-	const askWidget = widgets.find((entry) => entry.key === "orca-block");
+	const askWidget = widgets.find((entry) => entry.key === "ryk-block");
 	assert.ok(askWidget, "expected ryk ask widget");
 	assert.deepEqual(askWidget.opts, { placement: "aboveEditor" });
 	assert.match(askWidget.value?.join("\n") ?? "", /RYK \/\/ YOUR CALL/);
@@ -1625,7 +1623,7 @@ test("strict mode blocks", async () => {
 	const { spawn } = makeSpawn([err, err]);
 	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx();
-	await commands.get("orca-mode")!.handler("strict", ctx);
+	await commands.get("ryk-mode")!.handler("strict", ctx);
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(result.block, true);
@@ -1638,7 +1636,7 @@ test("allow-with-warning allows only spawn_failed unavailability", async () => {
 	const { spawn } = makeSpawn([missing, missing]);
 	installRykExtension(pi, { spawn, rykBin: "missing-orca" });
 	const { ctx, notifications } = makeCtx();
-	await commands.get("orca-mode")!.handler("allow-with-warning", ctx);
+	await commands.get("ryk-mode")!.handler("allow-with-warning", ctx);
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(result, undefined);
@@ -1652,7 +1650,7 @@ test("allow-with-warning still fail-closes on protocol decision error", async ()
 	const { spawn, calls } = makeSpawn([err]);
 	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx();
-	await commands.get("orca-mode")!.handler("allow-with-warning", ctx);
+	await commands.get("ryk-mode")!.handler("allow-with-warning", ctx);
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(result?.block, true);
@@ -1775,7 +1773,7 @@ test("/ryk-doctor handles ryk present", async () => {
 	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx, notifications } = makeCtx();
 
-	await commands.get("orca-doctor")!.handler("", ctx);
+	await commands.get("ryk-doctor")!.handler("", ctx);
 	assert.equal(notifications.at(-1)?.type, "info");
 	assert.match(notifications.at(-1)!.message, /ok/);
 	assert.match(notifications.at(-1)!.message, /Coverage:/);
@@ -1788,7 +1786,7 @@ test("/ryk-doctor handles ryk missing", async () => {
 	installRykExtension(pi, { spawn, rykBin: "missing-orca" });
 	const { ctx, notifications } = makeCtx();
 
-	await commands.get("orca-doctor")!.handler("", ctx);
+	await commands.get("ryk-doctor")!.handler("", ctx);
 	assert.equal(notifications.at(-1)?.type, "error");
 	assert.match(notifications.at(-1)!.message, /not found/);
 	assert.match(notifications.at(-1)!.message, /Coverage:/);
@@ -1806,13 +1804,13 @@ test("/ryk-stop disables Pi bash protection until /ryk-start re-enables it", asy
 	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx, notifications, statuses } = makeCtx({ cwd });
 
-	await commands.get("orca-stop")!.handler("", ctx);
+	await commands.get("ryk-stop")!.handler("", ctx);
 	const stopped = await fireToolCall(
 		handlers.get("tool_call")![0],
 		ctx,
 		"git status",
 	);
-	await commands.get("orca-start")!.handler("", ctx);
+	await commands.get("ryk-start")!.handler("", ctx);
 	const restarted = await fireToolCall(
 		handlers.get("tool_call")![0],
 		ctx,
@@ -1854,7 +1852,7 @@ test("/ryk-start re-enables without invoking the CLI start command", async () =>
 		rykBin: "ryk",
 	});
 	const presentCtx = makeCtx({ cwd });
-	await present.commands.get("orca-start")!.handler("", presentCtx.ctx);
+	await present.commands.get("ryk-start")!.handler("", presentCtx.ctx);
 	assert.deepEqual(
 		presentSpawn.calls.map((call) => call.args),
 		[["doctor"]],
@@ -1868,7 +1866,7 @@ test("/ryk-start re-enables without invoking the CLI start command", async () =>
 		rykBin: "missing-orca",
 	});
 	const missingCtx = makeCtx();
-	await missing.commands.get("orca-start")!.handler("", missingCtx.ctx);
+	await missing.commands.get("ryk-start")!.handler("", missingCtx.ctx);
 	assert.equal(missingCtx.notifications.at(-1)?.type, "error");
 	assert.equal(
 		missingSpawn.calls.some((call) => call.args.includes("start")),
@@ -1882,13 +1880,13 @@ test("/ryk-mode changes mode", async () => {
 	installRykExtension(pi, { spawn: makeSpawn().spawn, rykBin: "ryk" });
 	const { ctx, notifications } = makeCtx();
 
-	await commands.get("orca-mode")!.handler("strict", ctx);
+	await commands.get("ryk-mode")!.handler("strict", ctx);
 	assert.match(notifications.at(-1)!.message, /strict/);
 	assert.match(notifications.at(-1)!.message, /Coverage:/);
 	assert.match(notifications.at(-1)!.message, /ryk run/);
 	assert.match(notifications.at(-1)!.message, /prefer strict|Production/i);
 
-	await commands.get("orca-mode")!.handler("", ctx);
+	await commands.get("ryk-mode")!.handler("", ctx);
 	assert.match(notifications.at(-1)!.message, /ryk Pi mode: strict/);
 	assert.match(notifications.at(-1)!.message, /bash \+ write \+ edit \+ read policy-protected/);
 });

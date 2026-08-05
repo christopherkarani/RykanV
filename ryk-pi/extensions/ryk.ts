@@ -357,7 +357,7 @@ type ResolveOrcaBinOptions = {
 };
 
 const STATUS_KEY = "ryk";
-const BLOCK_WIDGET_KEY = "orca-block";
+const BLOCK_WIDGET_KEY = "ryk-block";
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_CHILD_OUTPUT_BYTES = 1024 * 1024;
 const REQUIRED_RYK_VERSION = (() => {
@@ -442,34 +442,25 @@ export function resolveOrcaBin(
 	if (packageRoot) {
 		const executableSuffix = process.platform === "win32" ? ".exe" : "";
 		const rykBin = resolve(packageRoot, "vendor", `ryk${executableSuffix}`);
-		const rykBin = resolve(packageRoot, "vendor", `orca${executableSuffix}`);
 		const daemonBin = resolve(
 			packageRoot,
 			"vendor",
 			`ryk-daemon${executableSuffix}`,
 		);
-		// Prefer ryk vendor binary when present; daemon optional (shell_engine in-process).
+		// Bundled ryk vendor only (hard-cut: no orca vendor dual path). Daemon optional.
 		if (isExecutable(rykBin)) {
 			return {
-				rykBin: rykBin,
+				rykBin,
 				daemonBin: isExecutable(daemonBin) ? daemonBin : undefined,
 				source: "bundled",
 			};
 		}
-		if (isExecutable(rykBin) && isExecutable(daemonBin)) {
-			return { rykBin, daemonBin, source: "bundled" };
-		}
-		if (isExecutable(rykBin)) {
-			return { rykBin, source: "bundled" };
-		}
 	}
 
-	const allowPath =
-		env.RYK_PI_USE_PATH === "true" || env.RYK_PI_USE_PATH === "true";
+	const allowPath = env.RYK_PI_USE_PATH === "true";
 	if (allowPath) {
 		if (options.isCompatiblePathOrca) {
 			if (options.isCompatiblePathOrca()) {
-				// Injected compat checks historically meant "orca on PATH"; prefer ryk name when unknown.
 				return { rykBin: "ryk", source: "path" };
 			}
 		} else {
@@ -481,7 +472,7 @@ export function resolveOrcaBin(
 		}
 	}
 
-	return { rykBin: "__orca_bundled_runtime_missing__", source: "missing" };
+	return { rykBin: "__ryk_bundled_runtime_missing__", source: "missing" };
 }
 
 export function buildEvaluateRequest(
@@ -1204,34 +1195,26 @@ export function installRykExtension(
 		);
 	};
 
-	// Primary slash names are /ryk-*; /ryk-* kept as aliases for one major.
-	for (const name of ["ryk-setup", "orca-setup"] as const) {
-		pi.registerCommand(name, {
-			description:
-				"Ensure the workspace policy exists and probe ryk CLI health.",
-			handler: setupHandler,
-		});
-	}
-	for (const name of ["ryk-start", "orca-start"] as const) {
-		pi.registerCommand(name, {
-			description:
-				"Re-enable ryk protection for this Pi session and verify setup.",
-			handler: startHandler,
-		});
-	}
-	for (const name of ["ryk-stop", "orca-stop"] as const) {
-		pi.registerCommand(name, {
-			description:
-				"Disable ryk protection for this Pi session until /ryk-start.",
-			handler: stopHandler,
-		});
-	}
-	for (const name of ["ryk-doctor", "orca-doctor"] as const) {
-		pi.registerCommand(name, {
-			description: "Run ryk doctor and show setup or health diagnostics.",
-			handler: doctorHandler,
-		});
-	}
+	// Hard-cut: ryk-* slash commands only (no orca-* dual registration).
+	pi.registerCommand("ryk-setup", {
+		description:
+			"Ensure the workspace policy exists and probe ryk CLI health.",
+		handler: setupHandler,
+	});
+	pi.registerCommand("ryk-start", {
+		description:
+			"Re-enable ryk protection for this Pi session and verify setup.",
+		handler: startHandler,
+	});
+	pi.registerCommand("ryk-stop", {
+		description:
+			"Disable ryk protection for this Pi session until /ryk-start.",
+		handler: stopHandler,
+	});
+	pi.registerCommand("ryk-doctor", {
+		description: "Run ryk doctor and show setup or health diagnostics.",
+		handler: doctorHandler,
+	});
 
 	const modeHandler = async (args: string | undefined, ctx: PiContext) => {
 		const requested = args?.trim().toLowerCase();
@@ -1271,12 +1254,10 @@ export function installRykExtension(
 		notify(ctx, modeSummary(unavailableMode, stateFor(ctx).bypass), "info");
 	};
 
-	for (const name of ["ryk-mode", "orca-mode"] as const) {
-		pi.registerCommand(name, {
-			description: "View or change ryk Pi unavailable-mode and session bypass.",
-			handler: modeHandler,
-		});
-	}
+	pi.registerCommand("ryk-mode", {
+		description: "View or change ryk Pi unavailable-mode and session bypass.",
+		handler: modeHandler,
+	});
 }
 
 async function applyToolDecision(
@@ -1378,14 +1359,14 @@ function recordOnceBypass(
 		return false;
 	}
 	const details = {
-		event: "orca_once_bypass",
+		event: "ryk_once_bypass",
 		tool: truncate(sanitizeVisibleText(toolLabel), 128),
 		source,
 	};
 	try {
 		pi.sendMessage(
 			{
-				customType: "orca.audit",
+				customType: "ryk.audit",
 				content: `ryk once-bypass: ${details.tool} (${source})`,
 				display: false,
 				details,
@@ -1412,7 +1393,7 @@ function recordAskAutoDeny(
 ): void {
 	if (!pi.sendMessage) return;
 	const details = {
-		event: "orca_ask_auto_deny",
+		event: "ryk_ask_auto_deny",
 		tool: truncate(sanitizeVisibleText(toolLabel), 128),
 		session_class: sessionClass,
 		reason: truncate(sanitizeVisibleText(reason), 256),
@@ -1420,7 +1401,7 @@ function recordAskAutoDeny(
 	try {
 		pi.sendMessage(
 			{
-				customType: "orca.audit",
+				customType: "ryk.audit",
 				content: `ryk ask auto-deny: ${details.tool} (${sessionClass})`,
 				display: false,
 				details,
@@ -1817,24 +1798,22 @@ function isExecutableFile(path: string): boolean {
 	}
 }
 
-/** Prefer ryk on PATH, fall back to orca; version line may say either product name. */
+/** Prefer ryk on PATH; version line must say ryk (hard-cut: no orca dual-read). */
 function resolveCompatiblePathCli(
 	env: NodeJS.ProcessEnv,
 	runner: SpawnSyncLike,
 ): string | null {
 	const versionRe = new RegExp(
-		`\\b(?:ryk|orca)\\s+${REQUIRED_RYK_VERSION.replaceAll(".", "\\.")}\\b`,
+		`\\bryk\\s+${REQUIRED_RYK_VERSION.replaceAll(".", "\\.")}\\b`,
 	);
-	for (const name of ["ryk", "ryk"] as const) {
-		const result = runner(name, ["--version"], {
-			encoding: "utf8",
-			env,
-			shell: false,
-			timeout: 2_000,
-		});
-		if (result.error || result.status !== 0) continue;
-		if (versionRe.test(result.stdout ?? "")) return name;
-	}
+	const result = runner("ryk", ["--version"], {
+		encoding: "utf8",
+		env,
+		shell: false,
+		timeout: 2_000,
+	});
+	if (result.error || result.status !== 0) return null;
+	if (versionRe.test(result.stdout ?? "")) return "ryk";
 	return null;
 }
 
@@ -1887,7 +1866,7 @@ function showOrcaDecision(
 	if (pi.sendMessage) {
 		pi.sendMessage(
 			{
-				customType: "orca-decision",
+				customType: "ryk-decision",
 				content: buildOrcaWidget(card).join("\n"),
 				display: true,
 				details: card,

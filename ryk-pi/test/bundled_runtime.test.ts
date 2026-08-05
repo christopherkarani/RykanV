@@ -22,7 +22,7 @@ test("clean HOME bundled extension loads and invokes the injected ryk binary", a
 
 	try {
 		mkdirSync(extensionDir, { recursive: true });
-		copyFileSync(resolve(sourceDir, "orca.ts"), resolve(extensionDir, "runtime.ts"));
+		copyFileSync(resolve(sourceDir, "ryk.ts"), resolve(extensionDir, "runtime.ts"));
 		copyFileSync(
 			resolve(sourceDir, "secret_capture.ts"),
 			resolve(extensionDir, "secret_capture.ts"),

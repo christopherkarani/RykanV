@@ -44,7 +44,7 @@ never silently allows the tool call:
 | Subagent / child agent | `PI_SUBAGENT_PARENT_SESSION` set (non-empty) | **Auto-deny** even if `hasUI` is true |
 | Strict / noninteractive-block | `RYK_PI_MODE=strict` (or once-bypass disabled) | Block; no once-bypass option on interactive ask |
 
-Auto-deny records a transcript audit event (`orca_ask_auto_deny`) when the host
+Auto-deny records a transcript audit event (`ryk_ask_auto_deny`) when the host
 supports `sendMessage`, and still blocks if audit is unavailable. Parent-forward
 approval (ask the parent TUI from a subagent) is not implemented; subagents
 auto-deny by design.
