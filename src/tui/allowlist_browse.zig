@@ -92,7 +92,7 @@ pub fn formatListRange(buf: []u8, entry_count: usize) []const u8 {
 /// Basename or last two path components for compact footer status.
 pub fn abbreviatePath(path: []const u8) []const u8 {
     if (path.len == 0) return path;
-    // Prefer last two components: ".ryk/allowlist.toml" / "orca/allowlist.toml"
+    // Prefer last two components: ".ryk/allowlist.toml" / "ryk/allowlist.toml"
     var last_sep: ?usize = null;
     var prev_sep: ?usize = null;
     var i: usize = 0;
@@ -350,7 +350,7 @@ pub fn fillDetailWithPaths(
             } else {
                 detail.lines[1] = switch (row.layer) {
                     .project => "Path:  .ryk/allowlist.toml (project)",
-                    .user => "Path:  $XDG_CONFIG_HOME/orca/allowlist.toml",
+                    .user => "Path:  $XDG_CONFIG_HOME/ryk/allowlist.toml",
                 };
             }
             if (layer_entries.len == 0) {
@@ -895,7 +895,7 @@ test "s-allowlist browse: write-target status abbreviates path" {
 
     const user = formatWriteTargetStatus(&buf, .user, "/ws/.ryk/allowlist.toml", "/home/u/.config/ryk/allowlist.toml");
     try std.testing.expect(std.mem.indexOf(u8, user, "user") != null);
-    try std.testing.expect(std.mem.indexOf(u8, user, "orca/allowlist.toml") != null);
+    try std.testing.expect(std.mem.indexOf(u8, user, "ryk/allowlist.toml") != null);
     try std.testing.expect(std.mem.indexOf(u8, user, "/home/u/.config/ryk/allowlist.toml") == null);
 }
 
