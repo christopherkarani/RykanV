@@ -264,9 +264,6 @@ pub fn installAtHome(
     // --- Primary: managed hooks file (full replace of ryk-owned document) ---
     const desired = try managedHookDocumentAlloc(allocator, ryk_binary);
     defer allocator.free(desired);
-    // managedHookDocumentAlloc embeds a JSON string for command; free the intermediate
-    // that was allocated inside via the format — actually managedHookDocumentAlloc
-    // currently leaks the json string. Fix that below by rewriting the function.
 
     const managed_changed = try writeTextFileAtomically(io, allocator, managed_path, desired);
     any_changed = any_changed or managed_changed;
@@ -580,6 +577,34 @@ test "Grok settings merge upgrades Bash-only ryk hook to dual Bash and Read matc
     try std.testing.expectEqual(@as(usize, 2), pre_tool.len);
     try std.testing.expectEqualStrings(shell_matcher, pre_tool[0].object.get("matcher").?.string);
     try std.testing.expectEqualStrings(read_matcher, pre_tool[1].object.get("matcher").?.string);
+}
+
+test "Grok settings merge upgrades Read-only ryk hook to dual Bash and Read matchers" {
+    const allocator = std.testing.allocator;
+    const read_only =
+        \\{
+        \\  "hooks": {
+        \\    "PreToolUse": [
+        \\      {
+        \\        "matcher": "Read",
+        \\        "hooks": [
+        \\          {"type": "command", "command": "/opt/ryk/bin/ryk hook grok PreToolUse", "timeout": 30}
+        \\        ]
+        \\      }
+        \\    ]
+        \\  }
+        \\}
+    ;
+    const merged = try mergeSettingsAlloc(allocator, read_only, "/opt/ryk/bin/ryk");
+    defer allocator.free(merged.bytes);
+    try std.testing.expect(merged.changed);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, merged.bytes, .{});
+    defer parsed.deinit();
+    const pre_tool = parsed.value.object.get("hooks").?.object.get("PreToolUse").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), pre_tool.len);
+    try std.testing.expectEqualStrings(read_matcher, pre_tool[0].object.get("matcher").?.string);
+    try std.testing.expectEqualStrings(shell_matcher, pre_tool[1].object.get("matcher").?.string);
 }
 
 test "Grok settings merge is idempotent and detects an existing ryk hook" {
