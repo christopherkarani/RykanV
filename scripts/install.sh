@@ -692,10 +692,42 @@ run_install_ensure() {
   else
     # Pre-W1 / pre-doctor --fix release binary (e.g. v1.2.9).
     # --skip-verify: install soft-success matches doctor --fix (host verify is not a
-    # hard install failure; operators can re-run start --auto / doctor later).
+    # hard install failure; operators can re-run ensure later).
     ENSURE_MODE=start_auto_legacy
     "$DESTINATION" start --auto --skip-verify
   fi
+}
+
+# One-line step receipt from captured ensure output. Install owns the UI —
+# never stream ensure's TUI/tables/banners. No D06 full-protection claims.
+summarize_ensure_receipt() {
+  _ob_file="$1"
+  _plain=""
+  if [ -s "$_ob_file" ]; then
+    _plain="$(sed $'s/\033\\[[0-9;]*m//g' "$_ob_file" 2>/dev/null || cat "$_ob_file")"
+  fi
+  _incomplete=0
+  if [ -n "$_plain" ]; then
+    _incomplete="$(printf '%s\n' "$_plain" | grep -Eic 'incomplete|partial' 2>/dev/null || true)"
+  fi
+  case "$_incomplete" in ''|*[!0-9]*) _incomplete=0 ;; esac
+  if printf '%s\n' "$_plain" | grep -Eiq 'core failed|policy.*(missing|invalid)|could not create policy'; then
+    printf '%s' "policy issue · run ryk doctor --fix"
+    return 0
+  fi
+  if [ "$_incomplete" -gt 0 ] || printf '%s\n' "$_plain" | grep -Eiq 'protection partial|some hosts incomplete'; then
+    printf '%s' "policy ready · some hosts incomplete · verify deferred"
+    return 0
+  fi
+  if printf '%s\n' "$_plain" | grep -Eiq 'verification skipped|verify deferred|--skip-verify'; then
+    printf '%s' "policy ready · hosts configured · verify deferred"
+    return 0
+  fi
+  if printf '%s\n' "$_plain" | grep -Eiq 'core ready|policy.*(created|preserved|ready)|Integrations configured'; then
+    printf '%s' "policy ready · hosts configured"
+    return 0
+  fi
+  printf '%s' "policy ready · hosts configured · verify deferred"
 }
 
 ONBOARDING_RAN=0
@@ -703,81 +735,66 @@ ENSURE_MODE=doctor_fix
 if [ "${RYK_INSTALL_SKIP_ONBOARD:-${ORCA_INSTALL_SKIP_ONBOARD:-0}}" != "1" ]; then
   step_active "Set up protection"
   set +e
-  if [ "$QUIET" -eq 1 ]; then
-    (
-      cd "$HOME"
-      RYK_RESOURCE_ROOT="$CURRENT_LINK"
-      ORCA_RESOURCE_ROOT="$CURRENT_LINK"
-      export RYK_RESOURCE_ROOT ORCA_RESOURCE_ROOT
-      PATH="$INSTALL_DIR:$PATH"
-      export PATH
-      # Probe + ensure in the same subshell so ENSURE_MODE is not needed here.
-      if cli_supports_doctor_fix "$DESTINATION"; then
-        "$DESTINATION" doctor --fix --from-install
-      else
-        "$DESTINATION" start --auto --skip-verify
-      fi
-    ) >"$TMP_DIR/.onboarding.out" 2>"$TMP_DIR/.onboarding.err"
-    _ob_exit=$?
-    # Quiet subshell cannot export ENSURE_MODE; re-probe for messaging only.
+  # Always capture ensure: install owns presentation (no second banner / TUI dump).
+  (
+    cd "$HOME"
+    RYK_RESOURCE_ROOT="$CURRENT_LINK"
+    ORCA_RESOURCE_ROOT="$CURRENT_LINK"
+    export RYK_RESOURCE_ROOT ORCA_RESOURCE_ROOT
+    PATH="$INSTALL_DIR:$PATH"
+    export PATH
+    # Prefer plain ensure output if the CLI honors NO_COLOR / non-TTY.
+    NO_COLOR=1
+    export NO_COLOR
+    # Probe + ensure in the same subshell.
     if cli_supports_doctor_fix "$DESTINATION"; then
       ENSURE_MODE=doctor_fix
+      "$DESTINATION" doctor --fix --from-install
     else
       ENSURE_MODE=start_auto_legacy
+      "$DESTINATION" start --auto --skip-verify
     fi
+  ) >"$TMP_DIR/.onboarding.out" 2>"$TMP_DIR/.onboarding.err"
+  _ob_exit=$?
+  # Parent needs ENSURE_MODE for fail copy; re-probe (help is cheap).
+  if cli_supports_doctor_fix "$DESTINATION"; then
+    ENSURE_MODE=doctor_fix
   else
-    (
-      cd "$HOME"
-      RYK_RESOURCE_ROOT="$CURRENT_LINK"
-      ORCA_RESOURCE_ROOT="$CURRENT_LINK"
-      export RYK_RESOURCE_ROOT ORCA_RESOURCE_ROOT
-      PATH="$INSTALL_DIR:$PATH"
-      export PATH
-      run_install_ensure
-    )
-    _ob_exit=$?
-    # Parent needs ENSURE_MODE for fail/step copy; re-probe (help is cheap).
-    if cli_supports_doctor_fix "$DESTINATION"; then
-      ENSURE_MODE=doctor_fix
-    else
-      ENSURE_MODE=start_auto_legacy
-    fi
+    ENSURE_MODE=start_auto_legacy
   fi
   set -e
   if [ "$_ob_exit" -ne 0 ]; then
-    if [ "$QUIET" -eq 1 ]; then
-      [ ! -s "$TMP_DIR/.onboarding.err" ] || sed 's/^/    /' "$TMP_DIR/.onboarding.err" >&2
-      [ ! -s "$TMP_DIR/.onboarding.out" ] || sed 's/^/    /' "$TMP_DIR/.onboarding.out" >&2
+    # Fail path only: short remediation + a few ensure lines (not full TUI).
+    if [ -s "$TMP_DIR/.onboarding.err" ]; then
+      grep -Eiv '^[+|──]|Status|Hosts|Try next|Re-run safely|Daemon|Protection|Verify[[:space:]]' \
+        "$TMP_DIR/.onboarding.err" 2>/dev/null | head -6 | sed 's/^/    /' >&2 || true
+    fi
+    if [ -s "$TMP_DIR/.onboarding.out" ]; then
+      grep -Eiq 'error|failed|unknown option|refusing' "$TMP_DIR/.onboarding.out" 2>/dev/null &&
+        grep -Ei 'error|failed|unknown option|refusing' "$TMP_DIR/.onboarding.out" 2>/dev/null |
+        head -4 | sed 's/^/    /' >&2 || true
     fi
     if [ "$ENSURE_MODE" = "doctor_fix" ]; then
-      # Re-teach install trust scope: HOME cwd + --from-install (same as the
-      # installer ensure door). Bare `ryk doctor --fix` drops that scope.
+      # Re-teach install trust scope: HOME cwd + --from-install.
       fail "ryk protection setup failed (exit ${_ob_exit})" \
-        "The CLI was installed, but doctor --fix did not finish successfully.
+        "The CLI was installed, but protection setup did not finish.
 Re-run from your home directory: ryk doctor --fix --from-install
 (cd \"\$HOME\" first; keep RYK_RESOURCE_ROOT/ORCA_RESOURCE_ROOT on the installed share current link if you set them.)
 Or re-run the installer after resolving the host integration error."
     else
       fail "ryk protection setup failed (exit ${_ob_exit})" \
-        "The CLI was installed, but start --auto --skip-verify (legacy ensure; this binary predates doctor --fix) did not finish successfully.
+        "The CLI was installed, but protection setup did not finish.
 Re-run from your home directory: cd \"\$HOME\" && $(shell_quote "$DESTINATION") start --auto --skip-verify
 (keep RYK_RESOURCE_ROOT/ORCA_RESOURCE_ROOT on the installed share current link if you set them.)
 Or upgrade to a release that supports doctor --fix, then re-run the installer."
     fi
   fi
-  # Exit 0 includes soft/partial host outcomes — never step_done full-protection phrasing.
-  # Quiet path still surfaces partial/core-failed honesty (stdout was captured).
-  if [ "$QUIET" -eq 1 ] && [ -s "$TMP_DIR/.onboarding.out" ]; then
-    if grep -Eiq 'partial|incomplete|core failed|repair:' "$TMP_DIR/.onboarding.out" 2>/dev/null; then
-      printf '    ryk ensure: partial or incomplete host outcomes (quiet install)\n' >&2
-      grep -Ei 'partial|incomplete|core failed|repair:|host ' "$TMP_DIR/.onboarding.out" 2>/dev/null | head -8 | sed 's/^/    /' >&2 || true
-    fi
+  # Merge stderr into summary scan (some CLIs put status on stderr).
+  if [ -s "$TMP_DIR/.onboarding.err" ]; then
+    cat "$TMP_DIR/.onboarding.err" >>"$TMP_DIR/.onboarding.out" 2>/dev/null || true
   fi
-  if [ "$ENSURE_MODE" = "doctor_fix" ]; then
-    step_done "Set up protection" "doctor --fix finished; host results shown above"
-  else
-    step_done "Set up protection" "start --auto --skip-verify finished (legacy binary; doctor --fix unavailable)"
-  fi
+  _ensure_detail="$(summarize_ensure_receipt "$TMP_DIR/.onboarding.out")"
+  step_done "Set up protection" "$_ensure_detail"
   ONBOARDING_RAN=1
 fi
 

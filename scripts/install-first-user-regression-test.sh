@@ -243,8 +243,14 @@ plain_output="$(printf '%s\n' "${output}" | sed $'s/\x1b\\[[0-9;]*m//g')"
 printf '%s\n' "${plain_output}" | grep -Eq 'Rykan V|ryk' || fail "installer did not print brand header"
 printf '%s\n' "${plain_output}" | grep -Eqi 'Rykan V' || fail "installer did not print Rykan V brand"
 printf '%s\n' "${plain_output}" | grep -Eq 'installed|reinstalled' || fail "installer did not print success receipt"
-printf '%s\n' "${plain_output}" | grep -Fqi 'doctor --fix' ||
-  fail "installer did not surface doctor --fix in user-facing copy (step/receipt)"
+# Ensure is summarized into the step list — no streamed start/doctor TUI.
+printf '%s\n' "${plain_output}" | grep -Eqi 'Set up protection' ||
+  fail "installer missing Set up protection step"
+printf '%s\n' "${plain_output}" | grep -Eqi 'policy ready' ||
+  fail "installer missing short ensure receipt (policy ready)"
+if printf '%s\n' "${plain_output}" | grep -Eiq 'Try next|Re-run safely|Verification skipped|Setup complete'; then
+  fail "installer streamed ensure TUI into the install receipt"
+fi
 if printf '%s\n' "${plain_output}" | grep -Fqi 'ryk start'; then
   fail "installer still teaches ryk start as user-facing door"
 fi
@@ -544,8 +550,16 @@ legacy_cwd="$(sed -n 's/^cwd=//p' "${legacy_onboard_log}" | head -n 1)"
 grep -qF "resource=${legacy_share_dir}/current" "${legacy_onboard_log}" ||
   fail "legacy ensure missing ORCA_RESOURCE_ROOT at installed share current"
 legacy_plain="$(printf '%s\n' "${legacy_output}" | sed $'s/\x1b\\[[0-9;]*m//g')"
-printf '%s\n' "${legacy_plain}" | grep -Eqi 'legacy|start --auto' ||
-  fail "legacy install success path did not surface legacy/start --auto receipt language"
+printf '%s\n' "${legacy_plain}" | grep -Eqi 'Set up protection' ||
+  fail "legacy install missing Set up protection step"
+printf '%s\n' "${legacy_plain}" | grep -Eqi 'policy ready' ||
+  fail "legacy install missing short ensure receipt (policy ready)"
+if printf '%s\n' "${legacy_plain}" | grep -Eiq 'Try next|Re-run safely|Setup complete|host mock'; then
+  fail "legacy install streamed ensure TUI into the install receipt"
+fi
+if printf '%s\n' "${legacy_plain}" | grep -Fqi 'start --auto'; then
+  fail "legacy install still surfaces start --auto in user-facing success copy"
+fi
 assert_no_d06_full_protection "${legacy_plain}" "legacy install receipt"
 
 grep -qF 'version "1.2.9"' "${REPO_ROOT}/packaging/homebrew/Formula/ryk.rb" ||
