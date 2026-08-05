@@ -166,7 +166,8 @@ fn grokHookPayload(value: std.json.Value, event: Event) GrokHookPayloadError!std
         {
             return error.InvalidGrokHookPayload;
         }
-        if (!isShellTool(tool_name)) return error.UnsupportedGrokPreToolUse;
+        // Phase 3: shell or file-read tools only. Unknown tools stay unsupported.
+        if (!isShellTool(tool_name) and !isFileReadTool(tool_name)) return error.UnsupportedGrokPreToolUse;
     }
 
     return value;
@@ -849,6 +850,7 @@ const ShellCommandEvent = shell_eval.ShellCommandEvent;
 
 const NonShellHookEvent = enum {
     file_write,
+    file_read,
     generic_tool,
     prompt,
     permission,
@@ -1161,14 +1163,22 @@ fn evaluatePreToolUse(
             redactions,
             limitations,
         ),
-        .fail_closed => |reason| makeFailClosedHookResponse(
-            allocator,
-            "command",
-            reason,
-            "Shell command hook payload is malformed. ryk blocked it before evaluation.",
-            redactions,
-            limitations,
-        ),
+        .fail_closed => |reason| blk: {
+            // File-read missing path must not look like a shell malformation (demo UX).
+            const is_file_malformed = std.mem.indexOf(u8, reason, "file read") != null or
+                std.mem.indexOf(u8, reason, "file path") != null;
+            break :blk makeFailClosedHookResponse(
+                allocator,
+                if (is_file_malformed) "file.read" else "command",
+                reason,
+                if (is_file_malformed)
+                    "File read hook payload is malformed. ryk blocked it before evaluation."
+                else
+                    "Shell command hook payload is malformed. ryk blocked it before evaluation.",
+                redactions,
+                limitations,
+            );
+        },
     };
 }
 
@@ -1971,6 +1981,37 @@ fn evaluateNativePreToolUseRoute(
                 .host_limitations = try limitations.toOwnedSlice(allocator),
             };
         },
+        .file_read => {
+            const path = extractFilePath(payload) orelse return error.MissingRequiredField;
+            const policy_path = file_policy_path.normalizeFilePolicyPath(io, allocator, workspace_root, path) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                else => return try makeFileNormalizationBlockResponse(
+                    allocator,
+                    "file.read",
+                    "file.read",
+                    redactions,
+                    limitations,
+                ),
+            };
+            defer allocator.free(policy_path);
+
+            const evaluation = try core_api.explainAction(allocator, @ptrCast(policy_value), .file_read, policy_path);
+            defer evaluation.deinit(allocator);
+
+            const decision = PluginDecision.fromDecisionResult(evaluation.decision.result, ci_mode);
+            const risk = RiskLevel.fromScore(evaluation.decision.risk_score);
+
+            return .{
+                .decision = decision,
+                .risk = risk,
+                .category = try allocator.dupe(u8, "file.read"),
+                .reason = try allocator.dupe(u8, evaluation.decision.reason),
+                .rule = if (evaluation.matched_rule) |rule| try allocator.dupe(u8, rule.id) else null,
+                .message = try buildMessage(allocator, decision, "file.read"),
+                .redactions = try redactions.toOwnedSlice(allocator),
+                .host_limitations = try limitations.toOwnedSlice(allocator),
+            };
+        },
         .generic_tool => {
             const generic_tool_name = extractToolName(payload) orelse return error.MissingRequiredField;
             // Combined MCP selector + effect-class evaluation (when effects: is configured).
@@ -2247,8 +2288,17 @@ fn classifyPreToolUse(payload: std.json.Value) HookEventClassification {
             };
         }
 
+        // File-read tools must never fall through to generic_tool (secrets allow) or
+        // file_write (files.write may allow .env). Missing path fails closed.
+        if (isFileReadTool(name)) {
+            if (extractFilePath(payload) == null) {
+                return .{ .malformed = "file read tool missing path field" };
+            }
+            return .{ .non_shell = .file_read };
+        }
+
         // Non-shell tools stay on the Zig path even when payloads carry incidental command fields.
-        if (extractFilePath(payload) != null and isFileTool(name)) {
+        if (extractFilePath(payload) != null and isFileWriteTool(name)) {
             return .{ .non_shell = .file_write };
         }
 
@@ -2308,19 +2358,41 @@ fn extractToolName(payload: std.json.Value) ?[]const u8 {
         extractNestedString(payload, &.{ "tool", "name" });
 }
 
+/// Non-empty path string for file policy. Empty / whitespace-only counts as missing.
+fn nonEmptyFilePath(value: []const u8) ?[]const u8 {
+    if (std.mem.trim(u8, value, " \t\r\n").len == 0) return null;
+    return value;
+}
+
 fn extractFilePath(payload: std.json.Value) ?[]const u8 {
-    return extractString(payload, "path") orelse
-        extractString(payload, "file") orelse
-        extractNestedString(payload, &.{ "tool_input", "path" }) orelse
-        extractNestedString(payload, &.{ "args", "path" }) orelse
-        extractNestedString(payload, &.{ "params", "path" }) orelse
-        extractNestedString(payload, &.{ "input", "path" }) orelse
-        extractNestedString(payload, &.{ "data", "path" }) orelse
-        extractNestedString(payload, &.{ "data", "input", "path" }) orelse
-        extractNestedString(payload, &.{ "kwargs", "path" }) orelse
-        extractNestedString(payload, &.{ "kwargs", "args", "path" }) orelse
-        extractNestedString(payload, &.{ "kwargs", "params", "path" }) orelse
-        extractNestedString(payload, &.{ "kwargs", "tool_input", "path" });
+    // Grok read_file + common host fields first; empty string never counts as present.
+    const path_candidates = [_][]const []const u8{
+        &.{ "toolInput", "target_file" },
+        &.{ "tool_input", "target_file" },
+        &.{"target_file"},
+        &.{ "toolInput", "file_path" },
+        &.{ "tool_input", "file_path" },
+        &.{"file_path"},
+        &.{"path"},
+        &.{"file"},
+        &.{ "tool_input", "path" },
+        &.{ "toolInput", "path" },
+        &.{ "args", "path" },
+        &.{ "params", "path" },
+        &.{ "input", "path" },
+        &.{ "data", "path" },
+        &.{ "data", "input", "path" },
+        &.{ "kwargs", "path" },
+        &.{ "kwargs", "args", "path" },
+        &.{ "kwargs", "params", "path" },
+        &.{ "kwargs", "tool_input", "path" },
+    };
+    for (path_candidates) |keys| {
+        if (extractNestedString(payload, keys)) |candidate| {
+            if (nonEmptyFilePath(candidate)) |path| return path;
+        }
+    }
+    return null;
 }
 
 fn extractCwd(payload: std.json.Value) ?[]const u8 {
@@ -2363,10 +2435,20 @@ fn extractToolArgsObject(payload: std.json.Value) ?std.json.Value {
     return null;
 }
 
-fn isFileTool(tool_name: []const u8) bool {
+/// Write/edit tools only. Never include read_file / Read / read — those are isFileReadTool.
+fn isFileWriteTool(tool_name: []const u8) bool {
     const file_tools = &[_][]const u8{ "edit", "write", "file_write", "file_edit", "apply", "create_file", "write_file" };
     for (file_tools) |ft| {
         if (std.ascii.eqlIgnoreCase(tool_name, ft)) return true;
+    }
+    return false;
+}
+
+/// Grok / Claude read tools. Case-insensitive.
+fn isFileReadTool(tool_name: []const u8) bool {
+    const read_tools = &[_][]const u8{ "read_file", "Read", "read" };
+    for (read_tools) |rt| {
+        if (std.ascii.eqlIgnoreCase(tool_name, rt)) return true;
     }
     return false;
 }
@@ -2615,6 +2697,168 @@ test "hook rejects malformed or mismatched raw Grok PreToolUse input" {
     );
     defer unsupported_tool.deinit();
     try std.testing.expectError(error.UnsupportedGrokPreToolUse, grokHookPayload(unsupported_tool.value, .PreToolUse));
+}
+
+test "hook Grok PreToolUse accepts read_file and Read with path" {
+    const allocator = std.testing.allocator;
+    var read_file_payload = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"hookEventName":"pre_tool_use","cwd":"/tmp/project","toolName":"read_file","toolInput":{"target_file":".env"}}
+    ,
+        .{},
+    );
+    defer read_file_payload.deinit();
+    _ = try grokHookPayload(read_file_payload.value, .PreToolUse);
+
+    var read_alias = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"hookEventName":"pre_tool_use","cwd":"/tmp/project","toolName":"Read","toolInput":{"target_file":"README.md"}}
+    ,
+        .{},
+    );
+    defer read_alias.deinit();
+    _ = try grokHookPayload(read_alias.value, .PreToolUse);
+}
+
+test "hook Grok PreToolUse rejects web_search as unsupported" {
+    const allocator = std.testing.allocator;
+    var web_search = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"hookEventName":"pre_tool_use","cwd":"/tmp/project","toolName":"web_search","toolInput":{"query":"x"}}
+    ,
+        .{},
+    );
+    defer web_search.deinit();
+    try std.testing.expectError(error.UnsupportedGrokPreToolUse, grokHookPayload(web_search.value, .PreToolUse));
+}
+
+test "hook extractFilePath finds camelCase toolInput.target_file and snake file_path" {
+    const allocator = std.testing.allocator;
+    var camel = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"toolName":"read_file","toolInput":{"target_file":".env"}}
+    ,
+        .{},
+    );
+    defer camel.deinit();
+    try std.testing.expectEqualStrings(".env", extractFilePath(camel.value).?);
+
+    var snake = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"tool_name":"read_file","tool_input":{"file_path":"src/main.zig"}}
+    ,
+        .{},
+    );
+    defer snake.deinit();
+    try std.testing.expectEqualStrings("src/main.zig", extractFilePath(snake.value).?);
+
+    var empty_path = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"toolInput":{"target_file":""}}
+    ,
+        .{},
+    );
+    defer empty_path.deinit();
+    try std.testing.expect(extractFilePath(empty_path.value) == null);
+}
+
+test "hook classifies read_file as file_read not file_write or generic_tool" {
+    const allocator = std.testing.allocator;
+    var parsed = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"toolName":"read_file","toolInput":{"target_file":".env"}}
+    ,
+        .{},
+    );
+    defer parsed.deinit();
+
+    const classification = classifyHookEvent(.PreToolUse, parsed.value);
+    try std.testing.expectEqual(HookEventClassification.non_shell, std.meta.activeTag(classification));
+    try std.testing.expectEqual(NonShellHookEvent.file_read, classification.non_shell);
+    try std.testing.expect(classification.non_shell != .file_write);
+    try std.testing.expect(classification.non_shell != .generic_tool);
+}
+
+test "hook PreToolUse file_read blocks .env via files.read.deny" {
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa_state.deinit();
+    const allocator = gpa_state.allocator();
+
+    var policy_obj = try core_api.loadPolicyPreset(allocator, .strict);
+    defer policy_obj.deinit();
+
+    var parsed = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"toolName":"read_file","toolInput":{"target_file":".env"}}
+    ,
+        .{},
+    );
+    defer parsed.deinit();
+
+    var result = try evaluateHookForTest(allocator, @ptrCast(@alignCast(policy_obj)), .grok, .PreToolUse, parsed.value, false);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(PluginDecision.block, result.decision);
+    try std.testing.expectEqualStrings("file.read", result.category);
+    try std.testing.expect(result.rule != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.rule.?, "files.read.deny") != null);
+}
+
+test "hook PreToolUse file_read allows README.md" {
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa_state.deinit();
+    const allocator = gpa_state.allocator();
+
+    var policy_obj = try core_api.loadPolicyPreset(allocator, .strict);
+    defer policy_obj.deinit();
+
+    var parsed = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"toolName":"read_file","toolInput":{"target_file":"README.md"}}
+    ,
+        .{},
+    );
+    defer parsed.deinit();
+
+    var result = try evaluateHookForTest(allocator, @ptrCast(@alignCast(policy_obj)), .grok, .PreToolUse, parsed.value, false);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(PluginDecision.allow, result.decision);
+    try std.testing.expectEqualStrings("file.read", result.category);
+}
+
+test "hook PreToolUse read_file missing path fails closed" {
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa_state.deinit();
+    const allocator = gpa_state.allocator();
+
+    var policy_obj = try core_api.loadPolicyPreset(allocator, .strict);
+    defer policy_obj.deinit();
+
+    var parsed = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"toolName":"read_file","toolInput":{}}
+    ,
+        .{},
+    );
+    defer parsed.deinit();
+
+    var result = try evaluateHookForTest(allocator, @ptrCast(@alignCast(policy_obj)), .grok, .PreToolUse, parsed.value, false);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(PluginDecision.block, result.decision);
+    // Must not classify as generic_tool allow
+    try std.testing.expect(result.decision != .allow);
 }
 
 test "hook codex SessionStart returns allow" {
@@ -3539,8 +3783,8 @@ test "hook pre-eval fail-closed Grok emits native deny JSON reason and exit 2" {
     const out = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "\"decision\":\"deny\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "RYKAN-V-GUARD") != null);
-    // Reason prefers policy `reason` ("empty payload"); message still on stderr.
-    try std.testing.expect(std.mem.indexOf(u8, out, "empty payload") != null);
+    // pickDetail prefers the longer message when it is substantially more informative.
+    try std.testing.expect(std.mem.indexOf(u8, out, "no JSON payload") != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), guard_sentinel_prefix) != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "no JSON payload") != null);
 }
