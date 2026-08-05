@@ -21,10 +21,12 @@ const pack_state = @import("pack_state.zig");
 const readiness = @import("readiness.zig");
 const ensure = @import("ensure.zig");
 const doctor_tui = @import("doctor_tui.zig");
+const doctor_mcp = @import("doctor_mcp.zig");
 
-// Monopath: pull nested doctor_tui tests into the lib test binary.
+// Monopath: pull nested doctor_tui / doctor_mcp tests into the lib test binary.
 test {
     _ = doctor_tui;
+    _ = doctor_mcp;
 }
 
 const DoctorCapability = struct {
@@ -522,6 +524,7 @@ fn writeReport(io: std.Io, stdout: anytype, os: core.platform.Os, backend_report
 
     if (!verbose) {
         try writeDefaultPanels(io, stdout, os, backend_report, context, policy_status, counts);
+        try writeMcpSetupReport(io, stdout, context);
         try writeHostStatusTable(io, stdout, context);
         try writePacksSection(io, stdout, context);
         try writeHermesFailOpenWarning(io, stdout, context);
@@ -533,6 +536,7 @@ fn writeReport(io: std.Io, stdout: anytype, os: core.platform.Os, backend_report
     try stdout.print("OS: {s}\n", .{os.toString()});
     try stdout.print("Version: {s}\n\n", .{cli.version});
     try writeIntegrationReport(io, stdout, context);
+    try writeMcpSetupReport(io, stdout, context);
     try writeHostStatusTable(io, stdout, context);
     try writePacksSection(io, stdout, context);
     try writeHermesFailOpenWarning(io, stdout, context);
@@ -649,6 +653,45 @@ fn writeDefaultPanels(
         \\  Labels: network route-force, ORCA_TOOL_PACK, ORCA_PATH_FILTER, control roots (.orca + .git).
         \\
     );
+}
+
+fn writeMcpSetupReport(io: std.Io, stdout: anytype, context: IntegrationContext) !void {
+    var summary = doctor_mcp.McpPolicySummary{
+        .present = context.policy_present,
+        .valid = context.policy_valid,
+    };
+    var allow_patterns: []const []const u8 = &.{};
+    // Concrete policy schema (not opaque boundary handle) so we can read mcp.* counts.
+    var owned_policy: ?orca_policy.schema.Policy = null;
+    defer if (owned_policy) |*policy| policy.deinit();
+
+    if (context.policy_present and context.policy_valid) {
+        const policy_path = std.fs.path.join(context.allocator, &.{ context.workspace_root, ".orca", "policy.yaml" }) catch null;
+        if (policy_path) |path| {
+            defer context.allocator.free(path);
+            if (orca_policy.load.loadFile(io, context.allocator, path)) |policy| {
+                owned_policy = policy;
+                const loaded = &owned_policy.?;
+                summary.default_decision = if (loaded.mcp.default) |d| d.toString() else "ask";
+                summary.allow_count = loaded.mcp.allow.len;
+                summary.deny_count = loaded.mcp.deny.len;
+                summary.ask_count = loaded.mcp.ask.len;
+                allow_patterns = loaded.mcp.allow;
+            } else |_| {
+                summary.valid = false;
+            }
+        }
+    }
+
+    const rows = doctor_mcp.suggestedInventoryRows(summary, allow_patterns);
+    try doctor_mcp.formatMcpSetupTable(
+        stdout,
+        summary,
+        &rows,
+        context.mcp_manifest_count,
+        context.mcp_manifest_invalid_count,
+    );
+    try stdout.writeByte('\n');
 }
 
 fn writeIntegrationReport(io: std.Io, stdout: anytype, context: IntegrationContext) !void {
@@ -1173,6 +1216,21 @@ fn detectShell(allocator: std.mem.Allocator) ![]const u8 {
     }
     if (envPresent(&env_map, "PSModulePath")) return try allocator.dupe(u8, "powershell");
     return try allocator.dupe(u8, "unknown");
+}
+
+test "doctor writeReport includes MCP setup table" {
+    var stdout_buf: [32768]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    const os = core.platform.detectOs();
+    const report = sandbox.backend.detect(os);
+    var context = try testContext(std.testing.allocator, .{});
+    defer context.deinit();
+
+    try writeReport(std.testing.io, &stdout_writer, os, report, context, false);
+    const written = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, written, "MCP policy (.orca/policy.yaml):") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "Host MCP inventory") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "does not rewrite policy") != null);
 }
 
 test "doctor renders verbose OS and planned capabilities from an injected context" {

@@ -1,0 +1,39 @@
+# Orca preset: pi-orchestrator
+# Exact MCP / custom-tool names for Pi subagent orchestration.
+# default stays ask — do NOT set mcp.default: allow.
+# Uncomment or copy names you actually use into .orca/policy.yaml mcp.allow.
+version: 1
+mode: ask
+
+workspace:
+  root: "."
+  write_mode: staged
+
+mcp:
+  default: ask
+  allow:
+    # Safe discovery globs (already common in generic-agent / project policy)
+    - "*.search_*"
+    - "*.list_*"
+    - "*.get_*"
+    # Pi built-in orchestration tools (exact bare names — not "*")
+    - "subagent"
+    - "skill"
+    - "task"
+    # Optional: uncomment if your Pi install exposes these exact names
+    # - "ctx_batch_execute"
+    # - "question"
+    # - "todowrite"
+    # - "todoread"
+  deny:
+    - "*.delete_*"
+    - "*.shell"
+    - "*.run_command"
+
+# Session grants (parent "Allow this tool for this Pi session") also cover
+# children via PI_SUBAGENT_PARENT_SESSION without permanent policy writes.
+
+audit:
+  level: full
+  redact_secrets: true
+  tamper_evident: true

@@ -85,11 +85,11 @@ cp integrations/opencode-plugin/orca.ts ~/.config/opencode/plugins/orca.ts
 
 ### Manual fallback install
 
-If your OpenCode version does not support automatic plugin loading:
+If automatic loading fails:
 
-1. Copy the skills from `integrations/opencode-plugin/skills/` into your OpenCode skills directory.
-2. Copy the hooks from `integrations/opencode-plugin/hooks/hooks.json` into your OpenCode hooks configuration.
-3. Ensure `orca` is in PATH or use the full path to the binary.
+1. Copy `integrations/opencode-plugin/orca.ts` to `.opencode/plugins/orca.ts` (project) or `~/.config/opencode/plugins/orca.ts` (global).
+2. Ensure `ryk` is on PATH (or set absolute `RYK_BIN`).
+3. Restart OpenCode and run `ryk plugin doctor opencode`.
 
 ## Verify install
 
@@ -123,6 +123,8 @@ This reports the expected manifest path and existence status.
 
 ```bash
 orca plugin install opencode --dry-run
+
+Day-one / `ryk doctor --fix` installs to the **global** path (`~/.config/opencode/plugins/orca.ts`) by default. Use `--scope project` for a repo-local plugin only.
 ```
 
 ### Hook smoke test
@@ -152,15 +154,9 @@ orca redteam --ci
 orca replay --session last --verify
 ```
 
-## Skill list
+## Skills
 
-| Skill | File | Purpose |
-|-------|------|---------|
-| `orca-doctor` | `skills/orca-doctor/SKILL.md` | Check installation and readiness |
-| `orca-init` | `skills/orca-init/SKILL.md` | Create or repair a policy |
-| `orca-protect` | `skills/orca-protect/SKILL.md` | Explain strongest protection |
-| `orca-redteam` | `skills/orca-redteam/SKILL.md` | Run red-team fixtures |
-| `orca-replay` | `skills/orca-replay/SKILL.md` | Replay latest session |
+This package is hooks-only. It does not ship OpenCode skill folders. Use `ryk doctor`, `ryk init`, and `ryk redteam` from the CLI (or your agent’s own skill system).
 
 ## Hooks supported
 
@@ -171,7 +167,8 @@ Hooks call `orca hook opencode <event>` with a JSON payload on stdin. The follow
 | `session.created` | Session initialization check | 10s |
 | `tool.execute.before` | Tool use policy evaluation before execution | 15s |
 | `tool.execute.after` | Post-tool acknowledgment and logging | 10s |
-| `permission.asked` | Permission request policy evaluation | 15s |
+| `command.execute.before` | Slash/custom command policy evaluation | 15s |
+| `permission.asked` | Permission request policy evaluation (`permission.ask` host hook) | 15s |
 | `permission.replied` | Permission response logging | 10s |
 | `file.edited` | File edit policy evaluation and logging | 10s |
 | `command.executed` | Shell command execution logging | 10s |

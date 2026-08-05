@@ -1,19 +1,5 @@
 {
-  "plugins": [
-    {
-      "name": "ryk",
-      "path": "./.opencode/plugins/orca.ts",
-      "enabled": true
-    }
-  ],
-  "settings": {
-    "ryk": {
-      "binary": "ryk",
-      "timeout": 15000,
-      "blocking_hooks": [
-        "tool.execute.before",
-        "permission.asked"
-      ]
-    }
-  }
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [],
+  "_comment": "Local plugins in .opencode/plugins/ (e.g. orca.ts) load automatically. Optional npm: \"plugin\": [\"orca-opencode-plugin\"]"
 }
