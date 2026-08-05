@@ -870,8 +870,8 @@ test "DayOneHost day-one set includes core hosts plus cursor and grok" {
 fn dayOneHostEmptyPluginReport() plugin.PluginDoctorReport {
     // Borrowed static strings only — do not deinit (no owned fields).
     return .{
-        .orca_version = "test",
-        .orca_binary_path = null,
+        .ryk_version = "test",
+        .ryk_binary_path = null,
         .cwd = @constCast("."),
         .workspace_root = ".",
         .policy_present = false,

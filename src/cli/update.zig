@@ -222,7 +222,7 @@ pub fn channelAllowsInstaller(channel: InstallChannel, force: bool) bool {
 pub fn packageManagerHint(channel: InstallChannel) []const u8 {
     return switch (channel) {
         .homebrew => "brew upgrade ryk",
-        .npm => "npm update -g @orca-sec/ryk",
+        .npm => "npm update -g @rykan/ryk",
         .scoop => "scoop update ryk",
         .winget => "winget upgrade ryk",
         .curl_installer, .unknown => "curl -fsSL https://raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh | sh",
@@ -970,7 +970,7 @@ test "installScriptUrlForVersion pins release tag" {
 test "detectInstallChannel classifies known layouts" {
     try std.testing.expectEqual(InstallChannel.homebrew, detectInstallChannel("/opt/homebrew/Cellar/ryk/1.2.9/bin/ryk"));
     try std.testing.expectEqual(InstallChannel.homebrew, detectInstallChannel("/home/linuxbrew/.linuxbrew/Cellar/ryk/1.0.0/bin/ryk"));
-    try std.testing.expectEqual(InstallChannel.npm, detectInstallChannel("/usr/local/lib/node_modules/@orca-sec/ryk/vendor/ryk"));
+    try std.testing.expectEqual(InstallChannel.npm, detectInstallChannel("/usr/local/lib/node_modules/@rykan/ryk/vendor/ryk"));
     try std.testing.expectEqual(InstallChannel.scoop, detectInstallChannel("C:\\Users\\me\\scoop\\apps\\ryk\\current\\ryk.exe"));
     try std.testing.expectEqual(InstallChannel.curl_installer, detectInstallChannel("/Users/me/.local/bin/ryk"));
     try std.testing.expectEqual(InstallChannel.unknown, detectInstallChannel("/Users/me/src/rykan/zig-out/bin/ryk"));
@@ -1003,7 +1003,7 @@ test "shouldProceedWithInstall upgrade downgrade rules" {
 
 test "packageManagerHint is non-empty" {
     try std.testing.expect(packageManagerHint(.homebrew).len > 0);
-    try std.testing.expect(std.mem.indexOf(u8, packageManagerHint(.npm), "@orca-sec/ryk") != null);
+    try std.testing.expect(std.mem.indexOf(u8, packageManagerHint(.npm), "@rykan/ryk") != null);
 }
 
 test "tagFromReleaseUrl strips path prefix and v" {
