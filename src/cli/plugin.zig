@@ -18,6 +18,25 @@ const host_status = @import("host_status.zig");
 const openclaw_status = @import("openclaw_status.zig");
 const interactive = @import("interactive.zig");
 
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+fn testDupEnvZ(name: [*:0]const u8) !?[:0]u8 {
+    if (std.c.getenv(name)) |value| {
+        return try std.testing.allocator.dupeZ(u8, std.mem.span(value));
+    }
+    return null;
+}
+
+fn testRestoreEnv(name: [*:0]const u8, prev: ?[:0]u8) void {
+    if (prev) |value| {
+        _ = setenv(name, value.ptr, 1);
+        std.testing.allocator.free(value);
+    } else {
+        _ = unsetenv(name);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Top-level dispatch
 // ---------------------------------------------------------------------------
@@ -632,7 +651,8 @@ fn writeDoctorPlain(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, r
             try stdout.print("  project plugin path (.opencode/plugins/orca.ts): {s}\n", .{if (report.opencode_paths.project_plugin_exists) "exists" else "not found"});
             if (!report.opencode_paths.project_plugin_exists) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install opencode\n");
             try stdout.print("  global plugin path (~/.config/opencode/plugins/orca.ts): {s}\n", .{if (report.opencode_paths.global_plugin_exists) "exists" else "not found"});
-            if (!report.opencode_paths.global_plugin_exists) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install opencode\n");
+            if (!report.opencode_paths.global_plugin_exists) try stdout.writeAll("    → Fix: ryk doctor --fix or ryk plugin install opencode --yes\n");
+            try stdout.writeAll("  day-one path: global ~/.config/opencode/plugins/orca.ts (project scope is opt-in)\n");
             try stdout.writeAll("  install: use 'ryk plugin install opencode --dry-run' to preview\n");
             try stdout.writeAll("  note: OpenCode plugin uses TypeScript hooks, not a manifest file\n");
         },
@@ -1252,7 +1272,7 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
     var custom_path: ?[]const u8 = null;
     var yes = false;
     var all_detected = false;
-    var scope: InstallScope = .project;
+    var scope: InstallScope = .global; // OpenCode day-one: machine-wide path OpenCode always finds
 
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_state.deinit();
@@ -1280,7 +1300,7 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
                 \\  --dry-run       Preview changes without mutating host config
                 \\  --all-detected  Only install for hosts found in PATH
                 \\  --path          Use a custom plugin path instead of the default
-                \\  --scope         OpenCode install scope: project|global (default: project)
+                \\  --scope         OpenCode install scope: project|global (default: global)
                 \\  --yes           Confirm mutation (required for non-TTY install)
                 \\
             );
@@ -1400,6 +1420,8 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
 
     var smoke_deny_failed = false;
     var smoke_degraded = false;
+    var opencode_install_attempted = false;
+    var opencode_smoke_deny_ok = false;
     var detected_targets: [5]InstallTarget = undefined;
     var detected_count: usize = 0;
 
@@ -1463,7 +1485,7 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
             try stdout.print("  plugin directory: found ({s})\n", .{plugin_dir});
 
             if (t == .opencode) {
-                // OpenCode-specific install guidance
+                // OpenCode-specific install (default scope=global → ~/.config/opencode/plugins).
                 const source_path = try std.fs.path.join(allocator, &.{ plugin_dir, "orca.ts" });
                 defer allocator.free(source_path);
                 const destination_path = try resolveOpenCodeDestination(allocator, workspace_root, scope);
@@ -1471,7 +1493,7 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
 
                 try stdout.writeAll("  install paths for OpenCode:\n");
                 try stdout.writeAll("    project: .opencode/plugins/orca.ts\n");
-                try stdout.writeAll("    global:  ~/.config/opencode/plugins/orca.ts\n");
+                try stdout.writeAll("    global:  ~/.config/opencode/plugins/orca.ts (default)\n");
                 if (dry_run) {
                     try stdout.writeAll("  action: no changes made (dry-run)\n");
                     try stdout.print("  next step: copy {s} to {s}\n", .{ source_path, destination_path });
@@ -1492,6 +1514,12 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
                     } else {
                         try stdout.print("  action: already up-to-date at {s}\n", .{destination_path});
                     }
+                    // Light config hygiene so local plugins auto-load.
+                    if (ensureOpenCodeConfigSane(io, allocator)) |cfg_note| {
+                        defer allocator.free(cfg_note);
+                        try stdout.print("  config: {s}\n", .{cfg_note});
+                    } else |_| {}
+                    opencode_install_attempted = true;
                 }
             } else if (t == .openclaw) {
                 // OpenClaw-specific install guidance
@@ -1674,6 +1702,8 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
                 smoke_deny_failed = true;
             } else if (smoke.isDegraded()) {
                 smoke_degraded = true;
+            } else if (t == .opencode) {
+                opencode_smoke_deny_ok = smoke.deny != .fail;
             }
             if (t == .hermes and host_status.hermesFailOpenFromEnv()) {
                 try stdout.writeAll("  warn: Hermes effective stance is fail-open — tools may run if ryk is degraded.\n");
@@ -1699,6 +1729,13 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
         try stdout.writeAll("Install completed but smoke is DEGRADED (deny ok, allow failed).\n");
         try stdout.writeAll("Host is safe/fail-closed but NOT ready — inspect with: ryk doctor\n");
         // Exit 0: protection proof (deny) passed; yellow is messaging-only per L3.
+    }
+    if (opencode_install_attempted and opencode_smoke_deny_ok and !smoke_deny_failed) {
+        if (binaryInPath(io, allocator, "opencode")) {
+            try stdout.writeAll("OpenCode is guarded.\n");
+        } else {
+            try stdout.writeAll("OpenCode plugin installed; host CLI not on PATH yet — install OpenCode, then re-run ryk doctor.\n");
+        }
     }
     return exit_codes.success;
 }
@@ -1986,6 +2023,50 @@ fn jsonBoolField(object: std.json.ObjectMap, key: []const u8) bool {
         .bool => |enabled| enabled,
         else => false,
     };
+}
+
+/// Ensure ~/.config/opencode/opencode.json lets local file plugins auto-load.
+/// - Missing file → create minimal `{"plugin":[]}`.
+/// - Broken docs placeholder `plugin: ["list"]` → rewrite to `[]`.
+/// Returns owned status note for the install receipt.
+fn ensureOpenCodeConfigSane(io: std.Io, allocator: std.mem.Allocator) ![]const u8 {
+    var env_map = try env_util.createProcessMap(allocator);
+    defer env_map.deinit();
+    const home = (try env_util.getOwned(&env_map, allocator, "HOME")) orelse return error.HomeNotSet;
+    defer allocator.free(home);
+
+    const config_dir = try std.fs.path.join(allocator, &.{ home, ".config", "opencode" });
+    defer allocator.free(config_dir);
+    const config_path = try std.fs.path.join(allocator, &.{ config_dir, "opencode.json" });
+    defer allocator.free(config_path);
+
+    const minimal =
+        \\{
+        \\  "plugin": []
+        \\}
+        \\
+    ;
+
+    const exists = fileExistsAbsolute(io, config_path);
+
+    if (!exists) {
+        // installTextIfSafe creates parent dirs securely (no symlink parents).
+        _ = try plugin_install.installTextIfSafe(io, allocator, minimal, config_path, true);
+        return try allocator.dupe(u8, "wrote ~/.config/opencode/opencode.json with plugin:[] (local plugins auto-load)");
+    }
+
+    const content = std.Io.Dir.cwd().readFileAlloc(io, config_path, allocator, .limited(256 * 1024)) catch
+        return try allocator.dupe(u8, "opencode.json present (could not read; left unchanged)");
+    defer allocator.free(content);
+
+    // Broken docs placeholder: "plugin": ["list"]
+    if (std.mem.indexOf(u8, content, "\"plugin\"") != null and
+        std.mem.indexOf(u8, content, "[\"list\"]") != null)
+    {
+        _ = try plugin_install.installTextIfSafe(io, allocator, minimal, config_path, true);
+        return try allocator.dupe(u8, "repaired broken plugin list placeholder in opencode.json");
+    }
+    return try allocator.dupe(u8, "opencode.json present (local plugins auto-load when plugin is empty or omitted)");
 }
 
 pub fn resolveOpenCodeDestination(allocator: std.mem.Allocator, workspace_root: []const u8, scope: InstallScope) ![]u8 {
@@ -2717,6 +2798,7 @@ test "plugin install opencode --dry-run reports safe preview with paths" {
     const output = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "dry-run") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "no changes made") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "scope: global") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, ".opencode/plugins/orca.ts") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "~/.config/opencode/plugins/orca.ts") != null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
@@ -2952,6 +3034,82 @@ test "plugin install opencode --scope global is accepted in dry-run" {
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "scope: global") != null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
+
+
+test "plugin install opencode --yes writes global plugin under HOME" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(home);
+    const home_z = try std.testing.allocator.dupeZ(u8, home);
+    defer std.testing.allocator.free(home_z);
+
+    const prev_home = try testDupEnvZ("HOME");
+    defer testRestoreEnv("HOME", prev_home);
+    try std.testing.expectEqual(@as(c_int, 0), setenv("HOME", home_z.ptr, 1));
+
+    var stdout_buf: [65536]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const code = try installCommand(std.testing.io, &.{ "opencode", "--yes" }, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.success, code);
+    try std.testing.expectEqualStrings("", stderr_writer.buffered());
+
+    const output = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "mode: install") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "scope: global") != null);
+    try std.testing.expect(
+        std.mem.indexOf(u8, output, "installed to") != null or
+            std.mem.indexOf(u8, output, "already up-to-date") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, output, "OpenCode is guarded") != null or
+            std.mem.indexOf(u8, output, "host CLI not on PATH") != null,
+    );
+
+    const plugin_path = try std.fs.path.join(std.testing.allocator, &.{ home, ".config", "opencode", "plugins", "orca.ts" });
+    defer std.testing.allocator.free(plugin_path);
+    try std.testing.expect(fileExistsAbsolute(std.testing.io, plugin_path));
+
+    const config_path = try std.fs.path.join(std.testing.allocator, &.{ home, ".config", "opencode", "opencode.json" });
+    defer std.testing.allocator.free(config_path);
+    try std.testing.expect(fileExistsAbsolute(std.testing.io, config_path));
+}
+
+test "ensureOpenCodeConfigSane repairs plugin list placeholder" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(home);
+    const home_z = try std.testing.allocator.dupeZ(u8, home);
+    defer std.testing.allocator.free(home_z);
+
+    try tmp.dir.createDirPath(std.testing.io, ".config/opencode");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = ".config/opencode/opencode.json",
+        .data = "{\"plugin\": [\"list\"]}\n",
+    });
+
+    const prev_home = try testDupEnvZ("HOME");
+    defer testRestoreEnv("HOME", prev_home);
+    try std.testing.expectEqual(@as(c_int, 0), setenv("HOME", home_z.ptr, 1));
+
+    const note = try ensureOpenCodeConfigSane(std.testing.io, std.testing.allocator);
+    defer std.testing.allocator.free(note);
+    try std.testing.expect(std.mem.indexOf(u8, note, "repaired") != null);
+
+    const fixed = try tmp.dir.readFileAlloc(std.testing.io, ".config/opencode/opencode.json", std.testing.allocator, .limited(4096));
+    defer std.testing.allocator.free(fixed);
+    try std.testing.expect(std.mem.indexOf(u8, fixed, "[\"list\"]") == null);
+    try std.testing.expect(std.mem.indexOf(u8, fixed, "[]") != null);
+}
+
 
 test "plugin mcp-server reports limited status honestly" {
     var stdout_buf: [4096]u8 = undefined;

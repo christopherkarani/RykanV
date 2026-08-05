@@ -123,6 +123,8 @@ This reports the expected manifest path and existence status.
 
 ```bash
 orca plugin install opencode --dry-run
+
+Day-one / `ryk doctor --fix` installs to the **global** path (`~/.config/opencode/plugins/orca.ts`) by default. Use `--scope project` for a repo-local plugin only.
 ```
 
 ### Hook smoke test

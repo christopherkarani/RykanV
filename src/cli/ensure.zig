@@ -653,8 +653,14 @@ pub fn installOneHost(
     }
     // Plugin install resolves marketplace roots from process cwd — pin to ensure workspace
     // so from_install (HOME) cannot write plugins under a nested caller `.git` tree.
-    const install_argv = [_][]const u8{ self_exe, "plugin", "install", host_id, "--yes" };
-    const code = ensureRunChildAt(allocator, &install_argv, workspace_root) catch return .failed;
+    // OpenCode day-one: always global ~/.config/opencode/plugins (not HOME/.opencode project scope).
+    const code = if (std.mem.eql(u8, host_id, "opencode")) blk: {
+        const install_argv = [_][]const u8{ self_exe, "plugin", "install", "opencode", "--yes", "--scope", "global" };
+        break :blk ensureRunChildAt(allocator, &install_argv, workspace_root) catch return .failed;
+    } else blk: {
+        const install_argv = [_][]const u8{ self_exe, "plugin", "install", host_id, "--yes" };
+        break :blk ensureRunChildAt(allocator, &install_argv, workspace_root) catch return .failed;
+    };
     return switch (plugin.verifyHostInstallAfterChild(io, allocator, host_id, code)) {
         .failed => .failed,
         .installed, .installed_after_child_failure => .installed,
