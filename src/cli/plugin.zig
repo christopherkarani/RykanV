@@ -1717,13 +1717,13 @@ fn mcpServerCommand(_: std.Io, argv: []const []const u8, stdout: anytype, stderr
                 \\Status: limited / deferred
                 \\  The ryk MCP plugin server is planned but not yet active.
                 \\  When implemented, it will expose safe read-only ryk capabilities as MCP tools:
-                \\    - orca_doctor
-                \\    - orca_plugin_doctor
-                \\    - orca_policy_check
-                \\    - orca_policy_explain
-                \\    - orca_redteam
-                \\    - orca_replay_summary
-                \\    - orca_capabilities
+                \\    - ryk_doctor
+                \\    - ryk_plugin_doctor
+                \\    - ryk_policy_check
+                \\    - ryk_policy_explain
+                \\    - ryk_redteam
+                \\    - ryk_replay_summary
+                \\    - ryk_capabilities
                 \\  The following will NOT be exposed by default:
                 \\    - arbitrary shell execution
                 \\    - arbitrary file writes
@@ -1743,13 +1743,13 @@ fn mcpServerCommand(_: std.Io, argv: []const []const u8, stdout: anytype, stderr
     try stdout.writeAll("  The ryk MCP plugin server is planned but not yet active.\n");
     try stdout.writeAll("  It does not listen on any port or transport.\n\n");
     try stdout.writeAll("Planned safe tools (when implemented):\n");
-    try stdout.writeAll("  - orca_doctor\n");
-    try stdout.writeAll("  - orca_plugin_doctor\n");
-    try stdout.writeAll("  - orca_policy_check\n");
-    try stdout.writeAll("  - orca_policy_explain\n");
-    try stdout.writeAll("  - orca_redteam\n");
-    try stdout.writeAll("  - orca_replay_summary\n");
-    try stdout.writeAll("  - orca_capabilities\n");
+    try stdout.writeAll("  - ryk_doctor\n");
+    try stdout.writeAll("  - ryk_plugin_doctor\n");
+    try stdout.writeAll("  - ryk_policy_check\n");
+    try stdout.writeAll("  - ryk_policy_explain\n");
+    try stdout.writeAll("  - ryk_redteam\n");
+    try stdout.writeAll("  - ryk_replay_summary\n");
+    try stdout.writeAll("  - ryk_capabilities\n");
     try stdout.writeAll("\n");
     try stdout.writeAll("Blocked by default (not exposed):\n");
     try stdout.writeAll("  - arbitrary shell execution\n");
@@ -2966,7 +2966,7 @@ test "plugin mcp-server reports limited status honestly" {
     try std.testing.expect(std.mem.indexOf(u8, output, "limited") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "deferred") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "not yet active") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "orca_doctor") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk_doctor") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "edge_safety_status") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "live drone") == null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
