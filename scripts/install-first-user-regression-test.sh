@@ -258,10 +258,15 @@ if printf '%s\n' "${plain_output}" | grep -Fqi 'start --auto'; then
   fail "installer still surfaces start --auto in user-facing copy"
 fi
 assert_no_d06_full_protection "${plain_output}" "success receipt"
-printf '%s\n' "${plain_output}" | grep -Eq 'Activate this terminal|Activate this session' || fail "installer did not print activation hero"
-printf '%s\n' "${plain_output}" | grep -Eq 'Details' || fail "installer did not print details section"
-# Dashboard soft-warn belongs on the receipt stdout, without retired branding.
-printf '%s\n' "${plain_output}" | grep -Eq 'dashboard UI' || fail "installer did not surface missing dashboard UI on the receipt"
+printf '%s\n' "${plain_output}" | grep -Eq '^[[:space:]]*eval ' || fail "installer did not print activation eval line"
+if printf '%s\n' "${plain_output}" | grep -Eq 'Activate this terminal|Activate this session|Profile exports|INSTALL_DIR is not on PATH'; then
+  fail "installer still prints removed success chrome (Activate/profile noise)"
+fi
+if printf '%s\n' "${plain_output}" | grep -Eq '^[[:space:]]*Details[[:space:]]*$|binary[[:space:]]+.*/ryk|assets[[:space:]]+.*current'; then
+  fail "installer still prints Details block on success"
+fi
+# Dashboard soft-warn belongs on the receipt stdout when assets are missing.
+printf '%s\n' "${plain_output}" | grep -Eqi 'dashboard' || fail "installer did not surface missing dashboard on the receipt"
 if printf '%s\n' "${plain_output}" | grep -Eiq '(^|[^[:alnum:]_])orca([^[:alnum:]_]|$)'; then
   fail "installer exposed retired Orca branding"
 fi
@@ -296,7 +301,7 @@ grep -qF "ryk_resource=${share_dir}/current" "${onboard_log}" ||
   fail "quiet onboarding missing RYK_RESOURCE_ROOT"
 quiet_activation="$(printf '%s\n' "${quiet_output}" | awk '/^    eval / { sub(/^    /, ""); print; exit }')"
 [[ -n "${quiet_activation}" ]] || fail "quiet mode did not print an activation command"
-if printf '%s\n' "${quiet_output}" | grep -Eq 'Platform|Details|Resolve release|Activate this terminal'; then
+if printf '%s\n' "${quiet_output}" | grep -Eq 'Platform|Details|Resolve release|Activate this terminal|Rykan V'; then
   fail "quiet mode leaked non-activation UI"
 fi
 # Only the activation line should be non-empty content (allow blank lines).

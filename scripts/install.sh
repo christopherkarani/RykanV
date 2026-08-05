@@ -86,15 +86,9 @@ ui_err() {
 print_banner() {
   [ "$QUIET" -eq 1 ] && return 0
   printf '\n'
-  printf '  %s🛡  Rykan V%s · %sv%s%s\n' "$C_BOLD$C_CYAN" "$C_RESET" "$C_BOLD" "$1" "$C_RESET"
-  if [ "$USE_COLOR" -eq 1 ]; then
-    printf '  %s────────────────────────────────%s\n' "$C_DIM" "$C_RESET"
-  else
-    printf '  --------------------------------\n'
-  fi
-  ui_dim "  Agent runtime protection · policy + shell_engine"
-  printf '  %sPlatform%s  %s\n' "$C_DIM" "$C_RESET" "$2"
-  printf '  %sTarget%s    %s\n' "$C_DIM" "$C_RESET" "$3"
+  # Single neutral title — no split color, no rule line.
+  printf '  %sRykan V  v%s%s\n' "$C_BOLD" "$1" "$C_RESET"
+  printf '  %s%s → %s%s\n' "$C_DIM" "$2" "$3" "$C_RESET"
   printf '\n'
 }
 
@@ -154,7 +148,7 @@ reject_symlink_components() {
 
 # Contract: /^    eval / — always printed, including quiet.
 print_activation() {
-  printf '    eval "$(%s env 2>/dev/null || %s --print-install-env)"\n' "$1" "$1"
+  printf '    eval "$(%s env)"\n' "$1"
 }
 
 # ── Version resolution ───────────────────────────────────────────────────────
@@ -530,33 +524,19 @@ print_success() {
     printf '  %s✓%s  %sryk v%s installed%s\n' \
       "$C_GREEN" "$C_RESET" "$C_BOLD" "$VERSION" "$C_RESET"
   fi
-  ui_dim "  CLI + runtime ready (shell_engine in-process)"
 
   printf '\n'
-  printf '  %sActivate this terminal%s\n' "$C_BOLD" "$C_RESET"
-  ui_dim "  (INSTALL_DIR is not on PATH in this shell yet)"
-  printf '\n'
   print_activation "$quoted_destination"
-  printf '\n'
-  ui_dim "  Profile exports were also written for future terminals."
 
   if [ "$onboarding_ran" -eq 0 ]; then
     printf '\n'
-    printf '  %sThen%s\n' "$C_BOLD" "$C_RESET"
-    printf '    ryk doctor --fix   %s# ensure policy + auto-wire hosts%s\n' "$C_DIM" "$C_RESET"
-    ui_dim "  (a compatibility alias is also installed for existing automation)"
+    printf '    ryk doctor --fix\n'
   fi
 
   if [ "$missing_dashboard" -eq 1 ]; then
     printf '\n'
-    printf '  %s⚠%s %s\n' "$C_YELLOW" "$C_RESET" \
-      "Release archive missing dashboard UI assets; reinstall a complete artifact for the dashboard."
+    printf '  %s⚠%s Dashboard assets missing from this archive.\n' "$C_YELLOW" "$C_RESET"
   fi
-
-  printf '\n'
-  printf '  %sDetails%s\n' "$C_DIM" "$C_RESET"
-  printf '  %s  binary   %s%s\n' "$C_DIM" "$DESTINATION" "$C_RESET"
-  printf '  %s  assets   %s → %s%s\n' "$C_DIM" "$CURRENT_LINK" "$RESOURCE_ROOT" "$C_RESET"
   printf '\n'
 }
 
@@ -657,7 +637,7 @@ else
   safe_install "$FOUND_BIN" "$LEGACY_DESTINATION"
 fi
 install_runtime_assets "$EXTRACT_ROOT"
-step_done "Install binaries + runtime" "ryk + compatibility alias + assets (CLI-only; shell_engine in-process)"
+step_done "Install binaries + runtime" "ryk + compatibility alias + assets"
 
 ensure_path_entry "$INSTALL_DIR"
 ensure_resource_root_entry "$CURRENT_LINK"
