@@ -100,13 +100,14 @@ The plugin registers lifecycle hooks that call `ryk hook opencode <event>`:
 | `session.created` | At the start of an OpenCode session | Informational (readiness log) |
 | `tool.execute.before` | Before OpenCode invokes a tool | **Blocking** — ryk can prevent the tool call |
 | `tool.execute.after` | After OpenCode finishes using a tool | Informational (audit only) |
-| `permission.asked` | When OpenCode requests user permission | **Native permission path** — ryk `block`/`error` → deny; ryk `ask` leaves host `ask` (approve-and-resume); `allow` can auto-allow |
+| `permission.ask` → `permission.asked` | When OpenCode requests user permission | **Native ask path** — ryk `block`/`error` → deny; ryk `ask` keeps host ask (approve-and-resume); `allow` can auto-allow |
+| `command.execute.before` | Before a slash/custom command runs | **Blocking** — evaluated as a tool name |
 | `file.edited` | When a file is edited by OpenCode | Informational (audit only) |
 | `command.executed` | When a shell command is executed | Informational (audit only) |
 | `session.updated` | When the session state changes | Informational (audit only) |
 | `session.idle` | When the session becomes idle | Informational (audit only) |
 | `session.error` | When a session error occurs | Informational (audit only) |
-| `shell.env` | When the shell environment is read | Informational (secrets redacted) |
+| `shell.env` | When the shell environment is prepared | **Scrubs secret env vars** from what OpenCode passes to shell, then audits |
 
 ## How hooks call ryk
 

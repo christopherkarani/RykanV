@@ -75,6 +75,10 @@ copy_cli_payload() {
     printf 'error: bundled Pi extension is missing orca-pi/extensions/secret_capture.ts\n' >&2
     exit 1
   }
+  [ -f "orca-pi/extensions/parent_ask.ts" ] || {
+    printf 'error: bundled Pi extension is missing orca-pi/extensions/parent_ask.ts\n' >&2
+    exit 1
+  }
   mkdir -p "$root"
   cp README.md LICENSE SECURITY.md CONTRIBUTING.md "$root/"
   cp -R docs policies schemas fixtures examples packages packaging scripts integrations "$root/"
