@@ -28,7 +28,7 @@ const daemon_socket_name = "daemon.sock";
 const daemon_pid_name = "daemon.pid";
 
 /// Directory under $HOME where ryk runtime state lives.
-const orca_state_dir = ".ryk";
+const ryk_state_dir = ".ryk";
 
 /// Environment variable override for the daemon binary path.
 const daemon_env_var = "RYK_DAEMON";
@@ -170,7 +170,7 @@ pub const RuntimePaths = struct {
 ///
 /// Caller owns both returned slices.
 pub fn runtimePathsForHome(allocator: std.mem.Allocator, home: []const u8) !RuntimePaths {
-    const state_dir = try std.fs.path.join(allocator, &.{ home, orca_state_dir });
+    const state_dir = try std.fs.path.join(allocator, &.{ home, ryk_state_dir });
     defer allocator.free(state_dir);
 
     return .{

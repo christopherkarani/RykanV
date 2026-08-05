@@ -10,7 +10,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const orca_mcp = @import("../mcp/mod.zig");
+const mcp_mod = @import("../mcp/mod.zig");
 const sandbox = @import("../sandbox/mod.zig");
 
 const inventory_limit = sandbox.mcp_runtime_grants.max_config_bytes;
@@ -882,7 +882,7 @@ fn snapshotMatchingManifest(
         var reader = file.reader(io, &read_buffer);
         const text = reader.interface.allocRemaining(allocator, .limited(inventory_limit)) catch continue;
         defer allocator.free(text);
-        var manifest = orca_mcp.manifests.parseFromSlice(allocator, text, source_path) catch continue;
+        var manifest = mcp_mod.manifests.parseFromSlice(allocator, text, source_path) catch continue;
         defer manifest.deinit(allocator);
         if (!std.mem.eql(u8, manifest.server.name, server.name) or
             !std.mem.eql(u8, manifest.server.command, server.command) or

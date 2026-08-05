@@ -3,8 +3,8 @@ const builtin = @import("builtin");
 const env_util = @import("../env_util.zig");
 const core = @import("ryk_core").core;
 const supervisor = core.supervisor;
-const orca_mcp = @import("../mcp/mod.zig");
-const orca_policy = @import("ryk_core").policy;
+const mcp_mod = @import("../mcp/mod.zig");
+const policy_mod = @import("ryk_core").policy;
 const sandbox = @import("../sandbox/mod.zig");
 const resource_root = @import("../resource_root.zig");
 const tui = @import("../tui/mod.zig");
@@ -377,7 +377,7 @@ fn parseDoctorOptions(argv: []const []const u8, stderr: anytype) !DoctorOptions 
             }
             const name = argv[i];
             // Same names as init.zig; brand as doctor so invalid values never leak ryk init:.
-            if (orca_policy.presets.AgentPreset.parse(name) == null) {
+            if (policy_mod.presets.AgentPreset.parse(name) == null) {
                 try suggestions.writeInvalidValue(
                     stderr,
                     "ryk doctor",
@@ -1103,7 +1103,7 @@ fn countMcpManifests(io: std.Io, allocator: std.mem.Allocator, workspace_root: [
             continue;
         };
         defer allocator.free(manifest_path);
-        var manifest = orca_mcp.manifests.loadFile(io, allocator, manifest_path) catch {
+        var manifest = mcp_mod.manifests.loadFile(io, allocator, manifest_path) catch {
             counts.invalid += 1;
             continue;
         };
@@ -1318,7 +1318,7 @@ test "doctor detects valid policy in current workspace" {
     {
         const file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer file.close(std.testing.io);
-        try file.writeStreamingAll(std.testing.io, orca_policy.presets.agentPresetText(.generic_agent));
+        try file.writeStreamingAll(std.testing.io, policy_mod.presets.agentPresetText(.generic_agent));
     }
 
     var stdout_buf: [32768]u8 = undefined;
