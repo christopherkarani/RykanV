@@ -1,5 +1,5 @@
 const std = @import("std");
-const orca_policy = @import("ryk_core").policy;
+const policy_mod = @import("ryk_core").policy;
 const core = @import("ryk_core").core;
 const supervisor = core.supervisor;
 const core_api = @import("ryk_core").api;
@@ -89,7 +89,7 @@ fn check(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
     }
 
     if (preset_name) |name| {
-        const preset = orca_policy.presets.Preset.parse(name) orelse {
+        const preset = policy_mod.presets.Preset.parse(name) orelse {
             try suggestions.writeInvalidValue(
                 stderr,
                 "ryk policy check",
@@ -165,7 +165,7 @@ fn explain(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytyp
         try stderr.writeAll("ryk policy explain: expected a type and target.\n");
         return exit_codes.usage;
     }
-    const kind = orca_policy.explain.ExplainKind.parse(positional[0]) orelse {
+    const kind = policy_mod.explain.ExplainKind.parse(positional[0]) orelse {
         try suggestions.writeSanitizedValue(stderr, "ryk policy explain: unsupported type '", positional[0], "'.\n");
         return exit_codes.usage;
     };
@@ -189,7 +189,7 @@ fn explain(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytyp
     };
     defer loaded.deinit();
 
-    var owned_args: ?orca_policy.effects.OwnedArgsView = null;
+    var owned_args: ?policy_mod.effects.OwnedArgsView = null;
     defer if (owned_args) |*oa| oa.deinit(allocator);
     if (parsed_target.args_json) |args_json| {
         if (kind != .tool) {
@@ -209,15 +209,15 @@ fn explain(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytyp
             try stderr.writeAll("ryk policy explain: --args must be a JSON object.\n");
             return exit_codes.usage;
         }
-        owned_args = try orca_policy.effects.toolArgsViewFromJsonObject(allocator, parsed_json.value);
+        owned_args = try policy_mod.effects.toolArgsViewFromJsonObject(allocator, parsed_json.value);
     }
-    const tool_args: ?orca_policy.effects.ToolArgsView = if (owned_args) |oa| oa.view else null;
+    const tool_args: ?policy_mod.effects.ToolArgsView = if (owned_args) |oa| oa.view else null;
 
     // Packs only affect `.tool` explain; skip I/O for command/network/file/mcp kinds.
-    var effect_packs = orca_policy.effects.PackSet.empty(allocator);
+    var effect_packs = policy_mod.effects.PackSet.empty(allocator);
     defer effect_packs.deinit();
     if (kind == .tool) {
-        effect_packs = orca_policy.effects.loadPacksForEnforcement(
+        effect_packs = policy_mod.effects.loadPacksForEnforcement(
             io,
             allocator,
             root,
@@ -290,7 +290,7 @@ const ExplainTarget = struct {
     }
 };
 
-fn parseExplainTarget(allocator: std.mem.Allocator, kind: orca_policy.explain.ExplainKind, args: []const []const u8, stderr: anytype) !ExplainTarget {
+fn parseExplainTarget(allocator: std.mem.Allocator, kind: policy_mod.explain.ExplainKind, args: []const []const u8, stderr: anytype) !ExplainTarget {
     if (kind == .command) {
         // command may include trailing flags only after command text; keep simple: join all non-flag tokens
         // Strip trailing --args if present (not valid for command).
@@ -379,8 +379,8 @@ fn packs(argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
         return exit_codes.usage;
     }
     try stdout.writeAll("Policy packs:\n");
-    for (orca_policy.presets.agent_preset_infos) |info| {
-        const source = orca_policy.presets.agentPresetText(info.preset);
+    for (policy_mod.presets.agent_preset_infos) |info| {
+        const source = policy_mod.presets.agentPresetText(info.preset);
         if (std.mem.indexOf(u8, source, "policy pack:") == null and
             !std.mem.eql(u8, info.name, "strict-local")) continue;
         try stdout.print("  {s}\n", .{info.name});
@@ -401,11 +401,11 @@ fn applyPack(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyt
         }
         force = true;
     }
-    const pack = orca_policy.presets.AgentPreset.parse(argv[0]) orelse {
+    const pack = policy_mod.presets.AgentPreset.parse(argv[0]) orelse {
         try suggestions.writeInvalidValue(stderr, "ryk policy apply-pack", "pack", argv[0], &.{ "solo-dev", "strict-local", "team-ci", "openclaw-hermes" }, "policy");
         return exit_codes.usage;
     };
-    const pack_name = orca_policy.presets.agentPresetName(pack);
+    const pack_name = policy_mod.presets.agentPresetName(pack);
     if (!isProductPack(pack_name)) {
         try stderr.print("ryk policy apply-pack: '{s}' is an init preset, not a product policy pack.\n", .{pack_name});
         return exit_codes.usage;
@@ -430,7 +430,7 @@ fn applyPack(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyt
         else => return err,
     };
     defer file.close(io);
-    try file.writeStreamingAll(io, orca_policy.presets.agentPresetText(pack));
+    try file.writeStreamingAll(io, policy_mod.presets.agentPresetText(pack));
     try stdout.print("Applied policy pack '{s}' to .ryk/policy.yaml.\n", .{pack_name});
     return exit_codes.success;
 }
@@ -458,7 +458,7 @@ test "policy check validates a file" {
     {
         const file = try tmp.dir.createFile(std.testing.io, "policy.yaml", .{});
         defer file.close(std.testing.io);
-        try file.writeStreamingAll(std.testing.io, orca_policy.presets.text(.strict));
+        try file.writeStreamingAll(std.testing.io, policy_mod.presets.text(.strict));
     }
     const path = try tmp.dir.realPathFileAlloc(std.testing.io, "policy.yaml", std.testing.allocator);
     defer std.testing.allocator.free(path);

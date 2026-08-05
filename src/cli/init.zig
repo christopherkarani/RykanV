@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const orca_policy = @import("ryk_core").policy;
+const policy_mod = @import("ryk_core").policy;
 const core = @import("ryk_core").core;
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
@@ -10,7 +10,7 @@ const pack_state = @import("pack_state.zig");
 
 const InitOptions = struct {
     mode: ?[]const u8 = null,
-    preset: orca_policy.presets.AgentPreset = .generic_agent,
+    preset: policy_mod.presets.AgentPreset = .generic_agent,
     force: bool = false,
     quiet: bool = false,
 };
@@ -40,9 +40,9 @@ pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: an
     };
     defer file.close(io);
 
-    const preset_text = orca_policy.presets.agentPresetText(options.preset);
+    const preset_text = policy_mod.presets.agentPresetText(options.preset);
     try writePolicy(io, file, preset_text, options.mode);
-    const info = orca_policy.presets.agentPresetInfo(options.preset);
+    const info = policy_mod.presets.agentPresetInfo(options.preset);
 
     // Additive pack enablement for the daemon evaluator (project `.ryk.toml` when in a git
     // repo, else user config). Zig still owns policy.yaml; packs config is additive.
@@ -109,7 +109,7 @@ pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: an
 // ---------------------------------------------------------------------------
 
 /// Re-export for tests and start.zig composition (product API is network_discovered).
-pub const refreshManagedDiscovery = orca_policy.network_discovered.refreshManagedDiscovery;
+pub const refreshManagedDiscovery = policy_mod.network_discovered.refreshManagedDiscovery;
 
 fn softRefreshInitDiscovery(
     io: std.Io,
@@ -155,7 +155,7 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
                 try stderr.writeAll("ryk init: --preset requires a preset name.\n");
                 return error.Usage;
             }
-            const preset = orca_policy.presets.AgentPreset.parse(argv[index]) orelse {
+            const preset = policy_mod.presets.AgentPreset.parse(argv[index]) orelse {
                 try suggestions.writeInvalidValue(stderr, "ryk init", "--preset", argv[index], &.{ "generic-agent", "claude-code", "codex", "cursor-agent", "opencode", "cline-roo", "mcp-dev", "github-actions", "solo-dev", "strict-local", "team-ci", "openclaw-hermes", "trusted-local" }, "init");
                 return error.Usage;
             };
@@ -336,9 +336,9 @@ test "init writes requested phase 18 presets as valid policies" {
 
         const policy = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(16 * 1024));
         defer std.testing.allocator.free(policy);
-        var loaded = try orca_policy.load.parseFromSlice(std.testing.allocator, policy, ".ryk/policy.yaml");
+        var loaded = try policy_mod.load.parseFromSlice(std.testing.allocator, policy, ".ryk/policy.yaml");
         defer loaded.deinit();
-        try orca_policy.validate.policy(&loaded);
+        try policy_mod.validate.policy(&loaded);
     }
 }
 
@@ -441,7 +441,7 @@ fn p3InitPlantOpencodeHome(home_dir: anytype) !void {
     try p3InitWriteRel(home_dir, ".local/share/opencode/auth.json", p3_init_opencode_auth_json);
 }
 
-fn p3InitStoreContainsHost(store: orca_policy.network_discovered.ManagedStore, needle: []const u8) bool {
+fn p3InitStoreContainsHost(store: policy_mod.network_discovered.ManagedStore, needle: []const u8) bool {
     for (store.hosts) |entry| {
         if (std.mem.eql(u8, entry.host, needle)) return true;
     }
@@ -475,7 +475,7 @@ test "init refreshManagedDiscovery pi/opencode writes managed yaml hostnames+sou
 
     try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{ "pi", "opencode" });
 
-    var store = try orca_policy.network_discovered.loadManaged(io, allocator, workspace_root);
+    var store = try policy_mod.network_discovered.loadManaged(io, allocator, workspace_root);
     defer store.deinit(allocator);
 
     try std.testing.expect(p3InitStoreContainsHost(store, "auth.x.ai"));
@@ -486,7 +486,7 @@ test "init refreshManagedDiscovery pi/opencode writes managed yaml hostnames+sou
         try std.testing.expect(std.mem.indexOf(u8, entry.host, "://") == null);
     }
 
-    const path = try orca_policy.network_discovered.managedPath(allocator, workspace_root);
+    const path = try policy_mod.network_discovered.managedPath(allocator, workspace_root);
     defer allocator.free(path);
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64 * 1024));
     defer allocator.free(bytes);
@@ -530,7 +530,7 @@ test "init refreshManagedDiscovery rediscovery leaves policy.yaml user allows un
     const policy_before = try ws_tmp.dir.readFileAlloc(io, ".ryk/policy.yaml", allocator, .limited(4096));
     defer allocator.free(policy_before);
 
-    try orca_policy.network_discovered.writeManaged(io, allocator, workspace_root, &.{
+    try policy_mod.network_discovered.writeManaged(io, allocator, workspace_root, &.{
         .{ .host = "stale-init-managed.invalid", .sources = &.{"fixture:stale"} },
     });
 
@@ -543,7 +543,7 @@ test "init refreshManagedDiscovery rediscovery leaves policy.yaml user allows un
     try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{"pi"});
     try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{"pi"});
 
-    var store = try orca_policy.network_discovered.loadManaged(io, allocator, workspace_root);
+    var store = try policy_mod.network_discovered.loadManaged(io, allocator, workspace_root);
     defer store.deinit(allocator);
     try std.testing.expect(p3InitStoreContainsHost(store, "auth.x.ai"));
     try std.testing.expect(!p3InitStoreContainsHost(store, "stale-init-managed.invalid"));
@@ -580,7 +580,7 @@ test "init refreshManagedDiscovery nested-cwd lands at workspace-root .ryk" {
 
     try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{"opencode"});
 
-    var store = try orca_policy.network_discovered.loadManaged(io, allocator, workspace_root);
+    var store = try policy_mod.network_discovered.loadManaged(io, allocator, workspace_root);
     defer store.deinit(allocator);
     try std.testing.expect(p3InitStoreContainsHost(store, "api.x.ai"));
     try std.testing.expect(p3InitStoreContainsHost(store, "auth.x.ai"));
@@ -649,7 +649,7 @@ test "init force still succeeds after refreshManagedDiscovery with fixtures" {
 
     try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{ "pi", "opencode" });
 
-    var store = try orca_policy.network_discovered.loadManaged(io, allocator, workspace_root);
+    var store = try policy_mod.network_discovered.loadManaged(io, allocator, workspace_root);
     defer store.deinit(allocator);
     try std.testing.expect(p3InitStoreContainsHost(store, "auth.x.ai"));
     try std.testing.expect(p3InitStoreContainsHost(store, "api.x.ai"));

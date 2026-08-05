@@ -15,7 +15,7 @@
 //! - `system.disk` (default-on, opt-out via disabled)
 
 const std = @import("std");
-const orca_policy = @import("ryk_core").policy;
+const policy_mod = @import("ryk_core").policy;
 const contracts = @import("daemon_contracts.zig");
 const exit_codes = @import("exit_codes.zig");
 const pack_config = @import("pack_config.zig");
@@ -74,7 +74,7 @@ pub const PacksSummary = struct {
 
 /// Opt-in pack IDs for a policy preset. Empty means baseline only.
 /// Real registry IDs only — daemon remains source of truth for definitions.
-pub fn presetOptInPacks(preset: orca_policy.presets.AgentPreset) []const []const u8 {
+pub fn presetOptInPacks(preset: policy_mod.presets.AgentPreset) []const []const u8 {
     return switch (preset) {
         // Default / conservative coding agents: no surprise opt-ins.
         .generic_agent, .solo_dev, .trusted_local, .mcp_dev => &.{},
@@ -101,7 +101,7 @@ pub fn presetOptInPacks(preset: orca_policy.presets.AgentPreset) []const []const
 }
 
 pub fn presetOptInPacksByName(preset_name: []const u8) []const []const u8 {
-    const preset = orca_policy.presets.AgentPreset.parse(preset_name) orelse return &.{};
+    const preset = policy_mod.presets.AgentPreset.parse(preset_name) orelse return &.{};
     return presetOptInPacks(preset);
 }
 
@@ -341,7 +341,7 @@ pub fn ensurePresetPacks(
     io: std.Io,
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
-    preset: orca_policy.presets.AgentPreset,
+    preset: policy_mod.presets.AgentPreset,
 ) !EnsurePacksResult {
     const desired = presetOptInPacks(preset);
     if (desired.len == 0) {
@@ -379,7 +379,7 @@ pub fn ensurePresetPacksByName(
     workspace_root: []const u8,
     preset_name: []const u8,
 ) !EnsurePacksResult {
-    const preset = orca_policy.presets.AgentPreset.parse(preset_name) orelse {
+    const preset = policy_mod.presets.AgentPreset.parse(preset_name) orelse {
         return .{
             .message = "Packs: baseline only",
             .changed = false,

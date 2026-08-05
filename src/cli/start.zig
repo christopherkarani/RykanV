@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const core_api = @import("ryk_core").api;
-const orca_policy = @import("ryk_core").policy;
+const policy_mod = @import("ryk_core").policy;
 
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
@@ -16,7 +16,7 @@ const env_util = @import("../env_util.zig");
 const tui = @import("../tui/mod.zig");
 /// Re-export: run adapters for host_keys; regenerate managed store under workspace_root.
 /// Body lives in `policy.network_discovered` (DIS-1 / DIS-7).
-pub const refreshManagedDiscovery = orca_policy.network_discovered.refreshManagedDiscovery;
+pub const refreshManagedDiscovery = policy_mod.network_discovered.refreshManagedDiscovery;
 
 pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     for (argv) |arg| {
@@ -269,7 +269,7 @@ fn resolveProtectionMode(flags: onboarding.StartFlags) onboarding.ProtectionMode
 /// Modes that ask or enforce on risk. observe/trusted soften and must not claim Ask protection.
 /// Matches status `policyModeIsMediating` vocabulary (ask/strict/ci/redteam).
 fn policyModeIsAskEquivalent(mode: []const u8) bool {
-    const parsed = orca_policy.schema.Mode.parse(mode) orelse return false;
+    const parsed = policy_mod.schema.Mode.parse(mode) orelse return false;
     return switch (parsed) {
         .ask, .yolo, .strict, .ci, .redteam => true,
         .observe, .trusted => false,
