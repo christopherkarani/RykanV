@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build Linux ryk CLI binaries (amd64 + arm64) via Docker buildx and stage them
-# for scripts/build-release.sh (RYK_CLI_ARTIFACT_DIR / RYK_CLI_ARTIFACT_DIR).
+# for scripts/build-release.sh (RYK_CLI_ARTIFACT_DIR).
 #
 # Layout written:
 #   $OUT_DIR/linux-amd64/ryk
@@ -17,7 +17,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 OUT_DIR="${1:-${RYK_LINUX_ARTIFACT_DIR:-${RYK_LINUX_ARTIFACT_DIR:-${REPO_ROOT}/.release-cli-bins}}}"
 VERSION="${RYK_VERSION:-${RYK_VERSION:-$(tr -d '[:space:]' <"${REPO_ROOT}/VERSION")}}"
 COMMIT="${RYK_COMMIT:-${RYK_COMMIT:-$(git -C "${REPO_ROOT}" rev-parse --short=12 HEAD)}}"
-BUILD_DATE="${RYK_BUILD_DATE:-${RYK_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}}"
+BUILD_DATE="${RYK_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 
 command -v docker >/dev/null 2>&1 || {
   echo "build-linux-release-docker: docker is required" >&2

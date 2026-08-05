@@ -12,7 +12,7 @@ Use Zig `0.16.0` (see `.zigversion`; prefer `./scripts/zig`). The product CLI is
 
 ## Release Artifacts
 
-Release helpers build checksum-covered **ryk** archives (primary `ryk-v*`; dual-publish `orca-v*` when enabled) into `dist/`:
+Release helpers build checksum-covered **ryk** archives (primary `ryk-v*`; dual-publish `ryk-v*` when enabled) into `dist/`:
 
 ```sh
 ./scripts/build-release.sh

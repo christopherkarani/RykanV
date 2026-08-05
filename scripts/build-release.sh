@@ -2,15 +2,15 @@
 set -eu
 
 # Phase 5a: primary product brand is ryk; dual-name env RYK_* then RYK_*.
-VERSION="${RYK_VERSION:-${RYK_VERSION:-$(tr -d '[:space:]' <"$(dirname "$0")/../VERSION" 2>/dev/null || printf '1.2.0')}}"
-COMMIT="${RYK_COMMIT:-${RYK_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || printf unknown)}}"
-BUILD_DATE="${RYK_BUILD_DATE:-${RYK_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}}"
-DIST_DIR="${RYK_DIST_DIR:-${RYK_DIST_DIR:-dist}}"
-ZIG_OPTIMIZE="${RYK_ZIG_OPTIMIZE:-${RYK_ZIG_OPTIMIZE:-ReleaseSafe}}"
-RELEASE_PRODUCT="${RYK_RELEASE_PRODUCT:-${RYK_RELEASE_PRODUCT:-all}}"
-CLI_ARTIFACT_DIR="${RYK_CLI_ARTIFACT_DIR:-${RYK_CLI_ARTIFACT_DIR:-}}"
-# Dual-publish orca-v* alias archives (same bytes as ryk-v*) for one major.
-DUAL_PUBLISH_ORCA="${RYK_DUAL_PUBLISH_ORCA:-${RYK_DUAL_PUBLISH_ORCA:-1}}"
+VERSION="${RYK_VERSION:-$(tr -d '[:space:]' <"$(dirname "$0")/../VERSION" 2>/dev/null || printf '1.2.0')}"
+COMMIT="${RYK_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || printf unknown)}"
+BUILD_DATE="${RYK_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+DIST_DIR="${RYK_DIST_DIR:-dist}"
+ZIG_OPTIMIZE="${RYK_ZIG_OPTIMIZE:-ReleaseSafe}"
+RELEASE_PRODUCT="${RYK_RELEASE_PRODUCT:-all}"
+CLI_ARTIFACT_DIR="${RYK_CLI_ARTIFACT_DIR:-}"
+# Dual-publish ryk-v* alias archives (same bytes as ryk-v*) for one major.
+DUAL_PUBLISH_DISABLED="${RYK_DUAL_PUBLISH_DISABLED:-1}"
 SIGNING_STATUS="not_configured"
 
 HOST_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -25,8 +25,8 @@ esac
 # - ryk-v{version}-darwin-arm64.tar.gz
 # - ryk-v{version}-linux-amd64.tar.gz
 # - ryk-v{version}-linux-arm64.tar.gz
-# Archive root contains bin/ryk (primary) + bin/orca (compat alias).
-# When DUAL_PUBLISH_ORCA=1, also emit orca-v* copies of the same archives.
+# Archive root contains bin/ryk (primary) + bin/ryk (compat alias).
+# When DUAL_PUBLISH_DISABLED=1, also emit ryk-v* copies of the same archives.
 
 CLI_TARGETS="
 darwin amd64 x86_64-macos tar.gz ryk
@@ -122,7 +122,7 @@ write_release_readme() {
 
 This artifact is built from commit ${COMMIT} at ${BUILD_DATE}.
 
-Primary CLI: \`bin/ryk\`. Legacy alias: \`bin/orca\` (same product).
+Primary CLI: \`bin/ryk\`. Legacy alias: \`bin/ryk\` (same product).
 
 Verify the archive against the top-level checksums.txt before installing:
 
@@ -157,7 +157,7 @@ install_primary_and_alias() {
       alias_src="$prefix/bin/ryk.exe"
     fi
     [ -n "$primary_src" ] || {
-      printf 'missing ryk/orca binary in %s\n' "$prefix/bin" >&2
+      printf 'missing ryk binary in %s\n' "$prefix/bin" >&2
       exit 1
     }
     cp "$primary_src" "$root/bin/ryk.exe"
@@ -178,7 +178,7 @@ install_primary_and_alias() {
       alias_src="$prefix/bin/ryk"
     fi
     [ -n "$primary_src" ] || {
-      printf 'missing ryk/orca binary in %s\n' "$prefix/bin" >&2
+      printf 'missing ryk binary in %s\n' "$prefix/bin" >&2
       exit 1
     }
     cp "$primary_src" "$root/bin/ryk"
@@ -239,8 +239,8 @@ build_cli_target() {
   fi
   printf 'Built %s\n' "${DIST_DIR}/$artifact"
 
-  # Cheap dual-publish: identical orca-v* alias for one major (installers / old taps).
-  if [ "$DUAL_PUBLISH_ORCA" = "1" ]; then
+  # Cheap dual-publish: identical ryk-v* alias for one major (installers / old taps).
+  if [ "$DUAL_PUBLISH_DISABLED" = "1" ]; then
     alias_artifact="ryk-v${VERSION}-${os}-${arch}.${ext}"
     cp -p "${DIST_DIR}/$artifact" "${DIST_DIR}/$alias_artifact"
     printf 'Built %s (compat dual-publish of ryk archive)\n' "${DIST_DIR}/$alias_artifact"
@@ -268,13 +268,13 @@ write_release_manifest() {
     {\"name\":\"${name}\",\"sha256\":\"${hash}\"}"
   done
 
-  products_json="[\"ryk\", \"orca\", \"core\"]"
+  products_json="[\"ryk\", \"core\"]"
   runtime_assets_json="[\"schemas\", \"policies\", \"fixtures\", \"examples\", \"integrations\", \"packaging\", \"ryk-pi/extensions\"]"
   schemas_json="[\"schemas/policy-v1.json\", \"schemas/event-v1.json\", \"schemas/mcp-manifest-v1.json\"]"
   fixtures_json="[\"fixtures/shell-abuse/curl-pipe-sh\", \"examples/mcp\", \"examples/network\", \"examples/policies\"]"
   docs_json="[\"README.md\", \"docs/install.md\", \"README-release.md\"]"
   target_platforms="$(target_platforms_json)"
-  safety_summary="ryk is a local CLI/runtime firewall (orca is a compat alias); Edge artifacts are not included in CLI-only releases."
+  safety_summary="ryk is a local CLI/runtime firewall (single brand: ryk / Rykan V); Edge artifacts are not included in CLI-only releases."
 
   cat >"$output" <<EOF
 {
@@ -297,7 +297,7 @@ write_release_manifest() {
   "signing_status": "${SIGNING_STATUS}",
   "sbom_status": "hook-only inventory generated at sbom.json",
   "primary_cli": "ryk",
-  "legacy_cli_alias": "orca"
+  "legacy_cli_alias": null
 }
 EOF
   printf 'Wrote %s\n' "$output"
@@ -321,12 +321,12 @@ printf '%s\n' "$(selected_targets)" | while read -r os arch zig_target ext bin_n
   build_cli_target "$os" "$arch" "$zig_target" "$ext" "$bin_name"
 done
 
-if [ "${RYK_SIGNING_ENABLED:-${RYK_SIGNING_ENABLED:-0}}" = "1" ]; then
-  if [ -n "${RYK_SIGNING_COMMAND:-${RYK_SIGNING_COMMAND:-}}" ]; then
+if [ "${RYK_SIGNING_ENABLED:-0}" = "1" ]; then
+  if [ -n "${RYK_SIGNING_COMMAND:-}" ]; then
     SIGNING_STATUS="signed"
     sh -c "${RYK_SIGNING_COMMAND:-$RYK_SIGNING_COMMAND}" sh "$DIST_DIR"
   else
-    printf 'Signing requested but RYK_SIGNING_COMMAND/RYK_SIGNING_COMMAND is not set.\n' >&2
+    printf 'Signing requested but RYK_SIGNING_COMMAND is not set.\n' >&2
     exit 1
   fi
 else

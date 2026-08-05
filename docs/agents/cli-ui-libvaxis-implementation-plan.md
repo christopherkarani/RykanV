@@ -76,7 +76,7 @@ Machine and script paths stay frozen (`--json`, pipes, non-TTY → linear).
 ## 4. Wave 1 — Packs (first product TUI)
 
 **Paths:** `src/cli/packs.zig`, `src/cli/help.zig`, browse kit, suggestions  
-**User story:** On colour TTY, bare `ryk packs` opens browse: **enabled + baseline first**; `/` search; `a` (or documented key) show all; Enter detail; **e/d** (or footer-bound keys) enable/disable with **confirm default No**; status line = project `.orca.toml` vs user config write target.
+**User story:** On colour TTY, bare `ryk packs` opens browse: **enabled + baseline first**; `/` search; `a` (or documented key) show all; Enter detail; **e/d** (or footer-bound keys) enable/disable with **confirm default No**; status line = project `.ryk.toml` vs user config write target.
 
 | ID | Work | Acceptance |
 |----|------|------------|

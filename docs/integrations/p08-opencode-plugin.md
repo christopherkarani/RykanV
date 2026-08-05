@@ -220,4 +220,4 @@ Release packaging is safe:
 - No MCP behavior was added.
 - No drone plugin behavior was added.
 - No secrets leak.
-- The 2 pre-existing test failures are unrelated to this change (they concern "orca" vs "orca" naming in docs).
+- The 2 pre-existing test failures are unrelated to this change (they concern "ryk" vs "ryk" naming in docs).

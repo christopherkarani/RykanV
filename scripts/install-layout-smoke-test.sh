@@ -49,7 +49,7 @@ ARCH="$(detect_arch)"
 [[ "${OS}" != "unsupported" ]] || fail "unsupported host OS for smoke test"
 [[ "${ARCH}" != "unsupported" ]] || fail "unsupported host architecture for smoke test"
 
-# Phase 5a: primary archive is ryk-v*; dual-publish may also emit orca-v* (same root layout).
+# Phase 5a: primary archive is ryk-v*; dual-publish may also emit ryk-v* (same root layout).
 ARTIFACT=""
 STAGE_NAME=""
 for prefix in ryk orca; do
@@ -60,7 +60,7 @@ for prefix in ryk orca; do
     break
   fi
 done
-[[ -n "${ARTIFACT}" ]] || fail "missing host artifact: ${DIST_DIR}/ryk-v${VERSION}-${OS}-${ARCH}.tar.gz (or orca-v* dual-publish)"
+[[ -n "${ARTIFACT}" ]] || fail "missing host artifact: ${DIST_DIR}/ryk-v${VERSION}-${OS}-${ARCH}.tar.gz (or ryk-v* dual-publish)"
 
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ryk-install-layout.XXXXXX")"
 cleanup() {
@@ -70,7 +70,7 @@ trap cleanup EXIT INT TERM
 
 tar -xzf "${ARTIFACT}" -C "${TMP_ROOT}"
 STAGE_ROOT="${TMP_ROOT}/${STAGE_NAME}"
-# Archive root is always ryk-v… even when dual-published as orca-v* filename
+# Archive root is always ryk-v… even when dual-published as ryk-v* filename
 # (byte-identical copy of the ryk archive). Prefer that layout first.
 if [[ ! -d "${STAGE_ROOT}" ]]; then
   if [[ -d "${TMP_ROOT}/ryk-v${VERSION}-${OS}-${ARCH}" ]]; then

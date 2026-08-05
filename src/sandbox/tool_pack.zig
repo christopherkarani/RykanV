@@ -1,6 +1,6 @@
 //! Essentials tool pack + PATH honesty for OS-attached agent sessions.
 //!
-//! ## Tool pack (`ORCA_TOOL_PACK`)
+//! ## Tool pack (`RYK_TOOL_PACK`)
 //! When OS sandbox attach is active, a small **essentials** pack may add
 //! file-only `.exec` grants for everyday coding tools that exist on the host:
 //! `rg`, `fd`, `jq`, project `./scripts/zig` (or `zig` on PATH), and `git`.
@@ -20,7 +20,7 @@ const builtin = @import("builtin");
 const apply_posix = @import("apply_posix.zig");
 
 /// Env kill switch / selector.
-pub const tool_pack_env = "ORCA_TOOL_PACK";
+pub const tool_pack_env = "RYK_TOOL_PACK";
 
 /// Max file-only `.exec` paths emitted by the pack (link + realpath + shebang extras).
 pub const max_pack_exec_paths: usize = 16;
@@ -70,7 +70,7 @@ pub const PathFilterOpts = struct {
     honesty: PathFilterHonesty = path_filter_honesty,
 };
 
-/// Parse `ORCA_TOOL_PACK` value. Unknown / empty → null (caller applies default).
+/// Parse `RYK_TOOL_PACK` value. Unknown / empty → null (caller applies default).
 pub fn parseToolPack(value: ?[]const u8) ?ToolPack {
     const raw = value orelse return null;
     if (raw.len == 0) return null;
@@ -207,7 +207,7 @@ pub fn filterPathForSandbox(
 }
 
 /// Apply PATH filter to env map when attach is active. No-op when `os_attach` is false.
-/// Sets `ORCA_PATH_FILTER` / `ORCA_TOOL_PACK` honesty labels for the child session.
+/// Sets `RYK_PATH_FILTER` / `RYK_TOOL_PACK` honesty labels for the child session.
 pub fn applyPathFilterToEnv(
     allocator: std.mem.Allocator,
     env_map: *std.process.Environ.Map,
@@ -220,8 +220,8 @@ pub fn applyPathFilterToEnv(
     const filtered = try filterPathForSandbox(allocator, old, opts);
     defer allocator.free(filtered);
     try env_map.put("PATH", filtered);
-    try env_map.put("ORCA_PATH_FILTER", path_filter_honesty.toString());
-    try env_map.put("ORCA_TOOL_PACK", pack.toString());
+    try env_map.put("RYK_PATH_FILTER", path_filter_honesty.toString());
+    try env_map.put("RYK_TOOL_PACK", pack.toString());
 }
 
 // --- internals ---

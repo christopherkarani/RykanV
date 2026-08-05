@@ -36,9 +36,9 @@ RUN version="${RYK_VERSION:-$RYK_VERSION}" \
     && mkdir -p "/out/linux-$TARGETARCH" \
     && cp -p /tmp/ryk-cli/bin/ryk "/out/linux-$TARGETARCH/ryk" \
     && if [ -f /tmp/ryk-cli/bin/ryk ]; then \
-         cp -p /tmp/ryk-cli/bin/ryk "/out/linux-$TARGETARCH/orca"; \
+         cp -p /tmp/ryk-cli/bin/ryk "/out/linux-$TARGETARCH/ryk"; \
        else \
-         cp -p /tmp/ryk-cli/bin/ryk "/out/linux-$TARGETARCH/orca"; \
+         cp -p /tmp/ryk-cli/bin/ryk "/out/linux-$TARGETARCH/ryk"; \
        fi
 
 FROM scratch

@@ -1,6 +1,6 @@
 # Packaging
 
-Primary CLI binary is **ryk**; **orca** is a PATH/package compat alias for one major (Phase 5a). Artifacts are `ryk-v{version}-*` (optional dual-publish `orca-v*`).
+Primary CLI binary is **ryk**; **orca** is a PATH/package compat alias for one major (Phase 5a). Artifacts are `ryk-v{version}-*` (optional dual-publish `ryk-v*`).
 
 Production package templates live under:
 

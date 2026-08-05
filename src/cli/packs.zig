@@ -172,7 +172,7 @@ fn runPacksBrowse(
         enabled[i] = pack.enabled;
     }
 
-    // Write-target status (project .orca.toml vs user config).
+    // Write-target status (project .ryk.toml vs user config).
     var write_scope: pack_config.ConfigScope = .user;
     var write_path: []const u8 = "user config";
     var write_path_owned: ?[]u8 = null;

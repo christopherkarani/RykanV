@@ -30,11 +30,11 @@ test("clean HOME bundled extension loads and invokes the injected ryk binary", a
 		writeFileSync(
 			resolve(extensionDir, "index.ts"),
 			[
-				'import { installOrcaExtension } from "./runtime.ts";',
+				'import { installRykExtension } from "./runtime.ts";',
 				"export default function rykPiExtension(",
-				"  pi: Parameters<typeof installOrcaExtension>[0],",
+				"  pi: Parameters<typeof installRykExtension>[0],",
 				"): void {",
-				`  installOrcaExtension(pi, { orcaBin: ${JSON.stringify(rykBinary)} });`,
+				`  installRykExtension(pi, { rykBin: ${JSON.stringify(rykBinary)} });`,
 				"}",
 				"",
 			].join("\n"),

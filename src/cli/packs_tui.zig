@@ -5,7 +5,7 @@
 //! On colour TTY when `shouldEnterTui` is true, bare `ryk packs` opens the shared
 //! browse kit: **enabled + baseline first** (`a` toggles full catalog), `/` search.
 //! **Enable** is one-shot; **disable** leaves alt-screen for confirm default No
-//! (baseline uses the same danger confirm / `ORCA_OPERATOR` gate as CLI). Status
+//! (baseline uses the same danger confirm / `RYK_OPERATOR` gate as CLI). Status
 //! shows write target. Sticky keeps just-disabled rows in enabled-only mode.
 //! Mutations use the same `pack_config` paths as argv enable/disable.
 //!
@@ -502,7 +502,7 @@ fn runBrowseLoop(
 }
 
 /// Apply enable/disable. Both leave alt-screen for confirm default No (freeze #3).
-/// Baseline disable uses CLI danger confirm / ORCA_OPERATOR.
+/// Baseline disable uses CLI danger confirm / RYK_OPERATOR.
 /// On successful disable, marks sticky so enabled-only view keeps the row.
 fn applyMutate(
     io: std.Io,
@@ -879,7 +879,7 @@ test "packs browse: row label and detail include id and write target" {
     try std.testing.expect(std.mem.indexOf(u8, row, "containers.docker") != null);
     try std.testing.expect(std.mem.indexOf(u8, row, "off") != null);
 
-    const status = writeTargetStatus(.project, "/tmp/proj/.orca.toml");
+    const status = writeTargetStatus(.project, "/tmp/proj/.ryk.toml");
     var l0: [128]u8 = undefined;
     var l1: [160]u8 = undefined;
     var l2: [96]u8 = undefined;
@@ -894,7 +894,7 @@ test "packs browse: renderFrame via kit shows domain footer (no alt-screen)" {
     var out_buf: [4096]u8 = undefined;
     var w: std.Io.Writer = .fixed(&out_buf);
     const items = [_][]const u8{ "● core.git  [on] baseline", "○ containers.docker  [off]" };
-    const detail = [_][]const u8{ "core.git", "writes → .orca.toml (project)" };
+    const detail = [_][]const u8{ "core.git", "writes → .ryk.toml (project)" };
     const n = try tui.browse.renderFrame(std.testing.io, &w, .{
         .title = browseTitle(.all),
         .items = &items,

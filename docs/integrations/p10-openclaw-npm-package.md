@@ -33,7 +33,7 @@ ryk-openclaw-plugin
 ## Manifest status
 
 - `openclaw.plugin.json` exists and validates as JSON.
-- Contains `id: "orca"`, `name: "ryk"`, `version: "1.1.3"`.
+- Contains `id: "ryk"`, `name: "ryk"`, `version: "1.1.3"`.
 - Contains `configSchema` with `type: "object"`, `additionalProperties: false`.
 
 ## Build output status

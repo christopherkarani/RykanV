@@ -46,10 +46,10 @@ fn childExecNc(port_text: [*:0]const u8) noreturn {
 }
 
 // CTRL template: unsandboxed canary readable; sandboxed child denies outside grant,
-// allows workspace neighbor read/write, and denies control-root write (.orca + .git).
+// allows workspace neighbor read/write, and denies control-root write (.ryk + .git).
 // Uses prepare SBPL + applyInChild.
 // Exit codes from child: 0=ok, 2=apply fail, 3=outside readable (leak), 4=ws read fail,
-// 5=ws write fail, 6=.orca control writable (leak), 7=.git control writable (leak).
+// 5=ws write fail, 6=.ryk control writable (leak), 7=.git control writable (leak).
 test "real FS deny: outside canary denied; workspace readable and writable" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
     if (!sandboxInitAvailable()) return error.SkipZigTest;
@@ -178,10 +178,10 @@ test "real FS deny: outside canary denied; workspace readable and writable" {
         );
         if (cfd >= 0) {
             _ = std.c.close(cfd);
-            std.c._exit(6); // .orca control write leak
+            std.c._exit(6); // .ryk control write leak
         }
 
-        // Phase 2: workspace .git is a default control root — same write-deny class as .orca.
+        // Phase 2: workspace .git is a default control root — same write-deny class as .ryk.
         const gfd = std.c.open(
             git_control_write_z.ptr,
             .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true },
@@ -1176,7 +1176,7 @@ test "real FS: host config RW grant allows .claude and still denies .ssh" {
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     try ws_tmp.dir.writeFile(io, .{ .sub_path = "neighbor.txt", .data = "WS_OK" });
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
@@ -1290,7 +1290,7 @@ test "real FS: host config authority write denied; sibling session file still wr
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
 
@@ -1392,7 +1392,7 @@ test "real FS: F-03 host-config hardlink into workspace denied; workspace-only l
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     try ws_tmp.dir.createDirPath(io, ".git");
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
@@ -1502,7 +1502,7 @@ test "real FS: path-walk lstat of grant ancestors succeeds; outside still denied
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     try ws_tmp.dir.createDirPath(io, "nested/deep");
     try ws_tmp.dir.writeFile(io, .{ .sub_path = "nested/deep/file.txt", .data = "WS_OK" });
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
@@ -1632,7 +1632,7 @@ test "real FS: Users path-walk + codex npm install realpath chain" {
         } else |_| {
             allocator.free(candidate);
         }
-        const planted = try std.fs.path.join(allocator, &.{ home, ".orca-tmp-pathwalk-probe" });
+        const planted = try std.fs.path.join(allocator, &.{ home, ".ryk-tmp-pathwalk-probe" });
         std.Io.Dir.cwd().createDirPath(io, planted) catch {
             allocator.free(planted);
             return error.SkipZigTest;

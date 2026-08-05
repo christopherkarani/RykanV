@@ -247,7 +247,7 @@ export function parseHookResponse(stdout: string, blocking: boolean): OrcaRespon
 
 /**
  * Resolve the ryk/orca binary (Phase 5a dual-name).
- * Prefer absolute RYK_BIN / RYK_BIN, then PATH (`ryk` then `ryk`).
+ * Prefer absolute RYK_BIN, then PATH (`ryk` then `ryk`).
  * Relative path-shaped env bins are agent-plantable — rejected.
  * Bare names and hook spawns use argv (no shell interpolation).
  */
@@ -273,7 +273,7 @@ export function findOrca(cwd?: string): string | null {
     return null;
   }
 
-  for (const name of ['ryk', 'orca'] as const) {
+  for (const name of ['ryk', 'ryk'] as const) {
     try {
       const which = execFileSync('which', [name], {
         encoding: 'utf-8',
@@ -289,7 +289,7 @@ export function findOrca(cwd?: string): string | null {
   // Dev-only: never trust agent-writable workspace bins in production loads.
   if (process.env.RYK_ALLOW_WORKSPACE_BIN === '1' || process.env.RYK_ALLOW_WORKSPACE_BIN === '1') {
     const candidates: string[] = [];
-    for (const name of ['ryk', 'orca'] as const) {
+    for (const name of ['ryk', 'ryk'] as const) {
       if (cwd) {
         candidates.push(join(cwd, 'zig-out', 'bin', name));
         candidates.push(join(cwd, '..', 'zig-out', 'bin', name));
@@ -309,7 +309,7 @@ export function findOrca(cwd?: string): string | null {
 }
 
 function callOrca(
-  orcaBin: string,
+  rykBin: string,
   event: string,
   data: unknown,
   sessionId: string | undefined,
@@ -318,8 +318,8 @@ function callOrca(
   const payloadJson = JSON.stringify(buildPayload(event, data, sessionId));
 
   try {
-    // argv array — no shell interpolation of orcaBin or event
-    const stdout = execFileSync(orcaBin, ['hook', 'opencode', event], {
+    // argv array — no shell interpolation of rykBin or event
+    const stdout = execFileSync(rykBin, ['hook', 'opencode', event], {
       input: payloadJson,
       encoding: 'utf-8',
       timeout: blocking ? 15000 : 10000,
@@ -430,16 +430,16 @@ const MISSING_BINARY_MSG = 'ryk binary not found; blocking as a precaution.';
 export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHooks> {
   const cwd = ctx.worktree || ctx.directory || process.cwd();
   // Fail closed on unexpected resolve errors so hooks still register.
-  let orcaBin: string | null = null;
+  let rykBin: string | null = null;
   try {
-    orcaBin = findOrca(cwd);
+    rykBin = findOrca(cwd);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[ryk] Binary resolve failed (fail-closed): ${message}`);
-    orcaBin = null;
+    rykBin = null;
   }
 
-  if (!orcaBin) {
+  if (!rykBin) {
     console.warn(
       '[ryk] Binary not found in PATH or typical build paths. ' +
         'Registering fail-closed veto hooks. ' +
@@ -457,7 +457,7 @@ export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHook
     };
   }
 
-  console.log(`[ryk] Plugin loaded. Binary: ${orcaBin}`);
+  console.log(`[ryk] Plugin loaded. Binary: ${rykBin}`);
 
   return {
     event: async ({ event }) => {
@@ -469,7 +469,7 @@ export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHook
       }
 
       await callOrca(
-        orcaBin,
+        rykBin,
         eventType,
         auditEventPayload(event),
         sessionIdFromEvent(event),
@@ -479,7 +479,7 @@ export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHook
 
     'tool.execute.before': async (input, output) => {
       const response = callOrca(
-        orcaBin,
+        rykBin,
         'tool.execute.before',
         buildToolBeforePayload(input, output),
         input.sessionID,
@@ -490,7 +490,7 @@ export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHook
 
     'tool.execute.after': async (input, output) => {
       await callOrca(
-        orcaBin,
+        rykBin,
         'tool.execute.after',
         {
           tool: input.tool,
@@ -508,14 +508,14 @@ export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHook
 
     'permission.ask': async (input, output) => {
       const sessionId = sessionIdFromRecord(input);
-      const response = callOrca(orcaBin, 'permission.asked', input, sessionId, true);
+      const response = callOrca(rykBin, 'permission.asked', input, sessionId, true);
       // Host already presents permission UI: map via table (ask stays ask for resume).
       applyPermissionDecision(response, output);
     },
 
     'shell.env': async (input, output) => {
       await callOrca(
-        orcaBin,
+        rykBin,
         'shell.env',
         {
           cwd: input.cwd,

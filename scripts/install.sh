@@ -8,15 +8,15 @@ set -eu
 # Fallback (same script, GitHub raw):
 #   curl -fsSL https://raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh | sh
 #
-# Environment (prefer RYK_*; fall back RYK_* for one major):
-#   RYK_VERSION / RYK_VERSION         Pin release version (default: latest / local VERSION / 1.2.9)
-#   RYK_INSTALL_DIR / RYK_INSTALL_DIR Binary install dir (default: ~/.local/bin)
-#   RYK_SHARE_DIR / RYK_SHARE_DIR     Runtime share root (default: ~/.local/share/ryk — kept in 5a)
-#   RYK_BASE_URL / RYK_BASE_URL       Override release base URL
-#   RYK_ARTIFACT_DIR / RYK_ARTIFACT_DIR Offline install from a local dist/ folder
-#   RYK_INSTALL_FORCE / RYK_INSTALL_FORCE=1 Allow overwriting a non-product file at the destination
-#   RYK_INSTALL_QUIET / RYK_INSTALL_QUIET=1 Suppress non-error UI (still installs; prints activation line)
-#   RYK_INSTALL_SKIP_ONBOARD / RYK_INSTALL_SKIP_ONBOARD=1  Skip post-install ensure
+# Environment (RYK_* only (hard-cut)):
+#   RYK_VERSION         Pin release version (default: latest / local VERSION / 1.2.9)
+#   RYK_INSTALL_DIR Binary install dir (default: ~/.local/bin)
+#   RYK_SHARE_DIR     Runtime share root (default: ~/.local/share/ryk — kept in 5a)
+#   RYK_BASE_URL       Override release base URL
+#   RYK_ARTIFACT_DIR Offline install from a local dist/ folder
+#   RYK_INSTALL_FORCE=1 Allow overwriting a non-product file at the destination
+#   RYK_INSTALL_QUIET=1 Suppress non-error UI (still installs; prints activation line)
+#   RYK_INSTALL_SKIP_ONBOARD=1  Skip post-install ensure
 #   NO_COLOR             Disable ANSI color even on a TTY
 #
 # Ensure door (release/install contract):
@@ -42,7 +42,7 @@ fi
 # Glyphs align with src/tui/render.zig (active/done use success green).
 
 QUIET=0
-if [ "${RYK_INSTALL_QUIET:-${RYK_INSTALL_QUIET:-0}}" = "1" ]; then
+if [ "${RYK_INSTALL_QUIET:-0}" = "1" ]; then
   QUIET=1
 fi
 
@@ -159,7 +159,7 @@ if [ -n "$SCRIPT_DIR" ] && [ -r "${SCRIPT_DIR}/../VERSION" ]; then
 fi
 
 RESOLVED_FROM="fallback 1.2.9"
-if [ -n "${RYK_VERSION:-${RYK_VERSION:-}}" ]; then
+if [ -n "${RYK_VERSION:-}" ]; then
   RESOLVED_FROM="version environment override"
 elif [ -n "${DEFAULT_VERSION}" ]; then
   RESOLVED_FROM="local VERSION"
@@ -182,14 +182,14 @@ else
   fi
 fi
 
-VERSION="${RYK_VERSION:-${RYK_VERSION:-${DEFAULT_VERSION:-1.2.9}}}"
-BASE_URL="${RYK_BASE_URL:-${RYK_BASE_URL:-https://github.com/christopherkarani/rykan/releases/download/v${VERSION}}}"
+VERSION="${RYK_VERSION:-${DEFAULT_VERSION:-1.2.9}}"
+BASE_URL="${RYK_BASE_URL:-https://github.com/christopherkarani/rykan/releases/download/v${VERSION}}"
 INSTALL_DIR="${RYK_INSTALL_DIR:-${RYK_INSTALL_DIR:-${HOME}/.local/bin}}"
 # Phase 5a: keep existing share layout under share/ryk (path migrate is Phase 5b).
 SHARE_DIR="${RYK_SHARE_DIR:-${RYK_SHARE_DIR:-${HOME}/.local/share/ryk}}"
 RESOURCE_ROOT="${SHARE_DIR}/${VERSION}"
 CURRENT_LINK="${SHARE_DIR}/current"
-ARTIFACT_DIR="${RYK_ARTIFACT_DIR:-${RYK_ARTIFACT_DIR:-}}"
+ARTIFACT_DIR="${RYK_ARTIFACT_DIR:-}"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ryk-install.XXXXXX")"
 RUNTIME_DIRS="integrations fixtures schemas policies ryk-pi"
 INSTALL_MARKER=".ryk-installation"
@@ -300,7 +300,7 @@ safe_install() {
   destination="$2"
 
   reject_symlink_components "$destination" "binary destination"
-  if [ -e "$destination" ] && [ "${RYK_INSTALL_FORCE:-${RYK_INSTALL_FORCE:-0}}" != "1" ]; then
+  if [ -e "$destination" ] && [ "${RYK_INSTALL_FORCE:-0}" != "1" ]; then
     if ! probe_existing_product "$destination" >/dev/null; then
       fail "refusing to overwrite non-ryk file at $destination" \
         "Set RYK_INSTALL_FORCE=1 to replace it, or choose another install dir."
@@ -544,7 +544,7 @@ print_success() {
 
 OS="$(detect_os)"
 ARCH="$(detect_arch)"
-# Prefer new ryk-v* artifact; fall back to legacy orca-v* during dual-publish window.
+# Prefer new ryk-v* artifact; fall back to legacy ryk-v* during dual-publish window.
 ARTIFACT="ryk-v${VERSION}-${OS}-${ARCH}.tar.gz"
 LEGACY_ARTIFACT="ryk-v${VERSION}-${OS}-${ARCH}.tar.gz"
 DESTINATION="$INSTALL_DIR/ryk"
@@ -647,7 +647,7 @@ step_done "Configure shell" "PATH + runtime resource root"
 # Setup is operational, not presentation: run for TTY, non-TTY, and quiet
 # installs. HOME is the global policy/plugin scope; never mutate an arbitrary
 # caller or Homebrew working directory. Trust scope: cd "$HOME" + export
-# RYK_RESOURCE_ROOT/ORCA_RESOURCE_ROOT to the installed share current link.
+# RYK_RESOURCE_ROOT to the installed share current link.
 # Soft host fails exit 0 with partial honesty from the ensure door — install
 # must not claim full-protection completion copy.
 #
@@ -712,7 +712,7 @@ summarize_ensure_receipt() {
 
 ONBOARDING_RAN=0
 ENSURE_MODE=doctor_fix
-if [ "${RYK_INSTALL_SKIP_ONBOARD:-${RYK_INSTALL_SKIP_ONBOARD:-0}}" != "1" ]; then
+if [ "${RYK_INSTALL_SKIP_ONBOARD:-0}" != "1" ]; then
   step_active "Set up protection"
   set +e
   # Always capture ensure: install owns presentation (no second banner / TUI dump).
@@ -759,13 +759,13 @@ if [ "${RYK_INSTALL_SKIP_ONBOARD:-${RYK_INSTALL_SKIP_ONBOARD:-0}}" != "1" ]; the
       fail "ryk protection setup failed (exit ${_ob_exit})" \
         "The CLI was installed, but protection setup did not finish.
 Re-run from your home directory: ryk doctor --fix --from-install
-(cd \"\$HOME\" first; keep RYK_RESOURCE_ROOT/ORCA_RESOURCE_ROOT on the installed share current link if you set them.)
+(cd \"\$HOME\" first; keep RYK_RESOURCE_ROOT on the installed share current link if you set them.)
 Or re-run the installer after resolving the host integration error."
     else
       fail "ryk protection setup failed (exit ${_ob_exit})" \
         "The CLI was installed, but protection setup did not finish.
 Re-run from your home directory: cd \"\$HOME\" && $(shell_quote "$DESTINATION") start --auto --skip-verify
-(keep RYK_RESOURCE_ROOT/ORCA_RESOURCE_ROOT on the installed share current link if you set them.)
+(keep RYK_RESOURCE_ROOT on the installed share current link if you set them.)
 Or upgrade to a release that supports doctor --fix, then re-run the installer."
     fi
   fi

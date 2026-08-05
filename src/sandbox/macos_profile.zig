@@ -228,7 +228,7 @@ pub fn renderSbplWithOptions(
     // fail. Same-tree hardlinks under host-config stay denied (residual; agents
     // rarely need them). Do not re-allow file-link on host_rw roots — that reopens
     // cross-root when both ends match separate allows (spike-proven).
-    // Control roots (.git / .orca / authority) get require-not so the workspace
+    // Control roots (.git / .ryk / authority) get require-not so the workspace
     // file-link re-allow does not re-open hardlink plant under write-denied trees
     // (same carve class as file-write*).
     try appendCrossRootFileLinkFence(&out, allocator, compiled.workspace_root, compiled.control_roots);
@@ -1192,7 +1192,7 @@ test "SBPL F-03 file-link fence denies global link then allows workspace only" {
 
     // Pathless deny then workspace allow with control require-not (last-match after grants).
     const deny_at = std.mem.indexOf(u8, sbpl, "(deny file-link)") orelse return error.TestUnexpectedResult;
-    // Default controls (.orca/.git) → require-all form, not bare workspace subpath allow.
+    // Default controls (.ryk/.git) → require-all form, not bare workspace subpath allow.
     const allow_ws = std.mem.indexOf(
         u8,
         sbpl,
@@ -1207,7 +1207,7 @@ test "SBPL F-03 file-link fence denies global link then allows workspace only" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         sbpl,
-        "(require-not (subpath \"/Users/dev/projects/app/.orca\"))",
+        "(require-not (subpath \"/Users/dev/projects/app/.ryk\"))",
     ) != null);
     // No Data-form workspace file-link grant (M-28).
     try std.testing.expect(std.mem.indexOf(

@@ -3,7 +3,7 @@ set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VERSION="${RYK_VERSION:-${RYK_VERSION:-$(tr -d '[:space:]' < "${SCRIPT_DIR}/../VERSION")}}"
-DIST_DIR="${RYK_DIST_DIR:-${RYK_DIST_DIR:-dist}}"
+DIST_DIR="${RYK_DIST_DIR:-dist}"
 OUT_DIR="${RYK_PACKAGE_MANIFEST_DIR:-${RYK_PACKAGE_MANIFEST_DIR:-${DIST_DIR}/package-manifests}}"
 CHECKSUMS="${DIST_DIR}/checksums.txt"
 
@@ -28,7 +28,7 @@ require_sha256() {
 
 [ -f "$CHECKSUMS" ] || fail "checksums not found: $CHECKSUMS"
 
-# Prefer primary ryk-v* checksums; fall back to dual-published orca-v*.
+# Prefer primary ryk-v* checksums; fall back to dual-published ryk-v*.
 darwin_amd64="$(checksum_for "ryk-v${VERSION}-darwin-amd64.tar.gz")"
 [ -n "$darwin_amd64" ] || darwin_amd64="$(checksum_for "ryk-v${VERSION}-darwin-amd64.tar.gz")"
 darwin_arm64="$(checksum_for "ryk-v${VERSION}-darwin-arm64.tar.gz")"

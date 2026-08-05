@@ -855,7 +855,7 @@ fn snapshotMatchingManifest(
     server_index: usize,
     server: sandbox.mcp_runtime_grants.Server,
 ) !?[]u8 {
-    const directory = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "mcp" });
+    const directory = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "mcp" });
     defer allocator.free(directory);
     var dir = std.Io.Dir.openDirAbsolute(io, directory, .{
         .iterate = true,
@@ -914,7 +914,7 @@ fn prepareProtectedWrapperParent(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
 ) PlanError![]u8 {
-    const control_root = try std.fs.path.join(allocator, &.{ workspace_root, ".orca" });
+    const control_root = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk" });
     defer allocator.free(control_root);
     try ensureDirectoryNoFollow(io, control_root);
     const wrapper_parent = try std.fs.path.join(allocator, &.{ control_root, "mcp-runtime" });

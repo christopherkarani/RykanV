@@ -135,7 +135,7 @@ Result: Install succeeded (plugin copied to `~/.openclaw/extensions/ryk/`).
 openclaw plugins list --json
 ```
 
-Result: Plugin appears in list with `id: "orca"`, `version: "1.1.3"`, `enabled: true`.
+Result: Plugin appears in list with `id: "ryk"`, `version: "1.1.3"`, `enabled: true`.
 
 **Note:** ~~A runtime error was observed during plugin registration: `TypeError: Cannot read properties of undefined (reading 'on')`. This appears to be due to OpenClaw loading the TypeScript source directly from the local path install, and the context shape may differ from the compiled runtime expectations. This is a known limitation of local path installs and does not affect the npm package or ClawHub distribution, which use the compiled `dist/index.js`.~~
 

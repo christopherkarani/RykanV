@@ -1,7 +1,7 @@
 .zig-cache/
 zig-cache/
 zig-out/
-.orca-tmp/
+.ryk-tmp/
 .direnv/
 .envrc.local
 dist/

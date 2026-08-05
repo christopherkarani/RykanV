@@ -3,7 +3,7 @@
 //! Codex supplies its fully resolved MCP inventory. Ryk wraps every usable
 //! stdio server through `ryk mcp proxy`, disables unmediated transports, and
 //! derives filesystem grants only from positive runtime roots or a protected
-//! `.orca/mcp` manifest.
+//! `.ryk/mcp` manifest.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -472,7 +472,7 @@ fn prepareProtectedWrapperParent(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
 ) ![]u8 {
-    const control_root = try std.fs.path.join(allocator, &.{ workspace_root, ".orca" });
+    const control_root = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk" });
     defer allocator.free(control_root);
     try ensureDirectoryNoFollow(io, control_root);
     const wrapper_parent = try std.fs.path.join(allocator, &.{ control_root, "mcp-runtime" });
@@ -536,7 +536,7 @@ fn snapshotMatchingManifest(
     server_index: usize,
     server: sandbox.mcp_runtime_grants.Server,
 ) !?[]u8 {
-    const directory = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "mcp" });
+    const directory = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "mcp" });
     defer allocator.free(directory);
     var dir = std.Io.Dir.openDirAbsolute(io, directory, .{
         .iterate = true,
@@ -789,7 +789,7 @@ test "protected plan proxies stdio without copying MCP argument secrets" {
     const wrapper = try std.fs.path.join(allocator, &.{ plan.wrapper_root, "mcp-0.sh" });
     defer allocator.free(wrapper);
     try std.testing.expect(pathPresent(plan.exec_paths, wrapper));
-    const control_root = try std.fs.path.join(allocator, &.{ workspace, ".orca" });
+    const control_root = try std.fs.path.join(allocator, &.{ workspace, ".ryk" });
     defer allocator.free(control_root);
     try std.testing.expect(isPathWithin(plan.wrapper_root, control_root));
     try std.testing.expect(!isPathWithin(plan.wrapper_root, plan.audit_root));
@@ -987,14 +987,14 @@ test "manifest discovery rejects a symlinked authority directory" {
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(io, "workspace/.orca");
+    try tmp.dir.createDirPath(io, "workspace/.ryk");
     try tmp.dir.createDirPath(io, "outside");
     try tmp.dir.createDirPath(io, "runtime");
     try tmp.dir.writeFile(io, .{
         .sub_path = "outside/server.yaml",
         .data = "version: 1\nserver:\n  name: external\n  transport: stdio\n  command: /bin/sh\n",
     });
-    tmp.dir.symLink(io, "../../outside", "workspace/.orca/mcp", .{}) catch return error.SkipZigTest;
+    tmp.dir.symLink(io, "../../outside", "workspace/.ryk/mcp", .{}) catch return error.SkipZigTest;
     const workspace = try tmp.dir.realPathFileAlloc(io, "workspace", allocator);
     defer allocator.free(workspace);
     const runtime = try tmp.dir.realPathFileAlloc(io, "runtime", allocator);
@@ -1016,7 +1016,7 @@ test "protected manifest binds external script to exact literal grant" {
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(io, ".orca/mcp");
+    try tmp.dir.createDirPath(io, ".ryk/mcp");
     try tmp.dir.createDirPath(io, "outside");
     try tmp.dir.writeFile(io, .{ .sub_path = "outside/server.mjs", .data = "// synthetic\n" });
     const workspace = try tmp.dir.realPathFileAlloc(io, ".", allocator);
@@ -1029,7 +1029,7 @@ test "protected manifest binds external script to exact literal grant" {
         .{script},
     );
     defer allocator.free(manifest);
-    try tmp.dir.writeFile(io, .{ .sub_path = ".orca/mcp/external.yaml", .data = manifest });
+    try tmp.dir.writeFile(io, .{ .sub_path = ".ryk/mcp/external.yaml", .data = manifest });
 
     var env_map = std.process.Environ.Map.init(allocator);
     defer env_map.deinit();
@@ -1048,8 +1048,8 @@ test "protected manifest binds external script to exact literal grant" {
     defer allocator.free(nested_workspace);
     try tmp.dir.createDir(io, "nested", .default_dir);
     // Copy the protected manifest tree into the effective workspace.
-    try tmp.dir.createDirPath(io, "nested/.orca/mcp");
-    try tmp.dir.writeFile(io, .{ .sub_path = "nested/.orca/mcp/external.yaml", .data = manifest });
+    try tmp.dir.createDirPath(io, "nested/.ryk/mcp");
+    try tmp.dir.writeFile(io, .{ .sub_path = "nested/.ryk/mcp/external.yaml", .data = manifest });
 
     var plan = try buildFromInventory(
         io,
@@ -1068,7 +1068,7 @@ test "protected manifest binds external script to exact literal grant" {
     try std.testing.expect(!pathPresent(plan.exec_paths, script));
     try std.testing.expect(pathPresent(plan.ro_paths, script));
 
-    try tmp.dir.writeFile(io, .{ .sub_path = "nested/.orca/mcp/duplicate.yaml", .data = manifest });
+    try tmp.dir.writeFile(io, .{ .sub_path = "nested/.ryk/mcp/duplicate.yaml", .data = manifest });
     try std.testing.expectError(
         error.AmbiguousManifest,
         buildFromInventory(
@@ -1091,7 +1091,7 @@ test "protected manifest cwd cannot authorize the same relative arg from another
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(io, "workspace/.orca/mcp");
+    try tmp.dir.createDirPath(io, "workspace/.ryk/mcp");
     try tmp.dir.createDirPath(io, "server-a");
     try tmp.dir.createDirPath(io, "server-b");
     try tmp.dir.writeFile(io, .{ .sub_path = "server-a/server.mjs", .data = "// a\n" });
@@ -1110,7 +1110,7 @@ test "protected manifest cwd cannot authorize the same relative arg from another
         .{cwd_a},
     );
     defer allocator.free(manifest);
-    try tmp.dir.writeFile(io, .{ .sub_path = "workspace/.orca/mcp/external.yaml", .data = manifest });
+    try tmp.dir.writeFile(io, .{ .sub_path = "workspace/.ryk/mcp/external.yaml", .data = manifest });
 
     var env_map = std.process.Environ.Map.init(allocator);
     defer env_map.deinit();
@@ -1145,7 +1145,7 @@ test "protected manifest grants exact external cwd read-only" {
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(io, "project/.orca/mcp");
+    try tmp.dir.createDirPath(io, "project/.ryk/mcp");
     try tmp.dir.createDirPath(io, "external-cwd");
     const workspace = try tmp.dir.realPathFileAlloc(io, "project", allocator);
     defer allocator.free(workspace);
@@ -1157,7 +1157,7 @@ test "protected manifest grants exact external cwd read-only" {
         .{external_cwd},
     );
     defer allocator.free(manifest);
-    const manifest_path = try std.fs.path.join(allocator, &.{ workspace, ".orca", "mcp", "external.yaml" });
+    const manifest_path = try std.fs.path.join(allocator, &.{ workspace, ".ryk", "mcp", "external.yaml" });
     defer allocator.free(manifest_path);
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest_path, .data = manifest });
     var env_map = std.process.Environ.Map.init(allocator);

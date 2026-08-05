@@ -60,7 +60,7 @@ function Resolve-OrcaBin {
         (Join-Path $HOME ".ryk/bin/ryk.exe"),
         (Join-Path $HOME ".ryk/bin/ryk")
     )
-    $pathOrca = Get-Command "orca" -ErrorAction SilentlyContinue
+    $pathOrca = Get-Command "ryk" -ErrorAction SilentlyContinue
     if ($pathOrca) { $candidates += $pathOrca.Source }
 
     foreach ($candidate in $candidates) {
@@ -70,8 +70,8 @@ function Resolve-OrcaBin {
     return $null
 }
 
-$orcaBin = Resolve-OrcaBin
-if (-not $orcaBin) {
+$rykBin = Resolve-OrcaBin
+if (-not $rykBin) {
     $env:RYK_VERSION = Get-RepoVersion
     $distDir = Join-Path $repoRoot "dist"
     if (Test-Path -LiteralPath $distDir) {
@@ -83,25 +83,25 @@ if (-not $orcaBin) {
     } else {
         Join-Path $HOME ".ryk\bin"
     }
-    $orcaBin = Join-Path $installDir "ryk.exe"
+    $rykBin = Join-Path $installDir "ryk.exe"
 }
 
-$resolvedOrca = Resolve-OrcaExecutable $orcaBin
+$resolvedOrca = Resolve-OrcaExecutable $rykBin
 if (-not $resolvedOrca) {
     throw "orca binary not found after install attempt"
 }
-$orcaBin = $resolvedOrca
+$rykBin = $resolvedOrca
 
-if ($doctorHost -eq "hermes" -and -not (Test-OrcaSupportsHermes $orcaBin)) {
-    throw "orca at $orcaBin does not support Hermes hooks (upgrade required)"
+if ($doctorHost -eq "hermes" -and -not (Test-OrcaSupportsHermes $rykBin)) {
+    throw "orca at $rykBin does not support Hermes hooks (upgrade required)"
 }
 
 if ($doctorHost -eq "opencode") {
-    & $orcaBin plugin install opencode --scope $Scope --yes
+    & $rykBin plugin install opencode --scope $Scope --yes
 } elseif ($doctorHost -eq "hermes") {
-    & $orcaBin plugin install hermes --yes
+    & $rykBin plugin install hermes --yes
 } else {
-    & $orcaBin plugin install openclaw --yes
+    & $rykBin plugin install openclaw --yes
 }
 
-& $orcaBin plugin doctor $doctorHost
+& $rykBin plugin doctor $doctorHost

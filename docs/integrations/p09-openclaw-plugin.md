@@ -23,7 +23,7 @@ integrations/openclaw-plugin/
 ## Manifest status
 
 - `openclaw.plugin.json` exists and validates as JSON.
-- Contains `id: "orca"`, `name: "ryk"`, `version: "1.0.0"`.
+- Contains `id: "ryk"`, `name: "ryk"`, `version: "1.0.0"`.
 - Contains `configSchema` (empty object, `additionalProperties: false`).
 
 ## Package metadata status

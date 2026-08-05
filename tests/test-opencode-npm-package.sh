@@ -107,7 +107,7 @@ fi
 
 # 11. No Zig binary bundling
 echo "11. No Zig binary bundling"
-if find "${PACKAGE_DIR}" -name 'orca' -type f -o -name '*.zig' -type f 2>/dev/null | grep -q .; then
+if find "${PACKAGE_DIR}" -name 'ryk' -type f -o -name '*.zig' -type f 2>/dev/null | grep -q .; then
   fail "Potential Zig binary or source found in package"
 else
   pass "No Zig binary bundled"

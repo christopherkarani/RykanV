@@ -369,7 +369,7 @@ fn normalizeMacosUsersPath(path: []const u8) []const u8 {
 /// `trusted_host_key` is the **already-bound** host_config_table key from
 /// `host_identity.resolveHostIdentity` in `run.zig` (empty when generic). Host-config
 /// RW / system RO / write-denies / custom cfg use this key only — do not re-resolve
-/// under the filtered child env (empty-backpack strips `ORCA_TRUSTED_HOST_PREFIXES`
+/// under the filtered child env (empty-backpack strips `RYK_TRUSTED_HOST_PREFIXES`
 /// and would split-brain empty backpack vs grants). Basename-only spoofs pass empty.
 /// Host-scoped system RO trees (e.g. codex `/etc/codex`) and macOS Apple developer
 /// toolchains (CLT / Xcode `Contents/Developer` for `/usr/bin/git` libxcselect) merge
@@ -446,7 +446,7 @@ pub fn applyForRun(
         try allocator.alloc([]const u8, 0);
     defer sandbox.apply.freeLaunchExecPaths(allocator, agent_exec_paths);
     // Phase 4: essentials tool pack → file-only .exec grants (rg/fd/jq/zig/git).
-    // Default essentials when OS attach is planned; ORCA_TOOL_PACK=none kills the pack.
+    // Default essentials when OS attach is planned; RYK_TOOL_PACK=none kills the pack.
     const os_attach_planned = mode != .off;
     const tool_pack = sandbox.tool_pack.resolveToolPack(env_map, os_attach_planned);
     const pack_exec_paths = try sandbox.tool_pack.collectPackExecPaths(
@@ -590,7 +590,7 @@ pub fn applyForRun(
         .minted_env_lookup = minted_env_lookup,
         .with_host_secrets = with_host_secrets,
         // Authority files as control roots: Landlock expands host RW with these RO.
-        // Merged with default `.orca`/`.git` inside compileProfile.
+        // Merged with default `.ryk`/`.git` inside compileProfile.
         .control_roots = config_write_denies,
         .launch_exec_paths = launch_exec_paths,
         .launch_ro_paths = launch_ro_paths,

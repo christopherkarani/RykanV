@@ -241,7 +241,7 @@ test "openclaw plugin source contains ryk hook call" {
     const content = try readFile(std.testing.allocator, source_path);
     defer std.testing.allocator.free(content);
 
-    // argv form: execFileSync(orcaBin, ['hook', 'openclaw', event], ...)
+    // argv form: execFileSync(rykBin, ['hook', 'openclaw', event], ...)
     try std.testing.expect(std.mem.indexOf(u8, content, "'hook'") != null or std.mem.indexOf(u8, content, "\"hook\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "'openclaw'") != null or std.mem.indexOf(u8, content, "\"openclaw\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "execFileSync") != null);

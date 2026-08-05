@@ -228,7 +228,7 @@ pub fn buildCapabilitiesLines(caps: []const CapabilityFact, out: [][]u8) usize {
 pub fn primaryRecommendation(facts: NextStepFacts) []const u8 {
     if (!facts.daemon_health_compatible) {
         if (facts.daemon_binary_untrusted) {
-            return "Daemon: remove untrusted ORCA_DAEMON override, then re-run `ryk doctor`.";
+            return "Daemon: remove untrusted RYK_DAEMON override, then re-run `ryk doctor`.";
         }
         if (facts.daemon_binary_exists and !facts.daemon_binary_executable) {
             return "Daemon: restore companion-service execute permission or reinstall ryk.";
@@ -239,10 +239,10 @@ pub fn primaryRecommendation(facts: NextStepFacts) []const u8 {
         return "Daemon: reinstall ryk or rebuild with `./scripts/build-all.sh`.";
     }
     if (!facts.policy_present) {
-        return "Run `ryk init --preset generic-agent` and review .orca/policy.yaml.";
+        return "Run `ryk init --preset generic-agent` and review .ryk/policy.yaml.";
     }
     if (!facts.policy_valid) {
-        return "Fix `.orca/policy.yaml`, then run `ryk policy check .orca/policy.yaml`.";
+        return "Fix `.ryk/policy.yaml`, then run `ryk policy check .ryk/policy.yaml`.";
     }
     if (facts.mcp_manifest_invalid_count > 0) {
         return "Fix invalid MCP manifests with `ryk mcp manifest check <path>`.";
@@ -267,7 +267,7 @@ pub fn buildNextStepsLines(facts: NextStepFacts, out: [][]u8) usize {
     n = appendRaw(out, n, "  ryk allowlist   — permanent allowlist entries");
     n = appendRaw(out, n, "  ryk doctor --fix — repair policy + day-one host wiring");
     if (facts.hermes_installed and facts.hermes_fail_open) {
-        n = appendRaw(out, n, "Hermes: effective fail-open — set ORCA_HERMES_FAIL_OPEN=0 or `ryk run -- hermes`.");
+        n = appendRaw(out, n, "Hermes: effective fail-open — set RYK_HERMES_FAIL_OPEN=0 or `ryk run -- hermes`.");
     }
     return n;
 }
@@ -624,7 +624,7 @@ test "doctor tui: hosts pane surfaces fail-stance (no silent drop)" {
             .wired = "yes",
             .shell_gate = "pre_tool_call",
             .fail_stance = "fail-open (default)",
-            .fix = "ORCA_HERMES_FAIL_OPEN=0",
+            .fix = "RYK_HERMES_FAIL_OPEN=0",
         },
     };
     var storage: [16][160]u8 = undefined;

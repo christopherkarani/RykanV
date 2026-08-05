@@ -193,9 +193,9 @@ pub fn build(b: *std.Build) void {
     const run_core_package_tests_only = addRunTestTerminal(b, core_package_tests);
 
     // Deep `src/policy/*` unit tests: package re-exports do not attach nested module
-    // tests under Zig 0.16 monopath/orca_core roots. Root at core_engine so
+    // tests under Zig 0.16 monopath/ryk_core roots. Root at core_engine so
     // agent_inference_hosts is discoverable under test-core/test-policy with
-    // `-Dtest-filter=…`. Dedicated module (not orca_core_engine_mod) — reusing the
+    // `-Dtest-filter=…`. Dedicated module (not ryk_core_engine_mod) — reusing the
     // package import as test root fails nested audit/core compile under 0.16.
     //
     // Not on test-fast / compile-test-fast: unfiltered core_engine still hits

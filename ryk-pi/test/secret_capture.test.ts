@@ -23,7 +23,7 @@ import {
 	_storeSecretToEnvFileWithHooksForTest,
 	storeSecretToEnvFile,
 } from "../extensions/secret_capture.ts";
-import { installOrcaExtension } from "../extensions/ryk.ts";
+import { installRykExtension } from "../extensions/ryk.ts";
 
 const SYNTH_OPENAI = "sk-fakeSyntheticOpenAIKey1234567890";
 const SYNTH_GITHUB = "ghp_fakeSyntheticTokenValue1234567890";
@@ -395,7 +395,7 @@ test("scrubContextMessages scrubs user text without storing", () => {
 	assert.equal(scrubbed[1].content, "ok");
 });
 
-test("installOrcaExtension wires input capture and keeps bash evaluate", async () => {
+test("installRykExtension wires input capture and keeps bash evaluate", async () => {
 	const handlers = new Map<string, Array<(event: any, ctx: any) => any>>();
 	const pi = {
 		on(event: string, handler: (event: any, ctx: any) => any) {
@@ -408,8 +408,8 @@ test("installOrcaExtension wires input capture and keeps bash evaluate", async (
 
 	const stores: Array<{ name: string; value: string }> = [];
 	// Capture is wired inside install; we test via input handler.
-	installOrcaExtension(pi as any, {
-		orcaBin: "orca",
+	installRykExtension(pi as any, {
+		rykBin: "ryk",
 		spawn: (() => {
 			throw new Error("spawn not used in this test path");
 		}) as any,
@@ -505,8 +505,8 @@ test("bash tool_call path still present after secret capture wiring", async () =
 		return child;
 	};
 
-	installOrcaExtension(pi as any, {
-		orcaBin: "orca",
+	installRykExtension(pi as any, {
+		rykBin: "ryk",
 		spawn: spawn as any,
 	});
 

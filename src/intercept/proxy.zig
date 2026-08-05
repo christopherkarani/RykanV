@@ -1462,7 +1462,7 @@ test "proxy CONNECT allowlisted hostname returns 200 Connection Established" {
     }.run, .{ &upstream, thread_io });
     defer accept_thread.join();
 
-    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
+    var loaded = try @import("ryk_core").policy.load.parseFromSlice(std.testing.allocator,
         \\version: 1
         \\mode: observe
         \\network:
@@ -1501,7 +1501,7 @@ test "proxy CONNECT allowlisted hostname returns 200 Connection Established" {
     const events = try runtime.snapshotAuditEvents(std.testing.allocator);
     defer runtime.freeAuditEvents(std.testing.allocator, events);
     try std.testing.expect(events.len >= 2);
-    try std.testing.expectEqual(@import("orca_core").core.event.EventType.network_connect_allowed, events[1].event_type);
+    try std.testing.expectEqual(@import("ryk_core").core.event.EventType.network_connect_allowed, events[1].event_type);
 }
 
 test "proxy tunnel survives mid-stream quiet gap of 5s (CONNECT shares fn tunnel)" {
@@ -1536,7 +1536,7 @@ test "proxy tunnel survives mid-stream quiet gap of 5s (CONNECT shares fn tunnel
     const upstream_thread = try std.Thread.spawn(.{}, UpstreamState.run, .{&upstream_state});
     defer upstream_thread.join();
 
-    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
+    var loaded = try @import("ryk_core").policy.load.parseFromSlice(std.testing.allocator,
         \\version: 1
         \\mode: observe
         \\network:
@@ -1633,7 +1633,7 @@ test "proxy deinit reclaims quiet open tunnel within bound" {
     const upstream_thread = try std.Thread.spawn(.{}, QuietUpstream.run, .{&quiet});
     defer upstream_thread.join();
 
-    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
+    var loaded = try @import("ryk_core").policy.load.parseFromSlice(std.testing.allocator,
         \\version: 1
         \\mode: observe
         \\network:
@@ -1719,7 +1719,7 @@ test "proxy F-audit records exfil on allow for sink host and cleartext secret qu
     // cleartext absolute-form secret query fires; plain CONNECT non-sink does not.
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
 
-    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
+    var loaded = try @import("ryk_core").policy.load.parseFromSlice(std.testing.allocator,
         \\version: 1
         \\mode: observe
         \\network:

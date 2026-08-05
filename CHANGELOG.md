@@ -40,19 +40,19 @@
 ### Breaking
 - **Brand hard cut — Rykan V / `ryk` only (no Orca dual-compat).**
   - **Product:** full name **Rykan V**; CLI **`ryk`** only (no `orca` binary alias).
-  - **Environment:** `RYK_*` only (no `ORCA_*` dual-read/write).
-  - **Paths:** workspace `.ryk/`, config `~/.config/ryk/`, resources `share/ryk/` (no `.orca` / `share/orca`).
+  - **Environment:** `RYK_*` only (no `RYK_*` dual-read/write).
+  - **Paths:** workspace `.ryk/`, config `~/.config/ryk/`, resources `share/ryk/` (no `.ryk` / `share/orca`).
   - **Zig modules:** `ryk`, `ryk_core`, `ryk_cli` (was `orca*`).
   - **npm scope:** `@rykan/ryk`, `@rykan/pi-ryk` (was `@orca-sec/*`).
-  - **Audit actor kind:** `"ryk"` (was `"orca"`).
+  - **Audit actor kind:** `"ryk"` (was `"ryk"`).
   - **Dirs:** `ryk-pi/`, `ryk-dashboard-ui/` (was `orca-pi/`, `orca-dashboard-ui/`).
   - Historical CHANGELOG / denylist tokens may still mention Orca/Aegis as past brands or attack surface.
   - **Codex guard emit:** still `[[ORCA-GUARD]]`; dual-read `[[RYK-GUARD]]` if present.
   - **Share install path:** still `~/.local/share/orca` (path migrate deferred to 5b).
-  - **Git remote / Zig package graph:** unchanged (`build.zig.zon` `.name = .orca` stays).
+  - **Git remote / Zig package graph:** unchanged (`build.zig.zon` `.name = .ryk` stays).
 
 ### Changed
-- **Full Zig shell evaluator (MVP)** — `orca hook` / `orca run` / shims evaluate shell commands in-process via `src/shell_engine` by default (`ORCA_SHELL_EVAL=zig`). Daemon-down no longer gates shell PreToolUse. `orca test` / `orca explain` are Zig-native. Former Rust ExecuteCli surfaces (`scan`, `simulate`, `packs`, `history`, allowlist mutators, …) stub until ported. The `orca-rs` crate is removed from the tree.
+- **Full Zig shell evaluator (MVP)** — `orca hook` / `orca run` / shims evaluate shell commands in-process via `src/shell_engine` by default (`RYK_SHELL_EVAL=zig`). Daemon-down no longer gates shell PreToolUse. `orca test` / `orca explain` are Zig-native. Former Rust ExecuteCli surfaces (`scan`, `simulate`, `packs`, `history`, allowlist mutators, …) stub until ported. The `orca-rs` crate is removed from the tree.
 - **Product language cut (Safe Launch)** — public day-1 path is now:
   - `orca start` → `orca <agent>` → `orca status` → `orca replay` (+ `orca stop` off-ramp)
   - Default help shows only public verbs; full surface via `orca help --all`
@@ -76,7 +76,7 @@
 - **Shell bypass (Zig command path)** — `open mailto:…` (and optional curl-to-tagged-host) merges effects on Zig command evaluation (`shell_bypass.*`); host shell PreToolUse uses Zig `shell_engine` MVP packs (documented residual gap vs full effect-class parity).
 - `orca policy explain tool <name> --args '<json-object>'` for structural demos (size-bounded).
 - **Phase C discovery** — `orca mcp inspect` prints inferred effects per tool; `orca tools classify <name> [--args] [--policy]` for interactive classification (no secret values in output).
-- **User effect packs** — YAML in `.orca/effect-packs/` and `~/.config/orca/effect-packs/` add names/tokens/structural key-sets (`pack.<id>.*` matchers). Classification-only; decisions still require policy `effects:`. Invalid packs fail closed. Example: `examples/effect-packs/demo.yaml`.
+- **User effect packs** — YAML in `.ryk/effect-packs/` and `~/.config/ryk/effect-packs/` add names/tokens/structural key-sets (`pack.<id>.*` matchers). Classification-only; decisions still require policy `effects:`. Invalid packs fail closed. Example: `examples/effect-packs/demo.yaml`.
 
 ### Fixed
 - Network effect tags now apply on the **runtime proxy** path (`network_eval.evaluate` / `orca run`), not only `policy explain network`.
@@ -125,7 +125,7 @@
 - **Pi slash commands** `/orca-start` and `/orca-stop` for session-level protection control.
 
 ### Changed
-- **`--no-rich`** and `ORCA_NO_RICH=1` now gate color without changing machine-readable output.
+- **`--no-rich`** and `RYK_NO_RICH=1` now gate color without changing machine-readable output.
 - `--tui` + `--json` is rejected at preflight to prevent mixed output modes.
 
 ### Fixed
@@ -165,7 +165,7 @@
 
 ### Added
 - **`orca disable`** — Remove Orca plugin registrations from host agents without touching binary or policy.
-- **`orca uninstall`** — Full removal of plugins, binary, and user config (preserves workspace `.orca/`).
+- **`orca uninstall`** — Full removal of plugins, binary, and user config (preserves workspace `.ryk/`).
 
 ## v1.1.4 - 2026-05-21
 

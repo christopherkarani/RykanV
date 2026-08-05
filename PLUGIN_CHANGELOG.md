@@ -66,7 +66,7 @@
 - Shell evaluation for hook hosts now benefits from daemon-backed policy when `orca-daemon` is running.
 
 ### Fixed
-- **Hermes Agent** — Hardened Orca discovery, `ORCA_HERMES_FAIL_OPEN` degraded-mode behavior, and install path alignment with `orca plugin doctor`.
+- **Hermes Agent** — Hardened Orca discovery, `RYK_HERMES_FAIL_OPEN` degraded-mode behavior, and install path alignment with `orca plugin doctor`.
 - **Pi** — Honor deny decisions, request timeouts, cwd propagation, and auto unavailable-mode handling.
 
 ## 1.1.4 — Unified Version Release
@@ -186,27 +186,27 @@ zig build
 zig build test
 
 # Verify plugin doctors
-./zig-out/bin/orca plugin doctor codex
-./zig-out/bin/orca plugin doctor claude
-./zig-out/bin/orca plugin doctor opencode
+./zig-out/bin/ryk plugin doctor codex
+./zig-out/bin/ryk plugin doctor claude
+./zig-out/bin/ryk plugin doctor opencode
 
 # Verify manifests
-./zig-out/bin/orca plugin manifest codex
-./zig-out/bin/orca plugin manifest claude
-./zig-out/bin/orca plugin manifest opencode
+./zig-out/bin/ryk plugin manifest codex
+./zig-out/bin/ryk plugin manifest claude
+./zig-out/bin/ryk plugin manifest opencode
 
 # Verify install dry-run
-./zig-out/bin/orca plugin install codex --dry-run
-./zig-out/bin/orca plugin install claude --dry-run
-./zig-out/bin/orca plugin install opencode --dry-run
+./zig-out/bin/ryk plugin install codex --dry-run
+./zig-out/bin/ryk plugin install claude --dry-run
+./zig-out/bin/ryk plugin install opencode --dry-run
 
 # Test hooks
 cat tests/plugin-fixtures/codex/pre_tool_use_command_safe.json \
-  | ./zig-out/bin/orca hook codex PreToolUse
+  | ./zig-out/bin/ryk hook codex PreToolUse
 cat tests/plugin-fixtures/claude/pre_tool_use_command_safe.json \
-  | ./zig-out/bin/orca hook claude PreToolUse
+  | ./zig-out/bin/ryk hook claude PreToolUse
 cat tests/plugin-fixtures/opencode/tool_execute_before_safe.json \
-  | ./zig-out/bin/orca hook opencode tool.execute.before
+  | ./zig-out/bin/ryk hook opencode tool.execute.before
 
 # Package plugins
 ./scripts/package-plugins.sh
@@ -216,5 +216,5 @@ ls -la dist/plugins
 cat dist/plugins/orca-plugin-checksums.txt
 
 # Run redteam
-./zig-out/bin/orca redteam --ci
+./zig-out/bin/ryk redteam --ci
 ```

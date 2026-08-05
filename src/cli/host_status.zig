@@ -296,7 +296,7 @@ fn resolveSmokeBinary(io: std.Io, allocator: std.mem.Allocator) !?[]u8 {
     var env_map = env_util.createProcessMap(allocator) catch null;
     defer if (env_map) |*m| m.deinit();
     if (env_map) |*m| {
-        // Prefer RYK_BIN, fall back to RYK_BIN (Phase 5a dual-read).
+        // RYK_BIN only (hard-cut).
         if (try env_util.getOwnedBrand(m, allocator, "BIN")) |configured| {
             if (std.Io.Dir.accessAbsolute(io, configured, .{})) |_| {
                 return configured;

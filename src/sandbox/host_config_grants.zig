@@ -1005,7 +1005,7 @@ pub const stale_login_fail_closed_message =
 /// Primary tip when parent stdout/stderr path is under classic ungranted host tmp
 /// (inherited shell redirects). Leads with stdio/fstat residual — not re-login.
 pub const empty_backpack_stdio_fstat_exit_tip =
-    \\ryk run: empty-backpack: agent died after sandbox attach — redirected stdout/stderr lands under classic /tmp or /var/folders, which Seatbelt does not grant. Bun/Node fstat on those FDs fails (EPERM / process.stderr.fd). Capture under the workspace (e.g. .orca-tmp), use a pipe, or a TTY. Do not treat this as missing login first. Keychain FS is not granted (by design).
+    \\ryk run: empty-backpack: agent died after sandbox attach — redirected stdout/stderr lands under classic /tmp or /var/folders, which Seatbelt does not grant. Bun/Node fstat on those FDs fails (EPERM / process.stderr.fd). Capture under the workspace (e.g. .ryk-tmp), use a pipe, or a TTY. Do not treat this as missing login first. Keychain FS is not granted (by design).
     \\
 ;
 
@@ -1505,7 +1505,7 @@ test "pathIsUngrantedHostTmpContent classifies classic tmp vs workspace" {
     try std.testing.expect(pathIsUngrantedHostTmpContent("/var/folders/xx/yy/T/out.txt"));
     try std.testing.expect(pathIsUngrantedHostTmpContent("/private/var/folders/ab/cd/T/err.txt"));
     try std.testing.expect(!pathIsUngrantedHostTmpContent(""));
-    try std.testing.expect(!pathIsUngrantedHostTmpContent("/Users/me/proj/.orca-tmp/out.txt"));
+    try std.testing.expect(!pathIsUngrantedHostTmpContent("/Users/me/proj/.ryk-tmp/out.txt"));
     try std.testing.expect(!pathIsUngrantedHostTmpContent("/dev/null"));
     try std.testing.expect(!pathIsUngrantedHostTmpContent("/private/var/log/system.log"));
     // Prefix must not false-positive adjacent names.

@@ -5,7 +5,7 @@ npm launcher template for the Zig-built **ryk** CLI (shell evaluation is in-proc
 - **Primary package name:** `@rykan/ryk`
 - **Bins:** `ryk` (primary), `ryk` (compat alias for one major)
 - **Scope:** remains `@rykan` (do not rename scope in Phase 5a)
-- **Artifacts:** downloads `ryk-v{version}-*` release archives (falls back to dual-published `orca-v*` if needed)
+- **Artifacts:** downloads `ryk-v{version}-*` release archives (falls back to dual-published `ryk-v*` if needed)
 
 > **Do not publish** this template directory while checksums are still `PLACEHOLDER_*`.
 > Publish only the **rendered** package under `dist/package-manifests/npm/` after `build-release.sh` / `cut-release.sh`.

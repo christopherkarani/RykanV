@@ -17,7 +17,7 @@ import {
 	buildDecideToolPayload,
 	buildEvaluateRequest,
 	extractDecideFilePath,
-	installOrcaExtension,
+	installRykExtension,
 	isProtectedPiTool,
 	isSubagentSession,
 	piCoverageLabel,
@@ -220,7 +220,7 @@ test("resolveOrcaBin honors executable RYK_BIN before other candidates", () => {
 		isCompatiblePathOrca: () => true,
 	});
 
-	assert.deepEqual(result, { orcaBin: "/trusted/ryk", source: "explicit" });
+	assert.deepEqual(result, { rykBin: "/trusted/ryk", source: "explicit" });
 });
 
 test("resolveOrcaBin prefers RYK_BIN over RYK_BIN", () => {
@@ -230,7 +230,7 @@ test("resolveOrcaBin prefers RYK_BIN over RYK_BIN", () => {
 		isExecutable: (path) => path === "/trusted/ryk" || path === "/trusted/ryk",
 		isCompatiblePathOrca: () => true,
 	});
-	assert.deepEqual(result, { orcaBin: "/trusted/ryk", source: "explicit" });
+	assert.deepEqual(result, { rykBin: "/trusted/ryk", source: "explicit" });
 });
 
 test("resolveOrcaBin prefers the bundled runtime and requires opt-in for PATH", () => {
@@ -245,7 +245,7 @@ test("resolveOrcaBin prefers the bundled runtime and requires opt-in for PATH", 
 	};
 
 	assert.deepEqual(resolveOrcaBin({ ...defaults, env: {} }), {
-		orcaBin: resolve("/package/vendor/ryk"),
+		rykBin: resolve("/package/vendor/ryk"),
 		daemonBin: resolve("/package/vendor/ryk-daemon"),
 		source: "bundled",
 	});
@@ -258,7 +258,7 @@ test("resolveOrcaBin prefers the bundled runtime and requires opt-in for PATH", 
 			env: {},
 		}),
 		{
-			orcaBin: resolve("/package/vendor/ryk"),
+			rykBin: resolve("/package/vendor/ryk"),
 			daemonBin: resolve("/package/vendor/ryk-daemon"),
 			source: "bundled",
 		},
@@ -271,7 +271,7 @@ test("resolveOrcaBin prefers the bundled runtime and requires opt-in for PATH", 
 			env: { RYK_PI_USE_PATH: "true" },
 		}),
 		{
-			orcaBin: "ryk",
+			rykBin: "ryk",
 			source: "path",
 		},
 	);
@@ -297,7 +297,7 @@ test("resolveOrcaBin validates opted-in PATH version output", () => {
 		isExecutable: () => false,
 		spawnSync: (cmd: string) => ({
 			status: 0,
-			stdout: `${cmd === "ryk" ? "ryk" : "orca"} ${requiredRuntimeVersion}\n`,
+			stdout: `${cmd === "ryk" ? "ryk" : "ryk"} ${requiredRuntimeVersion}\n`,
 		}),
 	});
 	assert.equal(compatible.source, "path");
@@ -324,10 +324,10 @@ test("resolveOrcaBin validates opted-in PATH version output", () => {
 test("bundled ryk evaluation receives its companion daemon path", async () => {
 	const { pi, handlers } = makePi();
 	const { spawn, calls } = makeSpawn([{ code: 0, stdout: allowJson() }]);
-	installOrcaExtension(pi, {
+	installRykExtension(pi, {
 		spawn,
 		resolveBin: () => ({
-			orcaBin: "/package/vendor/ryk",
+			rykBin: "/package/vendor/ryk",
 			daemonBin: "/package/vendor/ryk-daemon",
 			source: "bundled",
 		}),
@@ -355,7 +355,7 @@ test("session start quietly initializes a missing policy and probes health", asy
 		{ code: 0, stdout: "healthy" },
 	]);
 	const context = makeCtx({ cwd });
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 
 	const returned = handlers.get("session_start")![0]({}, context.ctx);
 	assert.equal(returned, undefined);
@@ -402,7 +402,7 @@ test("first bash evaluation waits for non-blocking session bootstrap", async () 
 		{ code: 0, stdout: allowJson() },
 	]);
 	const context = makeCtx({ cwd });
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 
 	assert.equal(handlers.get("session_start")![0]({}, context.ctx), undefined);
 	const decision = await fireToolCall(
@@ -443,7 +443,7 @@ test("/ryk-setup ensures policy and probes health without invoking start", async
 		{ code: 0, stdout: "healthy" },
 	]);
 	const context = makeCtx({ cwd });
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 
 	await commands.get("orca-setup")!.handler("", context.ctx);
 
@@ -529,7 +529,7 @@ test("decide file rejects context_only for write side effects", async () => {
 	]);
 	const result = await runOrcaDecideFile(
 		{ path: "./src/main.ts", operation: "write" },
-		{ spawn, orcaBin: "orca", timeoutMs: 1_000, cwd: process.cwd() },
+		{ spawn, rykBin: "ryk", timeoutMs: 1_000, cwd: process.cwd() },
 	);
 	assert.equal(result.kind, "deny");
 });
@@ -547,7 +547,7 @@ test("decide file validates decision and exit-code consistency", async () => {
 		const { spawn } = makeSpawn([plan, plan]);
 		const result = await runOrcaDecideFile(
 			{ path: "./README.md", operation: "read" },
-			{ spawn, orcaBin: "orca", timeoutMs: 1_000, cwd: process.cwd() },
+			{ spawn, rykBin: "ryk", timeoutMs: 1_000, cwd: process.cwd() },
 		);
 		assert.equal(result.kind, "error", JSON.stringify(plan));
 		if (result.kind === "error") {
@@ -561,7 +561,7 @@ test("custom/MCP-shaped tools are name-gated via ryk decide tool", async () => {
 	const { spawn, calls } = makeSpawn([
 		{ code: 0, stdout: decideAllowJson("tool") },
 	]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx({ cwd: process.cwd() });
 
 	const result = await fireToolCall(
@@ -591,7 +591,7 @@ test("custom tool deny blocks with rule id on card", async () => {
 	const { spawn, calls } = makeSpawn([
 		{ code: 3, stdout: decideBlockJson("tools.deny[0]", "tool") },
 	]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx({ cwd: process.cwd() });
 
 	const result = await fireToolCall(
@@ -614,7 +614,7 @@ test("custom tool unavailable fails closed", async () => {
 	const { pi, handlers } = makePi();
 	const missing = { error: new Error("ENOENT") };
 	const { spawn } = makeSpawn([missing, missing]);
-	installOrcaExtension(pi, { spawn, orcaBin: "missing-orca" });
+	installRykExtension(pi, { spawn, rykBin: "missing-orca" });
 	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
 
 	const result = await fireToolCall(
@@ -633,7 +633,7 @@ test("session bypass skips decide tool for custom tools", async () => {
 	// Typed decision:error is non-transient → single attempt (no retry).
 	const err = { code: 1 as number, stdout: errorJson() };
 	const { spawn, calls } = makeSpawn([err]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx, selections } = makeCtx();
 	selections.push("Disable ryk for this Pi session");
 
@@ -661,7 +661,7 @@ test("session bypass skips decide tool for custom tools", async () => {
 test("empty custom tool name fails closed without spawning decide", async () => {
 	const { pi, handlers } = makePi();
 	const { spawn, calls } = makeSpawn();
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx();
 
 	const result = await fireToolCall(
@@ -689,7 +689,7 @@ test("runOrcaDecideTool maps block to deny and validates exit codes", async () =
 			spawn: makeSpawn([
 				{ code: 3, stdout: decideBlockJson("tools.deny[1]", "tool") },
 			]).spawn,
-			orcaBin: "orca",
+			rykBin: "ryk",
 			timeoutMs: 1_000,
 			cwd: process.cwd(),
 		},
@@ -706,7 +706,7 @@ test("runOrcaDecideTool maps block to deny and validates exit codes", async () =
 			{ name: "x" },
 			{
 				spawn: makeSpawn([plan, plan]).spawn,
-				orcaBin: "orca",
+				rykBin: "ryk",
 				timeoutMs: 1_000,
 				cwd: process.cwd(),
 			},
@@ -724,7 +724,7 @@ test("runOrcaDecideTool retries once on malformed JSON then fail-closes", async 
 	const { spawn, calls } = makeSpawn([bad, bad]);
 	const result = await runOrcaDecideTool(
 		{ name: "x" },
-		{ spawn, orcaBin: "orca", timeoutMs: 1_000, cwd: process.cwd() },
+		{ spawn, rykBin: "ryk", timeoutMs: 1_000, cwd: process.cwd() },
 	);
 	assert.equal(result.kind, "error");
 	assert.equal(calls.length, 2);
@@ -741,7 +741,7 @@ test("runOrcaDecideTool recovers when second attempt succeeds", async () => {
 	]);
 	const result = await runOrcaDecideTool(
 		{ name: "x" },
-		{ spawn, orcaBin: "orca", timeoutMs: 1_000, cwd: process.cwd() },
+		{ spawn, rykBin: "ryk", timeoutMs: 1_000, cwd: process.cwd() },
 	);
 	assert.equal(result.kind, "allow");
 	assert.equal(calls.length, 2);
@@ -779,7 +779,7 @@ test("runOrcaDecideTool does not retry non-transient decision error", async () =
 	const { spawn, calls } = makeSpawn([err, err]);
 	const result = await runOrcaDecideTool(
 		{ name: "x" },
-		{ spawn, orcaBin: "orca", timeoutMs: 1_000, cwd: process.cwd() },
+		{ spawn, rykBin: "ryk", timeoutMs: 1_000, cwd: process.cwd() },
 	);
 	assert.equal(result.kind, "error");
 	assert.equal(calls.length, 1);
@@ -793,7 +793,7 @@ test("write tool is evaluated via ryk decide file", async () => {
 	const { spawn, calls } = makeSpawn([
 		{ code: 3, stdout: decideBlockJson("files.write.deny[2]") },
 	]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx({ cwd: process.cwd() });
 
 	const result = await fireToolCall(
@@ -823,7 +823,7 @@ test("write tool is evaluated via ryk decide file", async () => {
 test("edit tool allow proceeds without block", async () => {
 	const { pi, handlers } = makePi();
 	const { spawn, calls } = makeSpawn([{ code: 0, stdout: decideAllowJson() }]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx();
 
 	const result = await fireToolCall(
@@ -846,7 +846,7 @@ test("read tool is evaluated via ryk decide file with operation read", async () 
 			stdout: decideBlockJson("files.read.deny[0]", "file.read"),
 		},
 	]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx({ cwd: process.cwd() });
 
 	const result = await fireToolCall(
@@ -877,7 +877,7 @@ test("grep tool requires approval even when its broad root is allowed", async ()
 	const { spawn, calls } = makeSpawn([
 		{ code: 0, stdout: decideAllowJson("file.read") },
 	]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx({ cwd: process.cwd(), hasUI: false, mode: "print" });
 
 	const result = await fireToolCall(
@@ -902,7 +902,7 @@ test("find tool defaults missing path to cwd for decide file", async () => {
 	const { spawn, calls } = makeSpawn([
 		{ code: 0, stdout: decideAllowJson("file.read") },
 	]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const cwd = process.cwd();
 	const { ctx } = makeCtx({ cwd, hasUI: false, mode: "print" });
 
@@ -930,7 +930,7 @@ test("ls tool denies sensitive directory via decide file read", async () => {
 			stdout: decideBlockJson("files.read.deny[1]", "file.read"),
 		},
 	]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx();
 
 	const result = await fireToolCall(
@@ -954,7 +954,7 @@ test("file-policy ask uses truthful policy choices", async () => {
 	const { spawn } = makeSpawn([
 		{ code: 7, stdout: decideJson("ask", "file.write") },
 	]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx();
 	let offered: string[] = [];
 	(ctx.ui as any).select = async (_title: string, options: string[]) => {
@@ -1001,7 +1001,7 @@ test("strict mode policy ask omits once-bypass", async () => {
 	const { spawn } = makeSpawn([
 		{ code: 7, stdout: decideJson("ask", "file.write") },
 	]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx();
 	await commands.get("orca-mode")!.handler("strict", ctx);
 	let offered: string[] = [];
@@ -1027,7 +1027,7 @@ test("once-bypass records an audit event", async () => {
 	const { spawn } = makeSpawn([
 		{ code: 7, stdout: decideJson("ask", "file.write") },
 	]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const syntheticSecret = "AKIASYNTHETICONLY1234";
 	const encodedSecret = "dG9rZW49c3ludGhldGljLW9ubHktc2VjcmV0";
 	const { ctx, notifications } = makeCtx({
@@ -1074,7 +1074,7 @@ test("once-bypass stays blocked when transcript auditing is unavailable", async 
 	const { spawn } = makeSpawn([
 		{ code: 7, stdout: decideJson("ask", "file.write") },
 	]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx, notifications } = makeCtx();
 	(ctx.ui as any).select = async () => "Run once anyway";
 
@@ -1134,7 +1134,7 @@ test("policy ask auto-denies noninteractive sessions without calling select", as
 	const { spawn } = makeSpawn([
 		{ code: 7, stdout: decideJson("ask", "file.write") },
 	]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
 	let selectCalled = false;
 	(ctx.ui as any).select = async () => {
@@ -1167,7 +1167,7 @@ test("policy ask auto-denies print mode even when hasUI is true", async () => {
 	const { spawn } = makeSpawn([
 		{ code: 7, stdout: decideJson("ask", "file.write") },
 	]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx({ hasUI: true, mode: "print" });
 	let selectCalled = false;
 	(ctx.ui as any).select = async () => {
@@ -1195,7 +1195,7 @@ test("policy ask auto-denies subagent sessions even when hasUI is true", async (
 		const { spawn } = makeSpawn([
 			{ code: 7, stdout: decideJson("ask", "file.write") },
 		]);
-		installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+		installRykExtension(pi, { spawn, rykBin: "ryk" });
 		const { ctx } = makeCtx({ hasUI: true, mode: "tui" });
 		let selectCalled = false;
 		(ctx.ui as any).select = async () => {
@@ -1243,7 +1243,7 @@ test("policy ask still invokes select in interactive parent TUI", async () => {
 		const { spawn } = makeSpawn([
 			{ code: 7, stdout: decideJson("ask", "file.write") },
 		]);
-		installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+		installRykExtension(pi, { spawn, rykBin: "ryk" });
 		const { ctx } = makeCtx({ hasUI: true, mode: "tui" });
 		let selectCalled = false;
 		(ctx.ui as any).select = async () => {
@@ -1276,7 +1276,7 @@ test("policy ask auto-deny still blocks when audit is unavailable", async () => 
 	const { spawn } = makeSpawn([
 		{ code: 7, stdout: decideJson("ask", "file.write") },
 	]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
 	let selectCalled = false;
 	(ctx.ui as any).select = async () => {
@@ -1300,7 +1300,7 @@ test("policy ask auto-deny still blocks when audit is unavailable", async () => 
 test("bash policy ask auto-denies noninteractive sessions", async () => {
 	const { pi, handlers } = makePi();
 	const { spawn } = makeSpawn([{ code: 0, stdout: askJson() }]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
 	let selectCalled = false;
 	(ctx.ui as any).select = async () => {
@@ -1326,7 +1326,7 @@ test("interactive policy ask blocks when select returns undefined (timeout)", as
 		const { spawn } = makeSpawn([
 			{ code: 7, stdout: decideJson("ask", "file.write") },
 		]);
-		installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+		installRykExtension(pi, { spawn, rykBin: "ryk" });
 		const { ctx } = makeCtx({ hasUI: true, mode: "tui" });
 		(ctx.ui as any).select = async () => undefined;
 
@@ -1349,7 +1349,7 @@ test("interactive policy ask blocks when select returns undefined (timeout)", as
 test("malformed read tool call fails closed", async () => {
 	const { pi, handlers } = makePi();
 	const { spawn, calls } = makeSpawn();
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx();
 
 	const result = await fireToolCall(
@@ -1368,7 +1368,7 @@ test("read tool unavailable path fails closed in noninteractive mode", async () 
 	const { pi, handlers } = makePi();
 	const missing = { error: new Error("spawn ENOENT") };
 	const { spawn } = makeSpawn([missing, missing]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
 
 	const result = await fireToolCall(
@@ -1385,7 +1385,7 @@ test("read tool unavailable path fails closed in noninteractive mode", async () 
 test("session bypass skips write and read evaluation", async () => {
 	const { pi, handlers, commands } = makePi();
 	const { spawn, calls } = makeSpawn();
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx, notifications } = makeCtx();
 
 	await commands.get("orca-stop")!.handler("", ctx);
@@ -1449,7 +1449,7 @@ test("buildDecideFilePayload, resolveToolPath, extractDecideFilePath", () => {
 test("bash safe command with ryk allow returns undefined", async () => {
 	const { pi, handlers } = makePi();
 	const { spawn } = makeSpawn([{ code: 0, stdout: allowJson() }]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx();
 
 	const result = await fireToolCall(
@@ -1463,7 +1463,7 @@ test("bash safe command with ryk allow returns undefined", async () => {
 test("bash dangerous command with ryk deny returns block", async () => {
 	const { pi, handlers, messages } = makePi();
 	const { spawn } = makeSpawn([{ code: 2, stdout: denyJson() }]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx, widgets } = makeCtx();
 
 	const result = await fireToolCall(
@@ -1517,7 +1517,7 @@ test("ryk inline decision keeps long reasons inside the compact frame", async ()
 			}),
 		},
 	]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx();
 
 	await fireToolCall(handlers.get("tool_call")![0], ctx, "dangerous-command");
@@ -1535,7 +1535,7 @@ test("ryk inline decision keeps long reasons inside the compact frame", async ()
 test("bash dangerous command with ryk deny blocks even when exit code is not 2", async () => {
 	const { pi, handlers } = makePi();
 	const { spawn } = makeSpawn([{ code: 0, stdout: denyJson() }]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx();
 
 	const result = await fireToolCall(
@@ -1554,7 +1554,7 @@ test("ryk error in non-interactive mode blocks", async () => {
 	const { pi, handlers } = makePi();
 	const err = { code: 3 as number, stdout: errorJson() };
 	const { spawn } = makeSpawn([err, err]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
@@ -1566,7 +1566,7 @@ test("ryk error in interactive mode waits for the user's decision", async () => 
 	const { pi, handlers } = makePi();
 	const err = { code: 3 as number, stdout: errorJson() };
 	const { spawn } = makeSpawn([err, err]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx, widgets } = makeCtx();
 	let resolveSelection: (choice: string) => void = () => {};
 	ctx.ui.select = () =>
@@ -1611,7 +1611,7 @@ test("auto mode blocks print sessions even when hasUI is true", async () => {
 	const { pi, handlers } = makePi();
 	const err = { code: 3 as number, stdout: errorJson() };
 	const { spawn } = makeSpawn([err, err]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx({ hasUI: true, mode: "print" });
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
@@ -1623,7 +1623,7 @@ test("strict mode blocks", async () => {
 	const { pi, handlers, commands } = makePi();
 	const err = { code: 3 as number, stdout: errorJson() };
 	const { spawn } = makeSpawn([err, err]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx();
 	await commands.get("orca-mode")!.handler("strict", ctx);
 
@@ -1636,7 +1636,7 @@ test("allow-with-warning allows only spawn_failed unavailability", async () => {
 	const missing = { error: new Error("ENOENT") };
 	// spawn_failed is transient → one retry, then allow-with-warning soft-allows.
 	const { spawn } = makeSpawn([missing, missing]);
-	installOrcaExtension(pi, { spawn, orcaBin: "missing-orca" });
+	installRykExtension(pi, { spawn, rykBin: "missing-orca" });
 	const { ctx, notifications } = makeCtx();
 	await commands.get("orca-mode")!.handler("allow-with-warning", ctx);
 
@@ -1650,7 +1650,7 @@ test("allow-with-warning still fail-closes on protocol decision error", async ()
 	const { pi, handlers, commands } = makePi();
 	const err = { code: 3 as number, stdout: errorJson() };
 	const { spawn, calls } = makeSpawn([err]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx();
 	await commands.get("orca-mode")!.handler("allow-with-warning", ctx);
 
@@ -1668,7 +1668,7 @@ test("malformed ryk JSON follows unavailable policy", async () => {
 		{ code: 0, stdout: "{not-json" },
 		{ code: 0, stdout: "{not-json" },
 	]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
@@ -1683,7 +1683,7 @@ test("child process failure follows unavailable policy", async () => {
 		{ error: new Error("ENOENT") },
 		{ error: new Error("ENOENT") },
 	]);
-	installOrcaExtension(pi, { spawn, orcaBin: "missing-orca" });
+	installRykExtension(pi, { spawn, rykBin: "missing-orca" });
 	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
@@ -1698,7 +1698,7 @@ test("repeated protocol failures notify degraded once without allowing", async (
 		stdout: "{not-json",
 	}));
 	const { spawn, calls } = makeSpawn(plans);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx, notifications } = makeCtx({ hasUI: false, mode: "print" });
 
 	for (let i = 0; i < PROTOCOL_DEGRADED_THRESHOLD; i++) {
@@ -1719,7 +1719,7 @@ test("session bypass allows subsequent bash calls during same session", async ()
 	const err = { code: 3 as number, stdout: errorJson() };
 	// Non-transient decision:error → single spawn, then session bypass.
 	const { spawn, calls } = makeSpawn([err]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx, selections } = makeCtx();
 	selections.push("Disable ryk for this Pi session");
 
@@ -1737,7 +1737,7 @@ test("session bypass does not leak across Pi session ids", async () => {
 		err,
 		{ code: 0, stdout: allowJson() },
 	]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const firstSession = makeCtx();
 	const secondSession = makeCtx({
 		sessionManager: { getSessionId: () => "session-b" },
@@ -1757,7 +1757,7 @@ test("session bypass does not leak across Pi session ids", async () => {
 test("malformed bash tool calls fail closed", async () => {
 	const { pi, handlers } = makePi();
 	const { spawn, calls } = makeSpawn();
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx();
 
 	const result = await handlers.get("tool_call")![0](
@@ -1772,7 +1772,7 @@ test("malformed bash tool calls fail closed", async () => {
 test("/ryk-doctor handles ryk present", async () => {
 	const { pi, commands } = makePi();
 	const { spawn } = makeSpawn([{ code: 0, stdout: '{"ok":true}' }]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx, notifications } = makeCtx();
 
 	await commands.get("orca-doctor")!.handler("", ctx);
@@ -1785,7 +1785,7 @@ test("/ryk-doctor handles ryk present", async () => {
 test("/ryk-doctor handles ryk missing", async () => {
 	const { pi, commands } = makePi();
 	const { spawn } = makeSpawn([{ error: new Error("ENOENT") }]);
-	installOrcaExtension(pi, { spawn, orcaBin: "missing-orca" });
+	installRykExtension(pi, { spawn, rykBin: "missing-orca" });
 	const { ctx, notifications } = makeCtx();
 
 	await commands.get("orca-doctor")!.handler("", ctx);
@@ -1803,7 +1803,7 @@ test("/ryk-stop disables Pi bash protection until /ryk-start re-enables it", asy
 		{ code: 0, stdout: "healthy" },
 		{ code: 0, stdout: allowJson() },
 	]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx, notifications, statuses } = makeCtx({ cwd });
 
 	await commands.get("orca-stop")!.handler("", ctx);
@@ -1849,9 +1849,9 @@ test("/ryk-start re-enables without invoking the CLI start command", async () =>
 	writeFileSync(resolve(cwd, ".ryk/policy.yaml"), "version: 1\n");
 	const present = makePi();
 	const presentSpawn = makeSpawn([{ code: 0, stdout: "healthy" }]);
-	installOrcaExtension(present.pi, {
+	installRykExtension(present.pi, {
 		spawn: presentSpawn.spawn,
-		orcaBin: "orca",
+		rykBin: "ryk",
 	});
 	const presentCtx = makeCtx({ cwd });
 	await present.commands.get("orca-start")!.handler("", presentCtx.ctx);
@@ -1863,9 +1863,9 @@ test("/ryk-start re-enables without invoking the CLI start command", async () =>
 
 	const missing = makePi();
 	const missingSpawn = makeSpawn([{ error: new Error("ENOENT") }]);
-	installOrcaExtension(missing.pi, {
+	installRykExtension(missing.pi, {
 		spawn: missingSpawn.spawn,
-		orcaBin: "missing-orca",
+		rykBin: "missing-orca",
 	});
 	const missingCtx = makeCtx();
 	await missing.commands.get("orca-start")!.handler("", missingCtx.ctx);
@@ -1879,7 +1879,7 @@ test("/ryk-start re-enables without invoking the CLI start command", async () =>
 
 test("/ryk-mode changes mode", async () => {
 	const { pi, commands } = makePi();
-	installOrcaExtension(pi, { spawn: makeSpawn().spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn: makeSpawn().spawn, rykBin: "ryk" });
 	const { ctx, notifications } = makeCtx();
 
 	await commands.get("orca-mode")!.handler("strict", ctx);
@@ -1899,12 +1899,12 @@ test("no shell interpolation is used when invoking ryk", async () => {
 		buildEvaluateRequest("echo safe", { cwd: process.cwd(), mode: "print" }),
 		{
 			spawn,
-			orcaBin: "orca",
+			rykBin: "ryk",
 			timeoutMs: 1_000,
 		},
 	);
 
-	assert.equal(calls[0].file, "orca");
+	assert.equal(calls[0].file, "ryk");
 	assert.deepEqual(calls[0].args, ["evaluate", "--json", "--stdin"]);
 	assert.equal(calls[0].options.shell, false);
 	const request = JSON.parse(calls[0].stdin[0]) as OrcaEvaluateRequest;
@@ -1921,7 +1921,7 @@ test("runOrcaEvaluate maps decision ask exit 0 to kind ask", async () => {
 		}),
 		{
 			spawn,
-			orcaBin: "orca",
+			rykBin: "ryk",
 			timeoutMs: 1_000,
 		},
 	);
@@ -1941,7 +1941,7 @@ test("oversized ryk output follows unavailable policy", async () => {
 	const huge = "x".repeat(1024 * 1024 + 1);
 	const plan = { code: 0 as number, stdout: huge };
 	const { spawn } = makeSpawn([plan, plan]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installRykExtension(pi, { spawn, rykBin: "ryk" });
 	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
@@ -1994,7 +1994,7 @@ test("ryk timeout follows unavailable policy", async () => {
 		setTimeout(() => child.close(143), 5);
 		return child;
 	};
-	installOrcaExtension(pi, { spawn, orcaBin: "orca", timeoutMs: 1 });
+	installRykExtension(pi, { spawn, rykBin: "ryk", timeoutMs: 1 });
 	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);

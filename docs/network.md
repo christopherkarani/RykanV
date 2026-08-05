@@ -38,12 +38,12 @@ ryk run --network open -- pi
 One-release kill switch to restore pre-change agent net defaults (labels without forced mediation):
 
 ```sh
-ORCA_AGENT_NETWORK_DEFAULT=legacy ryk pi
+RYK_AGENT_NETWORK_DEFAULT=legacy ryk pi
 ```
 
 Custom `ryk run -- <command>` is **unchanged**: network mode still defaults to `ask`, backend stays policy/`decision_only` unless you pass `--network-backend proxy`. No silent lockdown on non-alias run.
 
-**Honesty rule:** host aliases must not advertise `ORCA_NETWORK_MODE=ask|allowlist` plus a populated allowlist while `ORCA_BACKEND_NETWORK_ENFORCEMENT=unavailable` without either mediation (route-forced) or an explicit open/legacy escape.
+**Honesty rule:** host aliases must not advertise `RYK_NETWORK_MODE=ask|allowlist` plus a populated allowlist while `RYK_BACKEND_NETWORK_ENFORCEMENT=unavailable` without either mediation (route-forced) or an explicit open/legacy escape.
 
 ## Policy
 
@@ -144,7 +144,7 @@ Deterministic union (exact-host dedupe; first wins):
 
 **effective allow = user policy ∪ core ∪ overlay ∪ discovered(managed∩host_key + live adapter) ∪ CLI**
 
-Managed store path: `<workspace>/.orca/network-discovered.yaml` (optional; soft-skip when missing/corrupt). Contents are hostnames + source tags only — never tokens, keys, or credential-bearing URLs. Load re-validates every host (rejects wildcards, `network_eval` class tokens such as `private` / `metadata` / `direct-ip`, non-loopback IPs). Writes are atomic (temp+rename) and refuse symlink product paths.
+Managed store path: `<workspace>/.ryk/network-discovered.yaml` (optional; soft-skip when missing/corrupt). Contents are hostnames + source tags only — never tokens, keys, or credential-bearing URLs. Load re-validates every host (rejects wildcards, `network_eval` class tokens such as `private` / `metadata` / `direct-ip`, non-loopback IPs). Writes are atomic (temp+rename) and refuse symlink product paths.
 
 ### What discovery reads (and does not)
 

@@ -50,7 +50,7 @@ pub const ShellEvalBackend = enum { zig, rust };
 /// callers can hard-error — it must never select `daemon.evaluate`.
 pub fn resolveShellEvalBackend() ShellEvalBackend {
     const env_util = @import("../env_util.zig");
-    // Prefer RYK_SHELL_EVAL then RYK_SHELL_EVAL (Phase 5a dual-read).
+    // RYK_SHELL_EVAL only (hard-cut).
     const value_z = env_util.getenvBrand("SHELL_EVAL") orelse return .zig;
     const value = std.mem.span(value_z);
     if (std.ascii.eqlIgnoreCase(value, "rust")) return .rust;

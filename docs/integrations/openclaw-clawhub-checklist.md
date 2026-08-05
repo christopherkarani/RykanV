@@ -5,7 +5,7 @@ This checklist tracks whether the ryk OpenClaw plugin is ready for ClawHub submi
 ## Metadata Checklist
 
 - [x] `openclaw.plugin.json` validates as JSON.
-- [x] `openclaw.plugin.json` contains `id: "orca"`.
+- [x] `openclaw.plugin.json` contains `id: "ryk"`.
 - [x] `openclaw.plugin.json` contains `name: "ryk"`.
 - [x] `openclaw.plugin.json` contains `version`.
 - [x] `openclaw.plugin.json` contains `description`.

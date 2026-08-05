@@ -72,8 +72,8 @@ function OverviewContent() {
     : [
         {
           label: "Version",
-          value: data.orca.version,
-          detail: data.orca.workspace_root ?? "Machine-wide",
+          value: data.ryk.version,
+          detail: data.ryk.workspace_root ?? "Machine-wide",
           status: "success" as const,
         },
         ...(data.policy ? [{

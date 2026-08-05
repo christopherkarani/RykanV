@@ -13,7 +13,7 @@ const packageJson = require(path.join(packageRoot, "package.json"));
 const binDir = path.join(packageRoot, "vendor");
 const resourceDir = path.join(binDir, "resources");
 const primaryName = process.platform === "win32" ? "ryk.exe" : "ryk";
-const aliasName = process.platform === "win32" ? "ryk.exe" : "orca";
+const aliasName = process.platform === "win32" ? "ryk.exe" : "ryk";
 const installedBinary = path.join(binDir, primaryName);
 const installedAlias = path.join(binDir, aliasName);
 const maxDownloadBytes = 512 * 1024 * 1024;
@@ -43,7 +43,7 @@ function sha256(filePath) {
 
 function artifactName(platform, arch) {
   const ext = platform === "windows" ? "zip" : "tar.gz";
-  // Primary release artifact is ryk-v*; dual-publish also ships orca-v*.
+  // Primary release artifact is ryk-v*; dual-publish also ships ryk-v*.
   return `ryk-v${packageJson.version}-${platform}-${arch}.${ext}`;
 }
 
@@ -124,7 +124,7 @@ function extractArchive(archive, destination, platform) {
 function installReleasePayload(extractDir, platform, arch) {
   const candidates = [
     path.join(extractDir, `ryk-v${packageJson.version}-${platform}-${arch}`),
-    path.join(extractDir, `orca-v${packageJson.version}-${platform}-${arch}`),
+    path.join(extractDir, `ryk-v${packageJson.version}-${platform}-${arch}`),
   ];
   let top = candidates.find((p) => fs.existsSync(p));
   if (!top) {
@@ -137,7 +137,7 @@ function installReleasePayload(extractDir, platform, arch) {
   }
   const sourcePrimary = path.join(top, "bin", primaryName);
   const sourceAlias = path.join(top, "bin", aliasName);
-  const sourceLegacy = path.join(top, "bin", process.platform === "win32" ? "ryk.exe" : "orca");
+  const sourceLegacy = path.join(top, "bin", process.platform === "win32" ? "ryk.exe" : "ryk");
   let source = sourcePrimary;
   if (!fs.existsSync(source)) {
     source = fs.existsSync(sourceAlias) ? sourceAlias : sourceLegacy;
@@ -218,7 +218,7 @@ if (process.argv.includes("--install")) {
 // When invoked as `ryk` npm bin, prefer alias binary if present.
 const invoked = path.basename(process.argv[1] || "");
 const runBinary =
-  (invoked === "orca" || invoked === "orca.js") && fs.existsSync(installedAlias)
+  (invoked === "ryk" || invoked === "ryk.js") && fs.existsSync(installedAlias)
     ? installedAlias
     : installedBinary;
 

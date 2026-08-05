@@ -335,15 +335,15 @@ type SessionState = {
 	protocolDegradedNotified: boolean;
 };
 
-export type OrcaExtensionOptions = {
-	orcaBin?: string;
+export type RykExtensionOptions = {
+	rykBin?: string;
 	resolveBin?: () => ResolvedOrcaBin;
 	spawn?: SpawnLike;
 	timeoutMs?: number;
 };
 
 export type ResolvedOrcaBin = {
-	orcaBin: string;
+	rykBin: string;
 	daemonBin?: string;
 	source: "explicit" | "bundled" | "path" | "missing";
 };
@@ -356,7 +356,7 @@ type ResolveOrcaBinOptions = {
 	spawnSync?: SpawnSyncLike;
 };
 
-const STATUS_KEY = "orca";
+const STATUS_KEY = "ryk";
 const BLOCK_WIDGET_KEY = "orca-block";
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_CHILD_OUTPUT_BYTES = 1024 * 1024;
@@ -436,13 +436,13 @@ export function resolveOrcaBin(
 	// Phase 5a: prefer RYK_BIN, fall back RYK_BIN.
 	const explicit = (env.RYK_BIN ?? env.RYK_BIN)?.trim();
 	if (explicit && isExecutable(explicit))
-		return { orcaBin: explicit, source: "explicit" };
+		return { rykBin: explicit, source: "explicit" };
 
 	const packageRoot = options.bundledPackageRoot ?? resolveBundledPackageRoot();
 	if (packageRoot) {
 		const executableSuffix = process.platform === "win32" ? ".exe" : "";
 		const rykBin = resolve(packageRoot, "vendor", `ryk${executableSuffix}`);
-		const orcaBin = resolve(packageRoot, "vendor", `orca${executableSuffix}`);
+		const rykBin = resolve(packageRoot, "vendor", `orca${executableSuffix}`);
 		const daemonBin = resolve(
 			packageRoot,
 			"vendor",
@@ -451,16 +451,16 @@ export function resolveOrcaBin(
 		// Prefer ryk vendor binary when present; daemon optional (shell_engine in-process).
 		if (isExecutable(rykBin)) {
 			return {
-				orcaBin: rykBin,
+				rykBin: rykBin,
 				daemonBin: isExecutable(daemonBin) ? daemonBin : undefined,
 				source: "bundled",
 			};
 		}
-		if (isExecutable(orcaBin) && isExecutable(daemonBin)) {
-			return { orcaBin, daemonBin, source: "bundled" };
+		if (isExecutable(rykBin) && isExecutable(daemonBin)) {
+			return { rykBin, daemonBin, source: "bundled" };
 		}
-		if (isExecutable(orcaBin)) {
-			return { orcaBin, source: "bundled" };
+		if (isExecutable(rykBin)) {
+			return { rykBin, source: "bundled" };
 		}
 	}
 
@@ -470,18 +470,18 @@ export function resolveOrcaBin(
 		if (options.isCompatiblePathOrca) {
 			if (options.isCompatiblePathOrca()) {
 				// Injected compat checks historically meant "orca on PATH"; prefer ryk name when unknown.
-				return { orcaBin: "ryk", source: "path" };
+				return { rykBin: "ryk", source: "path" };
 			}
 		} else {
 			const pathBin = resolveCompatiblePathCli(
 				env,
 				options.spawnSync ?? spawnSync,
 			);
-			if (pathBin) return { orcaBin: pathBin, source: "path" };
+			if (pathBin) return { rykBin: pathBin, source: "path" };
 		}
 	}
 
-	return { orcaBin: "__orca_bundled_runtime_missing__", source: "missing" };
+	return { rykBin: "__orca_bundled_runtime_missing__", source: "missing" };
 }
 
 export function buildEvaluateRequest(
@@ -528,7 +528,7 @@ export function resolveToolPath(pathInput: string, ctx: PiContext): string {
 async function runOrcaEvaluateOnce(
 	request: OrcaEvaluateRequest,
 	options: Required<
-		Pick<OrcaExtensionOptions, "orcaBin" | "spawn" | "timeoutMs">
+		Pick<RykExtensionOptions, "rykBin" | "spawn" | "timeoutMs">
 	> & { env?: NodeJS.ProcessEnv },
 ): Promise<OrcaDecision> {
 	const result = await runProcess(
@@ -629,7 +629,7 @@ async function runOrcaEvaluateOnce(
 export async function runOrcaEvaluate(
 	request: OrcaEvaluateRequest,
 	options: Required<
-		Pick<OrcaExtensionOptions, "orcaBin" | "spawn" | "timeoutMs">
+		Pick<RykExtensionOptions, "rykBin" | "spawn" | "timeoutMs">
 	> & { env?: NodeJS.ProcessEnv },
 ): Promise<OrcaDecision> {
 	const first = await runOrcaEvaluateOnce(request, options);
@@ -639,7 +639,7 @@ export async function runOrcaEvaluate(
 }
 
 type DecideRuntimeOptions = Required<
-	Pick<OrcaExtensionOptions, "orcaBin" | "spawn" | "timeoutMs">
+	Pick<RykExtensionOptions, "rykBin" | "spawn" | "timeoutMs">
 > & { env?: NodeJS.ProcessEnv; cwd?: string };
 
 /**
@@ -844,7 +844,7 @@ function blockMalformedToolCall(
 export async function runOrcaCommand(
 	args: string[],
 	options: Required<
-		Pick<OrcaExtensionOptions, "orcaBin" | "spawn" | "timeoutMs">
+		Pick<RykExtensionOptions, "rykBin" | "spawn" | "timeoutMs">
 	> & { env?: NodeJS.ProcessEnv },
 	cwd?: string,
 ): Promise<RunProcessResult> {
@@ -912,15 +912,15 @@ export function safeOrcaReason(response: unknown): string {
 	return formatOrcaDecisionSummary(buildOrcaDecisionCard(response, "block"));
 }
 
-export function installOrcaExtension(
+export function installRykExtension(
 	pi: PiAPI,
-	extensionOptions: OrcaExtensionOptions = {},
+	extensionOptions: RykExtensionOptions = {},
 ): void {
 	const resolvedBin = extensionOptions.rykBin
-		? { orcaBin: extensionOptions.rykBin, source: "explicit" as const }
+		? { rykBin: extensionOptions.rykBin, source: "explicit" as const }
 		: (extensionOptions.resolveBin ?? resolveOrcaBin)();
 	const runtime = {
-		orcaBin: resolvedBin.rykBin,
+		rykBin: resolvedBin.rykBin,
 		spawn: extensionOptions.spawn ?? (nodeSpawn as unknown as SpawnLike),
 		timeoutMs:
 			extensionOptions.timeoutMs ??
@@ -1647,7 +1647,7 @@ async function handleUnavailable(
 async function setupOrca(
 	ctx: PiContext,
 	runtime: Required<
-		Pick<OrcaExtensionOptions, "orcaBin" | "spawn" | "timeoutMs">
+		Pick<RykExtensionOptions, "rykBin" | "spawn" | "timeoutMs">
 	> & { env?: NodeJS.ProcessEnv },
 ): Promise<SetupResult> {
 	const cwd = resolveCwd(ctx.cwd);
@@ -2192,5 +2192,5 @@ function asError(value: unknown): Error {
 }
 
 export default function orcaPiExtension(pi: PiAPI): void {
-	installOrcaExtension(pi);
+	installRykExtension(pi);
 }

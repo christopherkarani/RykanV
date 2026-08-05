@@ -11,12 +11,12 @@ const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 async function withFakeOrca(run, scriptBody) {
   const directory = await mkdtemp(join(tmpdir(), 'ryk-opencode-plugin-'));
-  const orcaBin = join(directory, 'orca');
+  const rykBin = join(directory, 'ryk');
   const originalPath = process.env.PATH;
   const originalAllow = process.env.RYK_ALLOW_WORKSPACE_BIN;
 
   await writeFile(
-    orcaBin,
+    rykBin,
     scriptBody ??
       `#!/bin/sh
 payload=$(cat)
@@ -27,7 +27,7 @@ case "$payload" in
 esac
 `
   );
-  await chmod(orcaBin, 0o755);
+  await chmod(rykBin, 0o755);
   process.env.PATH = `${directory}:${originalPath ?? ''}`;
   delete process.env.RYK_ALLOW_WORKSPACE_BIN;
 
@@ -89,15 +89,15 @@ test('permission.ask denies ryk block', async () => {
 
 test('permission.ask fail-closes unknown decisions', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'ryk-opencode-plugin-'));
-  const orcaBin = join(directory, 'orca');
+  const rykBin = join(directory, 'ryk');
   const originalPath = process.env.PATH;
   await writeFile(
-    orcaBin,
+    rykBin,
     `#!/bin/sh
 printf '%s\\n' '{"decision":"unexpected","message":"bad decision"}'
 `
   );
-  await chmod(orcaBin, 0o755);
+  await chmod(rykBin, 0o755);
   process.env.PATH = `${directory}:${originalPath ?? ''}`;
   try {
     const plugin = await orcaPlugin({ directory, worktree: directory });
@@ -288,12 +288,12 @@ test('findryk does not shell-interpolate metacharacters in bare RYK_BIN', () => 
 test('findOrca ignores workspace zig-out without RYK_ALLOW_WORKSPACE_BIN', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'ryk-opencode-plugin-'));
   const zigOutBin = join(directory, 'zig-out', 'bin');
-  const orcaBin = join(zigOutBin, 'orca');
+  const rykBin = join(zigOutBin, 'ryk');
   const originalPath = process.env.PATH;
   const originalAllow = process.env.RYK_ALLOW_WORKSPACE_BIN;
   await mkdir(zigOutBin, { recursive: true });
-  await writeFile(orcaBin, '#!/bin/sh\necho ok\n');
-  await chmod(orcaBin, 0o755);
+  await writeFile(rykBin, '#!/bin/sh\necho ok\n');
+  await chmod(rykBin, 0o755);
   process.env.PATH = directory; // no ryk on PATH
   delete process.env.RYK_ALLOW_WORKSPACE_BIN;
   try {

@@ -67,12 +67,12 @@ pub fn install(
     rendered[0] = try std.fmt.allocPrint(
         allocator,
         ownership_marker ++
-            \\import {{ installOrcaExtension }} from "./runtime.ts";
+            \\import {{ installRykExtension }} from "./runtime.ts";
             \\
             \\export default function rykPiExtension(
-            \\  pi: Parameters<typeof installOrcaExtension>[0],
+            \\  pi: Parameters<typeof installRykExtension>[0],
             \\): void {{
-            \\  installOrcaExtension(pi, {{ orcaBin: {s} }});
+            \\  installRykExtension(pi, {{ rykBin: {s} }});
             \\}}
             \\
         ,
@@ -155,11 +155,11 @@ fn destinationChainIsSafe(io: std.Io, allocator: std.mem.Allocator, home: []cons
 fn hasExpectedInstalledShape(destination_name: []const u8, content: []const u8) bool {
     if (std.mem.eql(u8, destination_name, "index.ts")) {
         return std.mem.indexOf(u8, content, "from \"./runtime.ts\"") != null and
-            std.mem.indexOf(u8, content, "installOrcaExtension(pi, { orcaBin: \"") != null;
+            std.mem.indexOf(u8, content, "installRykExtension(pi, { rykBin: \"") != null;
     }
     if (std.mem.eql(u8, destination_name, "runtime.ts")) {
         return std.mem.indexOf(u8, content, "from \"./secret_capture.ts\"") != null and
-            std.mem.indexOf(u8, content, "export function installOrcaExtension") != null;
+            std.mem.indexOf(u8, content, "export function installRykExtension") != null;
     }
     if (std.mem.eql(u8, destination_name, "secret_capture.ts")) {
         return std.mem.indexOf(u8, content, "export function storeSecretToEnvFile") != null and
@@ -267,7 +267,7 @@ fn writeFixtureAssets(io: std.Io, dir: std.Io.Dir) !void {
         .sub_path = "assets/ryk.ts",
         .data =
         \\import { handleSecretCaptureInput } from "./secret_capture.ts";
-        \\export function installOrcaExtension() {}
+        \\export function installRykExtension() {}
         \\
         ,
     });

@@ -457,7 +457,7 @@ fn p3InitAssertNoSecretsInBytes(bytes: []const u8) !void {
 
 test "init refreshManagedDiscovery pi/opencode writes managed yaml hostnames+sources only" {
     // Acceptance: Synthetic HOME+tmp workspace refresh for pi/opencode writes
-    // <workspace>/.orca/network-discovered.yaml with hostnames+sources only.
+    // <workspace>/.ryk/network-discovered.yaml with hostnames+sources only.
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -523,11 +523,11 @@ test "init refreshManagedDiscovery rediscovery leaves policy.yaml user allows un
         \\
     ;
     {
-        const f = try ws_tmp.dir.createFile(io, ".orca/policy.yaml", .{});
+        const f = try ws_tmp.dir.createFile(io, ".ryk/policy.yaml", .{});
         defer f.close(io);
         try f.writeStreamingAll(io, user_policy);
     }
-    const policy_before = try ws_tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(4096));
+    const policy_before = try ws_tmp.dir.readFileAlloc(io, ".ryk/policy.yaml", allocator, .limited(4096));
     defer allocator.free(policy_before);
 
     try orca_policy.network_discovered.writeManaged(io, allocator, workspace_root, &.{
@@ -548,13 +548,13 @@ test "init refreshManagedDiscovery rediscovery leaves policy.yaml user allows un
     try std.testing.expect(p3InitStoreContainsHost(store, "auth.x.ai"));
     try std.testing.expect(!p3InitStoreContainsHost(store, "stale-init-managed.invalid"));
 
-    const policy_after = try ws_tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(4096));
+    const policy_after = try ws_tmp.dir.readFileAlloc(io, ".ryk/policy.yaml", allocator, .limited(4096));
     defer allocator.free(policy_after);
     try std.testing.expectEqualStrings(policy_before, policy_after);
     try std.testing.expect(std.mem.indexOf(u8, policy_after, "user-init-preserve.example") != null);
 }
 
-test "init refreshManagedDiscovery nested-cwd lands at workspace-root .orca" {
+test "init refreshManagedDiscovery nested-cwd lands at workspace-root .ryk" {
     // Composition: nested-cwd refresh → managed at workspace-root (not under nested).
     const allocator = std.testing.allocator;
     const io = std.testing.io;
@@ -585,7 +585,7 @@ test "init refreshManagedDiscovery nested-cwd lands at workspace-root .orca" {
     try std.testing.expect(p3InitStoreContainsHost(store, "api.x.ai"));
     try std.testing.expect(p3InitStoreContainsHost(store, "auth.x.ai"));
 
-    if (ws_tmp.dir.access(io, "nested/cwd/.orca/network-discovered.yaml", .{})) |_| {
+    if (ws_tmp.dir.access(io, "nested/cwd/.ryk/network-discovered.yaml", .{})) |_| {
         try std.testing.expect(false);
     } else |_| {}
 }
@@ -618,7 +618,7 @@ test "init command succeeds and refresh soft-succeeds when no hosts detected" {
     try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{ "pi", "opencode" });
 
     // Policy created by init must still exist and be readable.
-    const policy = try ws_tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(16 * 1024));
+    const policy = try ws_tmp.dir.readFileAlloc(io, ".ryk/policy.yaml", allocator, .limited(16 * 1024));
     defer allocator.free(policy);
     try std.testing.expect(std.mem.indexOf(u8, policy, "mode: observe") != null);
 }
@@ -654,7 +654,7 @@ test "init force still succeeds after refreshManagedDiscovery with fixtures" {
     try std.testing.expect(p3InitStoreContainsHost(store, "auth.x.ai"));
     try std.testing.expect(p3InitStoreContainsHost(store, "api.x.ai"));
 
-    const policy = try ws_tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(16 * 1024));
+    const policy = try ws_tmp.dir.readFileAlloc(io, ".ryk/policy.yaml", allocator, .limited(16 * 1024));
     defer allocator.free(policy);
     try std.testing.expect(std.mem.indexOf(u8, policy, "mode: ask") != null);
     // Managed secrets must not leak into policy.

@@ -845,7 +845,7 @@ test "applyLaunchAllowlistInPlace redacts credentialed host proxy URLs (M-3)" {
 
 test "appendProxyEnvironment dual-case inject wins over host proxies (M-3)" {
     // Production inject lives in policy.network_eval; covered here so test-lib
-    // actually executes it (orca_core package tests do not pull network_eval).
+    // actually executes it (ryk_core package tests do not pull network_eval).
     const network_eval = @import("ryk_core").policy.network_eval;
     var env_map = std.process.Environ.Map.init(std.testing.allocator);
     defer env_map.deinit();

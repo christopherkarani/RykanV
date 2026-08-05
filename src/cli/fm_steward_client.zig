@@ -148,7 +148,7 @@ pub fn fallbackContinue(why: []const u8, timed_out: bool) ClassifyResult {
 /// True when FM steward should be invoked (macOS and kill-switch not set).
 pub fn isEnabled() bool {
     if (builtin.os.tag != .macos) return false;
-    // Prefer RYK_FM_STEWARD then RYK_FM_STEWARD (Phase 5a dual-read).
+    // RYK_FM_STEWARD only (hard-cut).
     if (env_util.getenvBrand("FM_STEWARD")) |raw| {
         const v = std.mem.span(raw);
         if (std.mem.eql(u8, v, "0")) return false;

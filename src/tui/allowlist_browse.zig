@@ -92,7 +92,7 @@ pub fn formatListRange(buf: []u8, entry_count: usize) []const u8 {
 /// Basename or last two path components for compact footer status.
 pub fn abbreviatePath(path: []const u8) []const u8 {
     if (path.len == 0) return path;
-    // Prefer last two components: ".orca/allowlist.toml" / "orca/allowlist.toml"
+    // Prefer last two components: ".ryk/allowlist.toml" / "orca/allowlist.toml"
     var last_sep: ?usize = null;
     var prev_sep: ?usize = null;
     var i: usize = 0;
@@ -349,7 +349,7 @@ pub fn fillDetailWithPaths(
                 detail.lines[1] = std.fmt.bufPrint(&detail.line1, "Path:  {s}", .{p}) catch p;
             } else {
                 detail.lines[1] = switch (row.layer) {
-                    .project => "Path:  .orca/allowlist.toml (project)",
+                    .project => "Path:  .ryk/allowlist.toml (project)",
                     .user => "Path:  $XDG_CONFIG_HOME/orca/allowlist.toml",
                 };
             }
@@ -821,7 +821,7 @@ test "s-allowlist browse: dual-layer project section then user" {
     const user = [_]EntryView{
         .{ .kind = "command", .key = "git status", .reason = "ci", .layer = .user },
     };
-    var model = try buildDualLayer(gpa, &project, &user, "/proj/.orca/allowlist.toml", "/home/u/.config/orca/allowlist.toml", .project);
+    var model = try buildDualLayer(gpa, &project, &user, "/proj/.ryk/allowlist.toml", "/home/u/.config/ryk/allowlist.toml", .project);
     defer model.deinit();
 
     try std.testing.expect(model.rows.len >= 4);
@@ -887,16 +887,16 @@ test "s-allowlist browse: empty sections short chrome; CTA in detail not list" {
 
 test "s-allowlist browse: write-target status abbreviates path" {
     var buf: [192]u8 = undefined;
-    const proj = formatWriteTargetStatus(&buf, .project, "/ws/.orca/allowlist.toml", "/home/u/.config/orca/allowlist.toml");
+    const proj = formatWriteTargetStatus(&buf, .project, "/ws/.ryk/allowlist.toml", "/home/u/.config/ryk/allowlist.toml");
     try std.testing.expect(std.mem.indexOf(u8, proj, "project") != null);
     // Abbreviated: last two components, not the full absolute path.
-    try std.testing.expect(std.mem.indexOf(u8, proj, ".orca/allowlist.toml") != null);
-    try std.testing.expect(std.mem.indexOf(u8, proj, "/ws/.orca/allowlist.toml") == null);
+    try std.testing.expect(std.mem.indexOf(u8, proj, ".ryk/allowlist.toml") != null);
+    try std.testing.expect(std.mem.indexOf(u8, proj, "/ws/.ryk/allowlist.toml") == null);
 
-    const user = formatWriteTargetStatus(&buf, .user, "/ws/.orca/allowlist.toml", "/home/u/.config/orca/allowlist.toml");
+    const user = formatWriteTargetStatus(&buf, .user, "/ws/.ryk/allowlist.toml", "/home/u/.config/ryk/allowlist.toml");
     try std.testing.expect(std.mem.indexOf(u8, user, "user") != null);
     try std.testing.expect(std.mem.indexOf(u8, user, "orca/allowlist.toml") != null);
-    try std.testing.expect(std.mem.indexOf(u8, user, "/home/u/.config/orca/allowlist.toml") == null);
+    try std.testing.expect(std.mem.indexOf(u8, user, "/home/u/.config/ryk/allowlist.toml") == null);
 }
 
 test "s-allowlist browse: honest entry count and context footer" {
@@ -920,7 +920,7 @@ test "s-allowlist browse: honest entry count and context footer" {
     }));
 
     try std.testing.expectEqualStrings("allowlist.toml", abbreviatePath("allowlist.toml"));
-    try std.testing.expectEqualStrings(".orca/allowlist.toml", abbreviatePath("/ws/.orca/allowlist.toml"));
+    try std.testing.expectEqualStrings(".ryk/allowlist.toml", abbreviatePath("/ws/.ryk/allowlist.toml"));
 }
 
 test "s-allowlist browse: remove confirm default No; cancel skips write" {
@@ -1016,15 +1016,15 @@ test "s-allowlist browse: frame shows dual-layer and write status without alt-sc
 
 test "s-allowlist browse: empty frame hides remove and shows CTA in detail" {
     const gpa = std.testing.allocator;
-    var model = try buildDualLayer(gpa, &.{}, &.{}, "/ws/.orca/allowlist.toml", "/u/allowlist.toml", .project);
+    var model = try buildDualLayer(gpa, &.{}, &.{}, "/ws/.ryk/allowlist.toml", "/u/allowlist.toml", .project);
     defer model.deinit();
 
     var detail: DetailBufs = .{};
     // Select empty teach under project
-    fillDetailWithPaths(&detail, model.rows[1], &.{}, &.{}, "/ws/.orca/allowlist.toml", "/u/allowlist.toml");
+    fillDetailWithPaths(&detail, model.rows[1], &.{}, &.{}, "/ws/.ryk/allowlist.toml", "/u/allowlist.toml");
 
     var status_buf: [128]u8 = undefined;
-    const status = formatWriteTargetStatus(&status_buf, .project, "/ws/.orca/allowlist.toml", "/u/allowlist.toml");
+    const status = formatWriteTargetStatus(&status_buf, .project, "/ws/.ryk/allowlist.toml", "/u/allowlist.toml");
     var range_buf: [48]u8 = undefined;
     const list_range = formatListRange(&range_buf, 0);
 
@@ -1051,8 +1051,8 @@ test "s-allowlist browse: empty frame hides remove and shows CTA in detail" {
     try std.testing.expect(std.mem.indexOf(u8, text, "r remove") == null);
     try std.testing.expect(std.mem.indexOf(u8, text, "Enter ·") == null);
     // Full path in detail, abbreviated in status.
-    try std.testing.expect(std.mem.indexOf(u8, text, "/ws/.orca/allowlist.toml") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "write: project · .orca/allowlist.toml") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "/ws/.ryk/allowlist.toml") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "write: project · .ryk/allowlist.toml") != null);
 }
 
 fn joinDetail(gpa: std.mem.Allocator, lines: []const []const u8) ![]u8 {

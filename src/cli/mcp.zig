@@ -477,7 +477,7 @@ fn proxy(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
 
 fn safeProxyAuditDirName(value: []const u8) bool {
     if (value.len == 0 or value.len > 1024 or std.fs.path.isAbsolute(value)) return false;
-    if (!std.mem.startsWith(u8, value, ".orca-tmp/session-")) return false;
+    if (!std.mem.startsWith(u8, value, ".ryk-tmp/session-")) return false;
     var parts = std.mem.splitScalar(u8, value, '/');
     while (parts.next()) |part| {
         if (part.len == 0 or std.mem.eql(u8, part, ".") or std.mem.eql(u8, part, "..")) return false;
@@ -853,7 +853,7 @@ test "MCP proxy audit summaries never persist server arguments" {
         io,
         allocator,
         session,
-        ".orca-tmp/session-test/mcp-audit-0",
+        ".ryk-tmp/session-test/mcp-audit-0",
     );
     defer writer.deinit();
     try core_api.writeAuditSummary(allocator, writer.session_dir_path, .{
@@ -897,9 +897,9 @@ test "mcp command help and invalid subcommands are stable" {
 }
 
 test "MCP proxy audit directory is confined to a fresh workspace session" {
-    try std.testing.expect(safeProxyAuditDirName(".orca-tmp/session-abc/mcp-audit-0"));
-    try std.testing.expect(!safeProxyAuditDirName(".orca/sessions"));
-    try std.testing.expect(!safeProxyAuditDirName(".orca-tmp/../.orca"));
+    try std.testing.expect(safeProxyAuditDirName(".ryk-tmp/session-abc/mcp-audit-0"));
+    try std.testing.expect(!safeProxyAuditDirName(".ryk/sessions"));
+    try std.testing.expect(!safeProxyAuditDirName(".ryk-tmp/../.ryk"));
     try std.testing.expect(!safeProxyAuditDirName("/tmp/mcp-audit"));
 }
 

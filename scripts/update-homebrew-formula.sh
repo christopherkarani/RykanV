@@ -1,10 +1,10 @@
 #!/usr/bin/env sh
 set -eu
 
-VERSION="${1:-${RYK_VERSION:-${RYK_VERSION:-}}}"
+VERSION="${1:-${RYK_VERSION:-}}"
 HOMEBREW_TAP_DIR="${RYK_HOMEBREW_TAP_DIR:-${RYK_HOMEBREW_TAP_DIR:-${HOME}/code/homebrew-ryk}}"
 FORMULA_OUT="${RYK_HOMEBREW_FORMULA:-${RYK_HOMEBREW_FORMULA:-${HOMEBREW_TAP_DIR}/Formula/ryk.rb}}"
-TEMPLATE="${RYK_HOMEBREW_TEMPLATE:-${RYK_HOMEBREW_TEMPLATE:-packaging/homebrew/Formula/ryk.rb}}"
+TEMPLATE="${RYK_HOMEBREW_TEMPLATE:-packaging/homebrew/Formula/ryk.rb}"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ryk-homebrew.XXXXXX")"
 
 cleanup() {
@@ -17,11 +17,11 @@ fail() {
   exit 1
 }
 
-[ -n "$VERSION" ] || fail "usage: $0 <version>  (or set RYK_VERSION / RYK_VERSION)"
+[ -n "$VERSION" ] || fail "usage: $0 <version>  (or set RYK_VERSION)"
 [ -f "$TEMPLATE" ] || fail "homebrew template not found: $TEMPLATE"
 
 BASE_URL="https://github.com/christopherkarani/rykan/releases/download/v${VERSION}"
-DIST_DIR="${RYK_DIST_DIR:-${RYK_DIST_DIR:-}}"
+DIST_DIR="${RYK_DIST_DIR:-}"
 
 if [ -n "$DIST_DIR" ]; then
   printf 'Using local release assets for ryk %s from %s...\n' "$VERSION" "$DIST_DIR"
@@ -30,7 +30,7 @@ else
 fi
 
 for plat in darwin-arm64 darwin-amd64 linux-arm64 linux-amd64; do
-  # Prefer primary ryk-v* artifacts; fall back to dual-published orca-v*.
+  # Prefer primary ryk-v* artifacts; fall back to dual-published ryk-v*.
   artifact="ryk-v${VERSION}-${plat}.tar.gz"
   legacy="ryk-v${VERSION}-${plat}.tar.gz"
   output="${TMP_DIR}/${artifact}"

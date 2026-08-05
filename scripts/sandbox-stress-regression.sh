@@ -3,7 +3,7 @@
 #
 # Proves mediated / OS-attached `ryk run` still enforces:
 #   P1 network mediation (example.com + raw TCP deny) when mediation is active
-#   P2 .git / .orca write deny; workspace write allow
+#   P2 .git / .ryk write deny; workspace write allow
 #   P4 PATH honesty / session grade labels when present
 # Optional: --network open escape grade honesty
 #
@@ -11,7 +11,7 @@
 #
 # Usage:
 #   ./scripts/sandbox-stress-regression.sh [--binary PATH] [--skip-open-escape]
-#   ORCA_STRESS_BINARY=./zig-out/bin/ryk ./scripts/sandbox-stress-regression.sh
+#   RYK_STRESS_BINARY=./zig-out/bin/ryk ./scripts/sandbox-stress-regression.sh
 #
 # Exit:
 #   0  all applicable probes passed, or clean SKIP (no Seatbelt/Landlock)
@@ -23,7 +23,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-BINARY="${ORCA_STRESS_BINARY:-}"
+BINARY="${RYK_STRESS_BINARY:-}"
 SKIP_OPEN_ESCAPE=false
 WORK_DIR=""
 PASS=0
@@ -60,8 +60,8 @@ resolve_binary() {
     candidate="${BINARY}"
   elif [[ -x "${REPO_ROOT}/zig-out/bin/ryk" ]]; then
     candidate="${REPO_ROOT}/zig-out/bin/ryk"
-  elif [[ -x "${REPO_ROOT}/zig-out/bin/orca" ]]; then
-    candidate="${REPO_ROOT}/zig-out/bin/orca"
+  elif [[ -x "${REPO_ROOT}/zig-out/bin/ryk" ]]; then
+    candidate="${REPO_ROOT}/zig-out/bin/ryk"
   else
     return 1
   fi
@@ -149,10 +149,10 @@ main() {
   log "version=$("${RYK}" version 2>/dev/null | head -1 || echo unknown)"
 
   WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ryk-stress.XXXXXX")"
-  mkdir -p "${WORK_DIR}/.orca" "${WORK_DIR}/tmp"
+  mkdir -p "${WORK_DIR}/.ryk" "${WORK_DIR}/tmp"
   mkdir -p "${WORK_DIR}/.git/objects" "${WORK_DIR}/.git/refs"
   printf 'ref: refs/heads/main\n' >"${WORK_DIR}/.git/HEAD"
-  cat >"${WORK_DIR}/.orca/policy.yaml" <<'YAML'
+  cat >"${WORK_DIR}/.ryk/policy.yaml" <<'YAML'
 version: 1
 mode: observe
 env:
@@ -213,7 +213,7 @@ SH
     'echo probe > .git/phase5-probe 2>/dev/null && echo phase5-git-written && exit 0; echo STRESS_DENY_OK; exit 1'
 
   expect_fs_deny "write-orca-control" \
-    'echo probe > .orca/phase5-probe 2>/dev/null && echo phase5-orca-written && exit 0; echo STRESS_DENY_OK; exit 1'
+    'echo probe > .ryk/phase5-probe 2>/dev/null && echo phase5-orca-written && exit 0; echo STRESS_DENY_OK; exit 1'
 
   expect_fs_allow "workspace-write" \
     'echo ok > tmp/phase5-ok && test -f tmp/phase5-ok && echo PHASE5_WS_OK' \
@@ -225,7 +225,7 @@ SH
   # Session grade under attach + open (unrestricted-escape) via non-alias open path.
   local grade_out="${WORK_DIR}/out-grade-open.txt"
   set +e
-  run_os_sh 'echo GRADE=$ORCA_SESSION_SANDBOX_GRADE; echo PATH_FILTER=$ORCA_PATH_FILTER; echo TOOL_PACK=$ORCA_TOOL_PACK' "${grade_out}"
+  run_os_sh 'echo GRADE=$RYK_SESSION_SANDBOX_GRADE; echo PATH_FILTER=$RYK_PATH_FILTER; echo TOOL_PACK=$RYK_TOOL_PACK' "${grade_out}"
   local grade_code=$?
   set -e
   if [[ ${grade_code} -eq 0 ]]; then
@@ -235,7 +235,7 @@ SH
       # Open path should be unrestricted-escape; anything else is honesty bug.
       fail "session-grade under --network open expected unrestricted-escape (see ${grade_out})"
     else
-      fail "ORCA_SESSION_SANDBOX_GRADE missing under open attach (see ${grade_out})"
+      fail "RYK_SESSION_SANDBOX_GRADE missing under open attach (see ${grade_out})"
     fi
     if grep -qE 'PATH_FILTER=denylist|TOOL_PACK=' "${grade_out}"; then
       pass "PATH/tool_pack honesty labels present under attach"
@@ -259,7 +259,7 @@ SH
     skip "curl not on PATH; network deny probe not proven (install curl to exercise P1)"
   else
     set +e
-    run_mediated_pi 'echo GRADE=$ORCA_SESSION_SANDBOX_GRADE; echo ROUTE=$ORCA_PROXY_ROUTE_FORCED; code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 5 https://example.com 2>/dev/null || echo fail); echo HTTP=$code; if [ "$code" = "200" ]; then echo HTTP_200; exit 0; fi; echo STRESS_DENY_OK; exit 1' "${net_out}"
+    run_mediated_pi 'echo GRADE=$RYK_SESSION_SANDBOX_GRADE; echo ROUTE=$RYK_PROXY_ROUTE_FORCED; code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 5 https://example.com 2>/dev/null || echo fail); echo HTTP=$code; if [ "$code" = "200" ]; then echo HTTP_200; exit 0; fi; echo STRESS_DENY_OK; exit 1' "${net_out}"
     local net_code=$?
     set -e
     if mediation_launch_failed "${net_out}" && ! grep -q 'HTTP_200\|GRADE=\|ROUTE=' "${net_out}"; then
@@ -315,7 +315,7 @@ except Exception as e:
       cd "${WORK_DIR}"
       env HOME="${STRESS_HOME}" \
         "${RYK}" run --workspace "${WORK_DIR}" --mode observe --os-sandbox on --network open -- \
-        /bin/sh -c 'echo GRADE=$ORCA_SESSION_SANDBOX_GRADE'
+        /bin/sh -c 'echo GRADE=$RYK_SESSION_SANDBOX_GRADE'
     ) >"${open_out}" 2>&1
     local open_code=$?
     set -e
@@ -335,7 +335,7 @@ except Exception as e:
     fi
   fi
 
-  rm -f "${WORK_DIR}/.git/phase5-probe" "${WORK_DIR}/.orca/phase5-probe" "${WORK_DIR}/tmp/phase5-ok" 2>/dev/null || true
+  rm -f "${WORK_DIR}/.git/phase5-probe" "${WORK_DIR}/.ryk/phase5-probe" "${WORK_DIR}/tmp/phase5-ok" 2>/dev/null || true
 
   log "summary pass=${PASS} fail=${FAIL} skip=${SKIP}"
   if [[ ${FAIL} -gt 0 ]]; then

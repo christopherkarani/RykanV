@@ -93,7 +93,7 @@ This document covers common issues when installing, running, or uninstalling ryk
 **Symptom:** Cursor agent Shell tool is blocked with:
 
 ```text
-Hook "orca" returned invalid JSON. The command was blocked for safety.
+Hook "ryk" returned invalid JSON. The command was blocked for safety.
 ```
 
 **Cause:** Cursor's `beforeShellExecution` hook expects valid JSON on stdout (`permission`, `continue`, …). If `~/.cursor/hooks.json` points at bare `ryk` and the binary prints human help instead of JSON, Cursor fail-closes every shell command.

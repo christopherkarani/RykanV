@@ -89,8 +89,8 @@ The repo is organized as a monorepo with two products:
 
 | Package | Path | Re-exports |
 |---------|------|------------|
-| `orca_core` | `packages/core/src/root.zig` | api, actions, schemas, abi (experimental), redteam |
-| `orca_cli` | `packages/cli/src/root.zig` | CLI surface + intercept/MCP/sandbox wrappers |
+| `ryk_core` | `packages/core/src/root.zig` | api, actions, schemas, abi (experimental), redteam |
+| `ryk_cli` | `packages/cli/src/root.zig` | CLI surface + intercept/MCP/sandbox wrappers |
 
 ---
 

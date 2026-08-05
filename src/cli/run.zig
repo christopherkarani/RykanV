@@ -72,7 +72,7 @@ const default_session_grants = [_]intercept.session_secrets.GrantSpec{
 /// Shared remount for agent-network mediation fail-closed paths (proxy bind, OS route-force).
 const agent_mediation_network_open_help =
     \\  ryk run --network open -- <agent>
-    \\(or set ORCA_AGENT_NETWORK_DEFAULT=legacy for one-release pre-change defaults).
+    \\(or set RYK_AGENT_NETWORK_DEFAULT=legacy for one-release pre-change defaults).
     \\
 ;
 
@@ -80,7 +80,7 @@ const agent_mediation_route_force_help =
     \\Agent host network mediation requires OS route-force onto the loopback proxy.
     \\Fix sandbox attach / proxy, or re-run with:
     \\  ryk run --network open -- <agent>
-    \\(or set ORCA_AGENT_NETWORK_DEFAULT=legacy for one-release pre-change defaults).
+    \\(or set RYK_AGENT_NETWORK_DEFAULT=legacy for one-release pre-change defaults).
     \\
 ;
 
@@ -237,7 +237,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     // celebration can be emitted exactly once for a brand-new user/workspace.
     const is_first_session = isFirstSession(io, allocator, workspace_root_for_policy);
 
-    const agent_net_default = parseAgentNetworkDefault(if (std.c.getenv("ORCA_AGENT_NETWORK_DEFAULT")) |raw|
+    const agent_net_default = parseAgentNetworkDefault(if (std.c.getenv("RYK_AGENT_NETWORK_DEFAULT")) |raw|
         std.mem.span(raw)
     else
         null);
@@ -250,7 +250,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     }
     if (trusted_agent_host and agent_net_default == .legacy) {
         try stderr.writeAll(
-            "ryk: WARNING: ORCA_AGENT_NETWORK_DEFAULT=legacy restores pre-mediation agent net defaults " ++
+            "ryk: WARNING: RYK_AGENT_NETWORK_DEFAULT=legacy restores pre-mediation agent net defaults " ++
                 "(labels may not match OS enforcement).\n",
         );
     }
@@ -459,7 +459,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         0;
     if (mcp_disabled_count > 0) {
         try stderr.print(
-            "ryk run: disabled {d} MCP server(s) that could not be policy-mediated; external scripts need a matching .orca/mcp manifest and HTTP MCP remains unsupported.\n",
+            "ryk run: disabled {d} MCP server(s) that could not be policy-mediated; external scripts need a matching .ryk/mcp manifest and HTTP MCP remains unsupported.\n",
             .{mcp_disabled_count},
         );
     }
@@ -501,7 +501,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         stderr,
         launch_argv0,
         // Same bind as empty-backpack / mediation / auth preflight — do not re-resolve
-        // under filtered child env (would drop ORCA_TRUSTED_HOST_PREFIXES).
+        // under filtered child env (would drop RYK_TRUSTED_HOST_PREFIXES).
         trusted_host_key,
         mcp_exec_paths,
         mcp_ro_paths,
@@ -533,7 +533,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     // Capability/doctor may still report env_filtering=active via installBackendEnvironment;
     // restamp after apply so child env matches session facts (mirror network restamp).
     try filtered_env.env_map.put(
-        "ORCA_BACKEND_ENV_FILTERING",
+        "RYK_BACKEND_ENV_FILTERING",
         sessionEnvFilteringLabel(.{
             .with_host_secrets = options.with_host_secrets,
             .env_scrubbed = apply_result.env_scrubbed,
@@ -543,10 +543,10 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
     // E0 / RT-05: when OS attach is planned, control root is write-deny for the
     // agent — in-shim open of events.jsonl is known dead. Mark degraded so PATH
     // shims skip open silently (≤1 parent banner line, not N× per shimmed cmd).
-    // Do not grant the agent write access to `.orca` to "fix" audit.
+    // Do not grant the agent write access to `.ryk` to "fix" audit.
     const shim_audit_degraded = apply_result.requiresChildApply();
     if (shim_audit_degraded) {
-        try filtered_env.env_map.put("ORCA_SHIM_AUDIT_MODE", "degraded");
+        try filtered_env.env_map.put("RYK_SHIM_AUDIT_MODE", "degraded");
         // Session-file attestation is written when the session id is known
         // (see prepareSessionEnv next to writeSessionShimMode) — env alone is child-forgable.
     }
@@ -557,7 +557,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         .network_route_forced = apply_result.network_route_forced,
         .unrestricted_escape = isUnrestrictedNetworkEscape(options, agent_net_default, trusted_agent_host),
     });
-    try filtered_env.env_map.put("ORCA_SESSION_SANDBOX_GRADE", session_grade.toString());
+    try filtered_env.env_map.put("RYK_SESSION_SANDBOX_GRADE", session_grade.toString());
     try run_os_sandbox.warnAutoDegrade(effective_os_sandbox, &apply_result, stderr);
 
     // Empty backpack + **trusted** agent host: require usable login material or a
@@ -951,7 +951,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
             // Parent-attested audit mode (F36/F200): env alone is child-forgable.
             // If the session file cannot be written, drop the env claim so the
             // banner does not advertise degraded without attestation.
-            if (self.env_map.get("ORCA_SHIM_AUDIT_MODE")) |mode| {
+            if (self.env_map.get("RYK_SHIM_AUDIT_MODE")) |mode| {
                 if (std.ascii.eqlIgnoreCase(mode, "degraded") or std.ascii.eqlIgnoreCase(mode, "skip")) {
                     shim_mod.writeSessionShimAuditMode(
                         self.audit_context.io,
@@ -960,7 +960,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                         session.id.slice(),
                         "degraded",
                     ) catch {
-                        _ = self.env_map.swapRemove("ORCA_SHIM_AUDIT_MODE");
+                        _ = self.env_map.swapRemove("RYK_SHIM_AUDIT_MODE");
                     };
                 }
             }
@@ -1031,12 +1031,12 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 try self.auditNetworkDecision(session, "*", .network_connect_allowed, decision);
             }
             // Kill switch: durable audit marker (stderr already warned at start).
-            if (std.c.getenv("ORCA_AGENT_NETWORK_DEFAULT")) |raw| {
+            if (std.c.getenv("RYK_AGENT_NETWORK_DEFAULT")) |raw| {
                 if (std.mem.eql(u8, std.mem.span(raw), "legacy")) {
                     try self.auditNetworkDecision(session, "*", .network_connect_attempt, null);
                     const decision: core.decision.Decision = .{
                         .result = .allow,
-                        .reason = "network mediation disabled; ORCA_AGENT_NETWORK_DEFAULT=legacy",
+                        .reason = "network mediation disabled; RYK_AGENT_NETWORK_DEFAULT=legacy",
                         .ci_may_proceed = true,
                     };
                     try self.auditNetworkDecision(session, "*", .network_connect_allowed, decision);
@@ -1692,7 +1692,7 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
     return options;
 }
 
-/// Kill switch for host-alias network defaults (`ORCA_AGENT_NETWORK_DEFAULT`).
+/// Kill switch for host-alias network defaults (`RYK_AGENT_NETWORK_DEFAULT`).
 /// `mediated` (default): proxy + route-force. `legacy`: pre-change labels-only path.
 ///
 /// **Sunset:** one-release escape only. Track removal after mediation is the
@@ -1703,7 +1703,7 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
 const AgentNetworkDefault = enum { mediated, legacy };
 
 /// Effective session sandbox grade (Phase 5 honesty). Advertised via
-/// `ORCA_SESSION_SANDBOX_GRADE` and the session banner. Distinct from doctor
+/// `RYK_SESSION_SANDBOX_GRADE` and the session banner. Distinct from doctor
 /// capability probes (probe ≠ session).
 const SessionSandboxGrade = enum {
     strong_mediated,
@@ -1755,7 +1755,7 @@ fn parseAgentNetworkDefault(value: ?[]const u8) AgentNetworkDefault {
 
 /// Host aliases default to proxy + OS route-force unless the user escapes.
 /// Non-alias `ryk run -- <cmd>` is unchanged (no silent lockdown).
-/// Escapes only: `--network open` and `ORCA_AGENT_NETWORK_DEFAULT=legacy`.
+/// Escapes only: `--network open` and `RYK_AGENT_NETWORK_DEFAULT=legacy`.
 /// `--network-backend decision-only` does **not** opt out (would recreate labels-only theater).
 /// Requires **trusted** agent host identity (F-02), not basename alone.
 fn wantsMediatedAgentNetwork(options: RunOptions, agent_net_default: AgentNetworkDefault, trusted_agent_host: bool) bool {
@@ -1799,7 +1799,7 @@ fn hostKeyFromCommandArgv(options: RunOptions) ?[]const u8 {
 /// When null, pack-only (P1) path. Product always supplies abs workspace_root + parent HOME.
 pub const DiscoveryLaunchContext = struct {
     io: std.Io,
-    /// Absolute workspace root; managed file is always `<root>/.orca/network-discovered.yaml`.
+    /// Absolute workspace root; managed file is always `<root>/.ryk/network-discovered.yaml`.
     workspace_root: []const u8,
     /// Parent-process HOME for `discoverForHost` (may be empty → adapter soft-empty).
     home: []const u8,
@@ -2008,7 +2008,7 @@ fn installBackendEnvironment(env_map: *std.process.Environ.Map, report: sandbox.
     try env_map.put("RYK_BACKEND_NETWORK_ENFORCEMENT", report.get(.network_enforce).level.toString());
 }
 
-/// Session-effective `ORCA_BACKEND_ENV_FILTERING` vocabulary (RT-09).
+/// Session-effective `RYK_BACKEND_ENV_FILTERING` vocabulary (RT-09).
 /// Free-form session string — never written into `backend.Level` for `--require-backend`.
 /// Label honesty ≠ process secret presence after FS load (OpenCode putenv residual is WP-G).
 pub const SessionEnvFilteringFacts = struct {
@@ -2177,7 +2177,7 @@ fn printSessionStart(
     var grade_line_buf: [96]u8 = undefined;
     const grade_line = try std.fmt.bufPrint(
         &grade_line_buf,
-        "Session grade: {s} (env ORCA_SESSION_SANDBOX_GRADE)\n",
+        "Session grade: {s} (env RYK_SESSION_SANDBOX_GRADE)\n",
         .{session_grade.toString()},
     );
     // E0: one greppable audit=degraded line per session when in-shim audit is known dead.
@@ -3062,8 +3062,8 @@ test "run with-host-secrets exports host-secrets-escape env filtering label" {
     try std.testing.expectEqual(exit_codes.success, code);
     const written = try tmp.dir.readFileAlloc(std.testing.io, "out/env-label.txt", std.testing.allocator, .limited(8192));
     defer std.testing.allocator.free(written);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND_ENV_FILTERING=host-secrets-escape") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND_ENV_FILTERING=active") == null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_BACKEND_ENV_FILTERING=host-secrets-escape") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_BACKEND_ENV_FILTERING=active") == null);
 }
 
 test "run os-sandbox off exports policy-only env filtering label" {
@@ -3090,7 +3090,7 @@ test "run os-sandbox off exports policy-only env filtering label" {
     try std.testing.expectEqual(exit_codes.success, code);
     const written = try tmp.dir.readFileAlloc(std.testing.io, "out/env-label.txt", std.testing.allocator, .limited(8192));
     defer std.testing.allocator.free(written);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND_ENV_FILTERING=policy-only") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_BACKEND_ENV_FILTERING=policy-only") != null);
 }
 
 test "run defaults trusted host agents to empty backpack; basename spoof is generic" {
@@ -3196,7 +3196,7 @@ test "trusted agent-primary host launch enters empty backpack without secretless
     try current.put("PATH", trust_root);
     try current.put("HOME", fake_home);
     try current.put("MYSQL_PWD", "SuperSecretPass99");
-    try current.put("ORCA_TRUSTED_HOST_PREFIXES", trust_root);
+    try current.put("RYK_TRUSTED_HOST_PREFIXES", trust_root);
 
     var stdout_buf: [8192]u8 = undefined;
     var stderr_buf: [4096]u8 = undefined;
@@ -3574,7 +3574,7 @@ test "applyNetworkOverlay core-only host-alias seeds core pack without foreign h
 }
 
 test "applyNetworkOverlay does not seed agent pack when agent_net_default is legacy" {
-    // A-no-seed: ORCA_AGENT_NETWORK_DEFAULT=legacy kill switch — no pack theater.
+    // A-no-seed: RYK_AGENT_NETWORK_DEFAULT=legacy kill switch — no pack theater.
     const allocator = std.testing.allocator;
     var pol: policy.schema.Policy = .{ .allocator = allocator };
     defer pol.network.deinit(allocator);
@@ -3974,9 +3974,9 @@ test "applyNetworkOverlayWithHostKey P3 class tokens never land in allow; privat
     defer allocator.free(workspace_root);
 
     // Poison managed file with class tokens (load must soft-drop).
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     {
-        const f = try ws_tmp.dir.createFile(io, ".orca/network-discovered.yaml", .{});
+        const f = try ws_tmp.dir.createFile(io, ".ryk/network-discovered.yaml", .{});
         defer f.close(io);
         try f.writeStreamingAll(io,
             \\version: 1
@@ -4246,7 +4246,7 @@ test "applyNetworkOverlayWithHostKey P3 CLI --allow-network composes after disco
     try std.testing.expect(testNetworkAllowContains(pol.network.allow, "api.session-cli.example"));
 }
 
-test "applyNetworkOverlayWithHostKey P3 managed path is workspace_root/.orca/network-discovered.yaml" {
+test "applyNetworkOverlayWithHostKey P3 managed path is workspace_root/.ryk/network-discovered.yaml" {
     // Composition: launch loader must use the same path as p3-managed writer.
     const allocator = std.testing.allocator;
     const io = std.testing.io;
@@ -4258,7 +4258,7 @@ test "applyNetworkOverlayWithHostKey P3 managed path is workspace_root/.orca/net
 
     const path = try policy.network_discovered.managedPath(allocator, workspace_root);
     defer allocator.free(path);
-    try std.testing.expect(std.mem.endsWith(u8, path, ".orca/network-discovered.yaml"));
+    try std.testing.expect(std.mem.endsWith(u8, path, ".ryk/network-discovered.yaml"));
     try std.testing.expect(std.mem.startsWith(u8, path, workspace_root));
 
     // Write via managed API then launch-merge must observe the same file.
@@ -4297,7 +4297,7 @@ test "applyNetworkOverlayWithHostKey P3 nested-cwd managed write still merges fr
 
     try ws_tmp.dir.createDirPath(io, "nested/deep");
     // Decoy under nested cwd path — must NOT be the product managed file.
-    try p3LaunchWriteRel(ws_tmp.dir, "nested/deep/.orca/network-discovered.yaml",
+    try p3LaunchWriteRel(ws_tmp.dir, "nested/deep/.ryk/network-discovered.yaml",
         \\version: 1
         \\hosts:
         \\  - host: decoy-nested-cwd.invalid
@@ -4361,8 +4361,8 @@ test "applyNetworkOverlayWithHostKey P3 host_key scopes managed grants (no cross
     try std.testing.expect(!testNetworkAllowContains(pol.network.allow, "opencode-only-managed.invalid"));
 }
 
-test "applyNetworkOverlayWithHostKey P3 ORCA_NETWORK_ALLOW includes discovered hosts after installNetworkEnvironment" {
-    // LIVE unit proxy: product exports effective allow via ORCA_NETWORK_ALLOW (installNetworkEnvironment).
+test "applyNetworkOverlayWithHostKey P3 RYK_NETWORK_ALLOW includes discovered hosts after installNetworkEnvironment" {
+    // LIVE unit proxy: product exports effective allow via RYK_NETWORK_ALLOW (installNetworkEnvironment).
     // Full binary ryk pi/opencode CONNECT smoke remains implementer / p3-docs-live gate.
     const allocator = std.testing.allocator;
     const io = std.testing.io;
@@ -4398,7 +4398,7 @@ test "applyNetworkOverlayWithHostKey P3 ORCA_NETWORK_ALLOW includes discovered h
     defer env_map.deinit();
     try installNetworkEnvironment(allocator, &env_map, pol.network);
 
-    const allow_csv = env_map.get("ORCA_NETWORK_ALLOW") orelse {
+    const allow_csv = env_map.get("RYK_NETWORK_ALLOW") orelse {
         try std.testing.expect(false); // must export when allow non-empty
         return;
     };
@@ -4766,7 +4766,7 @@ test "run host-alias path mediates network with proxy and route-force or fails c
     defer std.testing.allocator.free(path_env);
     try current.put("PATH", path_env);
     try current.put("HOME", fake_home);
-    try current.put("ORCA_TRUSTED_HOST_PREFIXES", trust_root);
+    try current.put("RYK_TRUSTED_HOST_PREFIXES", trust_root);
 
     var stdout_buf: [16384]u8 = undefined;
     var stderr_buf: [8192]u8 = undefined;
@@ -4789,16 +4789,16 @@ test "run host-alias path mediates network with proxy and route-force or fails c
         defer std.testing.allocator.free(written);
         try std.testing.expect(std.mem.indexOf(u8, written, "HTTP_PROXY=http://127.0.0.1:") != null or
             std.mem.indexOf(u8, written, "HTTP_PROXY=http://localhost:") != null);
-        try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_PROXY_ROUTE_FORCED=true") != null);
-        try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_PROXY_MEDIATED_NETWORK_ENFORCEMENT=active") != null);
-        try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_NETWORK_MODE=allowlist") != null);
-        try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND_NETWORK_ENFORCEMENT=tcp-port-route-forced") != null or
-            std.mem.indexOf(u8, written, "ORCA_TRANSPARENT_NETWORK_ENFORCEMENT=tcp-port-route-forced") != null);
+        try std.testing.expect(std.mem.indexOf(u8, written, "RYK_PROXY_ROUTE_FORCED=true") != null);
+        try std.testing.expect(std.mem.indexOf(u8, written, "RYK_PROXY_MEDIATED_NETWORK_ENFORCEMENT=active") != null);
+        try std.testing.expect(std.mem.indexOf(u8, written, "RYK_NETWORK_MODE=allowlist") != null);
+        try std.testing.expect(std.mem.indexOf(u8, written, "RYK_BACKEND_NETWORK_ENFORCEMENT=tcp-port-route-forced") != null or
+            std.mem.indexOf(u8, written, "RYK_TRANSPARENT_NETWORK_ENFORCEMENT=tcp-port-route-forced") != null);
         // Phase 5 honesty: mediated host-alias reports strong-mediated, never open escape.
-        try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_SESSION_SANDBOX_GRADE=strong-mediated") != null);
-        try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_SESSION_SANDBOX_GRADE=unrestricted-escape") == null);
+        try std.testing.expect(std.mem.indexOf(u8, written, "RYK_SESSION_SANDBOX_GRADE=strong-mediated") != null);
+        try std.testing.expect(std.mem.indexOf(u8, written, "RYK_SESSION_SANDBOX_GRADE=unrestricted-escape") == null);
         // Honesty: not labels-only unavailable with a populated allowlist.
-        try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_BACKEND_NETWORK_ENFORCEMENT=unavailable") == null);
+        try std.testing.expect(std.mem.indexOf(u8, written, "RYK_BACKEND_NETWORK_ENFORCEMENT=unavailable") == null);
         const out = stdout_writer.buffered();
         try std.testing.expect(std.mem.indexOf(u8, out, "route-forced") != null or
             std.mem.indexOf(u8, out, "proxy route-forced") != null);
@@ -4887,8 +4887,8 @@ test "run workspace pi basename does not mediate network without trusted install
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "secret-boundary=off") != null);
     const written = try tmp.dir.readFileAlloc(std.testing.io, "spoof-env.txt", std.testing.allocator, .limited(16384));
     defer std.testing.allocator.free(written);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_PROXY_ROUTE_FORCED=true") == null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_PROXY_MEDIATED_NETWORK_ENFORCEMENT=active") == null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_PROXY_ROUTE_FORCED=true") == null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_PROXY_MEDIATED_NETWORK_ENFORCEMENT=active") == null);
 }
 
 test "run host-alias --network open does not require route-force and warns loudly" {
@@ -4945,7 +4945,7 @@ test "run host-alias --network open does not require route-force and warns loudl
     defer std.testing.allocator.free(path_env);
     try current.put("PATH", path_env);
     try current.put("HOME", fake_home);
-    try current.put("ORCA_TRUSTED_HOST_PREFIXES", trust_root);
+    try current.put("RYK_TRUSTED_HOST_PREFIXES", trust_root);
 
     var stdout_buf: [8192]u8 = undefined;
     var stderr_buf: [4096]u8 = undefined;
@@ -4978,12 +4978,12 @@ test "run host-alias --network open does not require route-force and warns loudl
 
     const written = try tmp.dir.readFileAlloc(std.testing.io, "open-env.txt", std.testing.allocator, .limited(16384));
     defer std.testing.allocator.free(written);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_NETWORK_MODE=open") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_NETWORK_MODE=open") != null);
     // Open escape: must not require route-forced proxy.
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_PROXY_ROUTE_FORCED=true") == null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_PROXY_ROUTE_FORCED=true") == null);
     // Phase 5: open escape grade must not look like strong-mediated.
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_SESSION_SANDBOX_GRADE=unrestricted-escape") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_SESSION_SANDBOX_GRADE=strong-mediated") == null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_SESSION_SANDBOX_GRADE=unrestricted-escape") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_SESSION_SANDBOX_GRADE=strong-mediated") == null);
     const open_out = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, open_out, "Session grade: unrestricted-escape") != null);
 
@@ -5049,7 +5049,7 @@ test "run host-alias with host-secrets and os-sandbox off fails closed under med
     defer std.testing.allocator.free(path_env);
     try current.put("PATH", path_env);
     try current.put("HOME", fake_home);
-    try current.put("ORCA_TRUSTED_HOST_PREFIXES", trust_root);
+    try current.put("RYK_TRUSTED_HOST_PREFIXES", trust_root);
 
     var stdout_buf: [4096]u8 = undefined;
     var stderr_buf: [4096]u8 = undefined;
@@ -5137,9 +5137,9 @@ test "run non-alias default does not force proxy backend" {
     try std.testing.expectEqual(exit_codes.success, code);
     const written = try tmp.dir.readFileAlloc(std.testing.io, "non-alias-env.txt", std.testing.allocator, .limited(16384));
     defer std.testing.allocator.free(written);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_NETWORK_MODE=ask") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_NETWORK_MODE=ask") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "HTTP_PROXY=") == null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "ORCA_PROXY_ROUTE_FORCED=true") == null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_PROXY_ROUTE_FORCED=true") == null);
 }
 
 test "run shell evaluation forwards command and cwd to daemon Evaluate" {
@@ -6034,7 +6034,7 @@ test "empty backpack fails closed when claude has config dir but no credentials"
     defer current.deinit();
     try current.put("PATH", trust_root);
     try current.put("HOME", fake_home);
-    try current.put("ORCA_TRUSTED_HOST_PREFIXES", trust_root);
+    try current.put("RYK_TRUSTED_HOST_PREFIXES", trust_root);
     // No ANTHROPIC_API_KEY → no gateway substitute.
 
     var stdout_buf: [4096]u8 = undefined;
@@ -6089,7 +6089,7 @@ test "empty backpack fails closed when claude OAuth access token is expired" {
     defer current.deinit();
     try current.put("PATH", trust_root);
     try current.put("HOME", fake_home);
-    try current.put("ORCA_TRUSTED_HOST_PREFIXES", trust_root);
+    try current.put("RYK_TRUSTED_HOST_PREFIXES", trust_root);
 
     var stdout_buf: [4096]u8 = undefined;
     var stderr_buf: [4096]u8 = undefined;
@@ -6141,7 +6141,7 @@ test "empty backpack allows claude --help with expired credentials" {
     defer current.deinit();
     try current.put("PATH", trust_root);
     try current.put("HOME", fake_home);
-    try current.put("ORCA_TRUSTED_HOST_PREFIXES", trust_root);
+    try current.put("RYK_TRUSTED_HOST_PREFIXES", trust_root);
 
     var stdout_buf: [8192]u8 = undefined;
     var stderr_buf: [4096]u8 = undefined;
@@ -6190,7 +6190,7 @@ test "empty backpack allows claude --help with no credentials at all" {
     defer current.deinit();
     try current.put("PATH", trust_root);
     try current.put("HOME", fake_home);
-    try current.put("ORCA_TRUSTED_HOST_PREFIXES", trust_root);
+    try current.put("RYK_TRUSTED_HOST_PREFIXES", trust_root);
 
     var stdout_buf: [8192]u8 = undefined;
     var stderr_buf: [4096]u8 = undefined;

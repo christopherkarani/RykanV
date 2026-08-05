@@ -156,7 +156,7 @@ function Install-RuntimeAssets($ExtractRoot) {
         Copy-Item -LiteralPath $source -Destination $dest -Recurse -Force
     }
     # Same marker contract as scripts/install.sh so `ryk uninstall` can recognize the runtime.
-    $markerPath = Join-Path $ResourceRoot ".orca-installation"
+    $markerPath = Join-Path $ResourceRoot ".ryk-installation"
     @(
         "orca-runtime-v1"
         "version=$Version"
@@ -300,7 +300,7 @@ try {
         }
         $localChecksums = Join-Path $ArtifactDir "checksums.txt"
         if (-not (Test-Path -LiteralPath $localArtifact)) {
-            Fail "artifact not found: ryk-v* or orca-v* under RYK_ARTIFACT_DIR/RYK_ARTIFACT_DIR."
+            Fail "artifact not found: ryk-v* or ryk-v* under RYK_ARTIFACT_DIR."
         }
         if (-not (Test-Path -LiteralPath $localChecksums)) {
             Fail "checksums.txt not found in $ArtifactDir" "Place checksums.txt next to the archive for offline install."

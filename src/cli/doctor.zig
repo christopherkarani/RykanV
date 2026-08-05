@@ -644,9 +644,9 @@ fn writeDefaultPanels(
     try stdout.writeAll(
         \\
         \\  Note: Doctor = host capability (probe ≠ live session).
-        \\  Session grade = this run's env ORCA_SESSION_SANDBOX_GRADE
+        \\  Session grade = this run's env RYK_SESSION_SANDBOX_GRADE
         \\  (strong-mediated | fs-attached | wrapper-only | unrestricted-escape).
-        \\  Labels: network route-force, ORCA_TOOL_PACK, ORCA_PATH_FILTER, control roots (.orca + .git).
+        \\  Labels: network route-force, RYK_TOOL_PACK, RYK_PATH_FILTER, control roots (.ryk + .git).
         \\
     );
 }
@@ -2198,8 +2198,8 @@ test "doctorFix probe and default command paths do not create policy (no host mu
         defer tmp.cleanup();
         try tmp.dir.createDirPath(io, ".git");
 
-        try std.testing.expect(!doctorFixPathExists(tmp.dir, ".orca/policy.yaml"));
-        try std.testing.expect(!doctorFixPathExists(tmp.dir, ".orca"));
+        try std.testing.expect(!doctorFixPathExists(tmp.dir, ".ryk/policy.yaml"));
+        try std.testing.expect(!doctorFixPathExists(tmp.dir, ".ryk"));
 
         const prev_cwd = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
         defer allocator.free(prev_cwd);
@@ -2214,15 +2214,15 @@ test "doctorFix probe and default command paths do not create policy (no host mu
         // Probe must not error-hard on missing policy; diagnose/readiness only.
         _ = try command(io, argv, &stdout_writer, &stderr_writer);
 
-        try std.testing.expect(!doctorFixPathExists(tmp.dir, ".orca/policy.yaml"));
-        // ensure create-if-missing writes .orca/ — must stay absent on probe doors.
-        try std.testing.expect(!doctorFixPathExists(tmp.dir, ".orca"));
+        try std.testing.expect(!doctorFixPathExists(tmp.dir, ".ryk/policy.yaml"));
+        // ensure create-if-missing writes .ryk/ — must stay absent on probe doors.
+        try std.testing.expect(!doctorFixPathExists(tmp.dir, ".ryk"));
     }
 }
 
 test "doctorFix --fix command path invokes ensure mutation door" {
     // Acceptance (2): --fix early-branches to ensure. Contrast with probe-only:
-    // under empty tmpDir, doctor --fix must create-if-missing .orca/policy.yaml
+    // under empty tmpDir, doctor --fix must create-if-missing .ryk/policy.yaml
     // (ensure core). Host wire may soft-fail under zig-test binary; policy create is
     // the greppable ensure side effect. RED until production wires the fix door.
     const io = std.testing.io;
@@ -2232,7 +2232,7 @@ test "doctorFix --fix command path invokes ensure mutation door" {
     defer tmp.cleanup();
     try tmp.dir.createDirPath(io, ".git");
 
-    try std.testing.expect(!doctorFixPathExists(tmp.dir, ".orca/policy.yaml"));
+    try std.testing.expect(!doctorFixPathExists(tmp.dir, ".ryk/policy.yaml"));
 
     const prev_cwd = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
     defer allocator.free(prev_cwd);
@@ -2247,7 +2247,7 @@ test "doctorFix --fix command path invokes ensure mutation door" {
     const code = try command(io, &.{"--fix"}, &stdout_writer, &stderr_writer);
     // Exit map: core_ok → 0. Policy create under empty fixture should core_ok.
     try std.testing.expectEqual(exit_codes.success, code);
-    try std.testing.expect(doctorFixPathExists(tmp.dir, ".orca/policy.yaml"));
+    try std.testing.expect(doctorFixPathExists(tmp.dir, ".ryk/policy.yaml"));
 }
 
 // ---------------------------------------------------------------------------
@@ -2291,9 +2291,9 @@ test "doctorFix composition ensure writer then doctor check observes policy with
     // Writer: doctor --fix → ensure create-if-missing.
     const fix_code = try command(io, &.{"--fix"}, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, fix_code);
-    try std.testing.expect(doctorFixPathExists(tmp.dir, ".orca/policy.yaml"));
+    try std.testing.expect(doctorFixPathExists(tmp.dir, ".ryk/policy.yaml"));
 
-    const before = try tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(64 * 1024));
+    const before = try tmp.dir.readFileAlloc(io, ".ryk/policy.yaml", allocator, .limited(64 * 1024));
     defer allocator.free(before);
     const before_hash = doctorFixSha256(before);
 
@@ -2301,9 +2301,9 @@ test "doctorFix composition ensure writer then doctor check observes policy with
     stdout_writer = .fixed(&stdout_buf);
     stderr_writer = .fixed(&stderr_buf);
     _ = try command(io, &.{"--check"}, &stdout_writer, &stderr_writer);
-    try std.testing.expect(doctorFixPathExists(tmp.dir, ".orca/policy.yaml"));
+    try std.testing.expect(doctorFixPathExists(tmp.dir, ".ryk/policy.yaml"));
 
-    const after_check = try tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(64 * 1024));
+    const after_check = try tmp.dir.readFileAlloc(io, ".ryk/policy.yaml", allocator, .limited(64 * 1024));
     defer allocator.free(after_check);
     try std.testing.expectEqualStrings(before, after_check);
     try std.testing.expectEqual(before_hash, doctorFixSha256(after_check));
@@ -2313,7 +2313,7 @@ test "doctorFix composition ensure writer then doctor check observes policy with
     stderr_writer = .fixed(&stderr_buf);
     const leave_code = try command(io, &.{"--fix"}, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, leave_code);
-    const after_leave = try tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(64 * 1024));
+    const after_leave = try tmp.dir.readFileAlloc(io, ".ryk/policy.yaml", allocator, .limited(64 * 1024));
     defer allocator.free(after_leave);
     try std.testing.expectEqualStrings(before, after_leave);
 }

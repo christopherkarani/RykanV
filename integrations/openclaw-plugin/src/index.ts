@@ -91,7 +91,7 @@ function buildPayload(event: string, data: unknown, sessionId?: string): object 
 
 /**
  * Resolve the ryk/orca binary (Phase 5a dual-name).
- * Prefer absolute RYK_BIN / RYK_BIN, then PATH (`ryk` then `ryk`). Relative
+ * Prefer absolute RYK_BIN, then PATH (`ryk` then `ryk`). Relative
  * env bins and workspace zig-out paths are agent-plantable (fake always-allow
  * binary), so:
  * - path-shaped env must be absolute
@@ -120,7 +120,7 @@ export function findOrca(cwd?: string): string | null {
     return null;
   }
 
-  for (const name of ['ryk', 'orca'] as const) {
+  for (const name of ['ryk', 'ryk'] as const) {
     try {
       const which = execFileSync('which', [name], {
         encoding: 'utf-8',
@@ -135,7 +135,7 @@ export function findOrca(cwd?: string): string | null {
 
   // Dev-only: never trust agent-writable workspace bins in production loads.
   if (process.env.RYK_ALLOW_WORKSPACE_BIN === '1' || process.env.RYK_ALLOW_WORKSPACE_BIN === '1') {
-    const names = ['ryk', 'orca'] as const;
+    const names = ['ryk', 'ryk'] as const;
     const candidates: string[] = [];
     for (const name of names) {
       if (cwd) {
@@ -324,7 +324,7 @@ export function parseHookResponse(stdout: string, blocking: boolean): OrcaRespon
 }
 
 async function callOrca(
-  orcaBin: string,
+  rykBin: string,
   event: string,
   data: unknown,
   sessionId: string | undefined,
@@ -335,9 +335,9 @@ async function callOrca(
   const payloadJson = JSON.stringify(payload);
 
   try {
-    // argv array — no shell interpolation of orcaBin
+    // argv array — no shell interpolation of rykBin
     const stdout = execFileSync(
-      orcaBin,
+      rykBin,
       ['hook', 'openclaw', event],
       {
         input: payloadJson,
@@ -386,7 +386,7 @@ export function isOnNoop(api: OpenClawPluginApi): boolean {
 export default function orcaPlugin(api: OpenClawPluginApi): void {
   const cwd = process.cwd();
   const sessionId = undefined;
-  const orcaBin = findOrca(cwd);
+  const rykBin = findOrca(cwd);
   const { logger } = api;
 
   if (typeof api.on !== 'function') {
@@ -404,7 +404,7 @@ export default function orcaPlugin(api: OpenClawPluginApi): void {
     // npm/ClawHub installs wire api.on to a no-op. Registering a veto handler
     // would claim fail-closed protection while hooks never fire. Prefer the
     // wrapper path instead of a false sense of enforcement.
-    if (!orcaBin) {
+    if (!rykBin) {
       logger?.warn?.(
         '[ryk] Binary not found in PATH (or RYK_BIN). ' +
           'npm/ClawHub install remains unprotected (hooks no-op); ' +
@@ -414,7 +414,7 @@ export default function orcaPlugin(api: OpenClawPluginApi): void {
     return;
   }
 
-  if (!orcaBin) {
+  if (!rykBin) {
     logger?.warn?.(
       '[ryk] Binary not found in PATH (or RYK_BIN). ' +
         'Registering fail-closed before_tool_call vetoes. ' +
@@ -432,12 +432,12 @@ export default function orcaPlugin(api: OpenClawPluginApi): void {
     return;
   }
 
-  logger?.info?.(`[ryk] Plugin loaded. Binary: ${orcaBin}`);
+  logger?.info?.(`[ryk] Plugin loaded. Binary: ${rykBin}`);
 
   api.on('session_start', async (event) => {
     logger?.info?.('[ryk] Plugin ready for session.');
     await callOrca(
-      orcaBin,
+      rykBin,
       'session.start',
       { session_id: (event as { sessionId?: string })?.sessionId },
       sessionId,
@@ -451,7 +451,7 @@ export default function orcaPlugin(api: OpenClawPluginApi): void {
     'before_tool_call',
     async (event) => {
       const normalized = normalizeOpenClawToolEvent(event);
-      const response = await callOrca(orcaBin, 'tool.before', normalized, sessionId, true, logger);
+      const response = await callOrca(rykBin, 'tool.before', normalized, sessionId, true, logger);
 
       if (response.decision === 'block') {
         const msg = response.message || response.reason || 'ryk blocked this command.';
@@ -470,10 +470,10 @@ export default function orcaPlugin(api: OpenClawPluginApi): void {
   );
 
   api.on('after_tool_call', async (event) => {
-    await callOrca(orcaBin, 'tool.after', normalizeOpenClawToolEvent(event), sessionId, false, logger);
+    await callOrca(rykBin, 'tool.after', normalizeOpenClawToolEvent(event), sessionId, false, logger);
   });
 
   api.on('session_end', async (event) => {
-    await callOrca(orcaBin, 'session.end', event, sessionId, false, logger);
+    await callOrca(rykBin, 'session.end', event, sessionId, false, logger);
   });
 }

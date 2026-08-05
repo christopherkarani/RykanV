@@ -204,7 +204,7 @@ pub fn detectInstallChannel(exe_path: []const u8) InstallChannel {
     }
     if (std.mem.indexOf(u8, lower, "/.local/bin/") != null or
         std.mem.indexOf(u8, lower, "\\.local\\bin\\") != null or
-        std.mem.indexOf(u8, lower, "\\.orca\\bin\\") != null)
+        std.mem.indexOf(u8, lower, "\\.ryk\\bin\\") != null)
     {
         return .curl_installer;
     }
@@ -838,12 +838,12 @@ fn runUnixInstaller(
 /// Installer child must not inherit operator overrides that redirect download roots.
 const scrub_env_keys = [_][]const u8{
     "RYK_BASE_URL",
-    "ORCA_BASE_URL",
+    "RYK_BASE_URL",
     "ARTIFACT_DIR",
     "RYK_ARTIFACT_DIR",
-    "ORCA_ARTIFACT_DIR",
+    "RYK_ARTIFACT_DIR",
     "RYK_INSTALL_ROOT",
-    "ORCA_INSTALL_ROOT",
+    "RYK_INSTALL_ROOT",
 };
 
 fn scrubInstallerEnv(env_map: *std.process.Environ.Map) void {
@@ -864,14 +864,14 @@ fn execInstaller(
     defer env_map.deinit();
     scrubInstallerEnv(&env_map);
     try env_map.put("RYK_VERSION", target_version);
-    try env_map.put("ORCA_VERSION", target_version);
+    try env_map.put("RYK_VERSION", target_version);
     if (skip_onboard) {
         try env_map.put("RYK_INSTALL_SKIP_ONBOARD", "1");
-        try env_map.put("ORCA_INSTALL_SKIP_ONBOARD", "1");
+        try env_map.put("RYK_INSTALL_SKIP_ONBOARD", "1");
     }
     if (quiet_json) {
         try env_map.put("RYK_INSTALL_QUIET", "1");
-        try env_map.put("ORCA_INSTALL_QUIET", "1");
+        try env_map.put("RYK_INSTALL_QUIET", "1");
     }
 
     const stdio: std.process.SpawnOptions.StdIo = if (quiet_json) .ignore else .inherit;

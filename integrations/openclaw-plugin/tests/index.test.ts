@@ -38,7 +38,7 @@ describe('findOrca', () => {
       process.env.RYK_BIN = './zig-out/bin/ryk';
       assert.strictEqual(findOrca(process.cwd()), null);
 
-      process.env.RYK_BIN = 'evil/orca';
+      process.env.RYK_BIN = 'evil/ryk';
       assert.strictEqual(findOrca(process.cwd()), null);
     } finally {
       if (prevBin === undefined) delete process.env.RYK_BIN;
@@ -88,7 +88,7 @@ describe('isOnNoop', () => {
   });
 
   it('returns false for bundled plugin sources', () => {
-    const api = makeApi({ source: '/Applications/OpenClaw.app/Contents/Plugins/orca' });
+    const api = makeApi({ source: '/Applications/OpenClaw.app/Contents/Plugins/ryk' });
     assert.strictEqual(isOnNoop(api), false);
   });
 
@@ -210,7 +210,7 @@ describe('orcaPlugin', () => {
 
   it('does not warn about noop when source is bundled', () => {
     const api = makeApi({
-      source: '/Applications/OpenClaw.app/Contents/Plugins/orca',
+      source: '/Applications/OpenClaw.app/Contents/Plugins/ryk',
     });
     orcaPlugin(api);
 
@@ -235,7 +235,7 @@ describe('orcaPlugin', () => {
     try {
       // Bundled source: api.on is real; missing binary must veto tools.
       const api = makeApi({
-        source: '/Applications/OpenClaw.app/Contents/Plugins/orca',
+        source: '/Applications/OpenClaw.app/Contents/Plugins/ryk',
       });
       orcaPlugin(api);
 

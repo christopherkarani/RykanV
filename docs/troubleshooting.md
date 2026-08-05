@@ -62,7 +62,7 @@ Run `ryk doctor`. If a feature is `limited`, `wrapper-only`, `observe-only`, or 
 
 `ryk doctor` answers **“what can this host do?”** (capability probes). It never means a live agent session is attached (strong sandbox is demoted away from probe-only `active`).
 
-**This session’s** enforcement class is `ORCA_SESSION_SANDBOX_GRADE` / the banner `Session grade:` line (`strong-mediated`, `fs-attached`, `wrapper-only`, `unrestricted-escape`). See `docs/platform-macos.md` and `docs/commands.md`.
+**This session’s** enforcement class is `RYK_SESSION_SANDBOX_GRADE` / the banner `Session grade:` line (`strong-mediated`, `fs-attached`, `wrapper-only`, `unrestricted-escape`). See `docs/platform-macos.md` and `docs/commands.md`.
 
 ## Pi tools fail with malformed JSON / evaluation errors
 
@@ -86,13 +86,13 @@ Under attached sessions (`ryk pi`, `ryk claude`, `ryk run --os-sandbox on`, …)
 
 | Symptom | Likely cause | What to do |
 |---|---|---|
-| `command not found` for `rg` / `fd` / `jq` | Tool not on host, or PATH honesty dropped an ungranted package dir | Install the tool, or use a system path; pack only grants files that exist. Set `ORCA_TOOL_PACK=essentials` (default under attach). |
+| `command not found` for `rg` / `fd` / `jq` | Tool not on host, or PATH honesty dropped an ungranted package dir | Install the tool, or use a system path; pack only grants files that exist. Set `RYK_TOOL_PACK=essentials` (default under attach). |
 | `command not found` but tool lives under Homebrew | PATH denylist removed `/opt/homebrew/bin` so the agent does not see a lie | Either install into a kept prefix, rely on essentials pack file grant (pack re-adds the parent of a granted file), or accept absence |
 | EPERM on absolute `/opt/homebrew/bin/...` | Absolute path bypasses shims; OS did not grant that file | Expected — no broad brew tree grants. Use essentials pack or do not invoke absolute brew paths |
 | EPERM on `~/.ssh` / bare `$HOME` | Empty-backpack FS fence | Expected; do not request bare home grants |
 | Shim name works but absolute path differs | Shims are **wrapper-only** | Absolute paths skip PATH shims; OS still enforces FS/network |
 
-Inspect child labels when debugging: `ORCA_PATH_FILTER=denylist`, `ORCA_TOOL_PACK=essentials|none`.
+Inspect child labels when debugging: `RYK_PATH_FILTER=denylist`, `RYK_TOOL_PACK=essentials|none`.
 
 ## MCP Protocol Issues
 

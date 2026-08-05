@@ -57,7 +57,7 @@ test "phase 44 VERSION matches install script defaults" {
     const version_needle = try std.fmt.allocPrint(std.testing.allocator, "version \"{s}\"", .{canonical});
     defer std.testing.allocator.free(version_needle);
     try expectContains(homebrew, version_needle);
-    try expectContains(homebrew, "bin.install \"bin/orca\"");
+    try expectContains(homebrew, "bin.install \"bin/ryk\"");
     try std.testing.expect(std.mem.indexOf(u8, homebrew, "bin.install \"bin/ryk-daemon\"") == null);
     try expectContains(homebrew, "pkgshare.install \"ryk-dashboard-ui\"");
 

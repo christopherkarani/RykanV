@@ -99,7 +99,7 @@ test "real FS deny: outside denied; neighbor RW; control root not writable" {
         _ = linux.close(@intCast(wfd));
         if (wrote != 6) linux.exit(5);
 
-        // Control root write must fail (.orca).
+        // Control root write must fail (.ryk).
         @memcpy(path_buf[0..control_write.len], control_write);
         path_buf[control_write.len] = 0;
         const cfd = linux.open(
@@ -109,10 +109,10 @@ test "real FS deny: outside denied; neighbor RW; control root not writable" {
         );
         if (linux.errno(cfd) == .SUCCESS) {
             _ = linux.close(@intCast(cfd));
-            linux.exit(6); // .orca control write leak
+            linux.exit(6); // .ryk control write leak
         }
 
-        // Phase 2: workspace .git is a default control root — same write-deny class as .orca.
+        // Phase 2: workspace .git is a default control root — same write-deny class as .ryk.
         @memcpy(path_buf[0..git_control_write.len], git_control_write);
         path_buf[git_control_write.len] = 0;
         const gfd = linux.open(

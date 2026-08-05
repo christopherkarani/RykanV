@@ -968,7 +968,7 @@ test "P1-U-04 trusted ryk state carve-out is not agent-writable" {
     try std.testing.expect(profile.isAgentWritable("/workspace/proj/src/app.zig"));
 }
 
-test "default control roots include .orca and .git" {
+test "default control roots include .ryk and .git" {
     const allocator = std.testing.allocator;
     var profile = try compileProfile(allocator, .{
         .workspace_root = "/workspace/proj",
@@ -976,13 +976,13 @@ test "default control roots include .orca and .git" {
     });
     defer profile.deinit();
 
-    try std.testing.expect(profile.isControlPath("/workspace/proj/.orca"));
+    try std.testing.expect(profile.isControlPath("/workspace/proj/.ryk"));
     try std.testing.expect(profile.isControlPath("/workspace/proj/.git"));
     try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.git/phase2-probe"));
     try std.testing.expect(profile.isAgentWritable("/workspace/proj/src/foo.zig"));
     // Control roots stay readable (write-deny only).
     try std.testing.expect(profile.isGrantedReadable("/workspace/proj/.git/config"));
-    try std.testing.expect(profile.isGrantedReadable("/workspace/proj/.orca/policy.yaml"));
+    try std.testing.expect(profile.isGrantedReadable("/workspace/proj/.ryk/policy.yaml"));
 }
 
 test "P1-U-03 no broad HOME grant" {
@@ -1296,8 +1296,8 @@ test "control root .git symlink on disk fails closed" {
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
     try ws_tmp.dir.createDirPath(io, "src");
-    // Real .orca so only the .git symlink fails validation.
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    // Real .ryk so only the .git symlink fails validation.
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
 
@@ -1331,7 +1331,7 @@ test "control root .git as gitdir file is accepted" {
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     try ws_tmp.dir.writeFile(io, .{ .sub_path = ".git", .data = "gitdir: /tmp/elsewhere/worktrees/wt1\n" });
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
@@ -1353,7 +1353,7 @@ test "control root regular file (authority path) is accepted" {
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     try ws_tmp.dir.createDirPath(io, ".git");
     try ws_tmp.dir.createDirPath(io, ".codex");
     try ws_tmp.dir.writeFile(io, .{ .sub_path = ".codex/config.toml", .data = "[mcp_servers]\n" });

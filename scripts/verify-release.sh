@@ -2,8 +2,8 @@
 set -eu
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DIST_DIR="${1:-${RYK_DIST_DIR:-${RYK_DIST_DIR:-dist}}}"
-RELEASE_PRODUCT="${RYK_RELEASE_PRODUCT:-${RYK_RELEASE_PRODUCT:-all}}"
+DIST_DIR="${1:-${RYK_DIST_DIR:-dist}}"
+RELEASE_PRODUCT="${RYK_RELEASE_PRODUCT:-all}"
 
 fail() {
   printf 'release verify: %s\n' "$1" >&2
@@ -103,11 +103,11 @@ require_archive_excludes() {
 
 artifact_package_key() {
   case "$1" in
-    ryk-v*-darwin-amd64.tar.gz|orca-v*-darwin-amd64.tar.gz) printf 'darwin-amd64' ;;
-    ryk-v*-darwin-arm64.tar.gz|orca-v*-darwin-arm64.tar.gz) printf 'darwin-arm64' ;;
-    ryk-v*-linux-amd64.tar.gz|orca-v*-linux-amd64.tar.gz) printf 'linux-amd64' ;;
-    ryk-v*-linux-arm64.tar.gz|orca-v*-linux-arm64.tar.gz) printf 'linux-arm64' ;;
-    ryk-v*-windows-amd64.zip|orca-v*-windows-amd64.zip) printf 'windows-amd64' ;;
+    ryk-v*-darwin-amd64.tar.gz|ryk-v*-darwin-amd64.tar.gz) printf 'darwin-amd64' ;;
+    ryk-v*-darwin-arm64.tar.gz|ryk-v*-darwin-arm64.tar.gz) printf 'darwin-arm64' ;;
+    ryk-v*-linux-amd64.tar.gz|ryk-v*-linux-amd64.tar.gz) printf 'linux-amd64' ;;
+    ryk-v*-linux-arm64.tar.gz|ryk-v*-linux-arm64.tar.gz) printf 'linux-arm64' ;;
+    ryk-v*-windows-amd64.zip|ryk-v*-windows-amd64.zip) printf 'windows-amd64' ;;
     *) fail "unsupported package artifact name: $1" ;;
   esac
 }
@@ -128,10 +128,10 @@ artifact_manifest_name() {
     ryk-v*-darwin-arm64.tar.gz) printf 'ryk-v#{version}-darwin-arm64.tar.gz' ;;
     ryk-v*-linux-amd64.tar.gz) printf 'ryk-v#{version}-linux-amd64.tar.gz' ;;
     ryk-v*-linux-arm64.tar.gz) printf 'ryk-v#{version}-linux-arm64.tar.gz' ;;
-    orca-v*-darwin-amd64.tar.gz) printf 'orca-v#{version}-darwin-amd64.tar.gz' ;;
-    orca-v*-darwin-arm64.tar.gz) printf 'orca-v#{version}-darwin-arm64.tar.gz' ;;
-    orca-v*-linux-amd64.tar.gz) printf 'orca-v#{version}-linux-amd64.tar.gz' ;;
-    orca-v*-linux-arm64.tar.gz) printf 'orca-v#{version}-linux-arm64.tar.gz' ;;
+    ryk-v*-darwin-amd64.tar.gz) printf 'ryk-v#{version}-darwin-amd64.tar.gz' ;;
+    ryk-v*-darwin-arm64.tar.gz) printf 'ryk-v#{version}-darwin-arm64.tar.gz' ;;
+    ryk-v*-linux-amd64.tar.gz) printf 'ryk-v#{version}-linux-amd64.tar.gz' ;;
+    ryk-v*-linux-arm64.tar.gz) printf 'ryk-v#{version}-linux-arm64.tar.gz' ;;
     *) printf '%s' "$1" ;;
   esac
 }
@@ -225,7 +225,7 @@ require_cli_pair() {
   # Primary ryk + ryk compat alias both required in primary archives.
   pattern="$1"
   require_archive_binary "$pattern" "ryk"
-  require_archive_binary "$pattern" "orca"
+  require_archive_binary "$pattern" "ryk"
   forbid_archive_binary "$pattern" "ryk-daemon"
   require_archive_excludes "$pattern"
 }
@@ -303,7 +303,7 @@ if grep -q '"ryk-daemon"' "$DIST_DIR/sbom.json"; then
   fail "sbom.json still lists ryk-daemon component (removed from packaging)"
 fi
 # SBOM may still list ryk (compat) or ryk (primary).
-if ! grep -qE '"ryk"|"orca"' "$DIST_DIR/sbom.json"; then
+if ! grep -qE '"ryk"|"ryk"' "$DIST_DIR/sbom.json"; then
   fail "sbom.json missing ryk/orca component"
 fi
 if command -v sha256sum >/dev/null 2>&1; then

@@ -213,9 +213,9 @@ def _supports_hermes_host(orca: str) -> bool:
     return _hook_smoke_passes(completed.stdout)
 
 
-def _orca_candidates() -> list[str]:
+def _ryk_candidates() -> list[str]:
     trusted: list[str] = []
-    # Phase 5a dual-read: prefer RYK_BIN then RYK_BIN.
+    # Phase 5a dual-read: RYK_BIN only.
     for env_key in ("RYK_BIN",):
         configured = os.environ.get(env_key)
         if configured:
@@ -226,13 +226,13 @@ def _orca_candidates() -> list[str]:
     # Trusted installs and PATH before cwd zig-out (F10): a planted
     # ./zig-out/bin/ryk must not beat ~/.local/bin or PATH when both exist.
     home = Path.home()
-    for name in ("ryk", "orca"):
+    for name in ("ryk", "ryk"):
         for path in (home / ".local" / "bin" / name, home / ".ryk" / "bin" / name, home / ".ryk" / "bin" / name):
             resolved = _orca_executable(str(path))
             if resolved:
                 trusted.append(resolved)
 
-    for name in ("ryk", "orca"):
+    for name in ("ryk", "ryk"):
         found = shutil.which(name)
         if found:
             resolved = _orca_executable(found)
@@ -245,7 +245,7 @@ def _orca_candidates() -> list[str]:
     if not trusted:
         directory = Path.cwd()
         for _ in range(3):
-            for name in ("ryk", "orca"):
+            for name in ("ryk", "ryk"):
                 zig_out = directory / "zig-out" / "bin" / name
                 resolved = _orca_executable(str(zig_out))
                 if resolved:
@@ -266,11 +266,11 @@ def _orca_candidates() -> list[str]:
 def _find_orca() -> str | None:
     global _orca_cache_env, _orca_cache_path
     # Cache key tracks both brand env vars.
-    env_bin = os.environ.get("RYK_BIN") or os.environ.get("RYK_BIN")
+    env_bin = os.environ.get("RYK_BIN")
     if _orca_cache_path is not None and _orca_cache_env == env_bin:
         return _orca_cache_path
 
-    for candidate in _orca_candidates():
+    for candidate in _ryk_candidates():
         try:
             if _supports_hermes_host(candidate):
                 _orca_cache_env = env_bin

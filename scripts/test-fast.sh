@@ -3,7 +3,7 @@
 #
 # Modes (narrowest first):
 #   compile  — toolchain check + build CLI + compile test-fast artifacts (no run)
-#   units    — compile mode + run test-fast unit binaries (lib + orca_core)
+#   units    — compile mode + run test-fast unit binaries (lib + ryk_core)
 #   full     — units + quick-install / generic-agent policy matrix (default)
 #
 # Usage:
@@ -72,7 +72,7 @@ if [[ "${mode}" == "compile" ]]; then
   exit 0
 fi
 
-step_begin "Unit tests (lib + orca_core via test-fast)"
+step_begin "Unit tests (lib + ryk_core via test-fast)"
 "${ZIG_BUILD[@]}" test-fast
 step_end "units"
 

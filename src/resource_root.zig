@@ -18,7 +18,7 @@ pub fn resolveResourcePath(io: std.Io, allocator: std.mem.Allocator, options: Re
     } else {
         var env_map = env_util.createProcessMap(allocator) catch return error.ResourceNotFound;
         defer env_map.deinit();
-        // Prefer RYK_RESOURCE_ROOT, fall back to RYK_RESOURCE_ROOT (Phase 5a dual-read).
+        // RYK_RESOURCE_ROOT only (hard-cut).
         if (try env_util.getOwnedBrand(&env_map, allocator, "RESOURCE_ROOT")) |resource_root| {
             defer allocator.free(resource_root);
             const candidate = try std.fs.path.join(allocator, &.{ resource_root, relative_path });

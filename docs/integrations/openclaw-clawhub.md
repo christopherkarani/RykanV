@@ -41,7 +41,7 @@ openclaw plugins install clawhub:orca
 
 ```json
 {
-  "id": "orca",
+  "id": "ryk",
   "name": "ryk",
   "version": "1.1.3",
   "description": "Runtime guardrails for OpenClaw workflows via the ryk CLI.",
@@ -54,7 +54,7 @@ openclaw plugins install clawhub:orca
 ```
 
 Checks:
-- `id` is `"orca"` ✓
+- `id` is `"ryk"` ✓
 - `name` is `"ryk"` ✓
 - `version` is present ✓
 - `description` is accurate ✓

@@ -12,7 +12,7 @@ OUTPUT="${ARTIFACT_DIR}/checksums.txt"
 tmp="${OUTPUT}.tmp"
 : > "$tmp"
 
-# Phase 5a: primary ryk-v* plus legacy orca-v* (dual-publish). Also Windows .zip.
+# Phase 5a: primary ryk-v* plus legacy ryk-v* (dual-publish). Also Windows .zip.
 hash_artifact() {
   file="$1"
   [ -f "$file" ] || return 0

@@ -33,7 +33,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
             self.assertFalse(_PLUGIN._fail_open_enabled())
         # Dual-read: RYK_ preferred brand key also closes fail-open.
         with mock.patch.dict(os.environ, {"RYK_HERMES_FAIL_OPEN": "0"}, clear=False):
-            os.environ.pop("ORCA_HERMES_FAIL_OPEN", None)
+            os.environ.pop("RYK_HERMES_FAIL_OPEN", None)
             self.assertFalse(_PLUGIN._fail_open_enabled())
 
     def test_fail_open_stance_file_fail_closed_for_new_installs(self) -> None:
@@ -64,7 +64,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         self.assertFalse(_PLUGIN._hook_smoke_passes("   "))
 
     def test_find_orca_skips_oserror_from_smoke_probe(self) -> None:
-        with mock.patch.object(_PLUGIN, "_orca_candidates", return_value=["/tmp/orca"]):
+        with mock.patch.object(_PLUGIN, "_ryk_candidates", return_value=["/tmp/orca"]):
             with mock.patch.object(_PLUGIN, "_supports_hermes_host", side_effect=OSError("spawn failed")):
                 self.assertIsNone(_PLUGIN._find_orca())
 

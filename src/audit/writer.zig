@@ -256,7 +256,7 @@ test "session writer rejects audit directory traversal at the storage boundary" 
     );
     try std.testing.expectError(
         error.InvalidAuditDirName,
-        SessionWriter.initWithDirName(std.testing.io, std.testing.allocator, session, ".orca/../escape"),
+        SessionWriter.initWithDirName(std.testing.io, std.testing.allocator, session, ".ryk/../escape"),
     );
 }
 

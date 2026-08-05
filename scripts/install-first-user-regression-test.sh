@@ -79,7 +79,7 @@ log_scope() {
   printf '%s\n' "${door_line}" >> "${RYK_TEST_ONBOARD_LOG:?}"
   printf 'cwd=%s\n' "$PWD" >> "${RYK_TEST_ONBOARD_LOG}"
   printf 'ryk_resource=%s\n' "${RYK_RESOURCE_ROOT:-}" >> "${RYK_TEST_ONBOARD_LOG}"
-  printf 'resource=%s\n' "${ORCA_RESOURCE_ROOT:-}" >> "${RYK_TEST_ONBOARD_LOG}"
+  printf 'resource=%s\n' "${RYK_RESOURCE_ROOT:-}" >> "${RYK_TEST_ONBOARD_LOG}"
   printf 'path=%s\n' "${PATH:-}" >> "${RYK_TEST_ONBOARD_LOG}"
   printf 'argv=' >> "${RYK_TEST_ONBOARD_LOG}"
   first=1
@@ -185,7 +185,7 @@ actual_onboard_cwd="$(sed -n 's/^cwd=//p' "${onboard_log}" | head -n 1)"
 [[ -n "${actual_onboard_cwd}" && "${actual_onboard_cwd}" -ef "${home}" ]] ||
   fail "onboarding did not run from the global HOME scope (cwd=${actual_onboard_cwd})"
 grep -qF "resource=${share_dir}/current" "${onboard_log}" ||
-  fail "onboarding did not receive ORCA_RESOURCE_ROOT at installed resource root"
+  fail "onboarding did not receive RYK_RESOURCE_ROOT at installed resource root"
 grep -qF "ryk_resource=${share_dir}/current" "${onboard_log}" ||
   fail "onboarding did not receive RYK_RESOURCE_ROOT at installed resource root"
 grep -qF "${install_dir}" "${onboard_log}" ||
@@ -213,7 +213,7 @@ resource_root="${share_dir}/${VERSION}"
 # must be replaced, not followed (which plants current/current and fails install).
 old_runtime="${share_dir}/0.0.0-old"
 mkdir -p "${old_runtime}"
-printf 'orca-runtime-v1\nversion=0.0.0-old\n' > "${old_runtime}/.orca-install"
+printf 'orca-runtime-v1\nversion=0.0.0-old\n' > "${old_runtime}/.ryk-install"
 # Plant the failure mode from buggy installs: nested selector inside the target.
 ln -sfn "${resource_root}" "${old_runtime}/current"
 ln -sfn "${old_runtime}" "${share_dir}/current"
@@ -221,10 +221,10 @@ ln -sfn "${old_runtime}" "${share_dir}/current"
 : > "${onboard_log}"
 HOME="${home}" \
 SHELL=/bin/sh \
-ORCA_VERSION="${VERSION}" \
-ORCA_ARTIFACT_DIR="${artifact_dir}" \
-ORCA_INSTALL_DIR="${install_dir}" \
-ORCA_SHARE_DIR="${share_dir}" \
+RYK_VERSION="${VERSION}" \
+RYK_ARTIFACT_DIR="${artifact_dir}" \
+RYK_INSTALL_DIR="${install_dir}" \
+RYK_SHARE_DIR="${share_dir}" \
 RYK_TEST_ONBOARD_LOG="${onboard_log}" \
 sh "${INSTALL_SH}" >/dev/null ||
   fail "install failed when replacing an existing current→version symlink (mv-into-dir skew)"
@@ -296,7 +296,7 @@ actual_quiet_cwd="$(sed -n 's/^cwd=//p' "${onboard_log}" | head -n 1)"
 [[ -n "${actual_quiet_cwd}" && "${actual_quiet_cwd}" -ef "${home}" ]] ||
   fail "quiet onboarding did not run from HOME (cwd=${actual_quiet_cwd})"
 grep -qF "resource=${share_dir}/current" "${onboard_log}" ||
-  fail "quiet onboarding missing ORCA_RESOURCE_ROOT"
+  fail "quiet onboarding missing RYK_RESOURCE_ROOT"
 grep -qF "ryk_resource=${share_dir}/current" "${onboard_log}" ||
   fail "quiet onboarding missing RYK_RESOURCE_ROOT"
 quiet_activation="$(printf '%s\n' "${quiet_output}" | awk '/^    eval / { sub(/^    /, ""); print; exit }')"
@@ -342,10 +342,10 @@ fi
 partial_output="${tmp_root}/partial.out"
 HOME="${home}" \
 SHELL=/bin/sh \
-ORCA_VERSION="${VERSION}" \
-ORCA_ARTIFACT_DIR="${artifact_dir}" \
-ORCA_INSTALL_DIR="${install_dir}" \
-ORCA_SHARE_DIR="${share_dir}" \
+RYK_VERSION="${VERSION}" \
+RYK_ARTIFACT_DIR="${artifact_dir}" \
+RYK_INSTALL_DIR="${install_dir}" \
+RYK_SHARE_DIR="${share_dir}" \
 RYK_TEST_ONBOARD_LOG="${onboard_log}" \
 RYK_TEST_DOCTOR_PARTIAL=1 \
 sh "${INSTALL_SH}" >"${partial_output}" 2>&1 ||
@@ -362,14 +362,14 @@ if printf '%s\n' "${partial_plain}" | grep -Fq "You're now protected by ryk"; th
   fail "soft host-fail path claimed full protection completion"
 fi
 
-# SKIP_ONBOARD must suppress the ensure door entirely (both RYK_ and ORCA_ names).
+# SKIP_ONBOARD must suppress the ensure door entirely (both RYK_ and RYK_ names).
 : > "${onboard_log}"
 HOME="${home}" \
 SHELL=/bin/sh \
-ORCA_VERSION="${VERSION}" \
-ORCA_ARTIFACT_DIR="${artifact_dir}" \
-ORCA_INSTALL_DIR="${install_dir}" \
-ORCA_SHARE_DIR="${share_dir}" \
+RYK_VERSION="${VERSION}" \
+RYK_ARTIFACT_DIR="${artifact_dir}" \
+RYK_INSTALL_DIR="${install_dir}" \
+RYK_SHARE_DIR="${share_dir}" \
 RYK_INSTALL_SKIP_ONBOARD=1 \
 RYK_TEST_ONBOARD_LOG="${onboard_log}" \
 sh "${INSTALL_SH}" >/dev/null
@@ -379,15 +379,15 @@ sh "${INSTALL_SH}" >/dev/null
 : > "${onboard_log}"
 HOME="${home}" \
 SHELL=/bin/sh \
-ORCA_VERSION="${VERSION}" \
-ORCA_ARTIFACT_DIR="${artifact_dir}" \
-ORCA_INSTALL_DIR="${install_dir}" \
-ORCA_SHARE_DIR="${share_dir}" \
-ORCA_INSTALL_SKIP_ONBOARD=1 \
+RYK_VERSION="${VERSION}" \
+RYK_ARTIFACT_DIR="${artifact_dir}" \
+RYK_INSTALL_DIR="${install_dir}" \
+RYK_SHARE_DIR="${share_dir}" \
+RYK_INSTALL_SKIP_ONBOARD=1 \
 RYK_TEST_ONBOARD_LOG="${onboard_log}" \
 sh "${INSTALL_SH}" >/dev/null
 [[ ! -s "${onboard_log}" ]] ||
-  fail "ORCA_INSTALL_SKIP_ONBOARD=1 still invoked doctor/start (log not empty)"
+  fail "RYK_INSTALL_SKIP_ONBOARD=1 still invoked doctor/start (log not empty)"
 
 # Destination hardening: even force mode must not write through symlinked
 # install/share parents or final binary/runtime targets.
@@ -459,7 +459,7 @@ legacy_install_dir="${legacy_home}/bin"
 legacy_share_dir="${legacy_home}/share"
 legacy_artifact_dir="${tmp_root}/legacy-artifacts"
 legacy_release_root="${tmp_root}/orca-v${VERSION}-legacy-${os}-${arch}"
-legacy_artifact="orca-v${VERSION}-${os}-${arch}.tar.gz"
+legacy_artifact="ryk-v${VERSION}-${os}-${arch}.tar.gz"
 legacy_onboard_log="${tmp_root}/legacy-onboard.log"
 mkdir -p "${legacy_home}" "${legacy_install_dir}" "${legacy_share_dir}" \
   "${legacy_artifact_dir}" "${legacy_release_root}/bin"
@@ -467,7 +467,7 @@ for dir in integrations fixtures schemas policies orca-pi; do
   mkdir -p "${legacy_release_root}/${dir}"
   printf 'fixture\n' > "${legacy_release_root}/${dir}/fixture.txt"
 done
-cat > "${legacy_release_root}/bin/orca" <<'EOF'
+cat > "${legacy_release_root}/bin/ryk" <<'EOF'
 #!/usr/bin/env sh
 # Pre-W1 mock: doctor help has no --fix; start --auto is the ensure door.
 log_scope() {
@@ -476,7 +476,7 @@ log_scope() {
   printf '%s\n' "${door_line}" >> "${RYK_TEST_ONBOARD_LOG:?}"
   printf 'cwd=%s\n' "$PWD" >> "${RYK_TEST_ONBOARD_LOG}"
   printf 'ryk_resource=%s\n' "${RYK_RESOURCE_ROOT:-}" >> "${RYK_TEST_ONBOARD_LOG}"
-  printf 'resource=%s\n' "${ORCA_RESOURCE_ROOT:-}" >> "${RYK_TEST_ONBOARD_LOG}"
+  printf 'resource=%s\n' "${RYK_RESOURCE_ROOT:-}" >> "${RYK_TEST_ONBOARD_LOG}"
   printf 'argv=' >> "${RYK_TEST_ONBOARD_LOG}"
   first=1
   for a in "$@"; do
@@ -511,14 +511,14 @@ case "${1:-}" in
     printf 'ryk ensure: core ready via start --auto (legacy mock)\n'
     ;;
   env|--print-install-env)
-    printf 'export ORCA_FIRST_USER_ACTIVATED=1\n'
+    printf 'export RYK_FIRST_USER_ACTIVATED=1\n'
     ;;
   version|--version)
     printf 'ryk 1.2.9\n'
     ;;
 esac
 EOF
-chmod +x "${legacy_release_root}/bin/orca"
+chmod +x "${legacy_release_root}/bin/ryk"
 tar -czf "${legacy_artifact_dir}/${legacy_artifact}" -C "${tmp_root}" "$(basename "${legacy_release_root}")"
 if command -v sha256sum >/dev/null 2>&1; then
   legacy_checksum="$(sha256sum "${legacy_artifact_dir}/${legacy_artifact}" | awk '{print $1}')"
@@ -531,10 +531,10 @@ printf '%s  %s\n' "${legacy_checksum}" "${legacy_artifact}" > "${legacy_artifact
 legacy_output="$(
   HOME="${legacy_home}" \
   SHELL=/bin/sh \
-  ORCA_VERSION="${VERSION}" \
-  ORCA_ARTIFACT_DIR="${legacy_artifact_dir}" \
-  ORCA_INSTALL_DIR="${legacy_install_dir}" \
-  ORCA_SHARE_DIR="${legacy_share_dir}" \
+  RYK_VERSION="${VERSION}" \
+  RYK_ARTIFACT_DIR="${legacy_artifact_dir}" \
+  RYK_INSTALL_DIR="${legacy_install_dir}" \
+  RYK_SHARE_DIR="${legacy_share_dir}" \
   RYK_INSTALL_FORCE=1 \
   RYK_TEST_ONBOARD_LOG="${legacy_onboard_log}" \
   sh "${INSTALL_SH}"
@@ -553,7 +553,7 @@ legacy_cwd="$(sed -n 's/^cwd=//p' "${legacy_onboard_log}" | head -n 1)"
 [[ -n "${legacy_cwd}" && "${legacy_cwd}" -ef "${legacy_home}" ]] ||
   fail "legacy ensure did not run from HOME (cwd=${legacy_cwd})"
 grep -qF "resource=${legacy_share_dir}/current" "${legacy_onboard_log}" ||
-  fail "legacy ensure missing ORCA_RESOURCE_ROOT at installed share current"
+  fail "legacy ensure missing RYK_RESOURCE_ROOT at installed share current"
 legacy_plain="$(printf '%s\n' "${legacy_output}" | sed $'s/\x1b\\[[0-9;]*m//g')"
 printf '%s\n' "${legacy_plain}" | grep -Eqi 'Set up protection' ||
   fail "legacy install missing Set up protection step"
