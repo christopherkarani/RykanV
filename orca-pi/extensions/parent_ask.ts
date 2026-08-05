@@ -16,6 +16,19 @@ import { join } from "node:path";
 
 export const PRODUCT_NAME = "Rykan V";
 export const DISPLAY_BRAND = "RYKAN V";
+/** Status bar key — no space (Pi status id). */
+export const STATUS_KEY = "rykanv";
+/** Transcript customType for decision cards. */
+export const DECISION_CUSTOM_TYPE = "rykanv-decision";
+/** Widget dock key. */
+export const BLOCK_WIDGET_KEY = "rykanv-block";
+
+/** Select labels (policy + protocol). Keep short; mapSelectLabelToChoice accepts aliases. */
+export const LABEL_ALLOW_ONCE = "Allow once";
+export const LABEL_DENY = "Deny";
+export const LABEL_DISABLE_SESSION = "Disable Rykan V for this session";
+export const LABEL_SHOW_WHY = "Show why";
+export const LABEL_PROTOCOL_SESSION_ALLOW = "Allow for this session";
 
 export type ParentAskChoice =
 	| "block"
@@ -80,7 +93,7 @@ const DEFAULT_FS: ParentAskFs = {
 
 export const DEFAULT_PARENT_ASK_TIMEOUT_MS = 60_000;
 export const DEFAULT_PARENT_ASK_POLL_MS = 200;
-export const SESSION_GRANT_OPTION = "Allow this tool for this Pi session";
+export const SESSION_GRANT_OPTION = "Allow this tool for this session";
 
 const CHOICES = new Set<ParentAskChoice>([
 	"block",
@@ -369,16 +382,22 @@ export function mapSelectLabelToChoice(
 	label: string | undefined,
 ): ParentAskChoice {
 	switch (label) {
-		case "Run once anyway":
+		case LABEL_ALLOW_ONCE:
+		case "Run once anyway": // legacy
 			return "run_once";
+		case LABEL_DISABLE_SESSION:
+		case "Disable ryk for this Pi session": // legacy
+		case LABEL_PROTOCOL_SESSION_ALLOW:
 		case "Allow for this session":
-		case "Disable ryk for this Pi session":
 			return "disable_session";
+		case LABEL_SHOW_WHY:
 		case "Show policy reason":
 		case "Show repair instructions / run doctor":
 			return "show_reason";
 		case SESSION_GRANT_OPTION:
+		case "Allow this tool for this Pi session": // legacy
 			return "allow_session_tool";
+		case LABEL_DENY:
 		case "Block":
 		case "Block remaining protocol errors":
 		default:

@@ -6,10 +6,17 @@ import { createRequire } from "node:module";
 import { dirname, isAbsolute, resolve } from "node:path";
 import {
 	addSessionGrant,
+	BLOCK_WIDGET_KEY,
 	buildAutoDenyCopy,
 	cleanupParentAskDir,
+	DECISION_CUSTOM_TYPE,
 	DISPLAY_BRAND,
 	hasSessionGrant,
+	LABEL_ALLOW_ONCE,
+	LABEL_DENY,
+	LABEL_DISABLE_SESSION,
+	LABEL_PROTOCOL_SESSION_ALLOW,
+	LABEL_SHOW_WHY,
 	listPendingRequests,
 	mapSelectLabelToChoice,
 	parentAskDir,
@@ -19,6 +26,7 @@ import {
 	resolvePiAskRoot,
 	sanitizeSessionId,
 	SESSION_GRANT_OPTION,
+	STATUS_KEY,
 	waitForAskResponse,
 	writeAskRequest,
 	writeAskResponse,
@@ -33,9 +41,17 @@ import {
 } from "./secret_capture.ts";
 
 export {
+	BLOCK_WIDGET_KEY,
+	DECISION_CUSTOM_TYPE,
 	DISPLAY_BRAND,
+	LABEL_ALLOW_ONCE,
+	LABEL_DENY,
+	LABEL_DISABLE_SESSION,
+	LABEL_PROTOCOL_SESSION_ALLOW,
+	LABEL_SHOW_WHY,
 	PRODUCT_NAME,
 	SESSION_GRANT_OPTION,
+	STATUS_KEY,
 	buildAutoDenyCopy,
 	parentAskTimeoutMs,
 	resolvePiAskRoot,
@@ -129,6 +145,18 @@ type PiAPI = {
 			triggerTurn?: boolean;
 			deliverAs?: "steer" | "followUp" | "nextTurn";
 		},
+	) => void;
+	/** Optional Pi host API for custom transcript chrome (no purple default). */
+	registerMessageRenderer?: (
+		customType: string,
+		renderer: (
+			message: { content?: string; details?: unknown },
+			options: { expanded?: boolean; outputPad?: number },
+			theme: {
+				fg: (name: string, text: string) => string;
+				bg?: (name: string, text: string) => string;
+			},
+		) => unknown,
 	) => void;
 };
 
@@ -397,13 +425,18 @@ type OrcaEvaluateResponse = {
 };
 
 type OrcaDecisionCard = {
-	variant: "block" | "ask";
+	/** block=deny, ask=needs decision, wait=parent-forward pending */
+	variant: "block" | "ask" | "wait";
 	title: string;
 	summary: string;
 	rule?: string;
 	pack?: string;
 	severity?: string;
 	nextStep?: string;
+	/** Optional tool/command preview line */
+	preview?: string;
+	/** For wait cards: timeout hint */
+	timeoutHint?: string;
 };
 
 type RunProcessResult = {
@@ -471,8 +504,6 @@ type ResolveOrcaBinOptions = {
 	spawnSync?: SpawnSyncLike;
 };
 
-const STATUS_KEY = "orca";
-const BLOCK_WIDGET_KEY = "orca-block";
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_CHILD_OUTPUT_BYTES = 1024 * 1024;
 const REQUIRED_ORCA_VERSION = (() => {
@@ -492,24 +523,24 @@ const REQUIRED_ORCA_VERSION = (() => {
 	}
 })();
 // Protocol recovery: session allow first, then once, then sticky block.
-const PROTOCOL_SESSION_ALLOW_OPTION = "Allow for this session";
-const PROTOCOL_BLOCK_OPTION = "Block";
+const PROTOCOL_SESSION_ALLOW_OPTION = LABEL_PROTOCOL_SESSION_ALLOW;
+const PROTOCOL_BLOCK_OPTION = LABEL_DENY;
 const ASK_OPTIONS = [
 	PROTOCOL_SESSION_ALLOW_OPTION,
-	"Run once anyway",
+	LABEL_ALLOW_ONCE,
 	PROTOCOL_BLOCK_OPTION,
 ] as const;
 const POLICY_ASK_OPTIONS = [
-	"Run once anyway",
-	"Block",
+	LABEL_ALLOW_ONCE,
+	LABEL_DENY,
 	SESSION_GRANT_OPTION,
-	"Disable ryk for this Pi session",
-	"Show policy reason",
+	LABEL_DISABLE_SESSION,
+	LABEL_SHOW_WHY,
 ] as const;
-const ONCE_OPTION = "Run once anyway";
+const ONCE_OPTION = LABEL_ALLOW_ONCE;
 
 /**
- * Whether interactive prompts may offer "Run once anyway".
+ * Whether interactive prompts may offer "Allow once".
  * - `ORCA_PI_ALLOW_ONCE=false|0|no` disables always
  * - `ORCA_PI_MODE=strict` disables by default (production hardening)
  * - `ORCA_PI_ALLOW_ONCE=true` re-enables even under strict
@@ -958,7 +989,7 @@ function blockMalformedToolCall(
 ): ToolCallResult {
 	const details = {
 		variant: "block" as const,
-		title: "RYK BLOCKED",
+		title: DISPLAY_BRAND,
 		summary,
 	};
 	showOrcaDecision(pi, ctx, details);
@@ -1048,6 +1079,33 @@ export function installOrcaExtension(
 	pi: PiAPI,
 	extensionOptions: OrcaExtensionOptions = {},
 ): void {
+	// Prefer semantic theme colors over Pi's purple custom-message chrome.
+	try {
+		pi.registerMessageRenderer?.(DECISION_CUSTOM_TYPE, (message, _opts, theme) => {
+			const details = message.details as OrcaDecisionCard | undefined;
+			const variant = details?.variant ?? "block";
+			const tone =
+				variant === "block"
+					? "error"
+					: variant === "ask"
+						? "warning"
+						: "dim";
+			const body =
+				typeof message.content === "string" && message.content.length > 0
+					? message.content
+					: buildOrcaWidget(
+							details ?? {
+								variant: "block",
+								title: DISPLAY_BRAND,
+								summary: "Decision",
+							},
+					  ).join("\n");
+			return theme.fg(tone, body);
+		});
+	} catch {
+		// Older hosts without registerMessageRenderer — plain text content still works.
+	}
+
 	const resolvedBin = extensionOptions.orcaBin
 		? { orcaBin: extensionOptions.orcaBin, source: "explicit" as const }
 		: (extensionOptions.resolveBin ?? resolveOrcaBin)();
@@ -1100,10 +1158,10 @@ export function installOrcaExtension(
 
 	const updateStatus = (ctx: PiContext): void => {
 		if (stateFor(ctx).bypass) {
-			ctx.ui?.setStatus?.(STATUS_KEY, "ryk bypass");
+			ctx.ui?.setStatus?.(STATUS_KEY, "rykan v bypass");
 			return;
 		}
-		ctx.ui?.setStatus?.(STATUS_KEY, `ryk ${stateFor(ctx).status}`);
+		ctx.ui?.setStatus?.(STATUS_KEY, `rykan v ${stateFor(ctx).status}`);
 	};
 
 	const grantsDirFor = (sessionId: string) =>
@@ -1516,7 +1574,7 @@ export function installOrcaExtension(
 	for (const name of ["ryk-stop", "orca-stop"] as const) {
 		pi.registerCommand(name, {
 			description:
-				"Disable ryk protection for this Pi session until /ryk-start.",
+				`${PRODUCT_NAME}: disabled for this session until /ryk-start.`,
 			handler: stopHandler,
 		});
 	}
@@ -1564,6 +1622,37 @@ export function installOrcaExtension(
 		updateStatus(ctx);
 		notify(ctx, modeSummary(unavailableMode, stateFor(ctx).bypass), "info");
 	};
+
+
+	const pendingHandler = async (_args: string | undefined, ctx: PiContext) => {
+		if (isSubagentSession(runtime.env)) {
+			notify(ctx, `${PRODUCT_NAME}: run /ryk-pending in the parent (main) Pi session.`, "warning");
+			return;
+		}
+		const sessionId = ctx.sessionManager?.getSessionId?.()?.trim();
+		if (!sessionId) {
+			notify(ctx, `${PRODUCT_NAME}: no session id — cannot list pending asks.`, "warning");
+			return;
+		}
+		const dir = grantsDirFor(sessionId);
+		const pending = listPendingRequests(dir, askFs);
+		if (pending.length === 0) {
+			notify(ctx, `${PRODUCT_NAME}: no pending subagent asks.`, "info");
+			return;
+		}
+		notify(
+			ctx,
+			`${PRODUCT_NAME}: ${pending.length} pending subagent ask(s). Opening prompts…`,
+			"warning",
+		);
+		await pollParentAsks(ctx);
+	};
+	for (const name of ["ryk-pending", "orca-pending"] as const) {
+		pi.registerCommand(name, {
+			description: "Drain pending subagent approval requests in this parent session.",
+			handler: pendingHandler,
+		});
+	}
 
 	for (const name of ["ryk-mode", "orca-mode"] as const) {
 		pi.registerCommand(name, {
@@ -1854,10 +1943,18 @@ async function handlePolicyAskParentForward(
 		});
 	}
 
-	const card = buildOrcaAskCard(
-		`${PRODUCT_NAME}: waiting for parent session approval (${toolLabel})…`,
-	);
+	const card = buildOrcaWaitCard({
+		toolLabel,
+		reason: sanitizeVisibleText(reason),
+		commandOrName: askIpc?.commandOrName ?? toolLabel,
+		timeoutMs,
+	});
 	showOrcaWidget(ctx, card);
+	notify(
+		ctx,
+		`${PRODUCT_NAME}: waiting for approval in the parent Pi session (${toolLabel}).`,
+		"info",
+	);
 
 	const response = await waitForAskResponse(dir, id, {
 		timeoutMs,
@@ -1897,7 +1994,7 @@ async function applyParentAskChoice(
 	toolLabel: string,
 	actions: { disableSession: () => void },
 	allowOnce: boolean,
-	env: NodeJS.ProcessEnv,
+	_env: NodeJS.ProcessEnv,
 	grantCtx?: {
 		parentSession: string;
 		askRoot: string;
@@ -1950,7 +2047,7 @@ async function applyParentAskChoice(
 			actions.disableSession();
 			notify(
 				ctx,
-				"Parent disabled ryk for this Pi session only. Use /ryk-start to re-enable.",
+				`${PRODUCT_NAME} disabled for this session only. Use /ryk-start to re-enable.`,
 				"warning",
 			);
 			return undefined;
@@ -1991,10 +2088,25 @@ async function answerParentAskRequest(
 	const summary = sanitizeVisibleText(
 		`[subagent ask] ${req.tool}: ${req.reason || req.command_or_name}`,
 	);
-	const card = buildOrcaAskCard(summary);
+	const preview = truncate(
+		sanitizeVisibleText(req.command_or_name || req.tool),
+		96,
+	);
+	const card: OrcaDecisionCard = {
+		...buildOrcaAskCard(summary),
+		preview,
+		rule: "rykanv:parent-ask",
+	};
 	showOrcaWidget(ctx, card);
+	// Surface in status so parent cannot miss a child ask while scrolling.
+	ctx.ui?.setStatus?.(STATUS_KEY, "rykan v ask");
+	notify(
+		ctx,
+		`${PRODUCT_NAME}: subagent needs approval for ${req.tool} — answer the prompt.`,
+		"warning",
+	);
 	const choiceLabel = await ctx.ui?.select?.(
-		`${PRODUCT_NAME}: subagent needs your decision (${req.tool})`,
+		`${PRODUCT_NAME}: subagent · ${req.tool}`,
 		askOptionsFor("policy", options.allowOnce),
 		{ timeout: Math.max(req.timeout_ms, 5_000), signal: ctx.signal },
 	);
@@ -2063,7 +2175,7 @@ async function handlePolicyAsk(
 	const card = buildOrcaAskCard(summary);
 	showOrcaWidget(ctx, card);
 	const choiceLabel = await ctx.ui?.select?.(
-		"ryk needs your decision",
+		`${PRODUCT_NAME}: needs your decision`,
 		askOptionsFor("policy", allowOnce),
 		{ timeout: 60_000, signal: ctx.signal },
 	);
@@ -2096,7 +2208,7 @@ async function handlePolicyAsk(
 					formatOrcaDecisionSummary(
 						{
 							variant: "block",
-							title: "RYK BLOCKED",
+							title: DISPLAY_BRAND,
 							summary,
 						},
 						toolLabel,
@@ -2118,7 +2230,7 @@ async function handlePolicyAsk(
 			actions.disableSession();
 			notify(
 				ctx,
-				"ryk disabled for this Pi session only. Use /ryk-start to re-enable.",
+				`${PRODUCT_NAME} disabled for this session only. Use /ryk-start to re-enable.`,
 				"warning",
 			);
 			return undefined;
@@ -2128,7 +2240,7 @@ async function handlePolicyAsk(
 				formatOrcaDecisionSummary(
 					{
 						variant: "block",
-						title: "RYK BLOCKED",
+						title: DISPLAY_BRAND,
 						summary,
 					},
 					toolLabel,
@@ -2141,7 +2253,7 @@ async function handlePolicyAsk(
 				formatOrcaDecisionSummary(
 					{
 						variant: "block",
-						title: "RYK BLOCKED",
+						title: DISPLAY_BRAND,
 						summary,
 					},
 					toolLabel,
@@ -2169,7 +2281,7 @@ async function handleUnavailable(
 	if (session?.protocolRecovery === "block") {
 		const card = {
 			variant: "block" as const,
-			title: "RYK BLOCKED",
+			title: DISPLAY_BRAND,
 			summary: repair,
 		};
 		showOrcaDecision(pi, ctx, card);
@@ -2195,7 +2307,7 @@ async function handleUnavailable(
 	if (mode === "strict") {
 		const card = {
 			variant: "block" as const,
-			title: "RYK BLOCKED",
+			title: DISPLAY_BRAND,
 			summary: repair,
 		};
 		showOrcaDecision(pi, ctx, card);
@@ -2227,7 +2339,7 @@ async function handleUnavailable(
 	if (mode === "noninteractive-block" || mode === "allow-with-warning") {
 		const card = {
 			variant: "block" as const,
-			title: "RYK BLOCKED",
+			title: DISPLAY_BRAND,
 			summary: repair,
 		};
 		showOrcaDecision(pi, ctx, card);
@@ -2239,21 +2351,23 @@ async function handleUnavailable(
 	// widget keeps ask context readable until the blocking select() resolves.
 	showOrcaWidget(ctx, card);
 	const choice = await ctx.ui?.select?.(
-		"ryk needs your decision",
+		`${PRODUCT_NAME}: needs your decision`,
 		askOptionsFor("unavailable", allowOnce),
 		{ timeout: 60_000, signal: ctx.signal },
 	);
 	switch (choice) {
 		case PROTOCOL_SESSION_ALLOW_OPTION:
+		case LABEL_DISABLE_SESSION:
 		case "Disable ryk for this Pi session":
 			clearOrcaWidget(ctx);
 			actions.disableSession();
 			notify(
 				ctx,
-				"ryk disabled for this Pi session only. Use /ryk-start to re-enable.",
+				`${PRODUCT_NAME} disabled for this session only. Use /ryk-start to re-enable.`,
 				"warning",
 			);
 			return undefined;
+		case LABEL_ALLOW_ONCE:
 		case "Run once anyway":
 			if (!allowOnce) {
 				clearOrcaWidget(ctx);
@@ -2262,7 +2376,7 @@ async function handleUnavailable(
 					formatOrcaDecisionSummary(
 						{
 							variant: "block",
-							title: "RYK BLOCKED",
+							title: DISPLAY_BRAND,
 							summary: repair,
 						},
 						toolLabel,
@@ -2282,6 +2396,7 @@ async function handleUnavailable(
 			);
 			return undefined;
 		case PROTOCOL_BLOCK_OPTION:
+		case LABEL_DENY:
 		case "Block":
 		default:
 			clearOrcaWidget(ctx);
@@ -2290,7 +2405,7 @@ async function handleUnavailable(
 				formatOrcaDecisionSummary(
 					{
 						variant: "block",
-						title: "RYK BLOCKED",
+						title: DISPLAY_BRAND,
 						summary: repair,
 					},
 					toolLabel,
@@ -2493,13 +2608,6 @@ function resolveCompatiblePathCli(
 	return null;
 }
 
-function isCompatiblePathOrca(
-	env: NodeJS.ProcessEnv,
-	runner: SpawnSyncLike,
-): boolean {
-	return resolveCompatiblePathCli(env, runner) !== null;
-}
-
 function appendBounded(
 	current: string,
 	chunk: string,
@@ -2542,7 +2650,7 @@ function showOrcaDecision(
 	if (pi.sendMessage) {
 		pi.sendMessage(
 			{
-				customType: "orca-decision",
+				customType: DECISION_CUSTOM_TYPE,
 				content: buildOrcaWidget(card).join("\n"),
 				display: true,
 				details: card,
@@ -2557,9 +2665,14 @@ function showOrcaDecision(
 	showOrcaWidget(ctx, card);
 }
 
+/** Enterprise card: brand header only, no fake action footer on wait. */
 function buildOrcaWidget(card: OrcaDecisionCard): string[] {
-	const contentWidth = 54;
+	const contentWidth = Math.min(
+		72,
+		Math.max(48, Math.min(terminalContentWidth(), 72)),
+	);
 	const isBlock = card.variant === "block";
+	const isWait = card.variant === "wait";
 	const frame = isBlock
 		? {
 				topLeft: "┏",
@@ -2581,10 +2694,7 @@ function buildOrcaWidget(card: OrcaDecisionCard): string[] {
 				bottomRight: "┘",
 				rule: "─",
 			};
-	const masthead = isBlock ? " RYK // BLOCKED " : " RYK // YOUR CALL ";
-	const stateLine = isBlock
-		? "COMMAND STOPPED BEFORE EXECUTION"
-		: "RYK PAUSED THIS COMMAND";
+	const masthead = ` ${DISPLAY_BRAND} `;
 	const lines = [
 		buildLabeledBorder(
 			frame.topLeft,
@@ -2593,42 +2703,58 @@ function buildOrcaWidget(card: OrcaDecisionCard): string[] {
 			masthead,
 			contentWidth,
 		),
-		`${frame.side} ${stateLine.padEnd(contentWidth - 2)} ${frame.side}`,
-		`${frame.teeLeft}${frame.rule.repeat(contentWidth)}${frame.teeRight}`,
 	];
 	lines.push(...formatWidgetRow("Why", card.summary, contentWidth, frame.side));
-	lines.push(
-		`${frame.teeLeft}${frame.rule.repeat(contentWidth)}${frame.teeRight}`,
-	);
-	lines.push(...formatWidgetRow("Rule", card.rule, contentWidth, frame.side));
-	if (card.pack)
-		lines.push(...formatWidgetRow("Pack", card.pack, contentWidth, frame.side));
-	if (card.severity)
+	if (card.preview) {
 		lines.push(
-			...formatWidgetRow(
-				"Severity",
-				capitalize(card.severity),
-				contentWidth,
-				frame.side,
-			),
+			...formatWidgetRow("Cmd", card.preview, contentWidth, frame.side),
 		);
-	if (card.nextStep)
+	}
+	const metaBits: string[] = [];
+	if (card.rule) metaBits.push(card.rule);
+	if (card.severity) metaBits.push(capitalize(card.severity));
+	if (card.pack && card.pack !== card.rule?.split(":")[0]) {
+		metaBits.push(card.pack);
+	}
+	if (metaBits.length > 0) {
+		lines.push(
+			`${frame.teeLeft}${frame.rule.repeat(contentWidth)}${frame.teeRight}`,
+		);
+		lines.push(
+			...formatWidgetRow("Meta", metaBits.join(" · "), contentWidth, frame.side),
+		);
+	}
+	if (card.nextStep) {
 		lines.push(
 			...formatWidgetRow("Next", card.nextStep, contentWidth, frame.side),
 		);
-	if (!isBlock)
+	}
+	if (isWait && card.timeoutHint) {
+		lines.push(
+			...formatWidgetRow("Wait", card.timeoutHint, contentWidth, frame.side),
+		);
+	}
+	// Ask only: real choices come from ui.select — one quiet hint, never fake buttons.
+	if (card.variant === "ask") {
 		lines.push(
 			...formatWidgetRow(
-				"Choose",
-				"Allow session, allow once, or block.",
+				"Tip",
+				"Use the prompt below to Allow once, Allow for session, or Deny.",
 				contentWidth,
 				frame.side,
 			),
 		);
+	}
 	lines.push(
 		`${frame.bottomLeft}${frame.rule.repeat(contentWidth)}${frame.bottomRight}`,
 	);
 	return lines;
+}
+
+function terminalContentWidth(): number {
+	const cols = Number(process.stdout?.columns ?? 0);
+	if (!Number.isFinite(cols) || cols < 40) return 54;
+	return Math.max(40, cols - 8);
 }
 
 function buildLabeledBorder(
@@ -2645,7 +2771,7 @@ function buildLabeledBorder(
 
 function buildOrcaDecisionCard(
 	response: unknown,
-	variant: OrcaDecisionCard["variant"],
+	variant: "block" | "ask",
 ): OrcaDecisionCard {
 	const reason = getDecisionReason(response);
 	const rule = getRuleId(response);
@@ -2654,7 +2780,7 @@ function buildOrcaDecisionCard(
 	const nextStep = getNextStep(response);
 	return {
 		variant,
-		title: variant === "ask" ? "RYK NEEDS YOUR DECISION" : "RYK BLOCKED",
+		title: DISPLAY_BRAND,
 		summary: sanitizeVisibleText(reason),
 		rule,
 		pack,
@@ -2666,8 +2792,33 @@ function buildOrcaDecisionCard(
 function buildOrcaAskCard(reason: string): OrcaDecisionCard {
 	return {
 		variant: "ask",
-		title: "RYK NEEDS YOUR DECISION",
+		title: DISPLAY_BRAND,
 		summary: sanitizeVisibleText(reason),
+	};
+}
+
+function buildOrcaWaitCard(input: {
+	toolLabel: string;
+	reason: string;
+	commandOrName?: string;
+	timeoutMs: number;
+}): OrcaDecisionCard {
+	const secs = Math.max(1, Math.round(input.timeoutMs / 1000));
+	const preview =
+		input.commandOrName && input.commandOrName !== input.toolLabel
+			? truncate(sanitizeVisibleText(input.commandOrName), 96)
+			: undefined;
+	return {
+		variant: "wait",
+		title: DISPLAY_BRAND,
+		summary: sanitizeVisibleText(
+			`Waiting for approval in the parent Pi session (${input.toolLabel}).`,
+		),
+		preview,
+		nextStep:
+			"Switch to the main Pi window and answer the prompt. This card is not interactive.",
+		timeoutHint: `Auto-denies in ~${secs}s if unanswered.`,
+		rule: "rykanv:parent-ask-wait",
 	};
 }
 
@@ -2681,9 +2832,11 @@ function formatOrcaDecisionSummary(
 		parts.push(`pack ${card.pack}`);
 	if (card.severity) parts.push(`severity ${card.severity}`);
 	const action = toolLabel === "bash" ? "bash command" : `${toolLabel} action`;
-	return sanitizeVisibleText(
-		`ryk ${card.variant === "ask" ? "needs your decision" : `blocked this ${action}`}: ${parts.join(" • ")}`,
-	);
+	const verb =
+		card.variant === "ask" || card.variant === "wait"
+			? "needs your decision"
+			: `blocked this ${action}`;
+	return sanitizeVisibleText(`${PRODUCT_NAME} ${verb}: ${parts.join(" • ")}`);
 }
 
 function getDecisionReason(response: unknown): string {
