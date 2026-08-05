@@ -88,6 +88,25 @@ type PiAPI = {
 			deliverAs?: "steer" | "followUp" | "nextTurn";
 		},
 	) => void;
+	/** Optional: Pi ≥0.79 hosts expose this for custom message UI (C3). */
+	registerMessageRenderer?: (
+		customType: string,
+		renderer: (
+			message: {
+				customType: string;
+				content: string;
+				display: boolean;
+				details?: unknown;
+			},
+			options: { expanded: boolean; outputPad: number },
+			theme: {
+				fg: (color: string, text: string) => string;
+				bg?: (color: string, text: string) => string;
+				bold?: (text: string) => string;
+				dim?: (text: string) => string;
+			},
+		) => unknown,
+	) => void;
 };
 
 type SpawnOptions = {
