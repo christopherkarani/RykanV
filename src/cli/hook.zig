@@ -13,6 +13,7 @@ const rust_visibility = @import("rust_visibility.zig");
 const feed_writer = @import("feed_writer.zig");
 const file_policy_path = @import("file_policy_path.zig");
 const fm_steward_client = @import("fm_steward_client.zig");
+const grok_deny_reason = @import("grok_deny_reason.zig");
 
 // Maximum JSON payload size to prevent memory exhaustion from hostile hosts.
 const max_payload_len = 256 * 1024; // 256 KiB
@@ -638,48 +639,29 @@ const writeCodexGuardBlock = writeExitTwoGuardBlock;
 /// Official Grok Build PreToolUse contract: stdout JSON decision + reason (UI/model),
 /// exit 2 to hard-block. Also emit stderr sentinel for scrapers / dual-read agents.
 fn writeGrokDenyOutput(allocator: std.mem.Allocator, stdout: anytype, stderr: anytype, result: HookResponse) !void {
-    const reason = try formatGrokDenyReasonAlloc(allocator, result);
+    const reason = try grok_deny_reason.formatAlloc(
+        allocator,
+        guard_product_tag,
+        result.rule,
+        result.message,
+        result.reason,
+    );
     defer allocator.free(reason);
-    const safe_reason = try core_api.redactAlloc(allocator, reason);
+    var safe_reason = try core_api.redactAlloc(allocator, reason);
     defer allocator.free(safe_reason);
+
+    // Redaction can grow length; mandatory blind re-cap after redact (never re-format).
+    if (safe_reason.len > grok_deny_reason.max_reason_len) {
+        const recapped = try grok_deny_reason.recapAlloc(allocator, safe_reason);
+        allocator.free(safe_reason);
+        safe_reason = recapped;
+    }
 
     try stdout.writeAll("{\"decision\":\"deny\",\"reason\":");
     try writeJsonString(stdout, safe_reason);
     try stdout.writeAll("}\n");
 
     try writeExitTwoGuardBlock(allocator, stderr, result.message, result.reason);
-}
-
-/// Compact reason string Grok surfaces in the TUI and feeds back to the model.
-fn formatGrokDenyReasonAlloc(allocator: std.mem.Allocator, result: HookResponse) ![]u8 {
-    const detail = pickGrokDenyDetail(result);
-    if (result.rule) |rule| {
-        return std.fmt.allocPrint(
-            allocator,
-            "{s}: {s} — {s}. Command did not execute. Recourse: ryk explain \"<command>\"; ryk allow-once <code>.",
-            .{ guard_product_tag, rule, detail },
-        );
-    }
-    return std.fmt.allocPrint(
-        allocator,
-        "{s}: {s}. Command did not execute. Recourse: ryk explain \"<command>\"; ryk allow-once <code>.",
-        .{ guard_product_tag, detail },
-    );
-}
-
-fn firstLineTrimmed(text: []const u8) []const u8 {
-    const line = if (std.mem.indexOfScalar(u8, text, '\n')) |nl| text[0..nl] else text;
-    return std.mem.trimEnd(u8, std.mem.trim(u8, line, " \t\r\n"), ".");
-}
-
-/// Prefer a substantive first line: message often has pack prose; reason can be terse.
-fn pickGrokDenyDetail(result: HookResponse) []const u8 {
-    const msg = firstLineTrimmed(result.message);
-    const why = firstLineTrimmed(result.reason);
-    if (msg.len > why.len + 8) return msg;
-    if (why.len > 0) return why;
-    if (msg.len > 0) return msg;
-    return "blocked by policy";
 }
 
 /// Compact human deny block for JSON hosts (Claude / OpenCode / OpenClaw / Hermes).
@@ -3563,21 +3545,36 @@ test "hook pre-eval fail-closed Grok emits native deny JSON reason and exit 2" {
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "no JSON payload") != null);
 }
 
-test "hook Grok deny stdout is Grok-native decision deny with branded reason" {
-    const allocator = std.testing.allocator;
-    var result = HookResponse{
+fn testGrokDenyHookResponse(
+    allocator: std.mem.Allocator,
+    reason: []const u8,
+    rule: ?[]const u8,
+    message: []const u8,
+) !HookResponse {
+    return .{
         .version = 1,
         .decision = .block,
         .risk = .critical,
         .category = try allocator.dupe(u8, "command"),
-        .reason = try allocator.dupe(u8, "Matched destructive pattern core.filesystem:rm-rf-root-home."),
-        .rule = try allocator.dupe(u8, "core.filesystem:rm-rf-root-home"),
-        .message = try allocator.dupe(u8, "command blocked by ryk policy: Matched destructive pattern core.filesystem:rm-rf-root-home."),
+        .reason = try allocator.dupe(u8, reason),
+        .rule = if (rule) |r| try allocator.dupe(u8, r) else null,
+        .message = try allocator.dupe(u8, message),
         .redactions = &.{},
         .host_limitations = &.{},
         .suggestions = &.{},
         .remediation_commands = &.{},
     };
+}
+
+// Integration: native deny JSON + stderr sentinel + post-redact cap (pure format lives in grok_deny_reason.zig).
+test "hook Grok deny stdout is Grok-native decision deny with branded reason" {
+    const allocator = std.testing.allocator;
+    var result = try testGrokDenyHookResponse(
+        allocator,
+        "Matched destructive pattern core.filesystem:rm-rf-root-home.",
+        "core.filesystem:rm-rf-root-home",
+        "command blocked by ryk policy: Matched destructive pattern core.filesystem:rm-rf-root-home.",
+    );
     defer result.deinit(allocator);
 
     var stdout_buf: [2048]u8 = undefined;
@@ -3592,6 +3589,73 @@ test "hook Grok deny stdout is Grok-native decision deny with branded reason" {
     try std.testing.expect(std.mem.indexOf(u8, out, "core.filesystem:rm-rf-root-home") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "Command did not execute") != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "[[RYKAN-V-GUARD]]") != null);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, out, .{});
+    defer parsed.deinit();
+    const reason_out = parsed.value.object.get("reason").?.string;
+    try std.testing.expect(reason_out.len <= grok_deny_reason.max_reason_len);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(reason_out));
+}
+
+test "hook Grok deny reason caps at 240 bytes after redaction" {
+    const allocator = std.testing.allocator;
+    var result = try testGrokDenyHookResponse(
+        allocator,
+        "short",
+        "core.filesystem:rm-rf-root-home",
+        "x" ** 400,
+    );
+    defer result.deinit(allocator);
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    try writeGrokDenyOutput(allocator, &stdout_writer, &stderr_writer, result);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, stdout_writer.buffered(), .{});
+    defer parsed.deinit();
+    const reason_out = parsed.value.object.get("reason").?.string;
+    try std.testing.expect(reason_out.len <= grok_deny_reason.max_reason_len);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(reason_out));
+    try std.testing.expect(std.mem.indexOf(u8, reason_out, guard_product_tag) != null);
+    try std.testing.expect(std.mem.indexOf(u8, reason_out, "core.filesystem:rm-rf-root-home") != null);
+    try std.testing.expect(std.mem.indexOf(u8, reason_out, "Command did not execute") != null);
+}
+
+test "hook Grok deny reason redacts secrets in stdout JSON" {
+    const allocator = std.testing.allocator;
+    const secret = "sk-fakeSyntheticOpenAIKey1234567890";
+    var result = HookResponse{
+        .version = 1,
+        .decision = .block,
+        .risk = .critical,
+        .category = try allocator.dupe(u8, "command"),
+        .reason = try std.fmt.allocPrint(allocator, "matched deny pattern {s}", .{secret}),
+        .rule = try allocator.dupe(u8, "core.secrets:test-canary"),
+        .message = try std.fmt.allocPrint(allocator, "Blocked because path contains {s}", .{secret}),
+        .redactions = &.{},
+        .host_limitations = &.{},
+        .suggestions = &.{},
+        .remediation_commands = &.{},
+    };
+    defer result.deinit(allocator);
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+    try writeGrokDenyOutput(allocator, &stdout_writer, &stderr_writer, result);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, stdout_writer.buffered(), .{});
+    defer parsed.deinit();
+    const reason_out = parsed.value.object.get("reason").?.string;
+    try std.testing.expect(std.mem.indexOf(u8, reason_out, secret) == null);
+    try std.testing.expect(reason_out.len <= grok_deny_reason.max_reason_len);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(reason_out));
+    try std.testing.expect(std.mem.indexOf(u8, reason_out, guard_product_tag) != null);
+    // Presentation redaction may use plain `[REDACTED]` or typed `[REDACTED:…]` tokens.
+    try std.testing.expect(std.mem.indexOf(u8, reason_out, "[REDACTED") != null);
 }
 
 test "hook pre-eval fail-closed Claude emits block JSON on stdout" {
@@ -4514,6 +4578,8 @@ test {
     // Pull allow-once CLI module tests into the lib monopath without touching mod.zig
     // (mod.zig is s1-honesty exclusive; implementer unhide/dispatch is compile-required).
     _ = @import("allow_once.zig");
+    // Nested module: Zig 0.16 monopath does not auto-attach transitive import tests.
+    _ = grok_deny_reason;
 }
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
