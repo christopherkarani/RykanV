@@ -859,24 +859,24 @@ test "appendProxyEnvironment dual-case inject wins over host proxies (M-3)" {
     try env_map.put("NO_PROXY", "evil.example");
     try env_map.put("no_proxy", "evil.example");
 
-    const orca_url = "http://127.0.0.1:18443";
-    const orca_no = "localhost,127.0.0.1,::1";
-    try network_eval.appendProxyEnvironment(&env_map, orca_url, orca_no);
+    const proxy_url = "http://127.0.0.1:18443";
+    const proxy_no = "localhost,127.0.0.1,::1";
+    try network_eval.appendProxyEnvironment(&env_map, proxy_url, proxy_no);
 
-    try std.testing.expectEqualStrings(orca_url, env_map.get("HTTP_PROXY").?);
-    try std.testing.expectEqualStrings(orca_url, env_map.get("http_proxy").?);
-    try std.testing.expectEqualStrings(orca_url, env_map.get("HTTPS_PROXY").?);
-    try std.testing.expectEqualStrings(orca_url, env_map.get("https_proxy").?);
-    try std.testing.expectEqualStrings(orca_url, env_map.get("ALL_PROXY").?);
-    try std.testing.expectEqualStrings(orca_url, env_map.get("all_proxy").?);
-    try std.testing.expectEqualStrings(orca_no, env_map.get("NO_PROXY").?);
-    try std.testing.expectEqualStrings(orca_no, env_map.get("no_proxy").?);
+    try std.testing.expectEqualStrings(proxy_url, env_map.get("HTTP_PROXY").?);
+    try std.testing.expectEqualStrings(proxy_url, env_map.get("http_proxy").?);
+    try std.testing.expectEqualStrings(proxy_url, env_map.get("HTTPS_PROXY").?);
+    try std.testing.expectEqualStrings(proxy_url, env_map.get("https_proxy").?);
+    try std.testing.expectEqualStrings(proxy_url, env_map.get("ALL_PROXY").?);
+    try std.testing.expectEqualStrings(proxy_url, env_map.get("all_proxy").?);
+    try std.testing.expectEqualStrings(proxy_no, env_map.get("NO_PROXY").?);
+    try std.testing.expectEqualStrings(proxy_no, env_map.get("no_proxy").?);
     try std.testing.expectEqualStrings("proxy-mediated", env_map.get("RYK_NETWORK_ENFORCEMENT").?);
 
     // After inject + allowlist, ryk loopback survives and host credentials stay gone.
     _ = try applyLaunchAllowlistInPlace(&env_map);
-    try std.testing.expectEqualStrings(orca_url, env_map.get("HTTP_PROXY").?);
-    try std.testing.expectEqualStrings(orca_url, env_map.get("http_proxy").?);
-    try std.testing.expectEqualStrings(orca_url, env_map.get("https_proxy").?);
+    try std.testing.expectEqualStrings(proxy_url, env_map.get("HTTP_PROXY").?);
+    try std.testing.expectEqualStrings(proxy_url, env_map.get("http_proxy").?);
+    try std.testing.expectEqualStrings(proxy_url, env_map.get("https_proxy").?);
     try std.testing.expect(std.mem.indexOf(u8, env_map.get("HTTP_PROXY").?, "user:") == null);
 }

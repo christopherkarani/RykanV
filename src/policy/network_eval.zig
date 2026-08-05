@@ -1341,19 +1341,19 @@ test "appendProxyEnvironment sets both cases and overwrites host proxies (M-3)" 
     try env_map.put("NO_PROXY", "evil.example");
     try env_map.put("no_proxy", "evil.example");
 
-    const orca_url = "http://127.0.0.1:18443";
-    const orca_no = "localhost,127.0.0.1,::1";
-    try appendProxyEnvironment(&env_map, orca_url, orca_no);
+    const proxy_url = "http://127.0.0.1:18443";
+    const proxy_no = "localhost,127.0.0.1,::1";
+    try appendProxyEnvironment(&env_map, proxy_url, proxy_no);
 
     // Both casings point at ryk loopback (ryk inject wins).
-    try std.testing.expectEqualStrings(orca_url, env_map.get("HTTP_PROXY").?);
-    try std.testing.expectEqualStrings(orca_url, env_map.get("http_proxy").?);
-    try std.testing.expectEqualStrings(orca_url, env_map.get("HTTPS_PROXY").?);
-    try std.testing.expectEqualStrings(orca_url, env_map.get("https_proxy").?);
-    try std.testing.expectEqualStrings(orca_url, env_map.get("ALL_PROXY").?);
-    try std.testing.expectEqualStrings(orca_url, env_map.get("all_proxy").?);
-    try std.testing.expectEqualStrings(orca_no, env_map.get("NO_PROXY").?);
-    try std.testing.expectEqualStrings(orca_no, env_map.get("no_proxy").?);
+    try std.testing.expectEqualStrings(proxy_url, env_map.get("HTTP_PROXY").?);
+    try std.testing.expectEqualStrings(proxy_url, env_map.get("http_proxy").?);
+    try std.testing.expectEqualStrings(proxy_url, env_map.get("HTTPS_PROXY").?);
+    try std.testing.expectEqualStrings(proxy_url, env_map.get("https_proxy").?);
+    try std.testing.expectEqualStrings(proxy_url, env_map.get("ALL_PROXY").?);
+    try std.testing.expectEqualStrings(proxy_url, env_map.get("all_proxy").?);
+    try std.testing.expectEqualStrings(proxy_no, env_map.get("NO_PROXY").?);
+    try std.testing.expectEqualStrings(proxy_no, env_map.get("no_proxy").?);
     try std.testing.expectEqualStrings("proxy-mediated", env_map.get("RYK_NETWORK_ENFORCEMENT").?);
     try std.testing.expectEqualStrings("false", env_map.get("RYK_PROXY_ROUTE_FORCED").?);
 

@@ -881,7 +881,7 @@ test "macOS default system RO includes DNS and TLS leaves not bare /etc" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var compiled = try compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-profile-dns-tls-ws",
+        .workspace_root = "/tmp/ryk-profile-dns-tls-ws",
         // null → production defaults
         .system_ro_prefixes = null,
     });
@@ -1247,11 +1247,11 @@ test "control root symlink on disk fails closed (F-1)" {
 
     const src_path = try std.fs.path.join(allocator, &.{ ws_root, "src" });
     defer allocator.free(src_path);
-    const orca_link = try std.fs.path.join(allocator, &.{ ws_root, ".ryk" });
-    defer allocator.free(orca_link);
+    const ryk_link = try std.fs.path.join(allocator, &.{ ws_root, ".ryk" });
+    defer allocator.free(ryk_link);
 
     // Plant workspace/.ryk → workspace/src (path alias attack).
-    std.Io.Dir.cwd().symLink(io, src_path, orca_link, .{}) catch |err| switch (err) {
+    std.Io.Dir.cwd().symLink(io, src_path, ryk_link, .{}) catch |err| switch (err) {
         error.PermissionDenied => return error.SkipZigTest,
         else => return err,
     };

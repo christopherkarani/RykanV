@@ -21,9 +21,9 @@ pub const SessionWriter = struct {
 
     pub fn initWithDirName(io: std.Io, allocator: std.mem.Allocator, session: core.session.Session, audit_dir_name: []const u8) !SessionWriter {
         if (!safeAuditDirName(audit_dir_name)) return error.InvalidAuditDirName;
-        const orca_dir = try std.fs.path.join(allocator, &.{ session.workspace_root, audit_dir_name });
-        defer allocator.free(orca_dir);
-        const sessions_dir = try std.fs.path.join(allocator, &.{ orca_dir, "sessions" });
+        const ryk_dir = try std.fs.path.join(allocator, &.{ session.workspace_root, audit_dir_name });
+        defer allocator.free(ryk_dir);
+        const sessions_dir = try std.fs.path.join(allocator, &.{ ryk_dir, "sessions" });
         defer allocator.free(sessions_dir);
         const session_dir_path = try std.fs.path.join(allocator, &.{ sessions_dir, session.id.slice() });
         errdefer allocator.free(session_dir_path);
@@ -52,9 +52,9 @@ pub const SessionWriter = struct {
     pub fn openExistingWithDirName(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8, session_id_text: []const u8, audit_dir_name: []const u8) !SessionWriter {
         try core.session.validateSessionIdText(session_id_text);
         if (!safeAuditDirName(audit_dir_name)) return error.InvalidAuditDirName;
-        const orca_dir = try std.fs.path.join(allocator, &.{ workspace_root, audit_dir_name });
-        defer allocator.free(orca_dir);
-        const sessions_dir = try std.fs.path.join(allocator, &.{ orca_dir, "sessions" });
+        const ryk_dir = try std.fs.path.join(allocator, &.{ workspace_root, audit_dir_name });
+        defer allocator.free(ryk_dir);
+        const sessions_dir = try std.fs.path.join(allocator, &.{ ryk_dir, "sessions" });
         defer allocator.free(sessions_dir);
         const session_dir_path = try std.fs.path.join(allocator, &.{ sessions_dir, session_id_text });
         errdefer allocator.free(session_dir_path);

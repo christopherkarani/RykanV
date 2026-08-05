@@ -87,14 +87,14 @@ pub fn writeManaged(
     workspace_root: []const u8,
     hosts: []const ManagedHost,
 ) !void {
-    const orca_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk" });
-    defer allocator.free(orca_dir);
+    const ryk_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk" });
+    defer allocator.free(ryk_dir);
 
     // Refuse parent `.ryk` symlink escape (component must not be a link).
-    if (try pathIsSymlink(allocator, orca_dir)) return error.ManagedPathIsSymlink;
-    try std.Io.Dir.cwd().createDirPath(io, orca_dir);
+    if (try pathIsSymlink(allocator, ryk_dir)) return error.ManagedPathIsSymlink;
+    try std.Io.Dir.cwd().createDirPath(io, ryk_dir);
     // Re-check after create: race / pre-existing link.
-    if (try pathIsSymlink(allocator, orca_dir)) return error.ManagedPathIsSymlink;
+    if (try pathIsSymlink(allocator, ryk_dir)) return error.ManagedPathIsSymlink;
 
     const path = try managedPath(allocator, workspace_root);
     defer allocator.free(path);
@@ -153,9 +153,9 @@ pub fn loadManaged(
     defer allocator.free(path);
 
     // Soft-empty on parent `.ryk` or leaf symlink (write refuses both; load must not follow).
-    const orca_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk" });
-    defer allocator.free(orca_dir);
-    if (try pathIsSymlink(allocator, orca_dir)) return emptyStore();
+    const ryk_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk" });
+    defer allocator.free(ryk_dir);
+    if (try pathIsSymlink(allocator, ryk_dir)) return emptyStore();
     if (try pathIsSymlink(allocator, path)) return emptyStore();
 
     const text = std.Io.Dir.cwd().readFileAlloc(
