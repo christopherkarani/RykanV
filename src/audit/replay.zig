@@ -651,7 +651,7 @@ test "verification detects modified event fields" {
     defer std.testing.allocator.free(summary_path);
 
     const event_text =
-        "{\"version\":1,\"session_id\":\"s\",\"event_id\":\"e\",\"timestamp\":\"2026-05-05T12:12:10Z\",\"type\":\"session_start\",\"actor\":{\"kind\":\"orca\",\"id\":null,\"display\":\"orca\"},\"target\":{\"kind\":\"session\",\"value\":\"s\"},\"decision\":null,\"redactions\":{\"count\":0,\"labels\":[]},\"previous_hash\":null";
+        "{\"version\":1,\"session_id\":\"s\",\"event_id\":\"e\",\"timestamp\":\"2026-05-05T12:12:10Z\",\"type\":\"session_start\",\"actor\":{\"kind\":\"ryk\",\"id\":null,\"display\":\"ryk\"},\"target\":{\"kind\":\"session\",\"value\":\"s\"},\"decision\":null,\"redactions\":{\"count\":0,\"labels\":[]},\"previous_hash\":null";
     const hash = blk: {
         const canonical = try std.fmt.allocPrint(std.testing.allocator, "{s}}}", .{event_text});
         defer std.testing.allocator.free(canonical);
@@ -675,7 +675,7 @@ test "verification detects modified event fields" {
         defer file.close(std.testing.io);
         var buf: [1024]u8 = undefined;
         var file_writer = file.writer(&buf);
-        try file_writer.interface.print("{s},\"event_hash\":\"{s}\"}}\n", .{ "{\"version\":1,\"session_id\":\"tampered\",\"event_id\":\"e\",\"timestamp\":\"2026-05-05T12:12:10Z\",\"type\":\"session_start\",\"actor\":{\"kind\":\"orca\",\"id\":null,\"display\":\"orca\"},\"target\":{\"kind\":\"session\",\"value\":\"s\"},\"decision\":null,\"redactions\":{\"count\":0,\"labels\":[]},\"previous_hash\":null", &hash });
+        try file_writer.interface.print("{s},\"event_hash\":\"{s}\"}}\n", .{ "{\"version\":1,\"session_id\":\"tampered\",\"event_id\":\"e\",\"timestamp\":\"2026-05-05T12:12:10Z\",\"type\":\"session_start\",\"actor\":{\"kind\":\"ryk\",\"id\":null,\"display\":\"ryk\"},\"target\":{\"kind\":\"session\",\"value\":\"s\"},\"decision\":null,\"redactions\":{\"count\":0,\"labels\":[]},\"previous_hash\":null", &hash });
         try file_writer.interface.flush();
     }
     var bad = try verifySessionDir(std.testing.io, std.testing.allocator, session_dir);
@@ -740,7 +740,7 @@ test "verification accepts rust shell metadata in audit events" {
         try hash_chain.writeEventJsonLine(&file_writer.interface, ev, null, &hash);
         try file_writer.interface.flush();
     }
-    try writeTestSummary(summary_path, 1, &hash, "[\"orca\",\"run\",\"--\",\"rm\",\"-rf\",\"/\"]");
+    try writeTestSummary(summary_path, 1, &hash, "[\"ryk\",\"run\",\"--\",\"rm\",\"-rf\",\"/\"]");
 
     var ok = try verifySessionDir(std.testing.io, std.testing.allocator, session_dir);
     defer ok.deinit(std.testing.allocator);
@@ -763,7 +763,7 @@ test "verification rejects event records with unauthenticated extra keys" {
     defer std.testing.allocator.free(summary_path);
 
     const event_text =
-        "{\"version\":1,\"session_id\":\"s\",\"event_id\":\"e\",\"timestamp\":\"2026-05-05T12:12:10Z\",\"type\":\"session_start\",\"actor\":{\"kind\":\"orca\",\"id\":null,\"display\":\"orca\"},\"target\":{\"kind\":\"session\",\"value\":\"s\"},\"decision\":null,\"redactions\":{\"count\":0,\"labels\":[]},\"previous_hash\":null";
+        "{\"version\":1,\"session_id\":\"s\",\"event_id\":\"e\",\"timestamp\":\"2026-05-05T12:12:10Z\",\"type\":\"session_start\",\"actor\":{\"kind\":\"ryk\",\"id\":null,\"display\":\"ryk\"},\"target\":{\"kind\":\"session\",\"value\":\"s\"},\"decision\":null,\"redactions\":{\"count\":0,\"labels\":[]},\"previous_hash\":null";
     const hash = blk: {
         const canonical = try std.fmt.allocPrint(std.testing.allocator, "{s}}}", .{event_text});
         defer std.testing.allocator.free(canonical);
@@ -801,7 +801,7 @@ test "verification rejects tampered summary display fields" {
     defer std.testing.allocator.free(summary_path);
 
     const event_text =
-        "{\"version\":1,\"session_id\":\"s\",\"event_id\":\"e\",\"timestamp\":\"2026-05-05T12:12:10Z\",\"type\":\"session_start\",\"actor\":{\"kind\":\"orca\",\"id\":null,\"display\":\"orca\"},\"target\":{\"kind\":\"session\",\"value\":\"s\"},\"decision\":null,\"redactions\":{\"count\":0,\"labels\":[]},\"previous_hash\":null";
+        "{\"version\":1,\"session_id\":\"s\",\"event_id\":\"e\",\"timestamp\":\"2026-05-05T12:12:10Z\",\"type\":\"session_start\",\"actor\":{\"kind\":\"ryk\",\"id\":null,\"display\":\"ryk\"},\"target\":{\"kind\":\"session\",\"value\":\"s\"},\"decision\":null,\"redactions\":{\"count\":0,\"labels\":[]},\"previous_hash\":null";
     const hash = blk: {
         const canonical = try std.fmt.allocPrint(std.testing.allocator, "{s}}}", .{event_text});
         defer std.testing.allocator.free(canonical);
@@ -883,7 +883,7 @@ test "verification detects summary event count mismatch" {
     const summary_path = try std.fs.path.join(std.testing.allocator, &.{ session_dir, "summary.json" });
     defer std.testing.allocator.free(summary_path);
     const event_text =
-        "{\"version\":1,\"session_id\":\"s\",\"event_id\":\"e\",\"timestamp\":\"2026-05-05T12:12:10Z\",\"type\":\"session_start\",\"actor\":{\"kind\":\"orca\",\"id\":null,\"display\":\"orca\"},\"target\":{\"kind\":\"session\",\"value\":\"s\"},\"decision\":null,\"redactions\":{\"count\":0,\"labels\":[]},\"previous_hash\":null";
+        "{\"version\":1,\"session_id\":\"s\",\"event_id\":\"e\",\"timestamp\":\"2026-05-05T12:12:10Z\",\"type\":\"session_start\",\"actor\":{\"kind\":\"ryk\",\"id\":null,\"display\":\"ryk\"},\"target\":{\"kind\":\"session\",\"value\":\"s\"},\"decision\":null,\"redactions\":{\"count\":0,\"labels\":[]},\"previous_hash\":null";
     const hash = blk: {
         const canonical = try std.fmt.allocPrint(std.testing.allocator, "{s}}}", .{event_text});
         defer std.testing.allocator.free(canonical);
@@ -962,7 +962,7 @@ fn writeValidReplayFixture(root: []const u8, session_id: []const u8) !void {
     defer std.testing.allocator.free(summary_path);
 
     const event_text =
-        "{\"version\":1,\"session_id\":\"s\",\"event_id\":\"e\",\"timestamp\":\"2026-05-05T12:12:10Z\",\"type\":\"command_denied\",\"actor\":{\"kind\":\"orca\",\"id\":null,\"display\":\"orca\"},\"target\":{\"kind\":\"command\",\"value\":\"rm -rf tmp\"},\"decision\":{\"result\":\"deny\",\"rule_id\":null,\"reason\":\"blocked\",\"risk_score\":null,\"requires_user\":false,\"ci_may_proceed\":false},\"redactions\":{\"count\":0,\"labels\":[]},\"previous_hash\":null";
+        "{\"version\":1,\"session_id\":\"s\",\"event_id\":\"e\",\"timestamp\":\"2026-05-05T12:12:10Z\",\"type\":\"command_denied\",\"actor\":{\"kind\":\"ryk\",\"id\":null,\"display\":\"ryk\"},\"target\":{\"kind\":\"command\",\"value\":\"rm -rf tmp\"},\"decision\":{\"result\":\"deny\",\"rule_id\":null,\"reason\":\"blocked\",\"risk_score\":null,\"requires_user\":false,\"ci_may_proceed\":false},\"redactions\":{\"count\":0,\"labels\":[]},\"previous_hash\":null";
     const hash = blk: {
         const canonical = try std.fmt.allocPrint(std.testing.allocator, "{s}}}", .{event_text});
         defer std.testing.allocator.free(canonical);
@@ -976,5 +976,5 @@ fn writeValidReplayFixture(root: []const u8, session_id: []const u8) !void {
         try file_writer.interface.print("{s},\"event_hash\":\"{s}\"}}\n", .{ event_text, &hash });
         try file_writer.interface.flush();
     }
-    try writeTestSummary(summary_path, 1, &hash, "[\"orca\",\"run\",\"--\",\"rm\",\"-rf\",\"tmp\"]");
+    try writeTestSummary(summary_path, 1, &hash, "[\"ryk\",\"run\",\"--\",\"rm\",\"-rf\",\"tmp\"]");
 }

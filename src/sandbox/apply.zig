@@ -2345,7 +2345,7 @@ test "require_network_route_forcing with sandbox off fails closed" {
     const err = applyBeforeExec(.{
         .allocator = std.testing.allocator,
         .mode = .off,
-        .workspace_root = "/tmp/orca-apply-ws-route-force-off",
+        .workspace_root = "/tmp/ryk-apply-ws-route-force-off",
         .env_map = null,
         .network_proxy_port = 18080,
         .require_network_route_forcing = true,
@@ -2952,7 +2952,7 @@ test "collectLaunchInstallRoPaths real host hermes grants uv cpython when presen
     // Prove SBPL emit includes process-exec + file-read* for the nested python install.
     if (builtin.os.tag == .macos) {
         var compiled = try profile.compileProfile(allocator, .{
-            .workspace_root = "/tmp/orca-hermes-sbpl-ws",
+            .workspace_root = "/tmp/ryk-hermes-sbpl-ws",
             .exec_paths = execs,
             .ro_paths = ro,
             .host_rw_paths = &.{},

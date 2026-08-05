@@ -1332,7 +1332,7 @@ test "symlink escape to protected path is blocked" {
     const root = try testAllocRealPath(std.testing.io, tmp.dir, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
 
-    const outside_dir = try std.fs.path.join(std.testing.allocator, &.{ root, "..", "orca-secret-outside" });
+    const outside_dir = try std.fs.path.join(std.testing.allocator, &.{ root, "..", "ryk-secret-outside" });
     defer std.testing.allocator.free(outside_dir);
     try std.Io.Dir.cwd().createDirPath(io, outside_dir);
     defer std.Io.Dir.cwd().deleteTree(io, outside_dir) catch {};
@@ -1705,7 +1705,7 @@ test "staging index rejects paths outside workspace and session" {
     defer std.testing.allocator.free(index_path);
     const index_text = try std.fmt.allocPrint(
         std.testing.allocator,
-        "{{\"version\":1,\"session_id\":\"evil\",\"entries\":[{{\"original_path\":\"{s}\",\"normalized_path\":\"safe.txt\",\"staged_path\":\"{s}\",\"original_hash\":null,\"staged_hash\":\"{s}\",\"operation\":\"create\",\"timestamp\":\"2026-05-17T00:00:00Z\",\"actor\":\"orca\"}}]}}",
+        "{{\"version\":1,\"session_id\":\"evil\",\"entries\":[{{\"original_path\":\"{s}\",\"normalized_path\":\"safe.txt\",\"staged_path\":\"{s}\",\"original_hash\":null,\"staged_hash\":\"{s}\",\"operation\":\"create\",\"timestamp\":\"2026-05-17T00:00:00Z\",\"actor\":\"ryk\"}}]}}",
         .{ outside_original, staged_path, staged_hash },
     );
     defer std.testing.allocator.free(index_text);
@@ -1719,7 +1719,7 @@ test "staging index rejects paths outside workspace and session" {
     try writeAbsoluteFile(outside_staged, "tampered\n");
     const index_text_staged_escape = try std.fmt.allocPrint(
         std.testing.allocator,
-        "{{\"version\":1,\"session_id\":\"evil\",\"entries\":[{{\"original_path\":\"{s}/safe.txt\",\"normalized_path\":\"safe.txt\",\"staged_path\":\"{s}\",\"original_hash\":null,\"staged_hash\":\"{s}\",\"operation\":\"create\",\"timestamp\":\"2026-05-17T00:00:00Z\",\"actor\":\"orca\"}}]}}",
+        "{{\"version\":1,\"session_id\":\"evil\",\"entries\":[{{\"original_path\":\"{s}/safe.txt\",\"normalized_path\":\"safe.txt\",\"staged_path\":\"{s}\",\"original_hash\":null,\"staged_hash\":\"{s}\",\"operation\":\"create\",\"timestamp\":\"2026-05-17T00:00:00Z\",\"actor\":\"ryk\"}}]}}",
         .{ root, outside_staged, staged_hash },
     );
     defer std.testing.allocator.free(index_text_staged_escape);
