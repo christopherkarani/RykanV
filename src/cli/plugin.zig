@@ -1534,7 +1534,7 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
 
                 try stdout.writeAll("  install paths for Hermes:\n");
                 try stdout.print("    user: {s}\n", .{destination_path});
-                try stdout.writeAll("    enable: hermes plugins enable orca\n");
+                try stdout.writeAll("    enable: hermes plugins enable ryk\n");
                 if (dry_run) {
                     try stdout.writeAll("  action: no changes made (dry-run)\n");
                     try stdout.print("  next step: copy {s} to {s}\n", .{ plugin_dir, destination_path });
@@ -1588,7 +1588,7 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
                     if (binaryInPath(io, allocator, "hermes")) {
                         const status = try runHermesEnable(allocator);
                         if (status == 0) {
-                            try stdout.writeAll("  enable: completed via hermes plugins enable orca\n");
+                            try stdout.writeAll("  enable: completed via hermes plugins enable ryk\n");
                         } else {
                             try stdout.print("  enable: failed (hermes exit code: {d})\n", .{status});
                             try writeHermesEnableHelper(allocator, destination_path);
@@ -2207,7 +2207,7 @@ fn writeHermesEnableHelper(allocator: std.mem.Allocator, plugin_dir: []const u8)
     _ = try plugin_install.installTextIfSafe(
         io,
         allocator,
-        "ryk plugin files are installed.\nTo enable, run:\n  hermes plugins enable orca\n",
+        "ryk plugin files are installed.\nTo enable, run:\n  hermes plugins enable ryk\n",
         help_path,
         true,
     );
