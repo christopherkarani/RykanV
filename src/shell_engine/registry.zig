@@ -373,7 +373,7 @@ pub fn severityForRuleId(rule_id: []const u8) Severity {
     return .critical;
 }
 
-/// Embedded oracle pattern totals (must match extract from frozen orca-rs packs).
+/// Embedded oracle pattern totals (must match extract from historical frozen oracle packs).
 pub const expected_destructive_patterns: usize = 794;
 pub const expected_safe_patterns: usize = 830;
 

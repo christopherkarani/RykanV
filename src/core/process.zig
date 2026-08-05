@@ -5,7 +5,7 @@
 //!
 //! When OS sandbox requires child apply (Landlock / Seatbelt), callers pass a
 //! `custom` spawn hook that uses `sandbox.apply_posix` so the agent is boxed.
-//! The core module must not import sandbox (module boundary: core_engine vs orca).
+//! The core module must not import sandbox (module boundary: core_engine vs ryk).
 //!
 //! prepareChild consumes the scrubbed env_map from applyBeforeExec.
 //! FD scrub is child-side only (see sandbox/fd_scrub.zig / apply_posix.zig).
@@ -48,7 +48,7 @@ pub const CustomSpawnRequest = struct {
     stdio: StdioBehavior,
 };
 
-/// Optional override for agent spawn (U07 OS-FS child apply lives in orca/sandbox).
+/// Optional override for agent spawn (U07 OS-FS child apply lives in ryk/sandbox).
 pub const CustomSpawn = struct {
     context: *anyopaque,
     spawnFn: *const fn (context: *anyopaque, request: CustomSpawnRequest) anyerror!std.process.Child,

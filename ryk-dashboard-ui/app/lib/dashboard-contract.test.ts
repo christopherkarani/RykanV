@@ -69,7 +69,7 @@ test("workspace-only routes do not mount their controls in machine mode", () => 
 
   assert.doesNotMatch(machine, /data-testid="policy-save"/);
   assert.match(machine, /Select a workspace/);
-  assert.match(machine, /orca dashboard --workspace/);
+  assert.match(machine, /ryk dashboard --workspace/);
   assert.match(workspace, /data-testid="policy-save"/);
 });
 
@@ -142,7 +142,7 @@ test("legacy fallback never builds commands from hostile persisted remediation",
 
   const context: { commands?: Array<{ value: string }> } = {};
   vm.runInNewContext(
-    `${extractRule}; ${remediation}; commands = remediationCommandsFor({ rule: "safe; touch /tmp/pwn", reason: "blocked", remediation: "orca safe; touch /tmp/pwn" });`,
+    `${extractRule}; ${remediation}; commands = remediationCommandsFor({ rule: "safe; touch /tmp/pwn", reason: "blocked", remediation: "ryk safe; touch /tmp/pwn" });`,
     context,
   );
   assert.deepEqual(

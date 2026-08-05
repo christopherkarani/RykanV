@@ -127,6 +127,7 @@ fn daemonBinaryAvailable() bool {
     if (std.c.getenv("RYK_DAEMON")) |path| {
         return fileExists(std.mem.span(path));
     }
+    // Primary product path + historical orca-rs layout probes (crate removed; still functional if present).
     const candidates = [_][]const u8{
         "./zig-out/bin/ryk-daemon",
         "orca-rs/target/release/ryk-daemon",
@@ -155,7 +156,7 @@ fn readPipeToAlloc(io: std.Io, allocator: std.mem.Allocator, file: std.Io.File, 
     return try list.toOwnedSlice(allocator);
 }
 
-fn runOrca(
+fn runRyk(
     allocator: std.mem.Allocator,
     args: []const []const u8,
     stdin_data: []const u8,
@@ -307,7 +308,7 @@ test "phase2f real daemon host matrix allows safe and denies dangerous shell com
         const safe_fixture = try readFile(allocator, host_case.safe_fixture);
         defer allocator.free(safe_fixture);
 
-        const safe_result = try runOrca(allocator, &.{ ryk_bin, "hook", host_case.host, host_case.event }, safe_fixture, null);
+        const safe_result = try runRyk(allocator, &.{ ryk_bin, "hook", host_case.host, host_case.event }, safe_fixture, null);
         defer allocator.free(safe_result.stdout);
         defer allocator.free(safe_result.stderr);
 
@@ -319,7 +320,7 @@ test "phase2f real daemon host matrix allows safe and denies dangerous shell com
         const dangerous_fixture = try readFile(allocator, host_case.dangerous_fixture);
         defer allocator.free(dangerous_fixture);
 
-        const deny_result = try runOrca(allocator, &.{ ryk_bin, "hook", host_case.host, host_case.event }, dangerous_fixture, null);
+        const deny_result = try runRyk(allocator, &.{ ryk_bin, "hook", host_case.host, host_case.event }, dangerous_fixture, null);
         defer allocator.free(deny_result.stdout);
         defer allocator.free(deny_result.stderr);
 
@@ -354,7 +355,7 @@ test "phase2f non-shell events stay on zig path without requiring daemon" {
         const fixture = try readFile(allocator, case.fixture);
         defer allocator.free(fixture);
 
-        const result = try runOrca(allocator, &.{ ryk_bin, "hook", case.host, case.event }, fixture, &isolated.env_map);
+        const result = try runRyk(allocator, &.{ ryk_bin, "hook", case.host, case.event }, fixture, &isolated.env_map);
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 
@@ -374,7 +375,7 @@ fn expectShellHostsBlockWithReason(
         const fixture = try readFile(allocator, host_case.safe_fixture);
         defer allocator.free(fixture);
 
-        const result = try runOrca(allocator, &.{ ryk_bin, "hook", host_case.host, host_case.event }, fixture, env_map);
+        const result = try runRyk(allocator, &.{ ryk_bin, "hook", host_case.host, host_case.event }, fixture, env_map);
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 
@@ -425,7 +426,7 @@ test "phase2f version still works when daemon is unavailable" {
     defer allocator.free(isolated.home);
     defer isolated.env_map.deinit();
 
-    const result = try runOrca(allocator, &.{ ryk_bin, "version" }, "", &isolated.env_map);
+    const result = try runRyk(allocator, &.{ ryk_bin, "version" }, "", &isolated.env_map);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -441,7 +442,7 @@ test "phase2f doctor degrades gracefully when daemon is unavailable" {
     defer allocator.free(isolated.home);
     defer isolated.env_map.deinit();
 
-    const result = try runOrca(allocator, &.{ ryk_bin, "doctor" }, "", &isolated.env_map);
+    const result = try runRyk(allocator, &.{ ryk_bin, "doctor" }, "", &isolated.env_map);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -458,7 +459,7 @@ test "phase2f run denies shell commands when daemon is unavailable" {
     defer allocator.free(isolated.home);
     defer isolated.env_map.deinit();
 
-    const result = try runOrca(allocator, &.{ ryk_bin, "run", "--workspace", ".", "--", "git", "status" }, "", &isolated.env_map);
+    const result = try runRyk(allocator, &.{ ryk_bin, "run", "--workspace", ".", "--", "git", "status" }, "", &isolated.env_map);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -474,7 +475,7 @@ test "phase2f malformed hook JSON fails closed with block decision" {
     if (!fileExists(ryk_bin)) return;
 
     const allocator = std.testing.allocator;
-    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "claude", "PreToolUse" }, "{not json", null);
+    const result = try runRyk(allocator, &.{ ryk_bin, "hook", "claude", "PreToolUse" }, "{not json", null);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -496,7 +497,7 @@ test "phase2f unknown host is rejected at CLI boundary" {
         \\{"version":1,"host":"unknown","event":"PreToolUse","payload":{"tool":"bash","command":"git status"}}
     ;
 
-    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "unknown", "PreToolUse" }, envelope, null);
+    const result = try runRyk(allocator, &.{ ryk_bin, "hook", "unknown", "PreToolUse" }, envelope, null);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -517,7 +518,7 @@ test "phase2f shell tool with missing command fails closed before daemon evaluat
         \\{"version":1,"host":"codex","event":"PreToolUse","payload":{"tool":"bash"}}
     ;
 
-    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "codex", "PreToolUse" }, envelope, &isolated.env_map);
+    const result = try runRyk(allocator, &.{ ryk_bin, "hook", "codex", "PreToolUse" }, envelope, &isolated.env_map);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -537,7 +538,7 @@ test "phase2f shell tool with empty command fails closed before daemon evaluatio
         \\{"version":1,"host":"claude","event":"PreToolUse","payload":{"tool":"Bash","command":""}}
     ;
 
-    const result = try runOrca(allocator, &.{ ryk_bin, "hook", "claude", "PreToolUse" }, envelope, &isolated.env_map);
+    const result = try runRyk(allocator, &.{ ryk_bin, "hook", "claude", "PreToolUse" }, envelope, &isolated.env_map);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 

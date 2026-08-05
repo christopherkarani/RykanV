@@ -370,9 +370,9 @@ else
   elif ! attests_latest_session_active; then
     fail_case 'D unminted reference probe lacked active sandbox_posture audit with profile hash'
   elif grep -Fq -- "$UNMINTED_REF" "$D_STDOUT" "$D_STDERR"; then
-    fail_case 'D unminted orca-secret reference reached child output'
+    fail_case 'D unminted ryk-secret reference reached child output'
   else
-    pass_case 'D unminted orca-secret reference absent from child'
+    pass_case 'D unminted ryk-secret reference absent from child'
   fi
 fi
 

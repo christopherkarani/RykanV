@@ -15,11 +15,11 @@ const readme_path = plugin_dir ++ "/README.md";
 const marketplace_example_path = plugin_dir ++ "/examples/marketplace.json";
 
 const skills = &[_][]const u8{
-    "orca-doctor",
-    "orca-init",
-    "orca-protect",
-    "orca-redteam",
-    "orca-replay",
+    "ryk-doctor",
+    "ryk-init",
+    "ryk-protect",
+    "ryk-redteam",
+    "ryk-replay",
 };
 
 // ---------------------------------------------------------------------------

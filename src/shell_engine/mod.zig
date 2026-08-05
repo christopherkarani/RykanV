@@ -1,7 +1,7 @@
 //! In-process Zig shell command evaluator.
 //!
 //! Owns security decisions for `ryk hook` / `ryk run` / shims.
-//! Pack patterns are the frozen orca-rs oracle set (embedded JSON + PCRE2).
+//! Pack patterns are the historical frozen oracle set from the former orca-rs packs (embedded JSON + PCRE2).
 //! Evaluator errors fail closed with deny.
 //!
 //! Phase 1 hard fence (Mode A default packs: core.* + system.disk): structure
@@ -2524,7 +2524,7 @@ test "s-engine: allow-once exact hit allows before packs and consumes when true"
 }
 
 test "s-engine: allow-once AccessDenied skips store and continues packs (seatbelt residual)" {
-    // Hardened Seatbelt cannot open ~/.local/share/orca/allow_once.jsonl.
+    // Hardened Seatbelt cannot open ~/.local/share/ryk/allow_once.jsonl.
     // Must not emit allow-once-store-error critical deny for every command.
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
 
