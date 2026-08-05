@@ -256,6 +256,10 @@ mcp:
     - "*.search_*"
     - "*.list_*"
     - "*.get_*"
+    # Pi orchestrator bare names (exact; see policies/presets/pi-orchestrator.yaml)
+    # - "subagent"
+    # - "skill"
+    # - "task"
   deny:
     - "*.delete_*"
     - "*.shell"

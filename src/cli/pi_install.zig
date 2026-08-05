@@ -34,9 +34,10 @@ const Asset = struct {
 const assets = [_]Asset{
     .{ .source_name = "orca.ts", .destination_name = "runtime.ts" },
     .{ .source_name = "secret_capture.ts", .destination_name = "secret_capture.ts" },
+    .{ .source_name = "parent_ask.ts", .destination_name = "parent_ask.ts" },
 };
 
-const installed_files = [_][]const u8{ "index.ts", "runtime.ts", "secret_capture.ts" };
+const installed_files = [_][]const u8{ "index.ts", "runtime.ts", "secret_capture.ts", "parent_ask.ts" };
 
 const DestinationState = enum {
     missing,
@@ -159,11 +160,16 @@ fn hasExpectedInstalledShape(destination_name: []const u8, content: []const u8) 
     }
     if (std.mem.eql(u8, destination_name, "runtime.ts")) {
         return std.mem.indexOf(u8, content, "from \"./secret_capture.ts\"") != null and
+            std.mem.indexOf(u8, content, "from \"./parent_ask.ts\"") != null and
             std.mem.indexOf(u8, content, "export function installOrcaExtension") != null;
     }
     if (std.mem.eql(u8, destination_name, "secret_capture.ts")) {
         return std.mem.indexOf(u8, content, "export function storeSecretToEnvFile") != null and
             std.mem.indexOf(u8, content, "export async function handleSecretCaptureInput") != null;
+    }
+    if (std.mem.eql(u8, destination_name, "parent_ask.ts")) {
+        return std.mem.indexOf(u8, content, "export function resolvePiAskRoot") != null and
+            std.mem.indexOf(u8, content, "export function waitForAskResponse") != null;
     }
     return false;
 }
@@ -267,6 +273,7 @@ fn writeFixtureAssets(io: std.Io, dir: std.Io.Dir) !void {
         .sub_path = "assets/orca.ts",
         .data =
         \\import { handleSecretCaptureInput } from "./secret_capture.ts";
+        \\import { resolvePiAskRoot } from "./parent_ask.ts";
         \\export function installOrcaExtension() {}
         \\
         ,
@@ -276,6 +283,14 @@ fn writeFixtureAssets(io: std.Io, dir: std.Io.Dir) !void {
         .data =
         \\export function storeSecretToEnvFile() {}
         \\export async function handleSecretCaptureInput() {}
+        \\
+        ,
+    });
+    try dir.writeFile(io, .{
+        .sub_path = "assets/parent_ask.ts",
+        .data =
+        \\export function resolvePiAskRoot() {}
+        \\export function waitForAskResponse() {}
         \\
         ,
     });
@@ -325,6 +340,10 @@ test "Pi install upgrades only ownership-marked files" {
     try tmp.dir.writeFile(std.testing.io, .{
         .sub_path = relative_install_dir ++ "/secret_capture.ts",
         .data = ownership_marker ++ "old managed capture\n",
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = relative_install_dir ++ "/parent_ask.ts",
+        .data = ownership_marker ++ "old managed parent ask\n",
     });
     const home = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(home);

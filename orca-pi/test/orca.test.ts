@@ -10,21 +10,33 @@ import {
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
+import { writeAskRequest } from "../extensions/parent_ask.ts";
 import {
 	allowOnceBypassEnabled,
 	askOptionsFor,
+	buildAutoDenyCopy,
 	buildDecideFilePayload,
 	buildDecideToolPayload,
 	buildEvaluateRequest,
+	DISPLAY_BRAND,
 	extractDecideFilePath,
 	installOrcaExtension,
+	isPassthroughPiTool,
 	isProtectedPiTool,
 	isSubagentSession,
+	listPendingRequests,
+	parentAskDir,
 	piCoverageLabel,
+	PRODUCT_NAME,
+	protocolBlockOptionLabel,
+	repairMessage,
 	resolveOrcaBin,
+	resolvePiAskRoot,
 	resolveToolPath,
 	resolveUnavailableMode,
 	formatProtocolErrorReason,
+	formatMalformedJsonDetail,
+	previewProcessOutput,
 	protocolFailureClassFromReason,
 	isTransientProtocolFailure,
 	allowWithWarningPermitsProtocolClass,
@@ -32,7 +44,13 @@ import {
 	runOrcaDecideTool,
 	runOrcaEvaluate,
 	safeOrcaReason,
+	SESSION_GRANT_OPTION,
 	shouldAutoDenyPolicyAsk,
+	shouldLocalSelectPolicyAsk,
+	shouldNameGateTool,
+	writeAskResponse,
+	addSessionGrant,
+	hasSessionGrant,
 	PROTOCOL_DEGRADED_THRESHOLD,
 	type OrcaEvaluateRequest,
 } from "../extensions/orca.ts";
@@ -581,9 +599,33 @@ test("custom/MCP-shaped tools are name-gated via orca decide tool", async () => 
 	assert.equal(isProtectedPiTool("write"), true);
 	assert.match(piCoverageLabel(), /bash \+ write \+ edit \+ read policy-protected/);
 	assert.match(piCoverageLabel(), /grep \+ find \+ ls approval-gated/);
-	assert.match(piCoverageLabel(), /custom tool names gated via decide tool/);
-	assert.match(piCoverageLabel(), /not full MCP protocol mediation/);
-	assert.doesNotMatch(piCoverageLabel(), /custom\/MCP not intercepted/);
+	assert.match(piCoverageLabel(), /decide tool/);
+	assert.match(piCoverageLabel(), /passthrough/);
+	assert.equal(shouldNameGateTool("mcp_custom_tool"), true);
+	assert.equal(shouldNameGateTool("contact_supervisor"), false);
+	assert.equal(isPassthroughPiTool("intercom"), true);
+	assert.equal(shouldNameGateTool("bash"), false);
+});
+
+test("Pi control-plane tools skip name-only decide (passthrough)", async () => {
+	const { pi, handlers } = makePi();
+	const { spawn, calls } = makeSpawn([
+		{ code: 0, stdout: decideAllowJson("tool") },
+	]);
+	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	const { ctx } = makeCtx({ cwd: process.cwd() });
+
+	for (const tool of ["contact_supervisor", "intercom", "subagent"] as const) {
+		const result = await fireToolCall(
+			handlers.get("tool_call")![0],
+			ctx,
+			"",
+			tool,
+			{ message: "hello" },
+		);
+		assert.equal(result, undefined, tool);
+	}
+	assert.equal(calls.length, 0, "passthrough tools must not spawn decide");
 });
 
 test("custom tool deny blocks with rule id on card", async () => {
@@ -731,7 +773,22 @@ test("runOrcaDecideTool retries once on malformed JSON then fail-closes", async 
 	if (result.kind === "error") {
 		assert.equal(result.failureClass, "malformed_json");
 		assert.match(result.reason, /\[malformed_json\]/);
+		assert.match(result.reason, /exit 0/);
+		assert.match(result.reason, /stdout "\{not-json"/);
+		assert.match(result.reason, /stderr empty/);
 	}
+});
+
+test("formatMalformedJsonDetail includes exit and stream previews", () => {
+	assert.equal(previewProcessOutput(""), "empty");
+	assert.equal(previewProcessOutput("  hi  "), '"hi"');
+	const detail = formatMalformedJsonDetail(
+		{ code: 2, stdout: "", stderr: "ryk decide: --json requires a value.\n" },
+		"decide",
+	);
+	assert.match(detail, /exit 2/);
+	assert.match(detail, /stdout empty/);
+	assert.match(detail, /--json requires a value/);
 });
 
 test("runOrcaDecideTool recovers when second attempt succeeds", async () => {
@@ -989,11 +1046,30 @@ test("allowOnceBypassEnabled honors env and strict mode", () => {
 	);
 	assert.deepEqual(askOptionsFor("policy", false), [
 		"Block",
+		SESSION_GRANT_OPTION,
 		"Disable ryk for this Pi session",
 		"Show policy reason",
 	]);
+	// Policy: once first, then block.
+	assert.deepEqual(askOptionsFor("policy", true).slice(0, 2), [
+		"Run once anyway",
+		"Block",
+	]);
+	// Protocol: session allow, once, block (no doctor option).
+	assert.deepEqual(askOptionsFor("unavailable", true), [
+		"Allow for this session",
+		"Run once anyway",
+		"Block",
+	]);
 	assert.ok(askOptionsFor("unavailable", true).includes("Run once anyway"));
 	assert.ok(!askOptionsFor("unavailable", false).includes("Run once anyway"));
+	assert.deepEqual(askOptionsFor("unavailable", false), [
+		"Allow for this session",
+		"Block",
+	]);
+	assert.ok(
+		!askOptionsFor("unavailable", true).some((o) => /doctor|repair/i.test(o)),
+	);
 });
 
 test("strict mode policy ask omits once-bypass", async () => {
@@ -1127,6 +1203,47 @@ test("isSubagentSession and shouldAutoDenyPolicyAsk helpers", () => {
 		),
 		true,
 	);
+	assert.equal(
+		shouldLocalSelectPolicyAsk({ hasUI: true, mode: "tui" }, {}),
+		true,
+	);
+	assert.equal(
+		shouldLocalSelectPolicyAsk(
+			{ hasUI: true, mode: "tui" },
+			{ PI_SUBAGENT_PARENT_SESSION: "parent-1" },
+		),
+		false,
+	);
+});
+
+test("buildAutoDenyCopy locks Why/Next product voice", () => {
+	const sub = buildAutoDenyCopy("subagent", "needs approval for write", "write");
+	assert.equal(sub.title, DISPLAY_BRAND);
+	assert.match(sub.summary, new RegExp(PRODUCT_NAME));
+	assert.match(sub.summary, /can't prompt \(subagent\)/);
+	assert.match(sub.nextStep, /parent Pi session/);
+	assert.match(sub.nextStep, /mcp\.allow/);
+	assert.equal(sub.rule, "rykanv:ask-no-ui");
+	assert.match(sub.reason, /auto-denied \(subagent\)/);
+
+	const non = buildAutoDenyCopy(
+		"non-interactive",
+		"needs approval",
+		"bash",
+		{ rule: "rykanv:parent-ask-timeout" },
+	);
+	assert.match(non.summary, /non-interactive/);
+	assert.match(non.nextStep, /interactive Pi/);
+	assert.equal(non.rule, "rykanv:parent-ask-timeout");
+});
+
+test("askOptionsFor policy includes session grant option", () => {
+	const opts = askOptionsFor("policy", true);
+	assert.ok(opts.includes(SESSION_GRANT_OPTION));
+	assert.ok(opts.includes("Run once anyway"));
+	const noOnce = askOptionsFor("policy", false);
+	assert.ok(!noOnce.includes("Run once anyway"));
+	assert.ok(noOnce.includes(SESSION_GRANT_OPTION));
 });
 
 test("policy ask auto-denies noninteractive sessions without calling select", async () => {
@@ -1134,7 +1251,11 @@ test("policy ask auto-denies noninteractive sessions without calling select", as
 	const { spawn } = makeSpawn([
 		{ code: 7, stdout: decideJson("ask", "file.write") },
 	]);
-	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	installOrcaExtension(pi, {
+		spawn,
+		orcaBin: "orca",
+		parentAskPollMs: 0,
+	});
 	const { ctx } = makeCtx({ hasUI: false, mode: "print" });
 	let selectCalled = false;
 	(ctx.ui as any).select = async () => {
@@ -1153,6 +1274,7 @@ test("policy ask auto-denies noninteractive sessions without calling select", as
 	assert.equal(selectCalled, false, "select must not be called for auto-deny");
 	assert.match(result?.reason ?? "", /auto-denied/i);
 	assert.match(result?.reason ?? "", /non-interactive/i);
+	assert.match(result?.reason ?? "", new RegExp(PRODUCT_NAME));
 	assert.notEqual(result, undefined, "auto-deny must never proceed");
 	const audit = messages.find((m) => m.message.customType === "orca.audit");
 	assert.ok(audit, "expected orca.audit transcript event");
@@ -1160,6 +1282,15 @@ test("policy ask auto-denies noninteractive sessions without calling select", as
 		(audit?.message.details as { event?: string } | undefined)?.event,
 		"orca_ask_auto_deny",
 	);
+	// Decision card should carry Next guidance for noninteractive.
+	const decision = messages.find(
+		(m) => m.message.customType === "orca-decision",
+	);
+	const details = decision?.message.details as
+		| { nextStep?: string; summary?: string }
+		| undefined;
+	assert.match(details?.nextStep ?? "", /interactive Pi|pre-allow/i);
+	assert.match(details?.summary ?? "", /can't prompt \(non-interactive\)/);
 });
 
 test("policy ask auto-denies print mode even when hasUI is true", async () => {
@@ -1187,15 +1318,30 @@ test("policy ask auto-denies print mode even when hasUI is true", async () => {
 	assert.match(result?.reason ?? "", /auto-denied/i);
 });
 
-test("policy ask auto-denies subagent sessions even when hasUI is true", async () => {
+test("policy ask subagent fails closed on parent timeout (no local select)", async () => {
 	const previous = process.env.PI_SUBAGENT_PARENT_SESSION;
+	const previousTimeout = process.env.RYK_PI_PARENT_ASK_TIMEOUT_MS;
+	const previousRoot = process.env.RYK_PI_ASK_ROOT;
+	const askRoot = mkdtempSync(resolve(tmpdir(), "ryk-pi-ask-"));
 	process.env.PI_SUBAGENT_PARENT_SESSION = "parent-session-stress";
+	process.env.RYK_PI_PARENT_ASK_TIMEOUT_MS = "500";
+	process.env.RYK_PI_ASK_ROOT = askRoot;
+	let clock = 0;
 	try {
 		const { pi, handlers, messages } = makePi();
 		const { spawn } = makeSpawn([
 			{ code: 7, stdout: decideJson("ask", "file.write") },
 		]);
-		installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+		installOrcaExtension(pi, {
+			spawn,
+			orcaBin: "orca",
+			piAskRoot: askRoot,
+			parentAskPollMs: 0,
+			now: () => clock,
+			sleep: async (ms) => {
+				clock += ms;
+			},
+		});
 		const { ctx } = makeCtx({ hasUI: true, mode: "tui" });
 		let selectCalled = false;
 		(ctx.ui as any).select = async () => {
@@ -1214,7 +1360,7 @@ test("policy ask auto-denies subagent sessions even when hasUI is true", async (
 		assert.equal(
 			selectCalled,
 			false,
-			"subagent must auto-deny even with hasUI",
+			"subagent must not local-select even with hasUI",
 		);
 		assert.match(result?.reason ?? "", /auto-denied/i);
 		assert.match(result?.reason ?? "", /subagent/i);
@@ -1229,9 +1375,268 @@ test("policy ask auto-denies subagent sessions even when hasUI is true", async (
 				?.session_class,
 			"subagent",
 		);
+		const decision = messages.find(
+			(m) => m.message.customType === "orca-decision",
+		);
+		const details = decision?.message.details as
+			| { nextStep?: string; rule?: string; summary?: string }
+			| undefined;
+		assert.match(details?.nextStep ?? "", /parent Pi session/i);
+		assert.match(details?.summary ?? "", /can't prompt \(subagent\)/);
+		assert.ok(
+			details?.rule === "rykanv:parent-ask-timeout" ||
+				details?.rule === "rykanv:ask-no-ui",
+		);
 	} finally {
 		if (previous === undefined) delete process.env.PI_SUBAGENT_PARENT_SESSION;
 		else process.env.PI_SUBAGENT_PARENT_SESSION = previous;
+		if (previousTimeout === undefined)
+			delete process.env.RYK_PI_PARENT_ASK_TIMEOUT_MS;
+		else process.env.RYK_PI_PARENT_ASK_TIMEOUT_MS = previousTimeout;
+		if (previousRoot === undefined) delete process.env.RYK_PI_ASK_ROOT;
+		else process.env.RYK_PI_ASK_ROOT = previousRoot;
+		rmSync(askRoot, { recursive: true, force: true });
+	}
+});
+
+test("policy ask subagent allows when parent responds run_once", async () => {
+	const previous = process.env.PI_SUBAGENT_PARENT_SESSION;
+	const previousTimeout = process.env.RYK_PI_PARENT_ASK_TIMEOUT_MS;
+	const previousRoot = process.env.RYK_PI_ASK_ROOT;
+	const askRoot = mkdtempSync(resolve(tmpdir(), "ryk-pi-ask-"));
+	const parentId = "parent-session-forward";
+	process.env.PI_SUBAGENT_PARENT_SESSION = parentId;
+	process.env.RYK_PI_PARENT_ASK_TIMEOUT_MS = "2000";
+	process.env.RYK_PI_ASK_ROOT = askRoot;
+	let clock = 0;
+	try {
+		const { pi, handlers, messages } = makePi();
+		const { spawn } = makeSpawn([
+			{ code: 7, stdout: decideJson("ask", "file.write") },
+		]);
+		installOrcaExtension(pi, {
+			spawn,
+			orcaBin: "orca",
+			piAskRoot: askRoot,
+			parentAskPollMs: 0,
+			now: () => clock,
+			sleep: async (ms) => {
+				// First poll: answer any pending request from parent side.
+				const dir = parentAskDir(askRoot, parentId);
+				const pending = listPendingRequests(dir);
+				for (const req of pending) {
+					writeAskResponse(dir, {
+						v: 1,
+						id: req.id,
+						choice: "run_once",
+						decided_at_ms: clock,
+					});
+				}
+				clock += ms;
+			},
+		});
+		const { ctx } = makeCtx({ hasUI: true, mode: "tui" });
+		(ctx.ui as any).select = async () => {
+			throw new Error("child must not call select");
+		};
+
+		const result = await fireToolCall(
+			handlers.get("tool_call")![0],
+			ctx,
+			"",
+			"write",
+			{ path: "src/main.ts", content: "x" },
+		);
+		assert.equal(result, undefined, "parent run_once should allow");
+		const onceAudit = messages.find(
+			(m) =>
+				(m.message.details as { event?: string } | undefined)?.event ===
+				"orca_once_bypass",
+		);
+		assert.ok(onceAudit, "expected once-bypass audit after parent allow");
+	} finally {
+		if (previous === undefined) delete process.env.PI_SUBAGENT_PARENT_SESSION;
+		else process.env.PI_SUBAGENT_PARENT_SESSION = previous;
+		if (previousTimeout === undefined)
+			delete process.env.RYK_PI_PARENT_ASK_TIMEOUT_MS;
+		else process.env.RYK_PI_PARENT_ASK_TIMEOUT_MS = previousTimeout;
+		if (previousRoot === undefined) delete process.env.RYK_PI_ASK_ROOT;
+		else process.env.RYK_PI_ASK_ROOT = previousRoot;
+		rmSync(askRoot, { recursive: true, force: true });
+	}
+});
+
+test("policy ask subagent denies when parent responds block", async () => {
+	const previous = process.env.PI_SUBAGENT_PARENT_SESSION;
+	const previousTimeout = process.env.RYK_PI_PARENT_ASK_TIMEOUT_MS;
+	const previousRoot = process.env.RYK_PI_ASK_ROOT;
+	const askRoot = mkdtempSync(resolve(tmpdir(), "ryk-pi-ask-"));
+	const parentId = "parent-session-block";
+	process.env.PI_SUBAGENT_PARENT_SESSION = parentId;
+	process.env.RYK_PI_PARENT_ASK_TIMEOUT_MS = "2000";
+	process.env.RYK_PI_ASK_ROOT = askRoot;
+	let clock = 0;
+	try {
+		const { pi, handlers } = makePi();
+		const { spawn } = makeSpawn([
+			{ code: 7, stdout: decideJson("ask", "file.write") },
+		]);
+		installOrcaExtension(pi, {
+			spawn,
+			orcaBin: "orca",
+			piAskRoot: askRoot,
+			parentAskPollMs: 0,
+			now: () => clock,
+			sleep: async (ms) => {
+				const dir = parentAskDir(askRoot, parentId);
+				for (const req of listPendingRequests(dir)) {
+					writeAskResponse(dir, {
+						v: 1,
+						id: req.id,
+						choice: "block",
+						decided_at_ms: clock,
+					});
+				}
+				clock += ms;
+			},
+		});
+		const { ctx } = makeCtx({ hasUI: true, mode: "tui" });
+
+		const result = await fireToolCall(
+			handlers.get("tool_call")![0],
+			ctx,
+			"",
+			"write",
+			{ path: "src/main.ts", content: "x" },
+		);
+		assert.equal(result?.block, true);
+		assert.ok(!/auto-denied/i.test(result?.reason ?? ""));
+	} finally {
+		if (previous === undefined) delete process.env.PI_SUBAGENT_PARENT_SESSION;
+		else process.env.PI_SUBAGENT_PARENT_SESSION = previous;
+		if (previousTimeout === undefined)
+			delete process.env.RYK_PI_PARENT_ASK_TIMEOUT_MS;
+		else process.env.RYK_PI_PARENT_ASK_TIMEOUT_MS = previousTimeout;
+		if (previousRoot === undefined) delete process.env.RYK_PI_ASK_ROOT;
+		else process.env.RYK_PI_ASK_ROOT = previousRoot;
+		rmSync(askRoot, { recursive: true, force: true });
+	}
+});
+
+test("session grant short-circuits decide for granted tool name", async () => {
+	const previousRoot = process.env.RYK_PI_ASK_ROOT;
+	const askRoot = mkdtempSync(resolve(tmpdir(), "ryk-pi-ask-"));
+	process.env.RYK_PI_ASK_ROOT = askRoot;
+	try {
+		const sessionId = "session-grant-main";
+		const dir = parentAskDir(askRoot, sessionId);
+		addSessionGrant(dir, "ctx_batch_execute", Date.now());
+		assert.equal(hasSessionGrant(dir, "ctx_batch_execute"), true);
+
+		const { pi, handlers, messages } = makePi();
+		const { spawn, calls } = makeSpawn();
+		installOrcaExtension(pi, {
+			spawn,
+			orcaBin: "orca",
+			piAskRoot: askRoot,
+			parentAskPollMs: 0,
+		});
+		const { ctx } = makeCtx({
+			hasUI: true,
+			mode: "tui",
+			sessionManager: { getSessionId: () => sessionId },
+		});
+
+		const result = await fireToolCall(
+			handlers.get("tool_call")![0],
+			ctx,
+			"",
+			"ctx_batch_execute",
+			{ query: "x" },
+		);
+		assert.equal(result, undefined, "grant hit must allow");
+		assert.equal(calls.length, 0, "grant hit must skip decide spawn");
+		const grantAudit = messages.find(
+			(m) =>
+				(m.message.details as { event?: string } | undefined)?.event ===
+				"orca_session_grant_hit",
+		);
+		assert.ok(grantAudit, "expected orca_session_grant_hit audit");
+	} finally {
+		if (previousRoot === undefined) delete process.env.RYK_PI_ASK_ROOT;
+		else process.env.RYK_PI_ASK_ROOT = previousRoot;
+		rmSync(askRoot, { recursive: true, force: true });
+	}
+});
+
+test("parent main session answers pending child ask via select", async () => {
+	const previousRoot = process.env.RYK_PI_ASK_ROOT;
+	const previousParent = process.env.PI_SUBAGENT_PARENT_SESSION;
+	const askRoot = mkdtempSync(resolve(tmpdir(), "ryk-pi-ask-"));
+	process.env.RYK_PI_ASK_ROOT = askRoot;
+	delete process.env.PI_SUBAGENT_PARENT_SESSION;
+	const parentId = "parent-poll-session";
+	try {
+		const dir = parentAskDir(askRoot, parentId);
+		// Seed a pending child request.
+		writeAskRequest(dir, {
+			v: 1,
+			id: "req-test-1",
+			parent_session: parentId,
+			tool: "write",
+			reason: "needs approval",
+			command_or_name: "src/main.ts",
+			created_at_ms: 1,
+			timeout_ms: 60_000,
+		});
+
+		const { pi, handlers, messages } = makePi();
+		const { spawn } = makeSpawn([
+			{ code: 0, stdout: decideAllowJson("file.write") },
+		]);
+		installOrcaExtension(pi, {
+			spawn,
+			orcaBin: "orca",
+			piAskRoot: askRoot,
+			parentAskPollMs: 0,
+			now: () => 100,
+		});
+		const { ctx, selections } = makeCtx({
+			hasUI: true,
+			mode: "tui",
+			sessionManager: { getSessionId: () => parentId },
+		});
+		selections.push("Block");
+
+		// Fire any tool call so parent poll drains pending asks.
+		await fireToolCall(
+			handlers.get("tool_call")![0],
+			ctx,
+			"",
+			"write",
+			{ path: "ok.ts", content: "y" },
+		);
+
+		const resPath = resolve(dir, "res-req-test-1.json");
+		const res = JSON.parse(readFileSync(resPath, "utf8")) as {
+			choice: string;
+			id: string;
+		};
+		assert.equal(res.id, "req-test-1");
+		assert.equal(res.choice, "block");
+		const parentAudit = messages.find(
+			(m) =>
+				(m.message.details as { event?: string } | undefined)?.event ===
+				"orca_parent_ask_response",
+		);
+		assert.ok(parentAudit, "expected parent ask response audit");
+	} finally {
+		if (previousRoot === undefined) delete process.env.RYK_PI_ASK_ROOT;
+		else process.env.RYK_PI_ASK_ROOT = previousRoot;
+		if (previousParent === undefined)
+			delete process.env.PI_SUBAGENT_PARENT_SESSION;
+		else process.env.PI_SUBAGENT_PARENT_SESSION = previousParent;
+		rmSync(askRoot, { recursive: true, force: true });
 	}
 });
 
@@ -1559,7 +1964,7 @@ test("Orca error in non-interactive mode blocks", async () => {
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(result.block, true);
-	assert.match(result.reason, /\/ryk-setup/i);
+	assert.match(result.reason, /\/ryk-doctor|Fail-closed|malformed|unavailable|error/i);
 });
 
 test("Orca error in interactive mode waits for the user's decision", async () => {
@@ -1593,7 +1998,7 @@ test("Orca error in interactive mode waits for the user's decision", async () =>
 	);
 	assert.match(
 		askWidget.value?.join("\n") ?? "",
-		/Choose: Run once, repair ryk, or keep it blocked\./,
+		/Choose: Allow session, allow once, or block\./,
 	);
 	assert.ok(
 		askWidget.value?.every((line) => line.length === 56),
@@ -1616,7 +2021,7 @@ test("auto mode blocks print sessions even when hasUI is true", async () => {
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(result.block, true);
-	assert.match(result.reason, /\/ryk-setup/i);
+	assert.match(result.reason, /\/ryk-doctor|Fail-closed|malformed|unavailable|error/i);
 });
 
 test("strict mode blocks", async () => {
@@ -1673,8 +2078,116 @@ test("malformed Orca JSON follows unavailable policy", async () => {
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(result.block, true);
-	assert.match(result.reason, /malformed JSON/);
-	assert.match(result.reason, /malformed_json|Failure class/i);
+	assert.match(result.reason, /malformed JSON|malformed_json|Fail-closed/i);
+	// Diagnostics must surface what the child actually emitted.
+	assert.match(result.reason, /exit 0/);
+	assert.match(result.reason, /\{not-json/);
+});
+
+test("repairMessage stays short enough for the ask card", () => {
+	const long = formatProtocolErrorReason(
+		"malformed_json",
+		formatMalformedJsonDetail(
+			{
+				code: 0,
+				stdout: "{not-json " + "x".repeat(200),
+				stderr: "noise",
+			},
+			"evaluate",
+		),
+	);
+	const card = repairMessage(long, "bash");
+	assert.ok(card.length <= 220, card);
+	assert.match(card, /Fail-closed/);
+	assert.match(card, /\/ryk-doctor/);
+	assert.doesNotMatch(card, /Coverage:/);
+	assert.doesNotMatch(card, /not a permanent session brick/i);
+});
+
+test("protocol block choice sticks for the rest of the session", async () => {
+	const { pi, handlers } = makePi();
+	const bad = { code: 0 as number, stdout: "{not-json" };
+	// Two tools × one retry each = 4 spawns if both go through evaluate; sticky may still evaluate.
+	const { spawn, calls } = makeSpawn([bad, bad, bad, bad, bad, bad]);
+	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
+	const { ctx, selections } = makeCtx();
+	selections.push(protocolBlockOptionLabel());
+
+	const first = await fireToolCall(handlers.get("tool_call")![0], ctx);
+	assert.equal(first?.block, true);
+	const selectsBefore = selections.length;
+
+	// Second protocol failure must not open another select (sticky block).
+	const second = await fireToolCall(
+		handlers.get("tool_call")![0],
+		ctx,
+		"echo again",
+	);
+	assert.equal(second?.block, true);
+	assert.equal(selections.length, selectsBefore, "no second select");
+	assert.ok(calls.length >= 2);
+});
+
+test("subagent protocol failure parent-forwards instead of silent local brick", async () => {
+	const previous = process.env.PI_SUBAGENT_PARENT_SESSION;
+	const previousTimeout = process.env.RYK_PI_PARENT_ASK_TIMEOUT_MS;
+	const previousRoot = process.env.RYK_PI_ASK_ROOT;
+	const askRoot = mkdtempSync(resolve(tmpdir(), "ryk-pi-proto-"));
+	const parentId = "parent-proto-session";
+	process.env.PI_SUBAGENT_PARENT_SESSION = parentId;
+	process.env.RYK_PI_PARENT_ASK_TIMEOUT_MS = "2000";
+	process.env.RYK_PI_ASK_ROOT = askRoot;
+	let clock = 0;
+	let sawProtocolAsk = false;
+	try {
+		const { pi, handlers, messages } = makePi();
+		const bad = { code: 0 as number, stdout: "{not-json" };
+		const { spawn } = makeSpawn([bad, bad]);
+		installOrcaExtension(pi, {
+			spawn,
+			orcaBin: "orca",
+			piAskRoot: askRoot,
+			parentAskPollMs: 0,
+			now: () => clock,
+			sleep: async (ms) => {
+				const dir = parentAskDir(askRoot, parentId);
+				const pending = listPendingRequests(dir);
+				for (const req of pending) {
+					if (/\[protocol\]|malformed/i.test(req.reason)) sawProtocolAsk = true;
+					writeAskResponse(dir, {
+						v: 1,
+						id: req.id,
+						choice: "run_once",
+						decided_at_ms: clock,
+					});
+				}
+				clock += ms;
+			},
+		});
+		const { ctx } = makeCtx({ hasUI: true, mode: "tui" });
+		(ctx.ui as any).select = async () => {
+			throw new Error("child must not local-select on protocol recovery");
+		};
+
+		const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
+		assert.equal(result, undefined, "parent run_once should allow through");
+		assert.equal(sawProtocolAsk, true, "expected [protocol] parent-forward ask");
+		const onceAudit = messages.find(
+			(m) =>
+				(m.message.details as { event?: string } | undefined)?.event ===
+				"orca_once_bypass",
+		);
+		assert.ok(onceAudit, "expected once-bypass audit after parent allow");
+	} finally {
+		if (previous === undefined) delete process.env.PI_SUBAGENT_PARENT_SESSION;
+		else process.env.PI_SUBAGENT_PARENT_SESSION = previous;
+		if (previousTimeout === undefined)
+			delete process.env.RYK_PI_PARENT_ASK_TIMEOUT_MS;
+		else process.env.RYK_PI_PARENT_ASK_TIMEOUT_MS = previousTimeout;
+		if (previousRoot === undefined) delete process.env.RYK_PI_ASK_ROOT;
+		else process.env.RYK_PI_ASK_ROOT = previousRoot;
+		rmSync(askRoot, { recursive: true, force: true });
+	}
 });
 
 test("child process failure follows unavailable policy", async () => {
