@@ -166,7 +166,8 @@ fn grokHookPayload(value: std.json.Value, event: Event) GrokHookPayloadError!std
         {
             return error.InvalidGrokHookPayload;
         }
-        if (!isShellTool(tool_name)) return error.UnsupportedGrokPreToolUse;
+        // Phase 3: shell or file-read tools only. Unknown tools stay unsupported.
+        if (!isShellTool(tool_name) and !isFileReadTool(tool_name)) return error.UnsupportedGrokPreToolUse;
     }
 
     return value;
@@ -849,6 +850,7 @@ const ShellCommandEvent = shell_eval.ShellCommandEvent;
 
 const NonShellHookEvent = enum {
     file_write,
+    file_read,
     generic_tool,
     prompt,
     permission,
@@ -863,10 +865,17 @@ const HookEventClassification = union(enum) {
     ambiguous: []const u8,
 };
 
+/// Fail-closed PreToolUse payload with category set at classify time (never re-parsed from English).
+const FailClosedInfo = struct {
+    reason: []const u8,
+    category: []const u8,
+    message: []const u8,
+};
+
 const PreToolUseRoute = union(enum) {
     shell_command: ShellCommandEvent,
     zig_native: NonShellHookEvent,
-    fail_closed: []const u8,
+    fail_closed: FailClosedInfo,
 };
 
 const ShellCommandEvaluatorFn = shell_eval.ShellCommandEvaluatorFn;
@@ -1161,11 +1170,11 @@ fn evaluatePreToolUse(
             redactions,
             limitations,
         ),
-        .fail_closed => |reason| makeFailClosedHookResponse(
+        .fail_closed => |info| makeFailClosedHookResponse(
             allocator,
-            "command",
-            reason,
-            "Shell command hook payload is malformed. ryk blocked it before evaluation.",
+            info.category,
+            info.reason,
+            info.message,
             redactions,
             limitations,
         ),
@@ -1928,6 +1937,61 @@ fn hookResponseFromDaemonEvaluate(
     };
 }
 
+/// Write vs read policy kind for PreToolUse file tools (shared normalize → explain path).
+const FilePolicyKind = enum {
+    write,
+    read,
+
+    fn explainKind(self: FilePolicyKind) policy.explain.ExplainKind {
+        return switch (self) {
+            .write => .file_write,
+            .read => .file_read,
+        };
+    }
+
+    fn category(self: FilePolicyKind) []const u8 {
+        return switch (self) {
+            .write => "file.write",
+            .read => "file.read",
+        };
+    }
+};
+
+fn evaluateFilePolicyPreToolUse(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    policy_value: *const policy.schema.Policy,
+    payload: std.json.Value,
+    kind: FilePolicyKind,
+    ci_mode: bool,
+    redactions: *std.ArrayList(RedactionEntry),
+    limitations: *std.ArrayList([]const u8),
+) !HookResponse {
+    const path = extractFilePath(payload) orelse return error.MissingRequiredField;
+    const cat = kind.category();
+    const policy_path = file_policy_path.normalizeFilePolicyPath(io, allocator, workspace_root, path) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return try makeFileNormalizationBlockResponse(allocator, cat, cat, redactions, limitations),
+    };
+    defer allocator.free(policy_path);
+
+    const evaluation = try core_api.explainAction(allocator, @ptrCast(policy_value), kind.explainKind(), policy_path);
+    defer evaluation.deinit(allocator);
+
+    const decision = PluginDecision.fromDecisionResult(evaluation.decision.result, ci_mode);
+    return .{
+        .decision = decision,
+        .risk = RiskLevel.fromScore(evaluation.decision.risk_score),
+        .category = try allocator.dupe(u8, cat),
+        .reason = try allocator.dupe(u8, evaluation.decision.reason),
+        .rule = if (evaluation.matched_rule) |rule| try allocator.dupe(u8, rule.id) else null,
+        .message = try buildMessage(allocator, decision, cat),
+        .redactions = try redactions.toOwnedSlice(allocator),
+        .host_limitations = try limitations.toOwnedSlice(allocator),
+    };
+}
+
 fn evaluateNativePreToolUseRoute(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -1940,37 +2004,28 @@ fn evaluateNativePreToolUseRoute(
     limitations: *std.ArrayList([]const u8),
 ) !HookResponse {
     switch (native_event) {
-        .file_write => {
-            const path = extractFilePath(payload) orelse return error.MissingRequiredField;
-            const policy_path = file_policy_path.normalizeFilePolicyPath(io, allocator, workspace_root, path) catch |err| switch (err) {
-                error.OutOfMemory => return err,
-                else => return try makeFileNormalizationBlockResponse(
-                    allocator,
-                    "file.write",
-                    "file.write",
-                    redactions,
-                    limitations,
-                ),
-            };
-            defer allocator.free(policy_path);
-
-            const evaluation = try core_api.explainAction(allocator, @ptrCast(policy_value), .file_write, policy_path);
-            defer evaluation.deinit(allocator);
-
-            const decision = PluginDecision.fromDecisionResult(evaluation.decision.result, ci_mode);
-            const risk = RiskLevel.fromScore(evaluation.decision.risk_score);
-
-            return .{
-                .decision = decision,
-                .risk = risk,
-                .category = try allocator.dupe(u8, "file.write"),
-                .reason = try allocator.dupe(u8, evaluation.decision.reason),
-                .rule = if (evaluation.matched_rule) |rule| try allocator.dupe(u8, rule.id) else null,
-                .message = try buildMessage(allocator, decision, "file.write"),
-                .redactions = try redactions.toOwnedSlice(allocator),
-                .host_limitations = try limitations.toOwnedSlice(allocator),
-            };
-        },
+        .file_write => return evaluateFilePolicyPreToolUse(
+            io,
+            allocator,
+            workspace_root,
+            policy_value,
+            payload,
+            .write,
+            ci_mode,
+            redactions,
+            limitations,
+        ),
+        .file_read => return evaluateFilePolicyPreToolUse(
+            io,
+            allocator,
+            workspace_root,
+            policy_value,
+            payload,
+            .read,
+            ci_mode,
+            redactions,
+            limitations,
+        ),
         .generic_tool => {
             const generic_tool_name = extractToolName(payload) orelse return error.MissingRequiredField;
             // Combined MCP selector + effect-class evaluation (when effects: is configured).
@@ -2234,6 +2289,24 @@ fn classifyHookEvent(event: Event, payload: std.json.Value) HookEventClassificat
     };
 }
 
+/// Stable reason strings for classify → fail-closed (exact match, never substring sniff).
+const file_read_missing_path_reason = "file read tool missing path field";
+const file_path_without_tool_reason = "file path present without file tool name";
+const shell_command_invalid_reason = "shell command field must be a non-empty string";
+const shell_command_missing_reason = "shell command missing command field";
+const pretool_unknown_reason = "PreToolUse payload does not identify a supported tool action";
+
+const fail_closed_file_read_message = "File read hook payload is malformed. ryk blocked it before evaluation.";
+const fail_closed_shell_message = "Shell command hook payload is malformed. ryk blocked it before evaluation.";
+
+fn failClosedShell(reason: []const u8) FailClosedInfo {
+    return .{ .reason = reason, .category = "command", .message = fail_closed_shell_message };
+}
+
+fn failClosedFileRead(reason: []const u8) FailClosedInfo {
+    return .{ .reason = reason, .category = "file.read", .message = fail_closed_file_read_message };
+}
+
 fn classifyPreToolUse(payload: std.json.Value) HookEventClassification {
     const tool_name = extractToolName(payload);
     const command_state = extractShellCommand(payload);
@@ -2242,13 +2315,22 @@ fn classifyPreToolUse(payload: std.json.Value) HookEventClassification {
         if (isShellTool(name)) {
             return switch (command_state) {
                 .found => |shell_event| .{ .shell_command = shell_event },
-                .invalid => .{ .malformed = "shell command field must be a non-empty string" },
-                .missing => .{ .malformed = "shell command missing command field" },
+                .invalid => .{ .malformed = shell_command_invalid_reason },
+                .missing => .{ .malformed = shell_command_missing_reason },
             };
         }
 
+        // File-read tools must never fall through to generic_tool (secrets allow) or
+        // file_write (files.write may allow .env). Missing path fails closed.
+        if (isFileReadTool(name)) {
+            if (extractFilePath(payload) == null) {
+                return .{ .malformed = file_read_missing_path_reason };
+            }
+            return .{ .non_shell = .file_read };
+        }
+
         // Non-shell tools stay on the Zig path even when payloads carry incidental command fields.
-        if (extractFilePath(payload) != null and isFileTool(name)) {
+        if (extractFilePath(payload) != null and isFileWriteTool(name)) {
             return .{ .non_shell = .file_write };
         }
 
@@ -2257,24 +2339,29 @@ fn classifyPreToolUse(payload: std.json.Value) HookEventClassification {
 
     switch (command_state) {
         .found => |shell_event| return .{ .shell_command = shell_event },
-        .invalid => return .{ .malformed = "shell command field must be a non-empty string" },
+        .invalid => return .{ .malformed = shell_command_invalid_reason },
         .missing => {},
     }
 
     if (extractFilePath(payload) != null) {
-        return .{ .ambiguous = "file path present without file tool name" };
+        return .{ .ambiguous = file_path_without_tool_reason };
     }
 
-    return .{ .unknown_unsupported = "PreToolUse payload does not identify a supported tool action" };
+    return .{ .unknown_unsupported = pretool_unknown_reason };
 }
 
 fn preToolUseRoute(payload: std.json.Value) PreToolUseRoute {
     return switch (classifyPreToolUse(payload)) {
         .shell_command => |shell_event| .{ .shell_command = shell_event },
         .non_shell => |native_event| .{ .zig_native = native_event },
-        .malformed => |reason| .{ .fail_closed = reason },
-        .ambiguous => |reason| .{ .fail_closed = reason },
-        .unknown_unsupported => |reason| .{ .fail_closed = reason },
+        .malformed => |reason| blk: {
+            if (std.mem.eql(u8, reason, file_read_missing_path_reason)) {
+                break :blk .{ .fail_closed = failClosedFileRead(reason) };
+            }
+            break :blk .{ .fail_closed = failClosedShell(reason) };
+        },
+        .ambiguous => |reason| .{ .fail_closed = failClosedFileRead(reason) },
+        .unknown_unsupported => |reason| .{ .fail_closed = failClosedShell(reason) },
     };
 }
 
@@ -2308,19 +2395,43 @@ fn extractToolName(payload: std.json.Value) ?[]const u8 {
         extractNestedString(payload, &.{ "tool", "name" });
 }
 
+/// Non-empty path string for file policy. Empty / whitespace-only counts as missing.
+/// Returns the trimmed slice so padded paths (e.g. `" .env "`) still hit exact deny rules.
+fn nonEmptyFilePath(value: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n");
+    if (trimmed.len == 0) return null;
+    return trimmed;
+}
+
 fn extractFilePath(payload: std.json.Value) ?[]const u8 {
-    return extractString(payload, "path") orelse
-        extractString(payload, "file") orelse
-        extractNestedString(payload, &.{ "tool_input", "path" }) orelse
-        extractNestedString(payload, &.{ "args", "path" }) orelse
-        extractNestedString(payload, &.{ "params", "path" }) orelse
-        extractNestedString(payload, &.{ "input", "path" }) orelse
-        extractNestedString(payload, &.{ "data", "path" }) orelse
-        extractNestedString(payload, &.{ "data", "input", "path" }) orelse
-        extractNestedString(payload, &.{ "kwargs", "path" }) orelse
-        extractNestedString(payload, &.{ "kwargs", "args", "path" }) orelse
-        extractNestedString(payload, &.{ "kwargs", "params", "path" }) orelse
-        extractNestedString(payload, &.{ "kwargs", "tool_input", "path" });
+    // Grok read_file + common host fields first; empty string never counts as present.
+    const path_candidates = [_][]const []const u8{
+        &.{ "toolInput", "target_file" },
+        &.{ "tool_input", "target_file" },
+        &.{"target_file"},
+        &.{ "toolInput", "file_path" },
+        &.{ "tool_input", "file_path" },
+        &.{"file_path"},
+        &.{"path"},
+        &.{"file"},
+        &.{ "tool_input", "path" },
+        &.{ "toolInput", "path" },
+        &.{ "args", "path" },
+        &.{ "params", "path" },
+        &.{ "input", "path" },
+        &.{ "data", "path" },
+        &.{ "data", "input", "path" },
+        &.{ "kwargs", "path" },
+        &.{ "kwargs", "args", "path" },
+        &.{ "kwargs", "params", "path" },
+        &.{ "kwargs", "tool_input", "path" },
+    };
+    for (path_candidates) |keys| {
+        if (extractNestedString(payload, keys)) |candidate| {
+            if (nonEmptyFilePath(candidate)) |path| return path;
+        }
+    }
+    return null;
 }
 
 fn extractCwd(payload: std.json.Value) ?[]const u8 {
@@ -2363,10 +2474,20 @@ fn extractToolArgsObject(payload: std.json.Value) ?std.json.Value {
     return null;
 }
 
-fn isFileTool(tool_name: []const u8) bool {
+/// Write/edit tools only. Never include read_file / Read / read — those are isFileReadTool.
+fn isFileWriteTool(tool_name: []const u8) bool {
     const file_tools = &[_][]const u8{ "edit", "write", "file_write", "file_edit", "apply", "create_file", "write_file" };
     for (file_tools) |ft| {
         if (std.ascii.eqlIgnoreCase(tool_name, ft)) return true;
+    }
+    return false;
+}
+
+/// Grok / Claude read tools. Case-insensitive.
+fn isFileReadTool(tool_name: []const u8) bool {
+    const read_tools = &[_][]const u8{ "read_file", "Read", "read" };
+    for (read_tools) |rt| {
+        if (std.ascii.eqlIgnoreCase(tool_name, rt)) return true;
     }
     return false;
 }
@@ -2615,6 +2736,257 @@ test "hook rejects malformed or mismatched raw Grok PreToolUse input" {
     );
     defer unsupported_tool.deinit();
     try std.testing.expectError(error.UnsupportedGrokPreToolUse, grokHookPayload(unsupported_tool.value, .PreToolUse));
+}
+
+test "hook Grok PreToolUse accepts read_file and Read with path" {
+    const allocator = std.testing.allocator;
+    var read_file_payload = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"hookEventName":"pre_tool_use","cwd":"/tmp/project","toolName":"read_file","toolInput":{"target_file":".env"}}
+    ,
+        .{},
+    );
+    defer read_file_payload.deinit();
+    _ = try grokHookPayload(read_file_payload.value, .PreToolUse);
+
+    var read_alias = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"hookEventName":"pre_tool_use","cwd":"/tmp/project","toolName":"Read","toolInput":{"target_file":"README.md"}}
+    ,
+        .{},
+    );
+    defer read_alias.deinit();
+    _ = try grokHookPayload(read_alias.value, .PreToolUse);
+}
+
+test "hook Grok PreToolUse rejects web_search as unsupported" {
+    const allocator = std.testing.allocator;
+    var web_search = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"hookEventName":"pre_tool_use","cwd":"/tmp/project","toolName":"web_search","toolInput":{"query":"x"}}
+    ,
+        .{},
+    );
+    defer web_search.deinit();
+    try std.testing.expectError(error.UnsupportedGrokPreToolUse, grokHookPayload(web_search.value, .PreToolUse));
+}
+
+test "hook extractFilePath finds camelCase toolInput.target_file and snake file_path" {
+    const allocator = std.testing.allocator;
+    var camel = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"toolName":"read_file","toolInput":{"target_file":".env"}}
+    ,
+        .{},
+    );
+    defer camel.deinit();
+    try std.testing.expectEqualStrings(".env", extractFilePath(camel.value).?);
+
+    var snake = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"tool_name":"read_file","tool_input":{"file_path":"src/main.zig"}}
+    ,
+        .{},
+    );
+    defer snake.deinit();
+    try std.testing.expectEqualStrings("src/main.zig", extractFilePath(snake.value).?);
+
+    var empty_path = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"toolInput":{"target_file":""}}
+    ,
+        .{},
+    );
+    defer empty_path.deinit();
+    try std.testing.expect(extractFilePath(empty_path.value) == null);
+}
+
+test "hook classifies read_file as file_read not file_write or generic_tool" {
+    const allocator = std.testing.allocator;
+    var parsed = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"toolName":"read_file","toolInput":{"target_file":".env"}}
+    ,
+        .{},
+    );
+    defer parsed.deinit();
+
+    const classification = classifyHookEvent(.PreToolUse, parsed.value);
+    try std.testing.expectEqual(HookEventClassification.non_shell, std.meta.activeTag(classification));
+    try std.testing.expectEqual(NonShellHookEvent.file_read, classification.non_shell);
+    try std.testing.expect(classification.non_shell != .file_write);
+    try std.testing.expect(classification.non_shell != .generic_tool);
+}
+
+test "hook PreToolUse file_read blocks .env via files.read.deny" {
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa_state.deinit();
+    const allocator = gpa_state.allocator();
+
+    var policy_obj = try core_api.loadPolicyPreset(allocator, .strict);
+    defer policy_obj.deinit();
+
+    var parsed = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"toolName":"read_file","toolInput":{"target_file":".env"}}
+    ,
+        .{},
+    );
+    defer parsed.deinit();
+
+    var result = try evaluateHookForTest(allocator, @ptrCast(@alignCast(policy_obj)), .grok, .PreToolUse, parsed.value, false);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(PluginDecision.block, result.decision);
+    try std.testing.expectEqualStrings("file.read", result.category);
+    try std.testing.expect(result.rule != null);
+    // Policy rule id form, not normalize builtin.files.read.deny[outside_workspace].
+    try std.testing.expect(std.mem.startsWith(u8, result.rule.?, "files.read.deny["));
+    try std.testing.expect(!std.mem.startsWith(u8, result.rule.?, "builtin."));
+}
+
+test "hook PreToolUse file_read allows README.md" {
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa_state.deinit();
+    const allocator = gpa_state.allocator();
+
+    var policy_obj = try core_api.loadPolicyPreset(allocator, .strict);
+    defer policy_obj.deinit();
+
+    var parsed = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"toolName":"read_file","toolInput":{"target_file":"README.md"}}
+    ,
+        .{},
+    );
+    defer parsed.deinit();
+
+    var result = try evaluateHookForTest(allocator, @ptrCast(@alignCast(policy_obj)), .grok, .PreToolUse, parsed.value, false);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(PluginDecision.allow, result.decision);
+    try std.testing.expectEqualStrings("file.read", result.category);
+}
+
+test "hook PreToolUse Read alias blocks .env via files.read.deny" {
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa_state.deinit();
+    const allocator = gpa_state.allocator();
+
+    var policy_obj = try core_api.loadPolicyPreset(allocator, .strict);
+    defer policy_obj.deinit();
+
+    var parsed = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"toolName":"Read","toolInput":{"target_file":".env"}}
+    ,
+        .{},
+    );
+    defer parsed.deinit();
+
+    var result = try evaluateHookForTest(allocator, @ptrCast(@alignCast(policy_obj)), .grok, .PreToolUse, parsed.value, false);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(PluginDecision.block, result.decision);
+    try std.testing.expectEqualStrings("file.read", result.category);
+    try std.testing.expect(result.rule != null);
+    try std.testing.expect(std.mem.startsWith(u8, result.rule.?, "files.read.deny["));
+}
+
+test "hook PreToolUse file_read trims path whitespace before policy" {
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa_state.deinit();
+    const allocator = gpa_state.allocator();
+
+    var policy_obj = try core_api.loadPolicyPreset(allocator, .strict);
+    defer policy_obj.deinit();
+
+    var parsed = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"toolName":"read_file","toolInput":{"target_file":" .env "}}
+    ,
+        .{},
+    );
+    defer parsed.deinit();
+
+    var result = try evaluateHookForTest(allocator, @ptrCast(@alignCast(policy_obj)), .grok, .PreToolUse, parsed.value, false);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(PluginDecision.block, result.decision);
+    try std.testing.expectEqualStrings("file.read", result.category);
+    try std.testing.expect(result.rule != null);
+    try std.testing.expect(std.mem.startsWith(u8, result.rule.?, "files.read.deny["));
+}
+
+test "hook PreToolUse read_file missing path fails closed" {
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa_state.deinit();
+    const allocator = gpa_state.allocator();
+
+    var policy_obj = try core_api.loadPolicyPreset(allocator, .strict);
+    defer policy_obj.deinit();
+
+    var parsed = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"toolName":"read_file","toolInput":{}}
+    ,
+        .{},
+    );
+    defer parsed.deinit();
+
+    var result = try evaluateHookForTest(allocator, @ptrCast(@alignCast(policy_obj)), .grok, .PreToolUse, parsed.value, false);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(PluginDecision.block, result.decision);
+    try std.testing.expectEqualStrings("file.read", result.category);
+    try std.testing.expect(result.rule == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.reason, "missing path") != null);
+}
+
+test "hook PreToolUse file_read deny emits Grok exit-2 branded stdout" {
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa_state.deinit();
+    const allocator = gpa_state.allocator();
+
+    var policy_obj = try core_api.loadPolicyPreset(allocator, .strict);
+    defer policy_obj.deinit();
+
+    var parsed = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        \\{"toolName":"read_file","toolInput":{"target_file":".env"}}
+    ,
+        .{},
+    );
+    defer parsed.deinit();
+
+    var result = try evaluateHookForTest(allocator, @ptrCast(@alignCast(policy_obj)), .grok, .PreToolUse, parsed.value, false);
+    defer result.deinit(allocator);
+    try std.testing.expectEqual(PluginDecision.block, result.decision);
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [4096]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    try writeGrokDenyOutput(allocator, &stdout_writer, &stderr_writer, result);
+    const out = stdout_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"decision\":\"deny\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "RYKAN-V-GUARD") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "files.read.deny") != null);
+    try std.testing.expectEqual(@as(u8, 2), hookExitCode(.grok, result.decision, false));
 }
 
 test "hook codex SessionStart returns allow" {
@@ -3539,8 +3911,8 @@ test "hook pre-eval fail-closed Grok emits native deny JSON reason and exit 2" {
     const out = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "\"decision\":\"deny\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "RYKAN-V-GUARD") != null);
-    // Reason prefers policy `reason` ("empty payload"); message still on stderr.
-    try std.testing.expect(std.mem.indexOf(u8, out, "empty payload") != null);
+    // pickDetail prefers the longer message when it is substantially more informative.
+    try std.testing.expect(std.mem.indexOf(u8, out, "no JSON payload") != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), guard_sentinel_prefix) != null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "no JSON payload") != null);
 }
@@ -3926,6 +4298,52 @@ test "hook PreToolUse file_write blocks symlink escape like decide" {
     try std.testing.expectEqual(PluginDecision.block, result.decision);
     try std.testing.expectEqualStrings("file.write", result.category);
     try std.testing.expectEqualStrings("builtin.files.write.deny[outside_workspace]", result.rule.?);
+}
+
+test "hook PreToolUse file_read blocks symlink escape like decide" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDir(std.testing.io, "workspace", .default_dir);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "outside.txt", .data = "synthetic\n" });
+
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, "workspace", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+    const outside_path = try tmp.dir.realPathFileAlloc(std.testing.io, "outside.txt", std.testing.allocator);
+    defer std.testing.allocator.free(outside_path);
+    const alias_path = try std.fs.path.join(std.testing.allocator, &.{ root, "outside-link" });
+    defer std.testing.allocator.free(alias_path);
+    std.Io.Dir.cwd().symLink(std.testing.io, outside_path, alias_path, .{}) catch |err| switch (err) {
+        error.PermissionDenied => return error.SkipZigTest,
+        else => return err,
+    };
+
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa_state.deinit();
+    const allocator = gpa_state.allocator();
+
+    var policy_obj = try core_api.loadPolicyPreset(allocator, .strict);
+    defer policy_obj.deinit();
+
+    var payload_obj = try std.json.ObjectMap.init(allocator, &.{}, &.{});
+    defer payload_obj.deinit(allocator);
+    try payload_obj.put(allocator, "toolName", std.json.Value{ .string = "read_file" });
+    try payload_obj.put(allocator, "path", std.json.Value{ .string = alias_path });
+
+    var result = try evaluateHookForTestWithOptions(
+        allocator,
+        root,
+        @ptrCast(@alignCast(policy_obj)),
+        .grok,
+        .PreToolUse,
+        std.json.Value{ .object = payload_obj },
+        false,
+        null,
+    );
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(PluginDecision.block, result.decision);
+    try std.testing.expectEqualStrings("file.read", result.category);
+    try std.testing.expectEqualStrings("builtin.files.read.deny[outside_workspace]", result.rule.?);
 }
 
 test "hook PermissionRequest file_write blocks symlink escape like decide" {
