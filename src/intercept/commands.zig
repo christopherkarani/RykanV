@@ -1284,7 +1284,7 @@ test "shim directory includes sh bash and zsh wrappers" {
         try std.Io.Dir.cwd().access(std.testing.io, shim_path, .{});
         const script = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, shim_path, std.testing.allocator, .limited(1024));
         defer std.testing.allocator.free(script);
-        try std.testing.expect(std.mem.indexOf(u8, script, "orca\" shim exec --") != null or std.mem.indexOf(u8, script, "true\" shim exec --") != null);
+        try std.testing.expect(std.mem.indexOf(u8, script, "ryk\" shim exec --") != null or std.mem.indexOf(u8, script, "true\" shim exec --") != null);
         try std.testing.expect(std.mem.indexOf(u8, script, shell) != null);
     }
 }

@@ -472,7 +472,7 @@ test "workspace detection falls back to start directory outside git" {
 
     var suffix_buf: [8]u8 = undefined;
     const suffix = try util.randomHexSuffix(std.testing.io, &suffix_buf);
-    const relative_name = try std.fmt.allocPrint(std.testing.allocator, "orca-non-git-{s}", .{suffix});
+    const relative_name = try std.fmt.allocPrint(std.testing.allocator, "ryk-non-git-{s}", .{suffix});
     defer std.testing.allocator.free(relative_name);
     const tmp_path = try std.fs.path.join(std.testing.allocator, &.{ tmp_parent, relative_name });
     defer std.testing.allocator.free(tmp_path);
@@ -558,7 +558,7 @@ test "child non-zero exit code is propagated" {
 
 test "missing child command returns useful typed error" {
     try std.testing.expectError(error.CommandNotFound, run(std.testing.io, std.testing.allocator, .{
-        .command = "orca-definitely-missing-command",
+        .command = "ryk-definitely-missing-command",
         .workspace = ".",
         .stdio = .ignore,
     }));

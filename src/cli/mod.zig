@@ -846,7 +846,7 @@ test "help run includes examples section" {
 fn fakeVersionSuccess(_: std.Io, argv: []const []const u8, stdout: anytype, _: anytype) !u8 {
     try std.testing.expectEqual(@as(usize, 1), argv.len);
     try std.testing.expectEqualStrings("version", argv[0]);
-    try stdout.writeAll("orca-rs 1.2.3\n");
+    try stdout.writeAll("ryk-daemon 1.2.3\n");
     return exit_codes.success;
 }
 
@@ -964,7 +964,7 @@ test "version proxy routes version argv and renders success" {
     const code = try proxyVersionCommand(fakeVersionSuccess, std.testing.io, &stdout_writer, &stderr_writer);
 
     try std.testing.expectEqual(exit_codes.success, code);
-    try std.testing.expectEqualStrings("orca-rs 1.2.3\n", stdout_writer.buffered());
+    try std.testing.expectEqualStrings("ryk-daemon 1.2.3\n", stdout_writer.buffered());
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 

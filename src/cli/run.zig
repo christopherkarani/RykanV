@@ -2513,7 +2513,7 @@ test "run reports missing command usefully" {
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
-    const code = try commandForTest(&.{ "--", "orca-definitely-missing-command" }, &stdout_writer, &stderr_writer, .ignore);
+    const code = try commandForTest(&.{ "--", "ryk-definitely-missing-command" }, &stdout_writer, &stderr_writer, .ignore);
     try std.testing.expectEqual(exit_codes.general, code);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "command not found") != null);
 }

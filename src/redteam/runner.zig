@@ -671,7 +671,7 @@ fn createLocalTempDir(io: std.Io, allocator: std.mem.Allocator) !LocalTempDir {
     while (attempts < 32) : (attempts += 1) {
         var suffix: [16]u8 = undefined;
         _ = try core.util.randomHexSuffix(io, &suffix);
-        const name = try std.fmt.allocPrint(allocator, "orca-redteam-{s}", .{&suffix});
+        const name = try std.fmt.allocPrint(allocator, "ryk-redteam-{s}", .{&suffix});
         defer allocator.free(name);
         const path = try std.fs.path.join(allocator, &.{ base, name });
         errdefer allocator.free(path);
@@ -958,7 +958,7 @@ test "redteam runner temp directories use OS temp base" {
     tmp.deinit(io, false);
 
     try std.testing.expect(std.mem.indexOf(u8, path, ".zig-cache/tmp") == null);
-    try std.testing.expect(std.mem.indexOf(u8, path, "orca-redteam-") != null);
+    try std.testing.expect(std.mem.indexOf(u8, path, "ryk-redteam-") != null);
     std.Io.Dir.accessAbsolute(io, path, .{}) catch |err| switch (err) {
         error.FileNotFound => return,
         else => return err,
