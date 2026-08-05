@@ -116,3 +116,19 @@
 {"command": "yes x | tee /etc/passwd", "expected": "deny", "source": "macr_f2d6b5b6_non_data_pipe", "description": "yes pipe-to-tee sensitive path must deny"}
 {"command": "echo x | tee $HOME/.ssh/id_rsa", "expected": "deny", "source": "macr_f2d6b5b6_home_sink", "description": "pipe-to-tee $HOME sink must deny"}
 {"command": "echo x > $HOME/.bashrc", "expected": "deny", "source": "macr_f2d6b5b6_home_sink", "description": "redirect to $HOME must deny"}
+{"command": "cat .env", "expected": "deny", "source": "phase2_credentials", "description": "exact .env peek via cat must deny"}
+{"command": "cat ./.env", "expected": "deny", "source": "phase2_credentials", "description": "dot-slash .env peek must deny"}
+{"command": "head -n 5 .env", "expected": "deny", "source": "phase2_credentials", "description": "head flags then .env must deny"}
+{"command": "bash -c 'cat .env'", "expected": "deny", "source": "phase2_credentials", "description": "embedded cat .env must deny"}
+{"command": "cat .env && true", "expected": "deny", "source": "phase2_credentials", "description": "compound cat .env must deny"}
+{"command": "cat .env.example", "expected": "allow", "source": "phase2_credentials", "description": "template .env.example must allow"}
+{"command": "cat ./.env.example", "expected": "allow", "source": "phase2_credentials", "description": "dot-slash template must allow"}
+{"command": "cat .env.sample", "expected": "allow", "source": "phase2_credentials", "description": "template .env.sample must allow"}
+{"command": "cat .env.template", "expected": "allow", "source": "phase2_credentials", "description": "template .env.template must allow"}
+{"command": "cat README.md", "expected": "allow", "source": "phase2_credentials", "description": "benign cat must allow"}
+{"command": "cat package.json", "expected": "allow", "source": "phase2_credentials", "description": "benign package.json must allow"}
+{"command": "printenv", "expected": "allow", "source": "phase2_credentials", "description": "bare printenv residual allow"}
+{"command": "cat foo.env", "expected": "allow", "source": "phase2_credentials", "description": "non-exact basename foo.env must allow"}
+{"command": "cat .envrc", "expected": "allow", "source": "phase2_credentials", "description": ".envrc residual allow"}
+{"command": "cat .env.bak", "expected": "allow", "source": "phase2_credentials", "description": ".env.bak residual allow"}
+{"command": "echo 'cat .env'", "expected": "allow", "source": "phase2_credentials", "description": "data-only echo must allow"}

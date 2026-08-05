@@ -2004,6 +2004,50 @@ test "phase1 hard-fence catastrophe table Mode A" {
     }
 }
 
+// Phase 2 — Mode A core.credentials:cat-env (exact .env peeks).
+// rule_id pins are mandatory: corpora use enforce_rule_id=false.
+test "phase2 credentials cat-env Mode A" {
+    const Case = struct {
+        cmd: []const u8,
+        expect_deny: bool,
+        rule_id: ?[]const u8 = null,
+    };
+    const cases = [_]Case{
+        // Deny + exact rule_id (bare)
+        .{ .cmd = "cat .env", .expect_deny = true, .rule_id = "core.credentials:cat-env" },
+        .{ .cmd = "cat ./.env", .expect_deny = true, .rule_id = "core.credentials:cat-env" },
+        .{ .cmd = "head -n 5 .env", .expect_deny = true, .rule_id = "core.credentials:cat-env" },
+        // Embed + compound (mandatory rule_id pins)
+        .{ .cmd = "bash -c 'cat .env'", .expect_deny = true, .rule_id = "core.credentials:cat-env" },
+        .{ .cmd = "cat .env && true", .expect_deny = true, .rule_id = "core.credentials:cat-env" },
+        // Templates / benign / near-misses / data-only
+        .{ .cmd = "cat .env.example", .expect_deny = false },
+        .{ .cmd = "cat ./.env.example", .expect_deny = false },
+        .{ .cmd = "cat .env.sample", .expect_deny = false },
+        .{ .cmd = "cat .env.template", .expect_deny = false },
+        .{ .cmd = "cat README.md", .expect_deny = false },
+        .{ .cmd = "cat package.json", .expect_deny = false },
+        .{ .cmd = "printenv", .expect_deny = false },
+        .{ .cmd = "cat foo.env", .expect_deny = false },
+        .{ .cmd = "cat .envrc", .expect_deny = false },
+        .{ .cmd = "cat .env.bak", .expect_deny = false },
+        .{ .cmd = "echo 'cat .env'", .expect_deny = false },
+    };
+    for (cases) |c| {
+        var eval = try evaluateCommand(std.testing.allocator, c.cmd, .{});
+        defer eval.deinit(std.testing.allocator);
+        if (c.expect_deny) {
+            try std.testing.expect(eval.decision == .deny);
+            try std.testing.expect(eval.rule_id != null);
+            if (c.rule_id) |want| {
+                try std.testing.expectEqualStrings(want, eval.rule_id.?);
+            }
+        } else {
+            try std.testing.expect(eval.decision == .allow);
+        }
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // s-engine — plan §4.1 evaluate order (RED until implementer wires pipeline)
 //

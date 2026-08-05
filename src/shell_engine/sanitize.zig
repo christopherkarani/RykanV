@@ -331,9 +331,9 @@ fn restoreWriteSinks(buf: []u8, original: []const u8) void {
     }
 }
 
-/// For write-path argv sinks (`tee`), re-copy absolute/sensitive path-shaped
-/// argv tokens that masking blanked. Skips redirect targets (handled elsewhere)
-/// and does **not** restore herestring/heredoc bodies.
+/// For write-path argv sinks (`tee`) and exact-basename `.env` reads (`cat .env`),
+/// re-copy path-shaped argv tokens that masking blanked. Skips redirect targets
+/// (handled elsewhere) and does **not** restore herestring/heredoc bodies.
 fn restorePathShapedArgs(buf: []u8, original: []const u8) void {
     if (buf.len != original.len) return;
     var i: usize = 0;
@@ -359,8 +359,11 @@ fn restorePathShapedArgs(buf: []u8, original: []const u8) void {
             continue;
         }
         const tok_end = redirectTargetEnd(buf, i);
-        if (tok_end > i and isPathShapedArg(original[i..tok_end])) {
-            @memcpy(buf[i..tok_end], original[i..tok_end]);
+        if (tok_end > i) {
+            const tok = original[i..tok_end];
+            if (isPathShapedArg(tok) or isExactEnvBasename(tok)) {
+                @memcpy(buf[i..tok_end], tok);
+            }
         }
         i = tok_end;
     }
@@ -374,6 +377,19 @@ fn isPathShapedArg(tok: []const u8) bool {
     if (inner[0] == '/') return true;
     if (inner[0] == '~') return true;
     if (inner.len >= 5 and std.mem.startsWith(u8, inner, "$HOME")) return true;
+    return false;
+}
+
+/// Exact basename `.env` (optional `./` or directory prefix). Templates
+/// (`.env.example` / `.sample` / `.template`) and near-misses (`.envrc`,
+/// `foo.env`, `.env.bak`) are intentionally excluded so data-only masking
+/// still suppresses them for pack match; pack regex also excludes templates.
+fn isExactEnvBasename(tok: []const u8) bool {
+    const inner = unwrapShellQuotes(tok);
+    if (inner.len == 0) return false;
+    if (std.mem.eql(u8, inner, ".env")) return true;
+    if (std.mem.eql(u8, inner, "./.env")) return true;
+    if (std.mem.endsWith(u8, inner, "/.env")) return true;
     return false;
 }
 
@@ -971,6 +987,28 @@ test "sanitize preserves tee absolute path argv for pack match" {
     const tmp = try sanitizeForMatching(std.testing.allocator, "tee /tmp/log");
     defer std.testing.allocator.free(tmp);
     try std.testing.expect(std.mem.indexOf(u8, tmp, "/tmp/log") != null);
+}
+
+// Phase 2: data-only readers mask argv; exact `.env` must stay visible for
+// core.credentials:cat-env. Templates and near-misses stay masked.
+test "sanitize preserves exact .env basename for credential peek packs" {
+    const restore = [_][]const u8{ "cat .env", "cat ./.env", "head -n 5 .env", "cat -- .env" };
+    for (restore) |cmd| {
+        const s = try sanitizeForMatching(std.testing.allocator, cmd);
+        defer std.testing.allocator.free(s);
+        try std.testing.expect(std.mem.indexOf(u8, s, ".env") != null);
+    }
+    // Templates / near-misses: not exact `.env` — leave masked (no literal `.env`).
+    const no_restore = [_][]const u8{ "cat .env.example", "cat foo.env", "cat .envrc", "cat .env.bak" };
+    for (no_restore) |cmd| {
+        const s = try sanitizeForMatching(std.testing.allocator, cmd);
+        defer std.testing.allocator.free(s);
+        try std.testing.expect(std.mem.indexOf(u8, s, ".env") == null);
+    }
+    // Data-only echo of the text must not re-surface a readable `cat .env` surface.
+    const echo = try sanitizeForMatching(std.testing.allocator, "echo 'cat .env'");
+    defer std.testing.allocator.free(echo);
+    try std.testing.expect(std.mem.indexOf(u8, echo, "cat .env") == null);
 }
 
 test "sanitize preserves pipe-to-busybox/stdbuf/sponge writer sinks" {

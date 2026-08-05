@@ -45,3 +45,9 @@
 {"command": "true", "expected": "allow"}
 {"command": "whoami", "expected": "allow"}
 {"command": "uname -a", "expected": "allow"}
+{"command": "cat .env", "expected": "deny", "source": "phase2_credentials"}
+{"command": "bash -c 'cat .env'", "expected": "deny", "source": "phase2_credentials"}
+{"command": "cat .env && true", "expected": "deny", "source": "phase2_credentials"}
+{"command": "cat .env.example", "expected": "allow", "source": "phase2_credentials"}
+{"command": "printenv", "expected": "allow", "source": "phase2_credentials"}
+{"command": "echo 'cat .env'", "expected": "allow", "source": "phase2_credentials"}
