@@ -11,6 +11,7 @@ const core_api = @import("ryk_core").api;
 const policy = @import("ryk_core").policy;
 const intercept = @import("../intercept/mod.zig");
 const shell_engine = @import("../shell_engine/mod.zig");
+const brand = @import("brand.zig");
 const daemon = @import("daemon.zig");
 const rust_visibility = @import("rust_visibility.zig");
 const feed_writer = @import("feed_writer.zig");
@@ -994,7 +995,7 @@ pub const DaemonPolicyOpts = struct {
     effect_class: ?[]const u8 = null,
     // ── FM soft seatbelt (Phase 4) ──────────────────────────────────────
     /// Session id for risk-card-v1 (schema minLength 1). Default product id.
-    session_id: []const u8 = "orca-shell",
+    session_id: []const u8 = brand.default_session_id,
     tool: []const u8 = "bash",
     /// Product honesty: about-to-run is true. Only set false with host evidence.
     executed: bool = true,
@@ -1015,7 +1016,7 @@ pub const DaemonPolicyOpts = struct {
 /// Context for building a shell risk card + classifying via the Mac steward.
 pub const FmShellContext = struct {
     command: []const u8,
-    session_id: []const u8 = "orca-shell",
+    session_id: []const u8 = brand.default_session_id,
     tool: []const u8 = "bash",
     executed: bool = true,
     cwd: ?[]const u8 = null,
@@ -1623,7 +1624,7 @@ pub fn evaluateCommand(
                 if (sid.len > 0) break :blk_sid sid;
             }
         }
-        break :blk_sid "orca-shell";
+        break :blk_sid brand.default_session_id;
     };
     const card_host: ?[]const u8 = if (audit_options) |ao| ao.host else null;
     const translated = try decisionFromDaemonResultWithPolicy(
@@ -1946,7 +1947,7 @@ test "resolveEffectiveCwd absolute missing still fails closed after realpath fai
         resolveEffectiveCwdAfterRealpathFail(
             std.testing.io,
             std.testing.allocator,
-            "/definitely/missing/orca-working-directory-fallback",
+            "/definitely/missing/ryk-working-directory-fallback",
         ),
     );
 }

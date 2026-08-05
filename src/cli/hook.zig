@@ -4,6 +4,7 @@ const supervisor = core.supervisor;
 const core_api = @import("ryk_core").api;
 const policy = @import("ryk_core").policy;
 
+const brand = @import("brand.zig");
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
 const daemon = @import("daemon.zig");
@@ -1192,7 +1193,7 @@ fn evaluateShellCommandRoute(
     redactions: *std.ArrayList(RedactionEntry),
     limitations: *std.ArrayList([]const u8),
     evaluator_override: ?ShellCommandEvaluatorFn,
-    /// Host-provided session id for FM risk cards; null → product default `"orca-shell"`.
+    /// Host-provided session id for FM risk cards; null → product default `brand.default_session_id`.
     session_id: ?[]const u8,
 ) !HookResponse {
     const evaluator = evaluator_override orelse defaultShellCommandEvaluator;
@@ -1241,7 +1242,7 @@ fn evaluateShellCommandRoute(
             .host = host_name,
             .cwd = shell_event.cwd,
             .workspace_root = workspace_root,
-            .session_id = session_id orelse "orca-shell",
+            .session_id = session_id orelse brand.default_session_id,
         },
     );
 }
@@ -1430,7 +1431,7 @@ fn shellEvalPluginDecisionToHook(decision: shell_eval.PluginDecision) PluginDeci
 const HookShellFmOpts = struct {
     client: ?fm_steward_client.Client = null,
     disable_fm: bool = false,
-    session_id: []const u8 = "orca-shell",
+    session_id: []const u8 = brand.default_session_id,
     tool: []const u8 = "bash",
     host: ?[]const u8 = null,
     cwd: ?[]const u8 = null,
@@ -1666,7 +1667,7 @@ fn buildRemediationCommands(allocator: std.mem.Allocator, rule_id: ?[]const u8) 
     return try list.toOwnedSlice(allocator);
 }
 
-/// Best-effort: resolve `$XDG_DATA_HOME/orca` (or `~/.local/share/ryk`) for pending store.
+/// Best-effort: resolve `$XDG_DATA_HOME/ryk` (or `~/.local/share/ryk`) for pending store.
 fn resolveOrcaDataDirForPending(allocator: std.mem.Allocator) !?[]u8 {
     if (std.c.getenv("XDG_DATA_HOME")) |xdg_z| {
         const xdg = std.mem.span(xdg_z);

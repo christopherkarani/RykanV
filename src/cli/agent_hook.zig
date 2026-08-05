@@ -12,6 +12,7 @@
 const std = @import("std");
 const build_options = @import("build_options");
 
+const brand = @import("brand.zig");
 const exit_codes = @import("exit_codes.zig");
 const shell_eval = @import("shell_eval.zig");
 const fm_steward_client = @import("fm_steward_client.zig");
@@ -126,7 +127,7 @@ pub const EvaluatePayloadOpts = struct {
     /// Injectable FM client for product-path tests. Null → `defaultClient()`.
     fm_client: ?fm_steward_client.Client = null,
     /// Session id for FM risk-card-v1 (default product id when host omits one).
-    session_id: []const u8 = "orca-shell",
+    session_id: []const u8 = brand.default_session_id,
 };
 
 pub fn evaluatePayload(

@@ -17,6 +17,9 @@ pub const cli_name = "ryk";
 /// npm package scope.
 pub const package_scope = "@rykan";
 
+/// Default FM / shell session id when host omits one (risk-card-v1 minLength 1).
+pub const default_session_id = "ryk-shell";
+
 /// Version JSON / plain `product` field.
 pub fn versionProduct() []const u8 {
     return product_display;
@@ -57,6 +60,13 @@ test "brand constants: ryk primary, Rykan V full name" {
     try std.testing.expect(!std.mem.eql(u8, cli_name, draft_brand));
     try std.testing.expect(!std.mem.eql(u8, product_display, retired_cli));
     try std.testing.expect(!std.mem.eql(u8, product_display, retired_title));
+}
+
+test "brand default_session_id is ryk-shell not retired orca-shell" {
+    try std.testing.expectEqualStrings("ryk-shell", default_session_id);
+    // Split retired token so bulk renames cannot self-corrupt the assert.
+    const retired_session = "orc" ++ "a-shell";
+    try std.testing.expect(!std.mem.eql(u8, default_session_id, retired_session));
 }
 
 test "brand safety boundary names ryk not retired brands" {

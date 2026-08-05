@@ -4,6 +4,7 @@ const build_options = @import("build_options");
 const core = @import("ryk_core").core;
 const core_api = @import("ryk_core").api;
 const policy = @import("ryk_core").policy;
+const brand = @import("brand.zig");
 const daemon = @import("daemon.zig");
 const shell_eval = @import("shell_eval.zig");
 const fm_steward_client = @import("fm_steward_client.zig");
@@ -538,7 +539,7 @@ fn writeEvaluationResponse(
             .permit = permit,
             .sticky = shell_eval.getSessionStickyStore(),
             .effect_class = null,
-            .session_id = request.session_id orelse "orca-shell",
+            .session_id = request.session_id orelse brand.default_session_id,
             .tool = "bash",
             .executed = true,
             .cwd = request.cwd,
