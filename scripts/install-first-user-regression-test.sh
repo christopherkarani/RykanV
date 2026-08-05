@@ -209,6 +209,32 @@ resource_root="${share_dir}/${VERSION}"
 [[ -f "${resource_root}/fixtures/fixture.txt" ]] || fail "runtime assets were not installed under HOME"
 [[ "$(readlink "${share_dir}/current")" == "${resource_root}" ]] || fail "current link targets the wrong runtime root"
 
+# macOS/BSD mv-into-symlink-dir regression: an existing current→version selector
+# must be replaced, not followed (which plants current/current and fails install).
+old_runtime="${share_dir}/0.0.0-old"
+mkdir -p "${old_runtime}"
+printf 'orca-runtime-v1\nversion=0.0.0-old\n' > "${old_runtime}/.orca-install"
+# Plant the failure mode from buggy installs: nested selector inside the target.
+ln -sfn "${resource_root}" "${old_runtime}/current"
+ln -sfn "${old_runtime}" "${share_dir}/current"
+[[ -L "${share_dir}/current/current" ]] || fail "test setup missing nested current/current pollution"
+: > "${onboard_log}"
+HOME="${home}" \
+SHELL=/bin/sh \
+ORCA_VERSION="${VERSION}" \
+ORCA_ARTIFACT_DIR="${artifact_dir}" \
+ORCA_INSTALL_DIR="${install_dir}" \
+ORCA_SHARE_DIR="${share_dir}" \
+RYK_TEST_ONBOARD_LOG="${onboard_log}" \
+sh "${INSTALL_SH}" >/dev/null ||
+  fail "install failed when replacing an existing current→version symlink (mv-into-dir skew)"
+[[ "$(readlink "${share_dir}/current")" == "${resource_root}" ]] ||
+  fail "current selector not replaced after reinstall (got: $(readlink "${share_dir}/current" 2>/dev/null || true))"
+[[ ! -e "${share_dir}/current/current" ]] ||
+  fail "nested current/current pollution still present after reinstall"
+[[ ! -e "${old_runtime}/current" ]] ||
+  fail "nested selector left under previous runtime version dir"
+
 activation="$(printf '%s\n' "${output}" | awk '/^    eval / { sub(/^    /, ""); print; exit }')"
 [[ -n "${activation}" ]] || fail "installer did not print an activation command"
 [[ "${activation}" == *"${install_dir}/ryk"* ]] || fail "activation command does not use the absolute installed binary"

@@ -396,18 +396,21 @@ install_runtime_assets() {
   fi
 
   reject_symlink_components "$SHARE_DIR" "runtime share directory"
-  current_stage="$(mktemp -d "$SHARE_DIR/.ryk-current.XXXXXX")" ||
-    fail "could not create runtime selector staging directory"
-  ln -s "$RESOURCE_ROOT" "$current_stage/current" || {
-    rmdir "$current_stage"
-    fail "could not stage the runtime selector"
-  }
-  mv -f "$current_stage/current" "$CURRENT_LINK" || {
-    rm -f "$current_stage/current"
-    rmdir "$current_stage"
-    fail "could not atomically select the installed runtime"
-  }
-  rmdir "$current_stage"
+  # Update the selector without following an existing current→version symlink.
+  # On macOS/BSD, `mv -f newlink "$CURRENT_LINK"` when CURRENT_LINK is a symlink
+  # to a directory moves *into* that directory (current/current) instead of
+  # replacing the selector — then fails with "are identical" on reinstall.
+  # ln -sfn replaces the symlink in place and never treats the target as a dir.
+  if [ -e "$CURRENT_LINK" ] && [ ! -L "$CURRENT_LINK" ]; then
+    fail "refusing to replace non-symlink runtime selector: $CURRENT_LINK"
+  fi
+  # Drop nested pollution from older buggy installs (current/current inside a version).
+  if [ -L "$CURRENT_LINK/current" ] || [ -e "$CURRENT_LINK/current" ]; then
+    rm -f "$CURRENT_LINK/current" 2>/dev/null || true
+  fi
+  ln -sfn "$RESOURCE_ROOT" "$CURRENT_LINK" ||
+    fail "could not atomically select the installed runtime" \
+      "Could not point ${CURRENT_LINK} at ${RESOURCE_ROOT}."
   [ -z "$runtime_backup" ] || rm -rf "$runtime_backup"
 }
 
