@@ -132,3 +132,9 @@
 {"command": "cat .envrc", "expected": "allow", "source": "phase2_credentials", "description": ".envrc residual allow"}
 {"command": "cat .env.bak", "expected": "allow", "source": "phase2_credentials", "description": ".env.bak residual allow"}
 {"command": "echo 'cat .env'", "expected": "allow", "source": "phase2_credentials", "description": "data-only echo must allow"}
+{"command": "less .env", "expected": "deny", "source": "phase2_credentials", "description": "less exact .env peek must deny"}
+{"command": "more .env", "expected": "deny", "source": "phase2_credentials", "description": "more exact .env peek must deny"}
+{"command": "bat .env", "expected": "deny", "source": "phase2_credentials", "description": "bat exact .env peek must deny"}
+{"command": "cat secrets/.env", "expected": "deny", "source": "phase2_credentials", "description": "multi-segment path ending /.env must deny"}
+{"command": "less rm -rf /", "expected": "allow", "source": "phase2_credentials", "description": "less data-only argv must not false-deny filesystem packs"}
+{"command": "more rm -rf /", "expected": "allow", "source": "phase2_credentials", "description": "more data-only argv must not false-deny filesystem packs"}
