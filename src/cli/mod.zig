@@ -109,6 +109,8 @@ test {
     _ = scan_command;
     // Pull hook.zig tests (daemon evaluate → HookResponse, strict refuse, redaction).
     _ = hook;
+    // Grok deny reason smart-shrink (pure formatter; also imported by hook.zig).
+    _ = @import("grok_deny_reason.zig");
     _ = shell_test;
     _ = shell_explain;
     _ = allow_once;
