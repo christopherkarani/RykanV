@@ -11,24 +11,25 @@ const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 async function withFakeOrca(run, scriptBody) {
   const directory = await mkdtemp(join(tmpdir(), 'ryk-opencode-plugin-'));
-  const rykBin = join(directory, 'ryk');
-  const originalPath = process.env.PATH;
-  const originalAllow = process.env.RYK_ALLOW_WORKSPACE_BIN;
-
-  await writeFile(
-    rykBin,
+  const script =
     scriptBody ??
-      `#!/bin/sh
+    `#!/bin/sh
 payload=$(cat)
 case "$payload" in
   *'"command":"rm -rf'* ) printf '%s\\n' '{"decision":"block","message":"command blocked"}' ;;
   *'"command":"rm'* ) printf '%s\\n' '{"decision":"ask","message":"approval required"}' ;;
   * ) printf '%s\\n' '{"decision":"allow"}' ;;
 esac
-`
-  );
+`;
+  const rykBin = join(directory, 'ryk');
+  const originalPath = process.env.PATH;
+  const originalAllow = process.env.RYK_ALLOW_WORKSPACE_BIN;
+  const originalRykBin = process.env.RYK_BIN;
+
+  await writeFile(rykBin, script);
   await chmod(rykBin, 0o755);
   process.env.PATH = `${directory}:${originalPath ?? ''}`;
+  process.env.RYK_BIN = rykBin;
   delete process.env.RYK_ALLOW_WORKSPACE_BIN;
 
   try {
@@ -37,6 +38,8 @@ esac
     process.env.PATH = originalPath;
     if (originalAllow === undefined) delete process.env.RYK_ALLOW_WORKSPACE_BIN;
     else process.env.RYK_ALLOW_WORKSPACE_BIN = originalAllow;
+    if (originalRykBin === undefined) delete process.env.RYK_BIN;
+    else process.env.RYK_BIN = originalRykBin;
     await rm(directory, { recursive: true, force: true });
   }
 }
@@ -88,28 +91,18 @@ test('permission.ask denies ryk block', async () => {
 });
 
 test('permission.ask fail-closes unknown decisions', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'ryk-opencode-plugin-'));
-  const rykBin = join(directory, 'ryk');
-  const originalPath = process.env.PATH;
-  await writeFile(
-    rykBin,
+  await withFakeOrca(
+    async (plugin) => {
+      const permissionAsk = plugin['permission.ask'];
+      assert.ok(permissionAsk);
+      const output = { status: 'ask' };
+      await permissionAsk({ sessionID: 'session-1', command: 'echo hi' }, output);
+      assert.equal(output.status, 'deny');
+    },
     `#!/bin/sh
-printf '%s\\n' '{"decision":"unexpected","message":"bad decision"}'
+printf '%s\n' '{"decision":"unexpected","message":"bad decision"}'
 `
   );
-  await chmod(rykBin, 0o755);
-  process.env.PATH = `${directory}:${originalPath ?? ''}`;
-  try {
-    const plugin = await orcaPlugin({ directory, worktree: directory });
-    const permissionAsk = plugin['permission.ask'];
-    assert.ok(permissionAsk);
-    const output = { status: 'ask' };
-    await permissionAsk({ sessionID: 'session-1', command: 'echo hi' }, output);
-    assert.equal(output.status, 'deny');
-  } finally {
-    process.env.PATH = originalPath;
-    await rm(directory, { recursive: true, force: true });
-  }
 });
 
 test('tool.execute.before still hard-blocks ryk ask (no resume on that path)', async () => {
@@ -126,13 +119,13 @@ test('tool.execute.before still hard-blocks ryk ask (no resume on that path)', a
   });
 });
 
-test('orca.ts is a single-source sync of src/index.ts', async () => {
+test('ryk.ts is a single-source sync of src/index.ts', async () => {
   const src = await readFile(join(pluginRoot, 'src/index.ts'), 'utf8');
-  const dropIn = await readFile(join(pluginRoot, 'orca.ts'), 'utf8');
+  const dropIn = await readFile(join(pluginRoot, 'ryk.ts'), 'utf8');
   assert.equal(
     dropIn,
     src,
-    'orca.ts must match src/index.ts (npm run build copies src → orca.ts)'
+    'ryk.ts must match src/index.ts (npm run build copies src → ryk.ts)'
   );
 });
 
@@ -361,4 +354,71 @@ test('parseHookResponse unknown decision blocks on blocking path', () => {
 test('parseHookResponse keeps ask on blocking path for permission.ask UX', () => {
   const r = parseHookResponse(JSON.stringify({ decision: 'ask', message: 'need approval' }), true);
   assert.equal(r.decision, 'ask');
+});
+
+test('shell.env scrubs secret-looking variables', async () => {
+  await withFakeOrca(async (plugin) => {
+    const shellEnv = plugin['shell.env'];
+    assert.ok(shellEnv);
+    const output = {
+      env: {
+        PATH: '/usr/bin',
+        HOME: '/home/dev',
+        OPENAI_API_KEY: 'sk-secret',
+        GITHUB_TOKEN: 'ghp_secret',
+        MY_NORMAL: 'ok',
+      },
+    };
+    await shellEnv({ cwd: '/tmp', sessionID: 's1' }, output);
+    assert.equal(output.env.PATH, '/usr/bin');
+    assert.equal(output.env.MY_NORMAL, 'ok');
+    assert.equal(output.env.OPENAI_API_KEY, undefined);
+    assert.equal(output.env.GITHUB_TOKEN, undefined);
+  });
+});
+
+test('tool.execute.before blocks .env reads locally', async () => {
+  await withFakeOrca(async (plugin) => {
+    const before = plugin['tool.execute.before'];
+    assert.ok(before);
+    await assert.rejects(
+      before(
+        { tool: 'read', sessionID: 'session-1', callID: 'call-1' },
+        { args: { path: '.env' } }
+      ),
+      /\.env protection/
+    );
+  });
+});
+
+test('command.execute.before blocks when ryk returns block', async () => {
+  await withFakeOrca(
+    async (plugin) => {
+      const hook = plugin['command.execute.before'];
+      assert.ok(hook);
+      await assert.rejects(
+        hook(
+          { command: 'danger', sessionID: 'session-1', arguments: '' },
+          { parts: [] }
+        ),
+        /ryk blocked command/
+      );
+    },
+    `#!/bin/sh
+printf '%s\\n' '{"decision":"block","message":"command blocked"}'
+`
+  );
+});
+
+test('parseHookResponse keeps remediation_commands', () => {
+  const r = parseHookResponse(
+    JSON.stringify({
+      decision: 'block',
+      message: 'nope',
+      remediation_commands: ['ryk allow-once abc', 'ryk explain "rm"'],
+    }),
+    true
+  );
+  assert.equal(r.decision, 'block');
+  assert.deepEqual(r.remediation_commands, ['ryk allow-once abc', 'ryk explain "rm"']);
 });

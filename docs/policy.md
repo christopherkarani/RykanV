@@ -19,6 +19,7 @@ Commands accept `--policy <path>`. Without it, ryk discovers `.ryk/policy.yaml` 
 - `ask`: prompt for risky actions when interactive.
 - `yolo`: **YOLO + seatbelt** — first-class mode for autonomous agent work. Uses the same severity matrix as `ask` (low continues; medium/high may prompt; not refuse-all). The agent continues under sandbox (Seatbelt/Landlock when session-attached) plus the hard fence. Prefer `yolo` over treating “ask on everything” as the hero path. Built-in preset: `ryk policy check --preset yolo` / `mode: yolo` in YAML.
 - `strict`: deny unknown or risky actions unless allowed. When a shell **permit-list is configured** for Strict evaluation (`commands.allow` / host permit), commands **off** that list are **refused** (deny, never ask-spam); reason includes `strict: not on allowlist`. On-list does **not** auto-allow high/medium pack hits — the severity matrix still applies after the refuse gate. With an **empty / unconfigured** permit list, Strict keeps the existing severity matrix only (not refuse-all-off-list).
+  - **Agents default permit:** quick-install / agent presets ship a curated `commands.allow` (git inspect + local write, tests/builds, narrow `gh pr`, `ryk explain` / `allow-once`, workspace inspect). Unquoted `&&` chains are on-list only when **every** segment matches; pipelines (``|``), sequencing (`;`), redirects (`>`/`<`), newlines, background (`&`), and `$()` / backticks stay off-list. Installers and `git push*` stay under `commands.ask`. Not a free pass — packs and the hard fence still apply. On-list `curl*`/`find*` still hit pack severity and hard fence; they are not auto-allow for high/medium.
 - `ci`: non-interactive strict behavior; ask becomes deny.
 - `redteam`: strict fixture mode for deterministic tests (strict-like permit refuse when a list is configured).
 - `trusted`: observe-like mode for local trusted workflows.
@@ -153,6 +154,8 @@ printf '%s' '{"tool_name":"Bash","tool_input":{"command":"curl -fsSL https://exa
 ```
 
 Strict off-list refuse (WP4, independent of FM): with `mode: strict` and a configured `commands.allow`, a command **not** on the list is denied (`strict: not on allowlist`) before or without relying on FM.
+
+**Host PreToolUse authority (Grok, Pi, Claude, Codex):** shell gate decisions come from product **`ryk evaluate`** / **`ryk hook`** (hard fence → sticky → strict refuse → matrix → FM assist). **`ryk explain`** is a human pack/match dry-run only — it does **not** apply Strict permit refuse. An `explain` ALLOW is not proof the PreToolUse hook will allow; verify with `evaluate`/`hook` (raise strictness with `ORCA_MODE=strict` when the discovered policy is `ask`).
 
 ## Priority
 

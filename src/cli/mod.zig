@@ -128,6 +128,7 @@ test {
     _ = readiness;
     _ = doctor;
     _ = @import("doctor_tui.zig");
+    _ = @import("doctor_mcp.zig");
     _ = history;
     _ = danger_confirmation;
     _ = run_command;

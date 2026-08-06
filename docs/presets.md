@@ -11,7 +11,7 @@ ryk policy check .ryk/policy.yaml
 
 Available presets:
 
-- `generic-agent`: conservative local coding-agent baseline (the default for `ryk init --preset` and `ryk start` / `start --auto`). The on-disk YAML documents the structure; the generated policy uses the stricter embedded variant (network default deny + expanded secret protections — see the file header and `src/policy/presets.zig`).
+- `generic-agent`: conservative local coding-agent baseline (the default for `ryk init --preset` and `ryk start` / `start --auto`). The on-disk YAML documents the structure; the generated policy uses the stricter embedded variant (network default deny + expanded secret protections + **agents default command permit** — see the file header and `src/policy/presets.zig`). The permit is usable for agent shell work under strict refuse without blanket `python3 *` / `bash *` / `git *`; recovery commands (`ryk explain`, `ryk allow-once`) are included so agents cannot deadlock on the escape hatch.
 - `claude-code`: generic/experimental local coding-agent assumptions for Claude Code-style use.
 - `codex`: generic/experimental local coding-agent assumptions for Codex-style use.
 - `cursor-agent`: generic/experimental local editor-agent assumptions.

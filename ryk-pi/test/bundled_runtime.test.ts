@@ -27,6 +27,10 @@ test("clean HOME bundled extension loads and invokes the injected ryk binary", a
 			resolve(sourceDir, "secret_capture.ts"),
 			resolve(extensionDir, "secret_capture.ts"),
 		);
+		copyFileSync(
+			resolve(sourceDir, "parent_ask.ts"),
+			resolve(extensionDir, "parent_ask.ts"),
+		);
 		writeFileSync(
 			resolve(extensionDir, "index.ts"),
 			[

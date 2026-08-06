@@ -12,11 +12,26 @@ interface OrcaResponse {
   message?: string;
   redactions?: Array<{ field: string; reason: string }>;
   host_limitations?: string[];
+  remediation_commands?: string[];
+  suggestions?: string[];
 }
 
+/** Minimal OpenCode plugin context (auto-load + typed Plugin). */
 type PluginContext = {
   directory: string;
   worktree: string;
+  client?: {
+    tui?: {
+      showToast?: (input: {
+        body: {
+          title?: string;
+          message: string;
+          variant?: 'info' | 'success' | 'warning' | 'error';
+          duration?: number;
+        };
+      }) => Promise<unknown>;
+    };
+  };
 };
 
 type ToolExecuteBeforeInput = {
@@ -53,6 +68,16 @@ type ShellEnvOutput = {
   env: Record<string, string>;
 };
 
+type CommandExecuteBeforeInput = {
+  command: string;
+  sessionID: string;
+  arguments: string;
+};
+
+type CommandExecuteBeforeOutput = {
+  parts: unknown[];
+};
+
 type PluginHooks = {
   event?: (input: { event: Record<string, unknown> }) => Promise<void>;
   'tool.execute.before'?: (
@@ -65,6 +90,10 @@ type PluginHooks = {
   ) => Promise<void>;
   'permission.ask'?: (input: Record<string, unknown>, output: PermissionAskOutput) => Promise<void>;
   'shell.env'?: (input: ShellEnvInput, output: ShellEnvOutput) => Promise<void>;
+  'command.execute.before'?: (
+    input: CommandExecuteBeforeInput,
+    output: CommandExecuteBeforeOutput
+  ) => Promise<void>;
 };
 
 /** Decisions that may pass through on a blocking path (ask kept for permission.ask UX). */
@@ -79,14 +108,29 @@ const SECRET_KEYS = [
   'refresh_token', 'credential', 'passwd', 'pwd',
 ];
 
+/** Env var name patterns scrubbed from shell.env output (defense in depth). */
+const SECRET_ENV_NAME_RE =
+  /^(.*(_)?(TOKEN|SECRET|PASSWORD|PASSWD|PRIVATE|API_?KEY|ACCESS_KEY|REFRESH|CREDENTIAL|AUTH).*|AWS_.*|AZURE_.*|GITHUB_TOKEN|GH_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY|GOOGLE_API_KEY|NPM_TOKEN|PYPI_TOKEN|SSH_AUTH_SOCK)$/i;
+
 const AUDIT_EVENT_TYPES = new Set([
   'session.created',
   'permission.replied',
+  'permission.asked',
   'file.edited',
   'command.executed',
   'session.updated',
   'session.idle',
   'session.error',
+]);
+
+/** Paths that must never be read via OpenCode tools (docs .env protection pattern). */
+const BLOCKED_READ_BASENAMES = new Set([
+  '.env',
+  '.env.local',
+  '.env.development',
+  '.env.production',
+  '.env.staging',
+  '.env.test',
 ]);
 
 function redactSecrets(data: unknown): unknown {
@@ -105,6 +149,19 @@ function redactSecrets(data: unknown): unknown {
     }
   }
   return result;
+}
+
+function scrubEnv(env: Record<string, string>): { env: Record<string, string>; removed: string[] } {
+  const next: Record<string, string> = {};
+  const removed: string[] = [];
+  for (const [key, value] of Object.entries(env)) {
+    if (SECRET_ENV_NAME_RE.test(key)) {
+      removed.push(key);
+      continue;
+    }
+    next[key] = value;
+  }
+  return { env: next, removed };
 }
 
 function buildPayload(event: string, data: unknown, sessionId?: string): object {
@@ -173,7 +230,15 @@ function normalizeBlockingDecision(
     rule: base.rule,
     redactions: base.redactions,
     host_limitations: base.host_limitations,
+    remediation_commands: base.remediation_commands,
+    suggestions: base.suggestions,
   };
+}
+
+function parseOptionalStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out = value.filter((item): item is string => typeof item === 'string');
+  return out.length > 0 ? out : undefined;
 }
 
 /**
@@ -224,25 +289,25 @@ export function parseHookResponse(stdout: string, blocking: boolean): OrcaRespon
     );
   }
 
-  if (!blocking) {
-    return {
-      decision: decisionRaw as OrcaResponse['decision'],
-      version: typeof record.version === 'number' ? record.version : undefined,
-      risk: record.risk as OrcaResponse['risk'],
-      category: typeof record.category === 'string' ? record.category : undefined,
-      reason: typeof record.reason === 'string' ? record.reason : undefined,
-      message: typeof record.message === 'string' ? record.message : undefined,
-    };
-  }
-
-  return normalizeBlockingDecision(decisionRaw, {
+  const base: Partial<OrcaResponse> = {
     version: typeof record.version === 'number' ? record.version : undefined,
     risk: record.risk as OrcaResponse['risk'],
     category: typeof record.category === 'string' ? record.category : undefined,
     reason: typeof record.reason === 'string' ? record.reason : undefined,
     message: typeof record.message === 'string' ? record.message : undefined,
     rule: (record.rule as string | null | undefined) ?? undefined,
-  });
+    remediation_commands: parseOptionalStringArray(record.remediation_commands),
+    suggestions: parseOptionalStringArray(record.suggestions),
+  };
+
+  if (!blocking) {
+    return {
+      decision: decisionRaw as OrcaResponse['decision'],
+      ...base,
+    };
+  }
+
+  return normalizeBlockingDecision(decisionRaw, base);
 }
 
 /**
@@ -252,14 +317,12 @@ export function parseHookResponse(stdout: string, blocking: boolean): OrcaRespon
  * Bare names and hook spawns use argv (no shell interpolation).
  */
 export function findOrca(cwd?: string): string | null {
-  // Phase 5a: prefer RYK_BIN, then RYK_BIN, then PATH ryk then orca.
-  const envBin = (process.env.RYK_BIN ?? process.env.RYK_BIN)?.trim();
+  const envBin = process.env.RYK_BIN?.trim();
   if (envBin) {
     if (envBin.includes('/') || envBin.includes('\\')) {
       if (!isAbsolute(envBin)) return null;
       return existsSync(envBin) ? envBin : null;
     }
-    // Bare name — resolve via PATH only (no shell interpolation).
     try {
       const which = execFileSync('which', [envBin], {
         encoding: 'utf-8',
@@ -287,7 +350,7 @@ export function findOrca(cwd?: string): string | null {
   }
 
   // Dev-only: never trust agent-writable workspace bins in production loads.
-  if (process.env.RYK_ALLOW_WORKSPACE_BIN === '1' || process.env.RYK_ALLOW_WORKSPACE_BIN === '1') {
+  if (process.env.RYK_ALLOW_WORKSPACE_BIN === '1') {
     const candidates: string[] = [];
     for (const name of ['ryk', 'ryk'] as const) {
       if (cwd) {
@@ -357,6 +420,41 @@ function buildToolBeforePayload(
   };
 }
 
+function formatBlockMessage(response: OrcaResponse, context: string): string {
+  const base = response.message || response.reason || 'ryk blocked this command.';
+  const parts = [`ryk blocked ${context}: ${base}`];
+  if (response.remediation_commands && response.remediation_commands.length > 0) {
+    parts.push(`Next: ${response.remediation_commands.slice(0, 3).join(' · ')}`);
+  } else if (response.decision === 'ask') {
+    parts.push(
+      'This needs your approval. In a terminal: ryk allow-once <code>  (or ryk explain "<command>")'
+    );
+  }
+  return parts.join('\n');
+}
+
+async function maybeToast(
+  ctx: PluginContext,
+  variant: 'info' | 'success' | 'warning' | 'error',
+  title: string,
+  message: string
+): Promise<void> {
+  const showToast = ctx.client?.tui?.showToast;
+  if (!showToast) return;
+  try {
+    await showToast({
+      body: {
+        title,
+        message: message.slice(0, 280),
+        variant,
+        duration: variant === 'error' ? 8000 : 5000,
+      },
+    });
+  } catch {
+    // Host toast is best-effort; never fail closed on UI.
+  }
+}
+
 function applyBlockingDecision(response: OrcaResponse, context: string): void {
   if (response.decision === 'warn') {
     console.warn(`[ryk] Warning: ${response.message || response.reason}`);
@@ -368,9 +466,9 @@ function applyBlockingDecision(response: OrcaResponse, context: string): void {
   }
 
   // block, ask, error, unrecognized → veto tool execution
-  const msg = response.message || response.reason || 'ryk blocked this command.';
-  console.error(`[ryk] Blocked ${context}: ${msg}`);
-  throw new Error(`ryk blocked ${context}: ${msg}`);
+  const msg = formatBlockMessage(response, context);
+  console.error(`[ryk] ${msg}`);
+  throw new Error(msg);
 }
 
 /** ryk decision → OpenCode permission.ask status. Unknown decisions fail closed to deny. */
@@ -425,6 +523,40 @@ function sessionIdFromRecord(value: Record<string, unknown>): string | undefined
   return undefined;
 }
 
+function pathFromArgs(args: Record<string, unknown>): string | undefined {
+  for (const key of ['path', 'filePath', 'file_path', 'target_file', 'file', 'filename']) {
+    const value = args[key];
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return undefined;
+}
+
+function isBlockedDotenvPath(pathValue: string): boolean {
+  const normalized = pathValue.replace(/\\/g, '/');
+  const base = normalized.split('/').pop() ?? normalized;
+  if (BLOCKED_READ_BASENAMES.has(base)) return true;
+  // .env.* variants (except example/sample templates)
+  if (/^\.env(\.|$)/.test(base) && !/\.(example|sample|template)$/i.test(base)) return true;
+  return false;
+}
+
+const READ_LIKE_TOOLS = new Set([
+  'read',
+  'read_file',
+  'file_read',
+  'cat',
+]);
+
+function localDotenvGuard(tool: string, args: Record<string, unknown>): void {
+  if (!READ_LIKE_TOOLS.has(tool.toLowerCase())) return;
+  const pathValue = pathFromArgs(args);
+  if (!pathValue) return;
+  if (!isBlockedDotenvPath(pathValue)) return;
+  const msg = `ryk blocked tool execution: reading ${pathValue} is blocked (.env protection).`;
+  console.error(`[ryk] ${msg}`);
+  throw new Error(msg);
+}
+
 const MISSING_BINARY_MSG = 'ryk binary not found; blocking as a precaution.';
 
 export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHooks> {
@@ -450,9 +582,17 @@ export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHook
         console.error(`[ryk] Blocked tool execution: ${MISSING_BINARY_MSG}`);
         throw new Error(MISSING_BINARY_MSG);
       },
+      'command.execute.before': async () => {
+        console.error(`[ryk] Blocked command: ${MISSING_BINARY_MSG}`);
+        throw new Error(MISSING_BINARY_MSG);
+      },
       'permission.ask': async (_input, output) => {
         console.error(`[ryk] Blocked permission: ${MISSING_BINARY_MSG}`);
         output.status = 'deny';
+      },
+      'shell.env': async (_input, output) => {
+        const scrubbed = scrubEnv(output.env);
+        output.env = scrubbed.env;
       },
     };
   }
@@ -478,6 +618,9 @@ export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHook
     },
 
     'tool.execute.before': async (input, output) => {
+      // Local defense-in-depth (.env protection) before ryk round-trip.
+      localDotenvGuard(input.tool, output.args ?? {});
+
       const response = callOrca(
         rykBin,
         'tool.execute.before',
@@ -485,6 +628,14 @@ export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHook
         input.sessionID,
         true
       );
+      if (response.decision === 'warn') {
+        await maybeToast(
+          ctx,
+          'warning',
+          'ryk',
+          response.message || response.reason || 'policy warning'
+        );
+      }
       applyBlockingDecision(response, 'tool execution');
     },
 
@@ -511,9 +662,44 @@ export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHook
       const response = callOrca(rykBin, 'permission.asked', input, sessionId, true);
       // Host already presents permission UI: map via table (ask stays ask for resume).
       applyPermissionDecision(response, output);
+      if (response.decision === 'warn' || response.decision === 'ask') {
+        await maybeToast(
+          ctx,
+          'warning',
+          'ryk approval',
+          response.message || response.reason || 'needs your approval'
+        );
+      }
+    },
+
+    'command.execute.before': async (input, _output) => {
+      // Slash/custom commands are not shell — send as tool name so ryk uses tool policy.
+      const response = callOrca(
+        rykBin,
+        'command.execute.before',
+        {
+          tool: input.command,
+          command_name: input.command,
+          sessionID: input.sessionID,
+          arguments: input.arguments,
+        },
+        input.sessionID,
+        true
+      );
+      applyBlockingDecision(response, 'command');
     },
 
     'shell.env': async (input, output) => {
+      // Scrub secrets from the env OpenCode will pass to shell tools.
+      const beforeKeys = Object.keys(output.env);
+      const scrubbed = scrubEnv(output.env);
+      output.env = scrubbed.env;
+      if (scrubbed.removed.length > 0) {
+        console.warn(
+          `[ryk] Scrubbed ${scrubbed.removed.length} secret env var(s) from shell.env`
+        );
+      }
+
       await callOrca(
         rykBin,
         'shell.env',
@@ -522,6 +708,9 @@ export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHook
           sessionID: input.sessionID,
           callID: input.callID,
           env: redactSecrets(output.env),
+          scrubbed_keys: scrubbed.removed,
+          env_key_count_before: beforeKeys.length,
+          env_key_count_after: Object.keys(output.env).length,
         },
         input.sessionID,
         false

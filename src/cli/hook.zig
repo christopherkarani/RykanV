@@ -216,6 +216,8 @@ fn mapOpenCodeEvent(event_name: []const u8) ?Event {
     if (std.mem.eql(u8, event_name, "tool.execute.before")) return .PreToolUse;
     if (std.mem.eql(u8, event_name, "tool.execute.after")) return .PostToolUse;
     if (std.mem.eql(u8, event_name, "permission.asked")) return .PermissionRequest;
+    // OpenCode slash/custom commands — evaluate like PreToolUse.
+    if (std.mem.eql(u8, event_name, "command.execute.before")) return .PreToolUse;
     if (std.mem.eql(u8, event_name, "permission.replied")) return null; // informational
     if (std.mem.eql(u8, event_name, "file.edited")) return null; // informational
     if (std.mem.eql(u8, event_name, "command.executed")) return null; // informational
@@ -299,6 +301,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
                 \\  ryk hook opencode session.created
                 \\  ryk hook opencode tool.execute.before
                 \\  ryk hook opencode tool.execute.after
+                \\  ryk hook opencode command.execute.before
                 \\  ryk hook opencode permission.asked
                 \\  ryk hook opencode permission.replied
                 \\  ryk hook opencode file.edited
@@ -3274,6 +3277,7 @@ test "mapOpenCodeEvent maps known events correctly" {
     try std.testing.expectEqual(Event.SessionStart, mapOpenCodeEvent("session.created").?);
     try std.testing.expectEqual(Event.PreToolUse, mapOpenCodeEvent("tool.execute.before").?);
     try std.testing.expectEqual(Event.PostToolUse, mapOpenCodeEvent("tool.execute.after").?);
+    try std.testing.expectEqual(Event.PreToolUse, mapOpenCodeEvent("command.execute.before").?);
     try std.testing.expectEqual(Event.PermissionRequest, mapOpenCodeEvent("permission.asked").?);
     try std.testing.expectEqual(null, mapOpenCodeEvent("permission.replied"));
     try std.testing.expectEqual(null, mapOpenCodeEvent("unknown.event"));

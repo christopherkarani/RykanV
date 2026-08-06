@@ -33,6 +33,7 @@ Where a host already hardens interactive outcomes:
 | **Hermes** | `pre_tool_call` | proceed | `action: block` | `action: approve` + `rule_key` | log + proceed | **Yes** (Hermes human gate) | Requires Hermes with `pre_tool_call` approve escalation. CI hardens `ask`→`block`. |
 | **OpenClaw** | `tool.before` | proceed | block | **block** (no ask UX) | log + allow | No | Documented host limitation until OpenClaw exposes native approval. |
 | **OpenCode** | `tool.execute.before` | proceed | throw/block | **block** (no resume) | log + allow | No on tool path | Prefer routing high-risk tools through OpenCode permission UX. |
+| **OpenCode** | `command.execute.before` | proceed | throw/block | **block** (no resume) | log + allow | No | Slash/custom commands; payload uses command name as tool. |
 | **OpenCode** | `permission.ask` | allow | deny | **host ask** (resume) | log | **Yes** | Leave OpenCode permission UI for ryk `ask`; only hard-deny on `block`. |
 | **Claude Code** | `PreToolUse` / `PermissionRequest` | allow | deny | host permission / ask shape | warn | Partial | Map to Claude permission request where the host supports it. |
 | **Codex** | `PreToolUse` / `PermissionRequest` | allow | deny | host permission / ask shape | warn | Partial | Same pattern as Claude adapter. |

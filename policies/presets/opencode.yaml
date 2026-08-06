@@ -95,6 +95,17 @@ mcp:
     - "*.search_*"
     - "*.list_*"
     - "*.get_*"
+    # OpenCode built-in coding tools (bare names; no server prefix)
+    - "glob"
+    - "grep"
+    - "list"
+    - "read"
+    - "todowrite"
+    - "todoread"
+    - "skill"
+    - "task"
+    - "question"
+    - "lsp"
   deny:
     - "*.delete_*"
     - "*.shell"

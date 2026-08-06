@@ -294,7 +294,46 @@ const common_strict_rules =
     \\
     \\commands:
     \\  default: ask
+    \\  # Agents default permit (strict list; packs + hard fence still apply).
+    \\  # Unquoted && chains are on-list only when every segment matches.
+    \\  # Not a free pass: high/medium pack hits still matrix-block under strict.
     \\  allow:
+    \\    # Workspace / inspect
+    \\    - "cd *"
+    \\    - "mkdir *"
+    \\    - "touch *"
+    \\    - "cp *"
+    \\    - "mv *"
+    \\    - "rmdir *"
+    \\    - "cat *"
+    \\    - "head *"
+    \\    - "tail *"
+    \\    - "file *"
+    \\    - "stat *"
+    \\    - "which *"
+    \\    - "whoami"
+    \\    - "id"
+    \\    - "uname *"
+    \\    - "date"
+    \\    - "umask"
+    \\    - "umask *"
+    \\    - "ls"
+    \\    - "ls *"
+    \\    - "pwd"
+    \\    - "echo *"
+    \\    - "/usr/bin/env"
+    \\    - "true"
+    \\    - "false"
+    \\    - "rg *"
+    \\    - "grep *"
+    \\    - "find *"
+    \\    - "wc *"
+    \\    - "sort *"
+    \\    - "uniq *"
+    \\    - "sed -n *"
+    \\    - "curl *"
+    \\    - "wget *"
+    \\    # Git (local read/write; no bare git *; push stays ask)
     \\    - "git status"
     \\    - "git status*"
     \\    - "git diff"
@@ -305,40 +344,80 @@ const common_strict_rules =
     \\    - "git branch *"
     \\    - "git ls-files"
     \\    - "git ls-files *"
+    \\    - "git add *"
     \\    - "git commit *"
-    \\    - "ls"
-    \\    - "ls *"
-    \\    - "pwd"
-    \\    - "echo *"
-    \\    - "/usr/bin/env"
-    \\    - "true"
-    \\    - "false"
-    \\    - "rg *"
-    \\    - "wc *"
-    \\    - "sort *"
-    \\    - "uniq *"
-    \\    - "sed -n *"
-    \\    - "curl *"
-    \\    - "wget *"
+    \\    - "git show *"
+    \\    - "git stash *"
+    \\    - "git fetch *"
+    \\    - "git pull *"
+    \\    - "git merge *"
+    \\    - "git remote *"
+    \\    - "git tag *"
+    \\    - "git cherry-pick *"
+    \\    - "git init"
+    \\    - "git clone *"
+    \\    - "git rev-parse *"
+    \\    - "git merge-base *"
+    \\    - "git checkout *"
+    \\    - "git switch *"
+    \\    - "git restore *"
+    \\    # GitHub CLI (narrow; no blanket gh api *)
+    \\    - "gh auth status"
+    \\    - "gh pr *"
+    \\    - "gh issue *"
+    \\    # Language / test / build
     \\    - "zig version"
     \\    - "zig build"
     \\    - "zig build *"
+    \\    - "zig fmt"
+    \\    - "zig fmt *"
     \\    - "npm test*"
     \\    - "npm run *"
     \\    - "pnpm test*"
+    \\    - "pnpm run *"
     \\    - "yarn test*"
+    \\    - "yarn run *"
     \\    - "go test"
     \\    - "go test *"
+    \\    - "go build"
+    \\    - "go build *"
+    \\    - "go run"
+    \\    - "go run *"
+    \\    - "go fmt"
+    \\    - "go fmt *"
     \\    - "cargo test"
     \\    - "cargo test *"
+    \\    - "cargo build"
+    \\    - "cargo build *"
+    \\    - "cargo run"
+    \\    - "cargo run *"
+    \\    - "cargo fmt"
+    \\    - "cargo check"
+    \\    - "cargo clippy"
     \\    - "swift test*"
+    \\    - "swift build"
+    \\    - "swift build *"
+    \\    - "tsc"
+    \\    - "tsc *"
+    \\    - "python --version"
+    \\    - "python3 --version"
     \\    - "python -m pytest*"
+    \\    - "python3 -m pytest*"
     \\    - "pytest"
     \\    - "pytest *"
-    \\    # Narrow, high-value, zero-risk build entrypoints (see Phase 2 / PR #17 DX work).
+    \\    - "node --version"
     \\    - "make test*"
     \\    - "make build*"
     \\    - "make check*"
+    \\    - "./scripts/zig *"
+    \\    # Ryk recovery / inspect (never deadlock allow-once / explain)
+    \\    - "ryk version"
+    \\    - "ryk help *"
+    \\    - "ryk doctor *"
+    \\    - "ryk explain *"
+    \\    - "ryk allow-once *"
+    \\    - "ryk allowlist *"
+    \\    - "ryk packs *"
     \\  deny:
     \\    - "rm -rf *"
     \\    - "find * -delete"
@@ -384,6 +463,16 @@ const common_strict_rules =
     \\    - "*.search_*"
     \\    - "*.list_*"
     \\    - "*.get_*"
+    \\    - "glob"
+    \\    - "grep"
+    \\    - "list"
+    \\    - "read"
+    \\    - "todowrite"
+    \\    - "todoread"
+    \\    - "skill"
+    \\    - "task"
+    \\    - "question"
+    \\    - "lsp"
     \\  deny:
     \\    - "*.delete_*"
     \\    - "*.shell"
@@ -724,4 +813,17 @@ test "quick install agent presets have conservative defaults (network deny + bro
     try std.testing.expect(std.mem.indexOf(u8, generic, "    - \"make test*\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, generic, "    - \"make build*\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, generic, "    - \"make check*\"") != null);
+
+    // Agents default permit markers (usable strict list without broad * shells).
+    try std.testing.expect(std.mem.indexOf(u8, generic, "Agents default permit") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generic, "    - \"git add *\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generic, "    - \"gh pr *\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generic, "    - \"ryk explain *\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generic, "    - \"ryk allow-once *\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generic, "    - \"mkdir *\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generic, "    - \"cd *\"") != null);
+    // Must not ship unrestricted interpreter / force-push permits.
+    try std.testing.expect(std.mem.indexOf(u8, generic, "    - \"python3 *\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generic, "    - \"bash *\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, generic, "    - \"git *\"") == null);
 }

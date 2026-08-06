@@ -489,7 +489,7 @@ test "all policy preset files under policies/presets validate" {
     defer dir.close(std.testing.io);
     var count: usize = 0;
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(std.testing.io)) |entry| {
         if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".yaml")) continue;
         const path = try std.fs.path.join(std.testing.allocator, &.{ "policies/presets", entry.name });
         defer std.testing.allocator.free(path);

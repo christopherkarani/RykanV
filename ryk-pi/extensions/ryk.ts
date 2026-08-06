@@ -5,10 +5,68 @@ import { accessSync, constants, existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, resolve } from "node:path";
 import {
+	addSessionGrant,
+	BLOCK_WIDGET_KEY,
+	buildAutoDenyCopy,
+	cleanupParentAskDir,
+	DECISION_CUSTOM_TYPE,
+	DISPLAY_BRAND,
+	hasSessionGrant,
+	LABEL_ALLOW_ONCE,
+	LABEL_DENY,
+	LABEL_DISABLE_SESSION,
+	LABEL_PROTOCOL_SESSION_ALLOW,
+	LABEL_SHOW_WHY,
+	listPendingRequests,
+	mapSelectLabelToChoice,
+	parentAskDir,
+	parentAskTimeoutMs,
+	parentSessionIdFromEnv,
+	PRODUCT_NAME,
+	resolvePiAskRoot,
+	sanitizeSessionId,
+	SESSION_GRANT_OPTION,
+	STATUS_KEY,
+	waitForAskResponse,
+	writeAskRequest,
+	writeAskResponse,
+	type ParentAskChoice,
+	type ParentAskFs,
+	type ParentAskRequest,
+} from "./parent_ask.ts";
+import {
 	handleSecretCaptureInput,
 	isSecretCaptureDisabled,
 	scrubContextMessages,
 } from "./secret_capture.ts";
+
+export {
+	BLOCK_WIDGET_KEY,
+	DECISION_CUSTOM_TYPE,
+	DISPLAY_BRAND,
+	LABEL_ALLOW_ONCE,
+	LABEL_DENY,
+	LABEL_DISABLE_SESSION,
+	LABEL_PROTOCOL_SESSION_ALLOW,
+	LABEL_SHOW_WHY,
+	PRODUCT_NAME,
+	SESSION_GRANT_OPTION,
+	STATUS_KEY,
+	buildAutoDenyCopy,
+	parentAskTimeoutMs,
+	resolvePiAskRoot,
+	sanitizeSessionId,
+	hasSessionGrant,
+	addSessionGrant,
+	readGrants,
+	listPendingRequests,
+	writeAskRequest,
+	writeAskResponse,
+	waitForAskResponse,
+	mapSelectLabelToChoice,
+	parentAskDir,
+	parentSessionIdFromEnv,
+} from "./parent_ask.ts";
 
 type UnavailableMode =
 	| "auto"
@@ -88,6 +146,18 @@ type PiAPI = {
 			deliverAs?: "steer" | "followUp" | "nextTurn";
 		},
 	) => void;
+	/** Optional Pi host API for custom transcript chrome (no purple default). */
+	registerMessageRenderer?: (
+		customType: string,
+		renderer: (
+			message: { content?: string; details?: unknown },
+			options: { expanded?: boolean; outputPad?: number },
+			theme: {
+				fg: (name: string, text: string) => string;
+				bg?: (name: string, text: string) => string;
+			},
+		) => unknown,
+	) => void;
 };
 
 type SpawnOptions = {
@@ -131,7 +201,7 @@ type SpawnLike = (
 
 /**
  * Built-in Pi tools with specialized evaluators (evaluate / decide file).
- * All other tool names are still intercepted via name-gated `ryk decide tool`.
+ * Other tools may be name-gated via `ryk decide tool` unless passthrough.
  */
 export const PROTECTED_PI_TOOLS = [
 	"bash",
@@ -144,6 +214,17 @@ export const PROTECTED_PI_TOOLS = [
 ] as const;
 export type ProtectedPiTool = (typeof PROTECTED_PI_TOOLS)[number];
 
+/**
+ * Pi control-plane / orchestration tools with no host shell or FS side effects
+ * through the standard bash/file path. Skip noisy name-only `decide tool`.
+ * MCP and other custom tools still name-gate.
+ */
+export const PASSTHROUGH_PI_TOOLS = [
+	"contact_supervisor",
+	"intercom",
+	"subagent",
+] as const;
+
 /** File tools that use Zig `ryk decide file` with operation write. */
 const FILE_WRITE_TOOLS = new Set<string>(["write", "edit"]);
 /** File tools that use Zig `ryk decide file` with operation read. */
@@ -151,13 +232,32 @@ const FILE_READ_TOOLS = new Set<string>(["read", "grep", "find", "ls"]);
 /** Discovery tools can traverse/read descendants that a root-only preflight cannot prove safe. */
 const BROAD_DISCOVERY_TOOLS = new Set<string>(["grep", "find", "ls"]);
 
-export function isProtectedPiTool(toolName: string): toolName is ProtectedPiTool {
+export function isProtectedPiTool(
+	toolName: string,
+): toolName is ProtectedPiTool {
 	return (PROTECTED_PI_TOOLS as readonly string[]).includes(toolName);
 }
 
-/** Honest coverage string for doctor/status surfaces. */
+/** True for Pi orchestration tools that skip name-only decide. */
+export function isPassthroughPiTool(toolName: string): boolean {
+	return (PASSTHROUGH_PI_TOOLS as readonly string[]).includes(toolName);
+}
+
+/**
+ * Whether a non-protected tool should hit `ryk decide tool` (name gate).
+ * Protected tools use specialized evaluators; passthrough tools are allowed.
+ */
+export function shouldNameGateTool(toolName: string): boolean {
+	const name = toolName.trim();
+	if (!name) return false;
+	if (isProtectedPiTool(name)) return false;
+	if (isPassthroughPiTool(name)) return false;
+	return true;
+}
+
+/** Honest coverage string for doctor/status surfaces (not the ask card). */
 export function piCoverageLabel(): string {
-	return "bash + write + edit + read policy-protected; grep + find + ls approval-gated (descendants not individually evaluated); custom tool names gated via decide tool (not full MCP protocol mediation)";
+	return "bash + write + edit + read policy-protected; grep + find + ls approval-gated; Pi control tools (contact_supervisor/intercom/subagent) passthrough; other custom names gated via decide tool";
 }
 
 /**
@@ -242,6 +342,27 @@ export function formatProtocolErrorReason(
 	return `[${failureClass}] ${cleaned}`;
 }
 
+/** Compact stdout/stderr preview for protocol diagnostics (never empty → "empty"). */
+export function previewProcessOutput(text: string, maxChars = 120): string {
+	const trimmed = text.replace(/\s+/g, " ").trim();
+	if (!trimmed) return "empty";
+	const sliced =
+		trimmed.length > maxChars ? `${trimmed.slice(0, maxChars)}…` : trimmed;
+	return JSON.stringify(sliced);
+}
+
+/**
+ * Human-readable detail when JSON.parse(stdout) fails.
+ * Includes exit + stdout/stderr previews so /ryk-doctor and the ask card are actionable.
+ */
+export function formatMalformedJsonDetail(
+	result: Pick<RunProcessResult, "code" | "stdout" | "stderr">,
+	verb: "evaluate" | "decide",
+): string {
+	const exit = result.code === null ? "null" : String(result.code);
+	return `ryk ${verb} returned malformed JSON (exit ${exit}; stdout ${previewProcessOutput(result.stdout)}; stderr ${previewProcessOutput(result.stderr)}).`;
+}
+
 /** Extract class token from a reason string, if present. */
 export function protocolFailureClassFromReason(
 	reason: string,
@@ -304,13 +425,18 @@ type OrcaEvaluateResponse = {
 };
 
 type OrcaDecisionCard = {
-	variant: "block" | "ask";
+	/** block=deny, ask=needs decision, wait=parent-forward pending */
+	variant: "block" | "ask" | "wait";
 	title: string;
 	summary: string;
 	rule?: string;
 	pack?: string;
 	severity?: string;
 	nextStep?: string;
+	/** Optional tool/command preview line */
+	preview?: string;
+	/** For wait cards: timeout hint */
+	timeoutHint?: string;
 };
 
 type RunProcessResult = {
@@ -325,6 +451,13 @@ type SetupResult = {
 	status: "ready" | "missing" | "degraded";
 	message: string;
 };
+/**
+ * Sticky recovery after the first protocol-failure dialog in a session.
+ * - unset: prompt (or parent-forward) on protocol errors
+ * - block: auto-block further protocol errors without re-prompting
+ */
+export type ProtocolRecovery = "block";
+
 type SessionState = {
 	bypass: boolean;
 	status: SetupResult["status"];
@@ -333,6 +466,11 @@ type SessionState = {
 	protocolFailures: number;
 	/** True after one-shot degraded notify for this session. */
 	protocolDegradedNotified: boolean;
+	/**
+	 * After the user (or parent) chooses session block for protocol failures,
+	 * further protocol errors auto-block without another select.
+	 */
+	protocolRecovery?: ProtocolRecovery;
 };
 
 export type RykExtensionOptions = {
@@ -340,6 +478,16 @@ export type RykExtensionOptions = {
 	resolveBin?: () => ResolvedOrcaBin;
 	spawn?: SpawnLike;
 	timeoutMs?: number;
+	/** Override IPC root (tests). */
+	piAskRoot?: string;
+	/** Inject fs for parent-ask IPC (tests). */
+	piAskFs?: ParentAskFs;
+	/** Inject clock for parent-ask wait (tests). */
+	now?: () => number;
+	/** Inject sleep for parent-ask wait (tests). */
+	sleep?: (ms: number) => Promise<void>;
+	/** Parent poll interval ms; 0 disables background poll (tests may call poll manually). */
+	parentAskPollMs?: number;
 };
 
 export type ResolvedOrcaBin = {
@@ -356,8 +504,6 @@ type ResolveOrcaBinOptions = {
 	spawnSync?: SpawnSyncLike;
 };
 
-const STATUS_KEY = "ryk";
-const BLOCK_WIDGET_KEY = "ryk-block";
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_CHILD_OUTPUT_BYTES = 1024 * 1024;
 const REQUIRED_RYK_VERSION = (() => {
@@ -376,22 +522,25 @@ const REQUIRED_RYK_VERSION = (() => {
 		return "1.2.9";
 	}
 })();
+// Protocol recovery: session allow first, then once, then sticky block.
+const PROTOCOL_SESSION_ALLOW_OPTION = LABEL_PROTOCOL_SESSION_ALLOW;
+const PROTOCOL_BLOCK_OPTION = LABEL_DENY;
 const ASK_OPTIONS = [
-	"Block",
-	"Run once anyway",
-	"Disable ryk for this Pi session",
-	"Show repair instructions / run doctor",
+	PROTOCOL_SESSION_ALLOW_OPTION,
+	LABEL_ALLOW_ONCE,
+	PROTOCOL_BLOCK_OPTION,
 ] as const;
 const POLICY_ASK_OPTIONS = [
-	"Block",
-	"Run once anyway",
-	"Disable ryk for this Pi session",
-	"Show policy reason",
+	LABEL_ALLOW_ONCE,
+	LABEL_DENY,
+	SESSION_GRANT_OPTION,
+	LABEL_DISABLE_SESSION,
+	LABEL_SHOW_WHY,
 ] as const;
-const ONCE_OPTION = "Run once anyway";
+const ONCE_OPTION = LABEL_ALLOW_ONCE;
 
 /**
- * Whether interactive prompts may offer "Run once anyway".
+ * Whether interactive prompts may offer "Allow once".
  * - `RYK_PI_ALLOW_ONCE=false|0|no` disables always
  * - `RYK_PI_MODE=strict` disables by default (production hardening)
  * - `RYK_PI_ALLOW_ONCE=true` re-enables even under strict
@@ -413,10 +562,19 @@ export function askOptionsFor(
 	kind: "policy" | "unavailable",
 	allowOnce: boolean,
 ): string[] {
-	const base =
-		kind === "policy" ? [...POLICY_ASK_OPTIONS] : [...ASK_OPTIONS];
+	const base = kind === "policy" ? [...POLICY_ASK_OPTIONS] : [...ASK_OPTIONS];
 	if (allowOnce) return base;
 	return base.filter((option) => option !== ONCE_OPTION);
+}
+
+/** Sticky protocol-recovery block label. */
+export function protocolBlockOptionLabel(): string {
+	return PROTOCOL_BLOCK_OPTION;
+}
+
+/** Session-wide allow (bypass) label for protocol recovery. */
+export function protocolSessionAllowOptionLabel(): string {
+	return PROTOCOL_SESSION_ALLOW_OPTION;
 }
 
 const DECIDE_EXIT_CODE = {
@@ -536,10 +694,7 @@ async function runOrcaEvaluateOnce(
 		return {
 			kind: "error",
 			failureClass: "timeout",
-			reason: formatProtocolErrorReason(
-				"timeout",
-				"ryk evaluation timed out.",
-			),
+			reason: formatProtocolErrorReason("timeout", "ryk evaluation timed out."),
 		};
 	}
 
@@ -569,7 +724,7 @@ async function runOrcaEvaluateOnce(
 			failureClass: "malformed_json",
 			reason: formatProtocolErrorReason(
 				"malformed_json",
-				"ryk returned malformed JSON.",
+				formatMalformedJsonDetail(result, "evaluate"),
 			),
 		};
 	}
@@ -690,7 +845,7 @@ async function runOrcaDecideOnce(
 			failureClass: "malformed_json",
 			reason: formatProtocolErrorReason(
 				"malformed_json",
-				"ryk decide returned malformed JSON.",
+				formatMalformedJsonDetail(result, "decide"),
 			),
 		};
 	}
@@ -825,7 +980,7 @@ function blockMalformedToolCall(
 ): ToolCallResult {
 	const details = {
 		variant: "block" as const,
-		title: "RYK BLOCKED",
+		title: DISPLAY_BRAND,
 		summary,
 	};
 	showOrcaDecision(pi, ctx, details);
@@ -862,26 +1017,34 @@ export function resolveUnavailableMode(
 }
 
 /**
- * Pi subagent / child-agent sessions. Parent-forward approval is out of scope
- * for Phase 3: policy ask always auto-denies when this is set.
+ * Pi subagent / child-agent sessions (`PI_SUBAGENT_PARENT_SESSION` set).
+ * Policy ask uses parent-forward IPC (see parent_ask.ts / ADR-ipc.md), not
+ * local ui.select. Timeout / missing parent still fail-closes to deny.
  */
 export function isSubagentSession(
 	env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-	const parent = env.PI_SUBAGENT_PARENT_SESSION;
-	return typeof parent === "string" && parent.trim().length > 0;
+	return parentSessionIdFromEnv(env) !== null;
 }
 
 /**
- * Policy `ask` must never silently allow. Auto-deny when the session cannot
- * present a real human prompt (noninteractive print/json/headless) or when
- * running as a Pi subagent (even if hasUI is true).
+ * True when this session must not present a local policy select:
+ * noninteractive print/json/headless, or Pi subagent (parent-forward only).
+ * Does not mean "always auto-deny" for subagents — they try parent first.
  */
 export function shouldAutoDenyPolicyAsk(
 	ctx: PiContext,
 	env: NodeJS.ProcessEnv = process.env,
 ): boolean {
 	return isNoninteractiveSession(ctx) || isSubagentSession(env);
+}
+
+/** Local interactive select is only for main TUI sessions. */
+export function shouldLocalSelectPolicyAsk(
+	ctx: PiContext,
+	env: NodeJS.ProcessEnv = process.env,
+): boolean {
+	return !isNoninteractiveSession(ctx) && !isSubagentSession(env);
 }
 
 export function isNoninteractiveSession(ctx: PiContext): boolean {
@@ -907,6 +1070,33 @@ export function installRykExtension(
 	pi: PiAPI,
 	extensionOptions: RykExtensionOptions = {},
 ): void {
+	// Prefer semantic theme colors over Pi's purple custom-message chrome.
+	try {
+		pi.registerMessageRenderer?.(DECISION_CUSTOM_TYPE, (message, _opts, theme) => {
+			const details = message.details as OrcaDecisionCard | undefined;
+			const variant = details?.variant ?? "block";
+			const tone =
+				variant === "block"
+					? "error"
+					: variant === "ask"
+						? "warning"
+						: "dim";
+			const body =
+				typeof message.content === "string" && message.content.length > 0
+					? message.content
+					: buildOrcaWidget(
+							details ?? {
+								variant: "block",
+								title: DISPLAY_BRAND,
+								summary: "Decision",
+							},
+					  ).join("\n");
+			return theme.fg(tone, body);
+		});
+	} catch {
+		// Older hosts without registerMessageRenderer — plain text content still works.
+	}
+
 	const resolvedBin = extensionOptions.rykBin
 		? { rykBin: extensionOptions.rykBin, source: "explicit" as const }
 		: (extensionOptions.resolveBin ?? resolveOrcaBin)();
@@ -924,6 +1114,20 @@ export function installRykExtension(
 			? { ...process.env, RYK_DAEMON: resolvedBin.daemonBin }
 			: process.env,
 	};
+
+	const askFs = extensionOptions.piAskFs;
+	const askRoot =
+		extensionOptions.piAskRoot ?? resolvePiAskRoot(runtime.env, askFs);
+	const askNow = extensionOptions.now ?? Date.now;
+	const askSleep =
+		extensionOptions.sleep ??
+		((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+	const parentPollMs =
+		extensionOptions.parentAskPollMs === undefined
+			? 1_000
+			: extensionOptions.parentAskPollMs;
+	let parentPollTimer: ReturnType<typeof setInterval> | undefined;
+	let parentPollBusy = false;
 
 	let unavailableMode: UnavailableMode =
 		parseMode(process.env.RYK_PI_MODE ?? process.env.RYK_PI_MODE) ?? "auto";
@@ -945,10 +1149,103 @@ export function installRykExtension(
 
 	const updateStatus = (ctx: PiContext): void => {
 		if (stateFor(ctx).bypass) {
-			ctx.ui?.setStatus?.(STATUS_KEY, "ryk bypass");
+			ctx.ui?.setStatus?.(STATUS_KEY, "rykan v bypass");
 			return;
 		}
-		ctx.ui?.setStatus?.(STATUS_KEY, `ryk ${stateFor(ctx).status}`);
+		ctx.ui?.setStatus?.(STATUS_KEY, `rykan v ${stateFor(ctx).status}`);
+	};
+
+	const grantsDirFor = (sessionId: string) =>
+		parentAskDir(askRoot, sessionId, askFs);
+
+	const checkSessionGrant = (
+		toolName: string,
+		env: NodeJS.ProcessEnv,
+		ctx: PiContext,
+	): boolean => {
+		const parentId = parentSessionIdFromEnv(env);
+		const localId = ctx.sessionManager?.getSessionId?.()?.trim();
+		const ids = [parentId, localId].filter(
+			(id): id is string => typeof id === "string" && id.length > 0,
+		);
+		for (const id of ids) {
+			if (hasSessionGrant(grantsDirFor(id), toolName, askFs)) return true;
+		}
+		return false;
+	};
+
+	const recordSessionGrantHit = (toolLabel: string): void => {
+		if (!pi.sendMessage) return;
+		try {
+			pi.sendMessage(
+				{
+					customType: "orca.audit",
+					content: `ryk session grant hit: ${toolLabel}`,
+					display: false,
+					details: {
+						event: "orca_session_grant_hit",
+						tool: truncate(sanitizeVisibleText(toolLabel), 128),
+					},
+				},
+				{ triggerTurn: false },
+			);
+		} catch {
+			// allow still proceeds; grant is explicit session approval
+		}
+	};
+
+	/**
+	 * Parent main session: drain pending child ask requests via local select.
+	 * Exported behavior for tests via returned poll closure is not public API;
+	 * tests drive via tool_call hooks + injected fs.
+	 */
+	const pollParentAsks = async (ctx: PiContext): Promise<void> => {
+		if (isSubagentSession(runtime.env)) return;
+		if (isNoninteractiveSession(ctx)) return;
+		if (parentPollBusy) return;
+		const sessionId = ctx.sessionManager?.getSessionId?.()?.trim();
+		if (!sessionId) return;
+		parentPollBusy = true;
+		try {
+			const dir = grantsDirFor(sessionId);
+			const pending = listPendingRequests(dir, askFs);
+			for (const req of pending) {
+				if (
+					sanitizeSessionId(req.parent_session) !== sanitizeSessionId(sessionId)
+				) {
+					continue;
+				}
+				await answerParentAskRequest(req, dir, pi, ctx, {
+					allowOnce: allowOnceBypassEnabled(runtime.env, unavailableMode),
+					disableSession: () => {
+						stateFor(ctx).bypass = true;
+						updateStatus(ctx);
+					},
+					now: askNow,
+					fsApi: askFs,
+				});
+			}
+		} finally {
+			parentPollBusy = false;
+		}
+	};
+
+	const startParentPoll = (ctx: PiContext): void => {
+		if (parentPollMs <= 0) return;
+		if (isSubagentSession(runtime.env)) return;
+		if (parentPollTimer) return;
+		parentPollTimer = setInterval(() => {
+			void pollParentAsks(ctx);
+		}, parentPollMs);
+		// unref so Node can exit if only the timer remains
+		parentPollTimer.unref?.();
+	};
+
+	const stopParentPoll = (): void => {
+		if (parentPollTimer) {
+			clearInterval(parentPollTimer);
+			parentPollTimer = undefined;
+		}
 	};
 
 	pi.on("session_start", (_event, ctx) => {
@@ -958,6 +1255,8 @@ export function installRykExtension(
 		state.protocolFailures = 0;
 		state.protocolDegradedNotified = false;
 		updateStatus(ctx);
+		startParentPoll(ctx);
+		void pollParentAsks(ctx);
 		if (
 			(process.env.RYK_PI_AUTO_SETUP ?? process.env.RYK_PI_AUTO_SETUP) ===
 			"false"
@@ -977,6 +1276,12 @@ export function installRykExtension(
 		stateFor(ctx).bypass = false;
 		ctx.ui?.setStatus?.(STATUS_KEY, undefined);
 		clearOrcaWidget(ctx);
+		stopParentPoll();
+		// Grants die with parent session.
+		if (!isSubagentSession(runtime.env)) {
+			const sessionId = ctx.sessionManager?.getSessionId?.()?.trim();
+			if (sessionId) cleanupParentAskDir(grantsDirFor(sessionId), askFs);
+		}
 	});
 
 	// Credential capture from prompt (Pi only). Still runs when bash bypass is on
@@ -1010,6 +1315,12 @@ export function installRykExtension(
 		async (event: PiToolCallEvent, ctx: PiContext): Promise<ToolCallResult> => {
 			await stateFor(ctx).bootstrap;
 
+			// Drain pending child asks while parent is active (also helps tests
+			// without relying solely on the background interval).
+			if (!isSubagentSession(runtime.env)) {
+				await pollParentAsks(ctx);
+			}
+
 			if (stateFor(ctx).bypass) {
 				clearOrcaWidget(ctx);
 				ctx.ui?.notify?.(
@@ -1025,6 +1336,13 @@ export function installRykExtension(
 				stateFor(ctx).bypass = true;
 				updateStatus(ctx);
 			};
+
+			// Session grant short-circuit (parent or local session allowlist).
+			if (checkSessionGrant(toolLabel, runtime.env, ctx)) {
+				recordSessionGrantHit(toolLabel);
+				clearOrcaWidget(ctx);
+				return undefined;
+			}
 
 			if (event.toolName === "bash") {
 				if (
@@ -1051,6 +1369,16 @@ export function installRykExtension(
 					disableSession,
 					runtime.env,
 					stateFor(ctx),
+					{
+						askRoot,
+						askFs,
+						askNow,
+						askSleep,
+						commandOrName:
+							typeof event.input?.command === "string"
+								? event.input.command
+								: toolLabel,
+					},
 				);
 			}
 
@@ -1067,9 +1395,7 @@ export function installRykExtension(
 					);
 				}
 				const absPath = resolveToolPath(pathTarget.path, ctx);
-				const operation: "read" | "write" = FILE_WRITE_TOOLS.has(
-					event.toolName,
-				)
+				const operation: "read" | "write" = FILE_WRITE_TOOLS.has(event.toolName)
 					? "write"
 					: "read";
 				const decision = await runOrcaDecideFile(
@@ -1088,6 +1414,13 @@ export function installRykExtension(
 						{ disableSession },
 						allowOnceBypassEnabled(runtime.env, unavailableMode),
 						runtime.env,
+						{
+							askRoot,
+							askFs,
+							askNow,
+							askSleep,
+							commandOrName: absPath,
+						},
 					);
 				}
 				return applyToolDecision(
@@ -1099,10 +1432,18 @@ export function installRykExtension(
 					disableSession,
 					runtime.env,
 					stateFor(ctx),
+					{
+						askRoot,
+						askFs,
+						askNow,
+						askSleep,
+						commandOrName: absPath,
+					},
 				);
 			}
 
 			// Custom / MCP-shaped tools → name-gated decide tool (not full MCP proxy).
+			// Pi control-plane tools (contact_supervisor, intercom, subagent) pass through.
 			const name = (event.toolName ?? "").trim();
 			if (!name) {
 				return blockMalformedToolCall(
@@ -1111,6 +1452,10 @@ export function installRykExtension(
 					"tool",
 					"malformed Pi tool call; missing non-empty tool name.",
 				);
+			}
+			if (!shouldNameGateTool(name)) {
+				clearOrcaWidget(ctx);
+				return undefined;
 			}
 			const decision = await runOrcaDecideTool(
 				buildDecideToolPayload({ name }),
@@ -1125,6 +1470,13 @@ export function installRykExtension(
 				disableSession,
 				runtime.env,
 				stateFor(ctx),
+				{
+					askRoot,
+					askFs,
+					askNow,
+					askSleep,
+					commandOrName: name,
+				},
 			);
 		},
 	);
@@ -1212,7 +1564,7 @@ export function installRykExtension(
 		handler: stopHandler,
 	});
 	pi.registerCommand("ryk-doctor", {
-		description: "Run ryk doctor and show setup or health diagnostics.",
+		 description: "Run ryk doctor and show setup or health diagnostics.",
 		handler: doctorHandler,
 	});
 
@@ -1254,11 +1606,47 @@ export function installRykExtension(
 		notify(ctx, modeSummary(unavailableMode, stateFor(ctx).bypass), "info");
 	};
 
+	const pendingHandler = async (_args: string | undefined, ctx: PiContext) => {
+		if (isSubagentSession(runtime.env)) {
+			notify(ctx, `${PRODUCT_NAME}: run /ryk-pending in the parent (main) Pi session.`, "warning");
+			return;
+		}
+		const sessionId = ctx.sessionManager?.getSessionId?.()?.trim();
+		if (!sessionId) {
+			notify(ctx, `${PRODUCT_NAME}: no session id — cannot list pending asks.`, "warning");
+			return;
+		}
+		const dir = grantsDirFor(sessionId);
+		const pending = listPendingRequests(dir, askFs);
+		if (pending.length === 0) {
+			notify(ctx, `${PRODUCT_NAME}: no pending subagent asks.`, "info");
+			return;
+		}
+		notify(
+			ctx,
+			`${PRODUCT_NAME}: ${pending.length} pending subagent ask(s). Opening prompts…`,
+			"warning",
+		);
+		await pollParentAsks(ctx);
+	};
+	pi.registerCommand("ryk-pending", {
+		description: "Drain pending subagent approval requests in this parent session.",
+		handler: pendingHandler,
+	});
+
 	pi.registerCommand("ryk-mode", {
 		description: "View or change ryk Pi unavailable-mode and session bypass.",
 		handler: modeHandler,
 	});
 }
+
+type AskIpcContext = {
+	askRoot: string;
+	askFs?: ParentAskFs;
+	askNow: () => number;
+	askSleep: (ms: number) => Promise<void>;
+	commandOrName: string;
+};
 
 async function applyToolDecision(
 	decision: OrcaDecision,
@@ -1269,6 +1657,7 @@ async function applyToolDecision(
 	disableSession: () => void,
 	env: NodeJS.ProcessEnv = process.env,
 	session?: SessionState,
+	askIpc?: AskIpcContext,
 ): Promise<ToolCallResult> {
 	if (decision.kind === "allow") {
 		if (session) session.protocolFailures = 0;
@@ -1301,6 +1690,7 @@ async function applyToolDecision(
 			{ disableSession },
 			allowOnceBypassEnabled(env, unavailableMode),
 			env,
+			askIpc,
 		);
 	}
 	// Protocol / unavailable: track consecutive failures; never silent-allow.
@@ -1313,7 +1703,7 @@ async function applyToolDecision(
 			session.protocolDegradedNotified = true;
 			notify(
 				ctx,
-				`ryk protocol degraded after ${session.protocolFailures} consecutive evaluation failures (class token in error text). Each tool call still fail-closes; run /ryk-setup then /ryk-doctor. Session is not permanently bricked.`,
+				`ryk protocol degraded after ${session.protocolFailures} consecutive evaluation failures. Session recovery applies until /ryk-start or restart. Run /ryk-doctor.`,
 				"warning",
 			);
 		}
@@ -1326,12 +1716,18 @@ async function applyToolDecision(
 		{ disableSession },
 		toolLabel,
 		allowOnceBypassEnabled(env, unavailableMode),
+		session,
+		env,
+		askIpc,
 	);
 }
 
 /**
- * Single entry for policy ask: interactive human select, or explicit auto-deny
- * for noninteractive / subagent sessions. Never ask → allow without a choice.
+ * Single entry for policy ask:
+ * - subagent → parent-forward IPC (fail closed on timeout)
+ * - noninteractive main → auto-deny with Why/Next copy
+ * - interactive main → local ui.select
+ * Never ask → allow without a choice.
  */
 async function resolvePolicyAsk(
 	reason: string,
@@ -1341,11 +1737,33 @@ async function resolvePolicyAsk(
 	actions: { disableSession: () => void },
 	allowOnce: boolean,
 	env: NodeJS.ProcessEnv = process.env,
+	askIpc?: AskIpcContext,
 ): Promise<ToolCallResult> {
-	if (shouldAutoDenyPolicyAsk(ctx, env)) {
+	if (isSubagentSession(env)) {
+		return handlePolicyAskParentForward(
+			reason,
+			pi,
+			ctx,
+			toolLabel,
+			actions,
+			allowOnce,
+			env,
+			askIpc,
+		);
+	}
+	if (isNoninteractiveSession(ctx)) {
 		return handlePolicyAskAutoDeny(reason, pi, ctx, toolLabel, env);
 	}
-	return handlePolicyAsk(reason, pi, ctx, toolLabel, actions, allowOnce);
+	return handlePolicyAsk(
+		reason,
+		pi,
+		ctx,
+		toolLabel,
+		actions,
+		allowOnce,
+		env,
+		askIpc,
+	);
 }
 
 function recordOnceBypass(
@@ -1355,7 +1773,11 @@ function recordOnceBypass(
 	source: "policy" | "unavailable",
 ): boolean {
 	if (!pi.sendMessage) {
-		notify(ctx, "ryk blocked the once-bypass because transcript auditing is unavailable.", "error");
+		notify(
+			ctx,
+			"ryk blocked the once-bypass because transcript auditing is unavailable.",
+			"error",
+		);
 		return false;
 	}
 	const details = {
@@ -1374,10 +1796,18 @@ function recordOnceBypass(
 			{ triggerTurn: false },
 		);
 	} catch {
-		notify(ctx, "ryk blocked the once-bypass because transcript auditing failed.", "error");
+		notify(
+			ctx,
+			"ryk blocked the once-bypass because transcript auditing failed.",
+			"error",
+		);
 		return false;
 	}
-	notify(ctx, `ryk audit: once-bypass used for ${details.tool} (${source}).`, "warning");
+	notify(
+		ctx,
+		`ryk audit: once-bypass used for ${details.tool} (${source}).`,
+		"warning",
+	);
 	return true;
 }
 
@@ -1419,19 +1849,294 @@ async function handlePolicyAskAutoDeny(
 	ctx: PiContext,
 	toolLabel: string,
 	env: NodeJS.ProcessEnv = process.env,
+	opts?: { rule?: string; sessionClass?: "subagent" | "non-interactive" },
 ): Promise<ToolCallResult> {
-	const sessionClass = policyAskAutoDenyClass(env);
+	const sessionClass = opts?.sessionClass ?? policyAskAutoDenyClass(env);
 	const policyReason = sanitizeVisibleText(reason);
-	const summary = `ryk auto-denied (${sessionClass}): ${policyReason || `${toolLabel} requires approval`}`;
-	const card = {
-		variant: "block" as const,
-		title: "RYK BLOCKED",
-		summary,
+	const copy = buildAutoDenyCopy(sessionClass, policyReason, toolLabel, {
+		rule: opts?.rule,
+	});
+	const card: OrcaDecisionCard = {
+		variant: "block",
+		title: copy.title,
+		summary: copy.summary,
+		rule: copy.rule,
+		nextStep: copy.nextStep,
 	};
 	// Prefer recording audit before returning the block; still block if audit fails.
 	recordAskAutoDeny(pi, toolLabel, sessionClass, policyReason);
 	showOrcaDecision(pi, ctx, card);
-	return block(summary);
+	return block(copy.reason);
+}
+
+/**
+ * Child subagent path: write AskRequest, wait for parent res-*.json, apply choice.
+ * Timeout / abort / missing parent → fail closed with subagent Why/Next copy.
+ */
+async function handlePolicyAskParentForward(
+	reason: string,
+	pi: PiAPI,
+	ctx: PiContext,
+	toolLabel: string,
+	actions: { disableSession: () => void },
+	allowOnce: boolean,
+	env: NodeJS.ProcessEnv,
+	askIpc?: AskIpcContext,
+): Promise<ToolCallResult> {
+	const parentSession = parentSessionIdFromEnv(env);
+	if (!parentSession) {
+		return handlePolicyAskAutoDeny(reason, pi, ctx, toolLabel, env, {
+			sessionClass: "subagent",
+			rule: "rykanv:ask-no-ui",
+		});
+	}
+
+	const root = askIpc?.askRoot ?? resolvePiAskRoot(env, askIpc?.askFs);
+	const fsApi = askIpc?.askFs;
+	const now = askIpc?.askNow ?? Date.now;
+	const sleep =
+		askIpc?.askSleep ??
+		((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+	const timeoutMs = parentAskTimeoutMs(env);
+	const id = randomUUID();
+	const dir = parentAskDir(root, parentSession, fsApi);
+	const request: ParentAskRequest = {
+		v: 1,
+		id,
+		parent_session: parentSession,
+		child_session: ctx.sessionManager?.getSessionId?.(),
+		tool: toolLabel,
+		reason: sanitizeVisibleText(reason),
+		command_or_name: askIpc?.commandOrName ?? toolLabel,
+		created_at_ms: now(),
+		timeout_ms: timeoutMs,
+	};
+
+	try {
+		writeAskRequest(dir, request, fsApi);
+	} catch {
+		return handlePolicyAskAutoDeny(reason, pi, ctx, toolLabel, env, {
+			sessionClass: "subagent",
+			rule: "rykanv:parent-ask-timeout",
+		});
+	}
+
+	const card = buildOrcaWaitCard({
+		toolLabel,
+		reason: sanitizeVisibleText(reason),
+		commandOrName: askIpc?.commandOrName ?? toolLabel,
+		timeoutMs,
+	});
+	showOrcaWidget(ctx, card);
+	notify(
+		ctx,
+		`${PRODUCT_NAME}: waiting for approval in the parent Pi session (${toolLabel}).`,
+		"info",
+	);
+
+	const response = await waitForAskResponse(dir, id, {
+		timeoutMs,
+		signal: ctx.signal,
+		now,
+		sleep,
+		fsApi,
+	});
+
+	clearOrcaWidget(ctx);
+
+	if (!response) {
+		return handlePolicyAskAutoDeny(reason, pi, ctx, toolLabel, env, {
+			sessionClass: "subagent",
+			rule: "rykanv:parent-ask-timeout",
+		});
+	}
+
+	return applyParentAskChoice(
+		response.choice,
+		reason,
+		pi,
+		ctx,
+		toolLabel,
+		actions,
+		allowOnce,
+		env,
+		{ parentSession, askRoot: root, askFs: fsApi, askNow: now },
+	);
+}
+
+async function applyParentAskChoice(
+	choice: ParentAskChoice,
+	reason: string,
+	pi: PiAPI,
+	ctx: PiContext,
+	toolLabel: string,
+	actions: { disableSession: () => void },
+	allowOnce: boolean,
+	_env: NodeJS.ProcessEnv,
+	grantCtx?: {
+		parentSession: string;
+		askRoot: string;
+		askFs?: ParentAskFs;
+		askNow: () => number;
+	},
+): Promise<ToolCallResult> {
+	const summary = sanitizeVisibleText(reason);
+	switch (choice) {
+		case "run_once":
+			if (!allowOnce) {
+				return block(
+					formatOrcaDecisionSummary(
+						{ variant: "block", title: DISPLAY_BRAND, summary },
+						toolLabel,
+					),
+				);
+			}
+			if (!recordOnceBypass(pi, ctx, toolLabel, "policy")) {
+				return block(
+					"ryk blocked this once-bypass because a required transcript audit event could not be recorded.",
+				);
+			}
+			notify(
+				ctx,
+				`Parent allowed this ${toolLabel} action once without ryk evaluation.`,
+				"warning",
+			);
+			return undefined;
+		case "allow_session_tool":
+			if (grantCtx) {
+				addSessionGrant(
+					parentAskDir(
+						grantCtx.askRoot,
+						grantCtx.parentSession,
+						grantCtx.askFs,
+					),
+					toolLabel,
+					grantCtx.askNow(),
+					grantCtx.askFs,
+				);
+			}
+			notify(
+				ctx,
+				`Parent allowed ${toolLabel} for this Pi session (session grant).`,
+				"warning",
+			);
+			return undefined;
+		case "disable_session":
+			actions.disableSession();
+			notify(
+				ctx,
+				`${PRODUCT_NAME} disabled for this session only. Use /ryk-start to re-enable.`,
+				"warning",
+			);
+			return undefined;
+		case "show_reason":
+			notify(ctx, summary, "error");
+			return block(
+				formatOrcaDecisionSummary(
+					{ variant: "block", title: DISPLAY_BRAND, summary },
+					toolLabel,
+				),
+			);
+		case "block":
+		default:
+			return block(
+				formatOrcaDecisionSummary(
+					{ variant: "block", title: DISPLAY_BRAND, summary },
+					toolLabel,
+				),
+			);
+	}
+}
+
+/**
+ * Parent side: present select for a child request and write AskResponse.
+ */
+async function answerParentAskRequest(
+	req: ParentAskRequest,
+	dir: string,
+	pi: PiAPI,
+	ctx: PiContext,
+	options: {
+		allowOnce: boolean;
+		disableSession: () => void;
+		now: () => number;
+		fsApi?: ParentAskFs;
+	},
+): Promise<void> {
+	const summary = sanitizeVisibleText(
+		`[subagent ask] ${req.tool}: ${req.reason || req.command_or_name}`,
+	);
+	const preview = truncate(
+		sanitizeVisibleText(req.command_or_name || req.tool),
+		96,
+	);
+	const card: OrcaDecisionCard = {
+		...buildOrcaAskCard(summary),
+		preview,
+		rule: "rykanv:parent-ask",
+	};
+	showOrcaWidget(ctx, card);
+	// Surface in status so parent cannot miss a child ask while scrolling.
+	ctx.ui?.setStatus?.(STATUS_KEY, "rykan v ask");
+	notify(
+		ctx,
+		`${PRODUCT_NAME}: subagent needs approval for ${req.tool} — answer the prompt.`,
+		"warning",
+	);
+	const choiceLabel = await ctx.ui?.select?.(
+		`${PRODUCT_NAME}: subagent · ${req.tool}`,
+		askOptionsFor("policy", options.allowOnce),
+		{ timeout: Math.max(req.timeout_ms, 5_000), signal: ctx.signal },
+	);
+	clearOrcaWidget(ctx);
+	const choice = mapSelectLabelToChoice(choiceLabel);
+
+	if (choice === "allow_session_tool") {
+		addSessionGrant(dir, req.tool, options.now(), options.fsApi);
+	}
+	if (choice === "disable_session") {
+		options.disableSession();
+	}
+
+	writeAskResponse(
+		dir,
+		{
+			v: 1,
+			id: req.id,
+			choice,
+			decided_at_ms: options.now(),
+		},
+		options.fsApi,
+	);
+
+	if (pi.sendMessage) {
+		try {
+			pi.sendMessage(
+				{
+					customType: "orca.audit",
+					content: `ryk parent ask response: ${req.tool} → ${choice}`,
+					display: false,
+					details: {
+						event: "orca_parent_ask_response",
+						tool: truncate(sanitizeVisibleText(req.tool), 128),
+						choice,
+						request_id: req.id,
+					},
+				},
+				{ triggerTurn: false },
+			);
+		} catch {
+			// response already written
+		}
+	}
+
+	if (choice === "show_reason") {
+		notify(ctx, summary, "error");
+	} else if (choice === "block" || choiceLabel === undefined) {
+		notify(ctx, `Blocked subagent ${req.tool} request.`, "warning");
+	} else {
+		notify(ctx, `Answered subagent ${req.tool}: ${choice}`, "info");
+	}
 }
 
 async function handlePolicyAsk(
@@ -1441,33 +2146,57 @@ async function handlePolicyAsk(
 	toolLabel: string,
 	actions: { disableSession: () => void },
 	allowOnce: boolean,
+	env: NodeJS.ProcessEnv = process.env,
+	askIpc?: AskIpcContext,
 ): Promise<ToolCallResult> {
 	const summary = sanitizeVisibleText(reason);
 	const card = buildOrcaAskCard(summary);
 	showOrcaWidget(ctx, card);
-	const choice = await ctx.ui?.select?.(
-		"ryk needs your decision",
+	const choiceLabel = await ctx.ui?.select?.(
+		`${PRODUCT_NAME}: needs your decision`,
 		askOptionsFor("policy", allowOnce),
 		{ timeout: 60_000, signal: ctx.signal },
 	);
+	const choice = mapSelectLabelToChoice(choiceLabel);
+	clearOrcaWidget(ctx);
+
+	const sessionId = ctx.sessionManager?.getSessionId?.()?.trim();
+	const root = askIpc?.askRoot ?? resolvePiAskRoot(env, askIpc?.askFs);
+	const now = askIpc?.askNow ?? Date.now;
+
+	if (choice === "allow_session_tool" && sessionId) {
+		addSessionGrant(
+			parentAskDir(root, sessionId, askIpc?.askFs),
+			toolLabel,
+			now(),
+			askIpc?.askFs,
+		);
+		notify(
+			ctx,
+			`Allowed ${toolLabel} for this Pi session (session grant).`,
+			"warning",
+		);
+		return undefined;
+	}
+
 	switch (choice) {
-		case "Run once anyway":
+		case "run_once":
 			if (!allowOnce) {
-				clearOrcaWidget(ctx);
 				return block(
 					formatOrcaDecisionSummary(
 						{
 							variant: "block",
-							title: "RYK BLOCKED",
+							title: DISPLAY_BRAND,
 							summary,
 						},
 						toolLabel,
 					),
 				);
 			}
-			clearOrcaWidget(ctx);
 			if (!recordOnceBypass(pi, ctx, toolLabel, "policy")) {
-				return block("ryk blocked this once-bypass because a required transcript audit event could not be recorded.");
+				return block(
+					"ryk blocked this once-bypass because a required transcript audit event could not be recorded.",
+				);
 			}
 			notify(
 				ctx,
@@ -1475,37 +2204,34 @@ async function handlePolicyAsk(
 				"warning",
 			);
 			return undefined;
-		case "Disable ryk for this Pi session":
-			clearOrcaWidget(ctx);
+		case "disable_session":
 			actions.disableSession();
 			notify(
 				ctx,
-				"ryk disabled for this Pi session only. Use /ryk-start to re-enable.",
+				`${PRODUCT_NAME} disabled for this session only. Use /ryk-start to re-enable.`,
 				"warning",
 			);
 			return undefined;
-		case "Show policy reason":
-			clearOrcaWidget(ctx);
+		case "show_reason":
 			notify(ctx, summary, "error");
 			return block(
 				formatOrcaDecisionSummary(
 					{
 						variant: "block",
-						title: "RYK BLOCKED",
+						title: DISPLAY_BRAND,
 						summary,
 					},
 					toolLabel,
 				),
 			);
-		case "Block":
+		case "block":
 		default:
 			// Timeout / undefined / unknown choice → block only (never allow).
-			clearOrcaWidget(ctx);
 			return block(
 				formatOrcaDecisionSummary(
 					{
 						variant: "block",
-						title: "RYK BLOCKED",
+						title: DISPLAY_BRAND,
 						summary,
 					},
 					toolLabel,
@@ -1522,9 +2248,24 @@ async function handleUnavailable(
 	actions: { disableSession: () => void },
 	toolLabel = "bash",
 	allowOnce = true,
+	session?: SessionState,
+	env: NodeJS.ProcessEnv = process.env,
+	askIpc?: AskIpcContext,
 ): Promise<ToolCallResult> {
 	const repair = repairMessage(reason, toolLabel);
 	const failureClass = protocolFailureClassFromReason(reason);
+
+	// Sticky session recovery: prior block choice (or parent block) sticks for this session.
+	if (session?.protocolRecovery === "block") {
+		const card = {
+			variant: "block" as const,
+			title: DISPLAY_BRAND,
+			summary: repair,
+		};
+		showOrcaDecision(pi, ctx, card);
+		return block(formatOrcaDecisionSummary(card, toolLabel));
+	}
+
 	// allow-with-warning soft-allows only spawn_failed (binary missing).
 	// Protocol corruption / typed errors always fail closed (Phase 5).
 	if (
@@ -1534,19 +2275,49 @@ async function handleUnavailable(
 		clearOrcaWidget(ctx);
 		notify(
 			ctx,
-			`ryk unavailable; allowing ${toolLabel} with warning.\n\n${repair}`,
+			`ryk unavailable; allowing ${toolLabel} with warning. ${repair}`,
 			"warning",
 		);
 		return undefined;
 	}
-	if (
-		mode === "strict" ||
-		mode === "noninteractive-block" ||
-		mode === "allow-with-warning"
-	) {
+
+	// Strict: hard block, no recovery ask.
+	if (mode === "strict") {
 		const card = {
 			variant: "block" as const,
-			title: "RYK BLOCKED",
+			title: DISPLAY_BRAND,
+			summary: repair,
+		};
+		showOrcaDecision(pi, ctx, card);
+		return block(formatOrcaDecisionSummary(card, toolLabel));
+	}
+
+	// Subagent: parent-forward protocol recovery (child has no local recovery UI).
+	if (isSubagentSession(env)) {
+		const result = await handlePolicyAskParentForward(
+			`[protocol] ${repair}`,
+			pi,
+			ctx,
+			toolLabel,
+			{
+				disableSession: () => {
+					actions.disableSession();
+				},
+			},
+			allowOnce,
+			env,
+			askIpc,
+		);
+		// Sticky block on this child after parent blocks / times out.
+		if (result?.block && session) session.protocolRecovery = "block";
+		return result;
+	}
+
+	// Main noninteractive / residual allow-with-warning: hard block.
+	if (mode === "noninteractive-block" || mode === "allow-with-warning") {
+		const card = {
+			variant: "block" as const,
+			title: DISPLAY_BRAND,
 			summary: repair,
 		};
 		showOrcaDecision(pi, ctx, card);
@@ -1558,19 +2329,32 @@ async function handleUnavailable(
 	// widget keeps ask context readable until the blocking select() resolves.
 	showOrcaWidget(ctx, card);
 	const choice = await ctx.ui?.select?.(
-		"ryk needs your decision",
+		`${PRODUCT_NAME}: needs your decision`,
 		askOptionsFor("unavailable", allowOnce),
 		{ timeout: 60_000, signal: ctx.signal },
 	);
 	switch (choice) {
+		case PROTOCOL_SESSION_ALLOW_OPTION:
+		case LABEL_DISABLE_SESSION:
+		case "Disable ryk for this Pi session":
+			clearOrcaWidget(ctx);
+			actions.disableSession();
+			notify(
+				ctx,
+				`${PRODUCT_NAME} disabled for this session only. Use /ryk-start to re-enable.`,
+				"warning",
+			);
+			return undefined;
+		case LABEL_ALLOW_ONCE:
 		case "Run once anyway":
 			if (!allowOnce) {
 				clearOrcaWidget(ctx);
+				if (session) session.protocolRecovery = "block";
 				return block(
 					formatOrcaDecisionSummary(
 						{
 							variant: "block",
-							title: "RYK BLOCKED",
+							title: DISPLAY_BRAND,
 							summary: repair,
 						},
 						toolLabel,
@@ -1579,7 +2363,9 @@ async function handleUnavailable(
 			}
 			clearOrcaWidget(ctx);
 			if (!recordOnceBypass(pi, ctx, toolLabel, "unavailable")) {
-				return block("ryk blocked this once-bypass because a required transcript audit event could not be recorded.");
+				return block(
+					"ryk blocked this once-bypass because a required transcript audit event could not be recorded.",
+				);
 			}
 			notify(
 				ctx,
@@ -1587,36 +2373,17 @@ async function handleUnavailable(
 				"warning",
 			);
 			return undefined;
-		case "Disable ryk for this Pi session":
-			clearOrcaWidget(ctx);
-			actions.disableSession();
-			notify(
-				ctx,
-				"ryk disabled for this Pi session only. Use /ryk-start to re-enable.",
-				"warning",
-			);
-			return undefined;
-		case "Show repair instructions / run doctor":
-			clearOrcaWidget(ctx);
-			notify(ctx, repair, "error");
-			return block(
-				formatOrcaDecisionSummary(
-					{
-						variant: "block",
-						title: "RYK BLOCKED",
-						summary: repair,
-					},
-					toolLabel,
-				),
-			);
+		case PROTOCOL_BLOCK_OPTION:
+		case LABEL_DENY:
 		case "Block":
 		default:
 			clearOrcaWidget(ctx);
+			if (session) session.protocolRecovery = "block";
 			return block(
 				formatOrcaDecisionSummary(
 					{
 						variant: "block",
-						title: "RYK BLOCKED",
+						title: DISPLAY_BRAND,
 						summary: repair,
 					},
 					toolLabel,
@@ -1817,13 +2584,6 @@ function resolveCompatiblePathCli(
 	return null;
 }
 
-function isCompatiblePathOrca(
-	env: NodeJS.ProcessEnv,
-	runner: SpawnSyncLike,
-): boolean {
-	return resolveCompatiblePathCli(env, runner) !== null;
-}
-
 function appendBounded(
 	current: string,
 	chunk: string,
@@ -1866,7 +2626,7 @@ function showOrcaDecision(
 	if (pi.sendMessage) {
 		pi.sendMessage(
 			{
-				customType: "ryk-decision",
+				customType: DECISION_CUSTOM_TYPE,
 				content: buildOrcaWidget(card).join("\n"),
 				display: true,
 				details: card,
@@ -1881,52 +2641,96 @@ function showOrcaDecision(
 	showOrcaWidget(ctx, card);
 }
 
+/** Enterprise card: brand header only, no fake action footer on wait. */
 function buildOrcaWidget(card: OrcaDecisionCard): string[] {
-	const contentWidth = 54;
+	const contentWidth = Math.min(
+		72,
+		Math.max(48, Math.min(terminalContentWidth(), 72)),
+	);
 	const isBlock = card.variant === "block";
+	const isWait = card.variant === "wait";
 	const frame = isBlock
-		? { topLeft: "┏", topRight: "┓", side: "┃", teeLeft: "┣", teeRight: "┫", bottomLeft: "┗", bottomRight: "┛", rule: "━" }
-		: { topLeft: "┌", topRight: "┐", side: "│", teeLeft: "├", teeRight: "┤", bottomLeft: "└", bottomRight: "┘", rule: "─" };
-	const masthead = isBlock ? " RYK // BLOCKED " : " RYK // YOUR CALL ";
-	const stateLine = isBlock
-		? "COMMAND STOPPED BEFORE EXECUTION"
-		: "RYK PAUSED THIS COMMAND";
+		? {
+				topLeft: "┏",
+				topRight: "┓",
+				side: "┃",
+				teeLeft: "┣",
+				teeRight: "┫",
+				bottomLeft: "┗",
+				bottomRight: "┛",
+				rule: "━",
+			}
+		: {
+				topLeft: "┌",
+				topRight: "┐",
+				side: "│",
+				teeLeft: "├",
+				teeRight: "┤",
+				bottomLeft: "└",
+				bottomRight: "┘",
+				rule: "─",
+			};
+	const masthead = ` ${DISPLAY_BRAND} `;
 	const lines = [
-		buildLabeledBorder(frame.topLeft, frame.topRight, frame.rule, masthead, contentWidth),
-		`${frame.side} ${stateLine.padEnd(contentWidth - 2)} ${frame.side}`,
-		`${frame.teeLeft}${frame.rule.repeat(contentWidth)}${frame.teeRight}`,
+		buildLabeledBorder(
+			frame.topLeft,
+			frame.topRight,
+			frame.rule,
+			masthead,
+			contentWidth,
+		),
 	];
 	lines.push(...formatWidgetRow("Why", card.summary, contentWidth, frame.side));
-	lines.push(`${frame.teeLeft}${frame.rule.repeat(contentWidth)}${frame.teeRight}`);
-	lines.push(...formatWidgetRow("Rule", card.rule, contentWidth, frame.side));
-	if (card.pack)
-		lines.push(...formatWidgetRow("Pack", card.pack, contentWidth, frame.side));
-	if (card.severity)
+	if (card.preview) {
 		lines.push(
-			...formatWidgetRow(
-				"Severity",
-				capitalize(card.severity),
-				contentWidth,
-				frame.side,
-			),
+			...formatWidgetRow("Cmd", card.preview, contentWidth, frame.side),
 		);
-	if (card.nextStep)
+	}
+	const metaBits: string[] = [];
+	if (card.rule) metaBits.push(card.rule);
+	if (card.severity) metaBits.push(capitalize(card.severity));
+	if (card.pack && card.pack !== card.rule?.split(":")[0]) {
+		metaBits.push(card.pack);
+	}
+	if (metaBits.length > 0) {
+		lines.push(
+			`${frame.teeLeft}${frame.rule.repeat(contentWidth)}${frame.teeRight}`,
+		);
+		lines.push(
+			...formatWidgetRow("Meta", metaBits.join(" · "), contentWidth, frame.side),
+		);
+	}
+	if (card.nextStep) {
 		lines.push(
 			...formatWidgetRow("Next", card.nextStep, contentWidth, frame.side),
 		);
-	if (!isBlock)
+	}
+	if (isWait && card.timeoutHint) {
+		lines.push(
+			...formatWidgetRow("Wait", card.timeoutHint, contentWidth, frame.side),
+		);
+	}
+	// Ask only: real choices come from ui.select — one quiet hint, never fake buttons.
+	if (card.variant === "ask") {
 		lines.push(
 			...formatWidgetRow(
-				"Choose",
-				"Run once, repair ryk, or keep it blocked.",
+				"Tip",
+				"Use the prompt below to Allow once, Allow for session, or Deny.",
 				contentWidth,
 				frame.side,
 			),
 		);
+	}
 	lines.push(
 		`${frame.bottomLeft}${frame.rule.repeat(contentWidth)}${frame.bottomRight}`,
 	);
 	return lines;
+}
+
+function terminalContentWidth(): number {
+	const cols = Number(process.stdout?.columns ?? 0);
+	if (!Number.isFinite(cols) || cols < 40) return 54;
+	return Math.max(40, cols - 8);
 }
 
 function buildLabeledBorder(
@@ -1943,7 +2747,7 @@ function buildLabeledBorder(
 
 function buildOrcaDecisionCard(
 	response: unknown,
-	variant: OrcaDecisionCard["variant"],
+	variant: "block" | "ask",
 ): OrcaDecisionCard {
 	const reason = getDecisionReason(response);
 	const rule = getRuleId(response);
@@ -1952,7 +2756,7 @@ function buildOrcaDecisionCard(
 	const nextStep = getNextStep(response);
 	return {
 		variant,
-		title: variant === "ask" ? "RYK NEEDS YOUR DECISION" : "RYK BLOCKED",
+		title: DISPLAY_BRAND,
 		summary: sanitizeVisibleText(reason),
 		rule,
 		pack,
@@ -1964,8 +2768,33 @@ function buildOrcaDecisionCard(
 function buildOrcaAskCard(reason: string): OrcaDecisionCard {
 	return {
 		variant: "ask",
-		title: "RYK NEEDS YOUR DECISION",
+		title: DISPLAY_BRAND,
 		summary: sanitizeVisibleText(reason),
+	};
+}
+
+function buildOrcaWaitCard(input: {
+	toolLabel: string;
+	reason: string;
+	commandOrName?: string;
+	timeoutMs: number;
+}): OrcaDecisionCard {
+	const secs = Math.max(1, Math.round(input.timeoutMs / 1000));
+	const preview =
+		input.commandOrName && input.commandOrName !== input.toolLabel
+			? truncate(sanitizeVisibleText(input.commandOrName), 96)
+			: undefined;
+	return {
+		variant: "wait",
+		title: DISPLAY_BRAND,
+		summary: sanitizeVisibleText(
+			`Waiting for approval in the parent Pi session (${input.toolLabel}).`,
+		),
+		preview,
+		nextStep:
+			"Switch to the main Pi window and answer the prompt. This card is not interactive.",
+		timeoutHint: `Auto-denies in ~${secs}s if unanswered.`,
+		rule: "rykanv:parent-ask-wait",
 	};
 }
 
@@ -1975,13 +2804,15 @@ function formatOrcaDecisionSummary(
 ): string {
 	const parts = [card.summary];
 	if (card.rule) parts.push(`rule ${card.rule}`);
-	if (card.pack && card.pack !== card.rule?.split(":")[0]) parts.push(`pack ${card.pack}`);
+	if (card.pack && card.pack !== card.rule?.split(":")[0])
+		parts.push(`pack ${card.pack}`);
 	if (card.severity) parts.push(`severity ${card.severity}`);
-	const action =
-		toolLabel === "bash" ? "bash command" : `${toolLabel} action`;
-	return sanitizeVisibleText(
-		`ryk ${card.variant === "ask" ? "needs your decision" : `blocked this ${action}`}: ${parts.join(" • ")}`,
-	);
+	const action = toolLabel === "bash" ? "bash command" : `${toolLabel} action`;
+	const verb =
+		card.variant === "ask" || card.variant === "wait"
+			? "needs your decision"
+			: `blocked this ${action}`;
+	return sanitizeVisibleText(`${PRODUCT_NAME} ${verb}: ${parts.join(" • ")}`);
 }
 
 function getDecisionReason(response: unknown): string {
@@ -1999,17 +2830,18 @@ function getRuleId(response: unknown): string | undefined {
 }
 
 function getNextStep(response: unknown): string | undefined {
-	const remediation = Array.isArray((response as OrcaEvaluateResponse | null)?.remediation)
+	const remediation = Array.isArray(
+		(response as OrcaEvaluateResponse | null)?.remediation,
+	)
 		? (response as OrcaEvaluateResponse).remediation
 		: undefined;
-	const description = remediation?.find((entry) => entry?.description)?.description;
+	const description = remediation?.find(
+		(entry) => entry?.description,
+	)?.description;
 	return description ? sanitizeVisibleText(description) : undefined;
 }
 
-function getStringFieldAny(
-	value: unknown,
-	keys: string[],
-): string | undefined {
+function getStringFieldAny(value: unknown, keys: string[]): string | undefined {
 	for (const key of keys) {
 		const field = getStringField(value, key);
 		if (field) return field;
@@ -2043,7 +2875,8 @@ function wrapText(value: string, width: number): string[] {
 	return lines.flatMap((line) => {
 		if (line.length <= width) return [line];
 		const chunks: string[] = [];
-		for (let i = 0; i < line.length; i += width) chunks.push(line.slice(i, i + width));
+		for (let i = 0; i < line.length; i += width)
+			chunks.push(line.slice(i, i + width));
 		return chunks;
 	});
 }
@@ -2073,21 +2906,27 @@ function notify(
 	ctx.ui?.notify?.(truncate(sanitizeVisibleText(message), 2_000), type);
 }
 
-function repairMessage(reason: string, toolLabel = "bash"): string {
+/**
+ * Short card/block copy for protocol failures (fits 54-col widget).
+ * Prefer the class token already present in `reason` over a second "Failure class" line.
+ * Always ends with Fail-closed + doctor hint so the card stays actionable.
+ */
+export function repairMessage(reason: string, toolLabel = "bash"): string {
 	const cleaned = sanitizeVisibleText(reason);
-	const klass =
-		protocolFailureClassFromReason(cleaned) ??
-		(cleaned.includes("malformed")
-			? "malformed_json"
-			: cleaned.includes("timed out")
-				? "timeout"
-				: cleaned.includes("unavailable")
-					? "spawn_failed"
-					: cleaned.includes("inconsistent")
-						? "inconsistent_exit"
-						: undefined);
-	const classHint = klass ? ` Failure class: ${klass}.` : "";
-	return `ryk could not evaluate this ${toolLabel} action: ${cleaned}${classHint}\n\nThis call is fail-closed only (not a permanent session brick). Retry the tool, or run /ryk-setup then /ryk-doctor if failures persist. Coverage: ${piCoverageLabel()}.`;
+	const core = cleaned.startsWith("[")
+		? cleaned
+		: `could not evaluate ${toolLabel}: ${cleaned}`;
+	const suffix = " Fail-closed. /ryk-doctor";
+	const max = 220;
+	if (core.length + suffix.length <= max) return `${core}${suffix}`;
+	const budget = Math.max(24, max - suffix.length - 1);
+	return `${core.slice(0, budget)}…${suffix}`;
+}
+
+/** Longer notify/doctor copy; still avoids the old coverage wall of text. */
+export function repairMessageDetail(reason: string, toolLabel = "bash"): string {
+	const short = repairMessage(reason, toolLabel);
+	return `${short} Not a permanent session brick. Retry the tool, or /ryk-setup then /ryk-doctor.`;
 }
 
 function modeSummary(mode: UnavailableMode, sessionBypass: boolean): string {
@@ -2125,22 +2964,24 @@ function parseMode(value: string | undefined): UnavailableMode | undefined {
 }
 
 function sanitizeVisibleText(value: string): string {
-	return value
-		// Compatibility runtimes and policies may still emit the former display
-		// name. Normalize only at the user-visible boundary; protocol ids,
-		// environment variables, and on-disk compatibility paths stay intact.
-		.replace(/\bORCA\b/g, "RYK")
-		.replace(/\bOrca\b/g, "ryk")
-		.replace(/\bsk-ant-[A-Za-z0-9_-]{20,}\b/g, "[redacted-token]")
-		.replace(/\bsk-(?!ant-)[A-Za-z0-9_-]{20,}\b/g, "[redacted-token]")
-		.replace(
-			/\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g,
-			"[redacted-token]",
-		)
-		.replace(/[A-Za-z0-9_]*gh[pousr]_[A-Za-z0-9_]+/g, "[redacted-token]")
-		.replace(/(password|token|secret|api[_-]?key)=\S+/gi, "$1=[redacted]")
-		.replace(/\s+/g, " ")
-		.trim();
+	return (
+		value
+			// Compatibility runtimes and policies may still emit the former display
+			// name. Normalize only at the user-visible boundary; protocol ids,
+			// environment variables, and on-disk compatibility paths stay intact.
+			.replace(/\bORCA\b/g, "RYK")
+			.replace(/\bOrca\b/g, "ryk")
+			.replace(/\bsk-ant-[A-Za-z0-9_-]{20,}\b/g, "[redacted-token]")
+			.replace(/\bsk-(?!ant-)[A-Za-z0-9_-]{20,}\b/g, "[redacted-token]")
+			.replace(
+				/\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g,
+				"[redacted-token]",
+			)
+			.replace(/[A-Za-z0-9_]*gh[pousr]_[A-Za-z0-9_]+/g, "[redacted-token]")
+			.replace(/(password|token|secret|api[_-]?key)=\S+/gi, "$1=[redacted]")
+			.replace(/\s+/g, " ")
+			.trim()
+	);
 }
 
 function truncate(value: string, max: number): string {

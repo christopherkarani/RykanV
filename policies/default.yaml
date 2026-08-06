@@ -50,13 +50,33 @@ files:
 
 commands:
   default: ask
+  # Sample agents-oriented permit. Full agents default lives in
+  # common_strict_rules / generic-agent preset (see docs/presets.md).
   allow:
     - "git status"
+    - "git status*"
+    - "git diff"
     - "git diff *"
+    - "git log"
+    - "git log *"
+    - "git add *"
+    - "git commit *"
+    - "ls"
+    - "ls *"
+    - "pwd"
+    - "rg *"
+    - "gh auth status"
+    - "gh pr *"
+    - "npm test*"
+    - "ryk explain *"
+    - "ryk allow-once *"
   deny:
     - "rm -rf *"
     - "curl * | sh"
     - "sudo *"
+  ask:
+    - "git push*"
+    - "npm install*"
 
 network:
   default: deny
