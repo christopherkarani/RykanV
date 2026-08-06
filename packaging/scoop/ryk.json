@@ -1,18 +1,16 @@
 {
-  "version": "1.2.8",
-  "description": "Local runtime firewall for AI agents (primary binary: ryk; ryk compat alias).",
+  "version": "1.2.9",
+  "description": "Local runtime firewall for AI agents (canonical binary: ryk).",
   "homepage": "https://github.com/christopherkarani/rykan",
   "license": "Apache-2.0",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/christopherkarani/rykan/releases/download/v1.2.8/ryk-v1.2.8-windows-amd64.zip",
+      "url": "https://github.com/christopherkarani/rykan/releases/download/v1.2.9/ryk-v1.2.9-windows-amd64.zip",
       "hash": "PLACEHOLDER_WINDOWS_AMD64_SHA256"
     }
   },
   "bin": [
-    "ryk-v1.2.8-windows-amd64\\bin\\ryk.exe",
-    [
-      "ryk-v1.2.8-windows-amd64\\bin\\ryk.exe", "ryk"]
+    "ryk-v1.2.9-windows-amd64\\bin\\ryk.exe"
   ],
   "checkver": {
     "github": "https://github.com/christopherkarani/rykan"
@@ -27,5 +25,5 @@
       }
     }
   },
-  "notes": "PLACEHOLDER: verify checksums.txt from the release before publishing this manifest. Primary CLI is ryk; ryk is a one-major compat alias. Zip top-level is ryk-v<version>-windows-amd64."
+  "notes": "Release note: verify checksums.txt from the release before publishing this manifest. Canonical CLI is ryk. Zip top-level is ryk-v<version>-windows-amd64."
 }

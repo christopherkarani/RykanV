@@ -267,7 +267,7 @@ pub fn buildNextStepsLines(facts: NextStepFacts, out: [][]u8) usize {
     n = appendRaw(out, n, "  ryk allowlist   — permanent allowlist entries");
     n = appendRaw(out, n, "  ryk doctor --fix — repair policy + day-one host wiring");
     if (facts.hermes_installed and facts.hermes_fail_open) {
-        n = appendRaw(out, n, "Hermes: effective fail-open — set RYK_HERMES_FAIL_OPEN=0 or `ryk run -- hermes`.");
+        n = appendRaw(out, n, "Hermes: explicit fail-open — unset RYK_HERMES_FAIL_OPEN or use `ryk run -- hermes`.");
     }
     return n;
 }
@@ -375,7 +375,6 @@ pub fn run(
 }
 
 fn runLoop(io: std.Io, stdout: anytype, tty: anytype, input: RunInput) !u8 {
-
     const list_rows: usize = blk: {
         const ws = tty.getWinsize() catch break :blk 6;
         if (ws.rows > 16) break :blk 6; // four panes + chrome
@@ -488,6 +487,7 @@ const Decoder = struct {
 };
 
 fn readKey(tty: anytype, decoder: *Decoder) !vaxis.Key {
+    if (comptime builtin.os.tag == .windows) return vaxis.Key{ .codepoint = 'q' };
     var buf: [256]u8 = undefined;
     while (true) {
         const n = std.posix.read(tty.fd.handle, &buf) catch |err| switch (err) {
@@ -623,8 +623,8 @@ test "doctor tui: hosts pane surfaces fail-stance (no silent drop)" {
             .host = "hermes",
             .wired = "yes",
             .shell_gate = "pre_tool_call",
-            .fail_stance = "fail-open (default)",
-            .fix = "RYK_HERMES_FAIL_OPEN=0",
+            .fail_stance = "fail-open (explicit)",
+            .fix = "unset RYK_HERMES_FAIL_OPEN",
         },
     };
     var storage: [16][160]u8 = undefined;
@@ -641,7 +641,7 @@ test "doctor tui: hosts pane surfaces fail-stance (no silent drop)" {
     const text = jw.buffered();
     try std.testing.expect(std.mem.indexOf(u8, text, "fail-closed shell") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "unwired (no fail-closed shell)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "fail-open (default)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "fail-open (explicit)") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "codex") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "fix opencode:") != null);
 }

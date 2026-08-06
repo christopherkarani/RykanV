@@ -55,11 +55,6 @@ require_archive_binary() {
   [ "$found" = "1" ] || fail "missing artifact pattern $pattern"
 }
 
-# Backward-compat alias used by older call sites.
-require_orca_archive_binary() {
-  require_archive_binary "$@"
-}
-
 disallowed_archive_path() {
   case "$1" in
     */schemas/safety-report*|\
@@ -103,11 +98,11 @@ require_archive_excludes() {
 
 artifact_package_key() {
   case "$1" in
-    ryk-v*-darwin-amd64.tar.gz|ryk-v*-darwin-amd64.tar.gz) printf 'darwin-amd64' ;;
-    ryk-v*-darwin-arm64.tar.gz|ryk-v*-darwin-arm64.tar.gz) printf 'darwin-arm64' ;;
-    ryk-v*-linux-amd64.tar.gz|ryk-v*-linux-amd64.tar.gz) printf 'linux-amd64' ;;
-    ryk-v*-linux-arm64.tar.gz|ryk-v*-linux-arm64.tar.gz) printf 'linux-arm64' ;;
-    ryk-v*-windows-amd64.zip|ryk-v*-windows-amd64.zip) printf 'windows-amd64' ;;
+    ryk-v*-darwin-amd64.tar.gz) printf 'darwin-amd64' ;;
+    ryk-v*-darwin-arm64.tar.gz) printf 'darwin-arm64' ;;
+    ryk-v*-linux-amd64.tar.gz) printf 'linux-amd64' ;;
+    ryk-v*-linux-arm64.tar.gz) printf 'linux-arm64' ;;
+    ryk-v*-windows-amd64.zip) printf 'windows-amd64' ;;
     *) fail "unsupported package artifact name: $1" ;;
   esac
 }
@@ -128,10 +123,6 @@ artifact_manifest_name() {
     ryk-v*-darwin-arm64.tar.gz) printf 'ryk-v#{version}-darwin-arm64.tar.gz' ;;
     ryk-v*-linux-amd64.tar.gz) printf 'ryk-v#{version}-linux-amd64.tar.gz' ;;
     ryk-v*-linux-arm64.tar.gz) printf 'ryk-v#{version}-linux-arm64.tar.gz' ;;
-    ryk-v*-darwin-amd64.tar.gz) printf 'ryk-v#{version}-darwin-amd64.tar.gz' ;;
-    ryk-v*-darwin-arm64.tar.gz) printf 'ryk-v#{version}-darwin-arm64.tar.gz' ;;
-    ryk-v*-linux-amd64.tar.gz) printf 'ryk-v#{version}-linux-amd64.tar.gz' ;;
-    ryk-v*-linux-arm64.tar.gz) printf 'ryk-v#{version}-linux-arm64.tar.gz' ;;
     *) printf '%s' "$1" ;;
   esac
 }
@@ -143,9 +134,8 @@ require_manifest_hash_for_artifact() {
   [ -n "$hash" ] || fail "missing checksum entry for $artifact_name"
 
   case "$manifest" in
-    */homebrew/Formula/ryk.rb|*/homebrew/Formula/orca.rb)
+    */homebrew/Formula/ryk.rb)
       manifest_name="$(artifact_manifest_name "$artifact_name")"
-      # Prefer ryk-named entries; accept either in dual-name formulas.
       awk -v name="$manifest_name" -v hash="$hash" -v raw="$artifact_name" '
         index($0, name) || index($0, raw) { seen = 1; window = 8 }
         seen && index($0, hash) { ok = 1 }
@@ -158,7 +148,7 @@ require_manifest_hash_for_artifact() {
       grep -Eq "\"$key\"[[:space:]]*:[[:space:]]*\"$hash\"" "$manifest" ||
         fail "rendered npm package checksum is not bound to $artifact_name"
       ;;
-    */scoop/ryk.json|*/scoop/orca.json|*/winget/ryk.yaml|*/winget/orca.yaml)
+    */scoop/ryk.json|*/winget/ryk.yaml)
       grep -q "$artifact_name" "$manifest" ||
         fail "rendered manifest $(basename "$manifest") missing artifact URL for $artifact_name"
       grep -q "$hash" "$manifest" ||
@@ -172,7 +162,6 @@ require_manifest_hash_for_artifact() {
 
 require_package_hashes() {
   homebrew_ryk="$DIST_DIR/package-manifests/homebrew/Formula/ryk.rb"
-  homebrew_orca="$DIST_DIR/package-manifests/homebrew/Formula/orca.rb"
   npm="$DIST_DIR/package-manifests/npm/package.json"
 
   for artifact in \
@@ -183,12 +172,18 @@ require_package_hashes() {
   do
     [ -f "$artifact" ] || continue
     name="$(basename "$artifact")"
-    if [ -f "$homebrew_ryk" ]; then
-      require_manifest_hash_for_artifact "$homebrew_ryk" "$name"
-    elif [ -f "$homebrew_orca" ]; then
-      require_manifest_hash_for_artifact "$homebrew_orca" "$name"
-    fi
+    require_manifest_hash_for_artifact "$homebrew_ryk" "$name"
     require_manifest_hash_for_artifact "$npm" "$name"
+  done
+
+  scoop="$DIST_DIR/package-manifests/scoop/ryk.json"
+  winget="$DIST_DIR/package-manifests/winget/ryk.yaml"
+  for artifact in "$DIST_DIR"/ryk-v*-windows-amd64.zip; do
+    [ -f "$artifact" ] || continue
+    name="$(basename "$artifact")"
+    require_manifest_hash_for_artifact "$npm" "$name"
+    require_manifest_hash_for_artifact "$scoop" "$name"
+    require_manifest_hash_for_artifact "$winget" "$name"
   done
 }
 
@@ -221,10 +216,8 @@ forbid_archive_binary() {
   [ "$found" = "1" ] || fail "missing artifact pattern $pattern"
 }
 
-require_cli_pair() {
-  # Primary ryk + ryk compat alias both required in primary archives.
+require_cli_archive() {
   pattern="$1"
-  require_archive_binary "$pattern" "ryk"
   require_archive_binary "$pattern" "ryk"
   forbid_archive_binary "$pattern" "ryk-daemon"
   require_archive_excludes "$pattern"
@@ -237,32 +230,35 @@ require_release_artifacts() {
       require_artifact "$DIST_DIR/ryk-v*-darwin-arm64.tar.gz"
       require_artifact "$DIST_DIR/ryk-v*-linux-amd64.tar.gz"
       require_artifact "$DIST_DIR/ryk-v*-linux-arm64.tar.gz"
-      require_cli_pair "$DIST_DIR/ryk-v*-darwin-amd64.tar.gz"
-      require_cli_pair "$DIST_DIR/ryk-v*-darwin-arm64.tar.gz"
-      require_cli_pair "$DIST_DIR/ryk-v*-linux-amd64.tar.gz"
-      require_cli_pair "$DIST_DIR/ryk-v*-linux-arm64.tar.gz"
+      require_artifact "$DIST_DIR/ryk-v*-windows-amd64.zip"
+      require_cli_archive "$DIST_DIR/ryk-v*-darwin-amd64.tar.gz"
+      require_cli_archive "$DIST_DIR/ryk-v*-darwin-arm64.tar.gz"
+      require_cli_archive "$DIST_DIR/ryk-v*-linux-amd64.tar.gz"
+      require_cli_archive "$DIST_DIR/ryk-v*-linux-arm64.tar.gz"
+      require_archive_binary "$DIST_DIR/ryk-v*-windows-amd64.zip" "ryk.exe"
+      forbid_archive_binary "$DIST_DIR/ryk-v*-windows-amd64.zip" "ryk-daemon.exe"
+      require_archive_excludes "$DIST_DIR/ryk-v*-windows-amd64.zip"
       ;;
     host)
       case "$(detect_host_target)" in
         darwin-amd64)
           require_artifact "$DIST_DIR/ryk-v*-darwin-amd64.tar.gz"
-          require_cli_pair "$DIST_DIR/ryk-v*-darwin-amd64.tar.gz"
+          require_cli_archive "$DIST_DIR/ryk-v*-darwin-amd64.tar.gz"
           ;;
         darwin-arm64)
           require_artifact "$DIST_DIR/ryk-v*-darwin-arm64.tar.gz"
-          require_cli_pair "$DIST_DIR/ryk-v*-darwin-arm64.tar.gz"
+          require_cli_archive "$DIST_DIR/ryk-v*-darwin-arm64.tar.gz"
           ;;
         linux-amd64)
           require_artifact "$DIST_DIR/ryk-v*-linux-amd64.tar.gz"
-          require_cli_pair "$DIST_DIR/ryk-v*-linux-amd64.tar.gz"
+          require_cli_archive "$DIST_DIR/ryk-v*-linux-amd64.tar.gz"
           ;;
         linux-arm64)
           require_artifact "$DIST_DIR/ryk-v*-linux-arm64.tar.gz"
-          require_cli_pair "$DIST_DIR/ryk-v*-linux-arm64.tar.gz"
+          require_cli_archive "$DIST_DIR/ryk-v*-linux-arm64.tar.gz"
           ;;
         windows-amd64)
           require_artifact "$DIST_DIR/ryk-v*-windows-amd64.zip"
-          require_archive_binary "$DIST_DIR/ryk-v*-windows-amd64.zip" "ryk.exe"
           require_archive_binary "$DIST_DIR/ryk-v*-windows-amd64.zip" "ryk.exe"
           forbid_archive_binary "$DIST_DIR/ryk-v*-windows-amd64.zip" "ryk-daemon.exe"
           require_archive_excludes "$DIST_DIR/ryk-v*-windows-amd64.zip"
@@ -283,15 +279,11 @@ require_release_artifacts() {
 [ -s "$DIST_DIR/release-manifest.json" ] || fail "missing release-manifest.json"
 [ -s "$DIST_DIR/sbom.json" ] || fail "missing sbom.json"
 if [ "$RELEASE_PRODUCT" != "host" ]; then
-  if [ ! -s "$DIST_DIR/package-manifests/homebrew/Formula/ryk.rb" ] && \
-     [ ! -s "$DIST_DIR/package-manifests/homebrew/Formula/orca.rb" ]; then
-    fail "missing rendered Homebrew formula (ryk.rb or orca.rb)"
-  fi
+  [ -s "$DIST_DIR/package-manifests/homebrew/Formula/ryk.rb" ] || fail "missing rendered Homebrew formula"
   [ -s "$DIST_DIR/package-manifests/npm/package.json" ] || fail "missing rendered npm package manifest"
-  if [ ! -s "$DIST_DIR/package-manifests/npm/bin/ryk.js" ] && \
-     [ ! -s "$DIST_DIR/package-manifests/npm/bin/ryk.js" ]; then
-    fail "missing rendered npm launcher (ryk.js or orca.js)"
-  fi
+  [ -s "$DIST_DIR/package-manifests/npm/bin/ryk.js" ] || fail "missing rendered npm launcher"
+  [ -s "$DIST_DIR/package-manifests/scoop/ryk.json" ] || fail "missing rendered Scoop manifest"
+  [ -s "$DIST_DIR/package-manifests/winget/ryk.yaml" ] || fail "missing rendered WinGet manifest"
 fi
 grep -q '"products_included"' "$DIST_DIR/release-manifest.json" || fail "release-manifest.json missing products_included"
 grep -q '"ryk"' "$DIST_DIR/release-manifest.json" || fail "release-manifest.json missing ryk product"
@@ -302,9 +294,8 @@ fi
 if grep -q '"ryk-daemon"' "$DIST_DIR/sbom.json"; then
   fail "sbom.json still lists ryk-daemon component (removed from packaging)"
 fi
-# SBOM may still list ryk (compat) or ryk (primary).
-if ! grep -qE '"ryk"|"ryk"' "$DIST_DIR/sbom.json"; then
-  fail "sbom.json missing ryk/orca component"
+if ! grep -q '"ryk"' "$DIST_DIR/sbom.json"; then
+  fail "sbom.json missing ryk component"
 fi
 if command -v sha256sum >/dev/null 2>&1; then
   (cd "$DIST_DIR" && sha256sum -c checksums.txt)
@@ -318,8 +309,9 @@ grep -q '"sbom_status"' "$DIST_DIR/release-manifest.json"
 if [ "$RELEASE_PRODUCT" != "host" ]; then
   for rendered in \
     "$DIST_DIR/package-manifests/homebrew/Formula/ryk.rb" \
-    "$DIST_DIR/package-manifests/homebrew/Formula/orca.rb" \
-    "$DIST_DIR/package-manifests/npm/package.json"
+    "$DIST_DIR/package-manifests/npm/package.json" \
+    "$DIST_DIR/package-manifests/scoop/ryk.json" \
+    "$DIST_DIR/package-manifests/winget/ryk.yaml"
   do
     [ -f "$rendered" ] || continue
     ! grep -q 'PLACEHOLDER' "$rendered" || { printf 'release verify: placeholder left in %s\n' "$rendered" >&2; exit 1; }
@@ -334,8 +326,8 @@ OPENCLAW_VERSION=$(grep '"version"' "${REPO_ROOT}/integrations/openclaw-plugin/p
 CODEX_VERSION=$(grep '"version"' "${REPO_ROOT}/integrations/codex-plugin/.codex-plugin/plugin.json" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
 CLAUDE_VERSION=$(grep '"version"' "${REPO_ROOT}/integrations/claude-code-plugin/.claude-plugin/plugin.json" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
 OPENCODE_VERSION=$(grep '"version"' "${REPO_ROOT}/integrations/opencode-plugin/package.json" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
-# Pi runtime dependency may be @rykan/ryk (primary) or legacy @rykan/ryk.
-PI_RUNTIME_VERSION=$(grep -E '"@rykan/(ryk|orca)"' "${REPO_ROOT}/ryk-pi/package.json" | head -1 | sed 's/.*"@rykan\/[^"]*": *"\([^"]*\)".*/\1/')
+# Pi runtime dependency is the canonical @rykan/ryk package.
+PI_RUNTIME_VERSION=$(grep '"@rykan/ryk"' "${REPO_ROOT}/ryk-pi/package.json" | head -1 | sed 's/.*"@rykan\/ryk": *"\([^"]*\)".*/\1/')
 for plugin_version in "${HERMES_VERSION}" "${OPENCLAW_VERSION}" "${CODEX_VERSION}" "${CLAUDE_VERSION}" "${OPENCODE_VERSION}" "${PI_RUNTIME_VERSION}"; do
   if [ "${plugin_version}" != "${CLI_VERSION}" ]; then
     echo "ERROR: plugin version mismatch (expected ${CLI_VERSION}, got ${plugin_version})" >&2
@@ -344,4 +336,4 @@ for plugin_version in "${HERMES_VERSION}" "${OPENCLAW_VERSION}" "${CODEX_VERSION
 done
 
 printf 'release verify: passed\n'
-printf 'Limitations: ryk release assets cover local CLI/runtime guardrails only; no hosted telemetry or cloud enforcement is included. ryk is a PATH/package compat alias for one major.\n'
+printf 'Limitations: ryk release assets cover local CLI/runtime guardrails only; no hosted telemetry or cloud enforcement is included.\n'

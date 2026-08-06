@@ -558,7 +558,7 @@ pub fn collectLaunchExecPaths(
 
     // Symlink target when different (e.g. ~/.local/bin/claude → versions/N).
     var real_buf: [std.fs.max_path_bytes]u8 = undefined;
-    if (realpathInto(abs, &real_buf)) |real| {
+    if (realpathInto(io, abs, &real_buf)) |real| {
         if (!std.mem.eql(u8, real, abs)) {
             try appendLaunchExecCandidate(io, allocator, &list, real, env_map);
         }
@@ -619,7 +619,7 @@ pub fn collectLaunchInstallRoPaths(
     try appendInstallRoForLaunchFile(io, allocator, &list, abs, env_map);
 
     var real_buf: [std.fs.max_path_bytes]u8 = undefined;
-    if (realpathInto(abs, &real_buf)) |real| {
+    if (realpathInto(io, abs, &real_buf)) |real| {
         if (!std.mem.eql(u8, real, abs)) {
             try appendInstallRoForLaunchFile(io, allocator, &list, real, env_map);
         }
@@ -680,7 +680,7 @@ pub fn expandShellWrapperLaunch(
 
     // Primary interpreter = first nested absolute path (realpath preferred for exec).
     var real_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const interp: []const u8 = if (realpathInto(targets[0], &real_buf)) |real| real else targets[0];
+    const interp: []const u8 = if (realpathInto(io, targets[0], &real_buf)) |real| real else targets[0];
 
     // Venv residual: realpath loses site-packages; inject ryk-owned PYTHONPATH.
     if (env_map) |map| {
@@ -697,7 +697,7 @@ pub fn expandShellWrapperLaunch(
     var i: usize = 1;
     while (i < n) : (i += 1) {
         // Prefer realpath for each nested file path (same symlink residual).
-        if (realpathInto(targets[i], &real_buf)) |real| {
+        if (realpathInto(io, targets[i], &real_buf)) |real| {
             try list.append(allocator, try allocator.dupe(u8, real));
         } else {
             try list.append(allocator, try allocator.dupe(u8, targets[i]));
@@ -757,12 +757,12 @@ pub fn expandEnvShebangLaunch(
         list.deinit(allocator);
     }
     var real_buf: [std.fs.max_path_bytes]u8 = undefined;
-    if (realpathInto(interp_abs, &real_buf)) |real| {
+    if (realpathInto(io, interp_abs, &real_buf)) |real| {
         try list.append(allocator, try allocator.dupe(u8, real));
     } else {
         try list.append(allocator, try allocator.dupe(u8, interp_abs));
     }
-    if (realpathInto(script_abs, &real_buf)) |real| {
+    if (realpathInto(io, script_abs, &real_buf)) |real| {
         try list.append(allocator, try allocator.dupe(u8, real));
     } else {
         try list.append(allocator, try allocator.dupe(u8, script_abs));
@@ -1014,13 +1014,10 @@ fn absolutePathForGrant(io: std.Io, allocator: std.mem.Allocator, path: []const 
     return allocator.dupe(u8, "") catch return error.OutOfMemory;
 }
 
-fn realpathInto(path: []const u8, out: *[std.fs.max_path_bytes]u8) ?[]const u8 {
+fn realpathInto(io: std.Io, path: []const u8, out: *[std.fs.max_path_bytes]u8) ?[]const u8 {
     if (path.len == 0 or path.len >= std.fs.max_path_bytes) return null;
-    var in_buf: [std.fs.max_path_bytes]u8 = undefined;
-    @memcpy(in_buf[0..path.len], path);
-    in_buf[path.len] = 0;
-    const resolved = std.c.realpath(in_buf[0..path.len :0].ptr, out) orelse return null;
-    return std.mem.span(resolved);
+    const n = std.Io.Dir.cwd().realPathFile(io, path, out[0..]) catch return null;
+    return out[0..n];
 }
 
 fn appendLaunchExecCandidate(
@@ -1074,7 +1071,7 @@ fn appendShebangInterpreterGrants(
     try appendLaunchExecCandidate(io, allocator, list, abs, env_map);
 
     var real_buf: [std.fs.max_path_bytes]u8 = undefined;
-    if (realpathInto(abs, &real_buf)) |real| {
+    if (realpathInto(io, abs, &real_buf)) |real| {
         if (!std.mem.eql(u8, real, abs)) {
             try appendLaunchExecCandidate(io, allocator, list, real, env_map);
         }
@@ -1107,7 +1104,7 @@ fn appendShebangInterpreterInstallRo(
     try appendBinLayoutInstallRo(io, allocator, list, abs, env_map);
 
     var real_buf: [std.fs.max_path_bytes]u8 = undefined;
-    if (realpathInto(abs, &real_buf)) |real| {
+    if (realpathInto(io, abs, &real_buf)) |real| {
         if (!std.mem.eql(u8, real, abs)) {
             try appendInstallRoForLaunchFile(io, allocator, list, real, env_map);
             try appendBinLayoutInstallRo(io, allocator, list, real, env_map);
@@ -1165,7 +1162,7 @@ fn appendShellWrapperNestedExecTargets(
     for (targets[0..n]) |target| {
         try appendLaunchExecCandidate(io, allocator, list, target, env_map);
         var real_buf: [std.fs.max_path_bytes]u8 = undefined;
-        if (realpathInto(target, &real_buf)) |real| {
+        if (realpathInto(io, target, &real_buf)) |real| {
             if (!std.mem.eql(u8, real, target)) {
                 try appendLaunchExecCandidate(io, allocator, list, real, env_map);
             }
@@ -1192,7 +1189,7 @@ fn appendShellWrapperNestedInstallRo(
         try appendInstallRoForLaunchFile(io, allocator, list, target, env_map);
         try appendBinLayoutInstallRo(io, allocator, list, target, env_map);
         var real_buf: [std.fs.max_path_bytes]u8 = undefined;
-        if (realpathInto(target, &real_buf)) |real| {
+        if (realpathInto(io, target, &real_buf)) |real| {
             if (!std.mem.eql(u8, real, target)) {
                 try appendInstallRoForLaunchFile(io, allocator, list, real, env_map);
                 try appendBinLayoutInstallRo(io, allocator, list, real, env_map);
@@ -2607,6 +2604,7 @@ test "collectLaunchInstallRoPaths grants package root for node shebang agent" {
     var env_map = std.process.Environ.Map.init(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", home);
+    try env_map.put("PATH", "/no/such/ryk-test-path");
 
     const ro = try collectLaunchInstallRoPaths(io, allocator, script, &env_map);
     defer freeLaunchInstallRoPaths(allocator, ro);
@@ -2667,6 +2665,7 @@ test "collectLaunchInstallRoPaths unscoped package root only (no parent RO)" {
     var env_map = std.process.Environ.Map.init(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", home);
+    try env_map.put("PATH", "/no/such/ryk-test-path");
 
     const ro = try collectLaunchInstallRoPaths(io, allocator, script, &env_map);
     defer freeLaunchInstallRoPaths(allocator, ro);
@@ -2696,6 +2695,7 @@ test "collectLaunchInstallRoPaths rejects package.json planted at HOME" {
     var env_map = std.process.Environ.Map.init(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", home);
+    try env_map.put("PATH", "/no/such/ryk-test-path");
 
     const ro = try collectLaunchInstallRoPaths(io, allocator, script, &env_map);
     defer freeLaunchInstallRoPaths(allocator, ro);
@@ -2734,7 +2734,7 @@ test "absoluteizeLaunchArgv resolves bare name before PATH honesty filter" {
     try std.testing.expectEqualStrings("--version", absolute[1]);
     // realpath of the planted binary (tmp may be under a symlink prefix).
     var real_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const expected = realpathInto(abs_agent, &real_buf) orelse abs_agent;
+    const expected = realpathInto(io, abs_agent, &real_buf) orelse abs_agent;
     try std.testing.expectEqualStrings(expected, absolute[0]);
 
     // After PATH honesty drops the bin dir, bare name fails but absolute still resolves.
@@ -2807,8 +2807,8 @@ test "expandEnvShebangLaunch rewrites node shebang to absolute interpreter plus 
     try std.testing.expectEqual(@as(usize, 5), expanded.len);
     var real_buf_a: [std.fs.max_path_bytes]u8 = undefined;
     var real_buf_b: [std.fs.max_path_bytes]u8 = undefined;
-    const want_node = realpathInto(node_abs, &real_buf_a) orelse node_abs;
-    const want_script = realpathInto(script_abs, &real_buf_b) orelse script_abs;
+    const want_node = realpathInto(io, node_abs, &real_buf_a) orelse node_abs;
+    const want_script = realpathInto(io, script_abs, &real_buf_b) orelse script_abs;
     try std.testing.expectEqualStrings(want_node, expanded[0]);
     try std.testing.expectEqualStrings(want_script, expanded[1]);
     try std.testing.expectEqualStrings("mcp", expanded[2]);

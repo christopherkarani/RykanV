@@ -34,6 +34,5 @@ compatibility broker path `.ryk/dev-secrets.env` and replace the raw value with
 `$ENV_NAME` before the model sees it. Never ask the user to paste the raw secret
 again, and never print or log the value. Noninteractive capture fails closed.
 
-Primary settings use the `RYK_PI_` prefix. Legacy environment variables and
-slash-command aliases remain accepted internally for migration but must not be
-shown as the product identity.
+Primary settings use the `RYK_PI_` prefix. The hard-cut release accepts only
+the canonical `RYK_*` environment variables and `ryk-*` slash commands.

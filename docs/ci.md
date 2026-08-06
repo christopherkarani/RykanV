@@ -14,7 +14,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Zig
         run: |
-          echo "Install Zig 0.15.2 using your pinned toolchain action or cache"
+          echo "Install Zig 0.16.0 using your pinned toolchain action or cache"
       - name: Build
         run: zig build
       - name: Test
@@ -23,14 +23,14 @@ jobs:
         run: ./zig-out/bin/ryk ci check --format markdown
       # Fixture engine self-test (builtin:redteam); not workspace policy assurance.
       - name: ryk red-team
-        run: ./zig-out/bin/ryk redteam --ci --json > orca-redteam.json
+        run: ./zig-out/bin/ryk redteam --ci --json > ryk-redteam.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: ryk-audit
           path: |
             .ryk/**
-            orca-redteam.json
+            ryk-redteam.json
 ```
 
 See `docs/ci/github-actions.md` and `examples/ci/github-actions.yml`.

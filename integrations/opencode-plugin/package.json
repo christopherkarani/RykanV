@@ -7,6 +7,7 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist",
+    "ryk.ts",
     "README.md",
     "package.json"
   ],
@@ -23,7 +24,7 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && cp src/index.ts orca.ts",
+    "build": "tsc -p tsconfig.json && cp src/index.ts ryk.ts",
     "test": "npm run build && node --test test/index.test.mjs",
     "pack:dry-run": "npm pack --dry-run"
   },

@@ -1,4 +1,7 @@
-# Orca Plugin Changelog
+# ryk Plugin Changelog
+
+Entries before the 1.2.9 hard cut retain historical product names where they
+describe the releases that originally shipped them.
 
 ## 1.2.8 — 2026-07-04
 

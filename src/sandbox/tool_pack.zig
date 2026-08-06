@@ -285,13 +285,10 @@ fn appendOwnedPath(allocator: std.mem.Allocator, list: *std.ArrayList([]const u8
     try list.append(allocator, owned);
 }
 
-fn realpathInto(path: []const u8, out: *[std.fs.max_path_bytes]u8) ?[]const u8 {
+fn realpathInto(io: std.Io, path: []const u8, out: *[std.fs.max_path_bytes]u8) ?[]const u8 {
     if (path.len == 0 or path.len >= std.fs.max_path_bytes) return null;
-    var in_buf: [std.fs.max_path_bytes]u8 = undefined;
-    @memcpy(in_buf[0..path.len], path);
-    in_buf[path.len] = 0;
-    const resolved = std.c.realpath(in_buf[0..path.len :0].ptr, out) orelse return null;
-    return std.mem.span(resolved);
+    const n = std.Io.Dir.cwd().realPathFile(io, path, out[0..]) catch return null;
+    return out[0..n];
 }
 
 fn isRegularFile(io: std.Io, path: []const u8) bool {
@@ -311,7 +308,7 @@ fn appendFileAndRealpath(
     if (!isRegularFile(io, path)) return;
     try appendOwnedPath(allocator, list, path);
     var real_buf: [std.fs.max_path_bytes]u8 = undefined;
-    if (realpathInto(path, &real_buf)) |real| {
+    if (realpathInto(io, path, &real_buf)) |real| {
         if (!std.mem.eql(u8, real, path)) {
             if (isRegularFile(io, real)) {
                 try appendOwnedPath(allocator, list, real);
@@ -458,7 +455,7 @@ fn appendLinkedLibRoDirs(
         try appendOwnedRoPath(allocator, list, lib_dir);
         // Also grant realpath target dir when opt/ is a symlink into Cellar.
         var real_buf: [std.fs.max_path_bytes]u8 = undefined;
-        if (realpathInto(lib_path, &real_buf)) |real| {
+        if (realpathInto(io, lib_path, &real_buf)) |real| {
             if (!std.mem.eql(u8, real, lib_path)) {
                 if (std.fs.path.dirname(real)) |real_dir| {
                     try appendOwnedRoPath(allocator, list, real_dir);

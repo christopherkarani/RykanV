@@ -601,7 +601,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
         // Shell redirects open stdio FDs in the parent before fork. When those
         // targets sit under classic /tmp or /var/folders, empty-backpack Seatbelt
         // will deny Bun fstat — warn early so operators fix capture location first.
-        if (sandbox.host_config_grants.parentStdioHasUngrantedHostTmpRisk()) {
+        if (sandbox.host_config_grants.parentStdioHasUngrantedHostTmpRisk(io)) {
             try stderr.writeAll(sandbox.host_config_grants.empty_backpack_stdio_host_tmp_warn);
         }
     }
@@ -1380,7 +1380,7 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                 ),
             }
             if (secret_boundary == .empty_backpack) {
-                const stdio_risk = sandbox.host_config_grants.parentStdioHasUngrantedHostTmpRisk();
+                const stdio_risk = sandbox.host_config_grants.parentStdioHasUngrantedHostTmpRisk(io);
                 // Agent stdio is usually inherited (not retained here). Path-walk residual
                 // is classified when agent_output is available; generic tip also names it.
                 try stderr.writeAll(sandbox.host_config_grants.selectEmptyBackpackAgentExitTip(.{
@@ -2403,7 +2403,7 @@ fn flushIfSupported(writer: anytype) !void {
 
 /// After the shield card is painted + flushed, dwell ~2s on an interactive TTY
 /// so humans can actually read it. Skips pipes, dumb terminals, tests, and
-/// `RYK_SHIELD_HOLD=0` / `RYK_SHIELD_HOLD=0`.
+/// `RYK_SHIELD_HOLD=0`.
 fn holdShieldCardIfNeeded(io: std.Io, stdout: anytype, receipt: sandbox.posture.AttachReceipt) void {
     const posture = tui.sandbox_card.PostureKind.parse(@tagName(receipt.posture));
     const is_tty = stdoutIsTty(io, stdout);
@@ -2416,8 +2416,8 @@ fn holdShieldCardIfNeeded(io: std.Io, stdout: anytype, receipt: sandbox.posture.
 }
 
 fn shieldHoldDisabledByEnv() bool {
-    // Dual-read ryk/ryk env (Phase 5a brand cut).
-    for ([_][:0]const u8{ "RYK_SHIELD_HOLD", "RYK_SHIELD_HOLD" }) |name| {
+    // Honor the canonical RYK_SHIELD_HOLD setting.
+    for ([_][:0]const u8{"RYK_SHIELD_HOLD"}) |name| {
         if (std.c.getenv(name)) |raw| {
             const v = std.mem.sliceTo(raw, 0);
             if (v.len == 0) continue;
@@ -5168,8 +5168,8 @@ test "run shell evaluation forwards command and cwd to daemon Evaluate" {
 }
 
 test "approval presentation redacts argv while evaluation and execution retain original argv" {
-    const sentinel = "sk-orcaPresentationBoundarySentinel123456789";
-    const child_arg = "--token=sk-orcaPresentationBoundarySentinel123456789";
+    const sentinel = "sk-rykPresentationBoundarySentinel123456789";
+    const child_arg = "--token=sk-rykPresentationBoundarySentinel123456789";
 
     const command_argv = [_][]const u8{ "./capture-argv.sh", child_arg };
     const display = try intercept.commands.displayArgvRedactedAlloc(std.testing.allocator, &command_argv);
@@ -5217,8 +5217,8 @@ test "approval presentation redacts argv while evaluation and execution retain o
 }
 
 test "denial panel and remediation redact argv while evaluator receives original argv" {
-    const sentinel = "sk-orcaDeniedBoundarySentinel123456789";
-    const secret_arg = "--token=sk-orcaDeniedBoundarySentinel123456789";
+    const sentinel = "sk-rykDeniedBoundarySentinel123456789";
+    const secret_arg = "--token=sk-rykDeniedBoundarySentinel123456789";
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);

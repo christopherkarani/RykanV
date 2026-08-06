@@ -1,4 +1,4 @@
-export interface OrcaMeta {
+export interface RykMeta {
   installed: boolean;
   version: string;
   workspace_root: string | null;
@@ -149,7 +149,7 @@ export interface StatusResponse {
   mode: "machine" | "workspace";
   workspace_count: number;
   workspaces: Array<{ root: string; last_seen_at: string; last_host: string | null; policy_present: boolean }>;
-  orca: OrcaMeta;
+  ryk: RykMeta;
   policy: PolicySummary | null;
   secretless_runtime: SecretlessRuntime | null;
   license: License;

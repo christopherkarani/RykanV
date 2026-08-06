@@ -607,6 +607,7 @@ fn readStatusOk(read_fd: i32, child_pid: i32) bool {
 
 /// Best-effort: signal the process group (negative pid) then the pid itself.
 fn killProcessGroup(pid: i32) void {
+    if (comptime builtin.os.tag == .windows) return;
     if (pid <= 0) return;
     std.posix.kill(-pid, std.posix.SIG.KILL) catch {};
     std.posix.kill(pid, std.posix.SIG.KILL) catch {};
@@ -615,6 +616,7 @@ fn killProcessGroup(pid: i32) void {
 /// Best-effort kill process group + pid and reap (public for post-handshake
 /// promote hard-fail cleanup in `apply.spawnAgent`).
 pub fn killAndReapChild(pid: i32) void {
+    if (comptime builtin.os.tag == .windows) return;
     killProcessGroup(pid);
     var status: c_int = 0;
     // Retry waitpid on EINTR so parent does not free argv/env while the child

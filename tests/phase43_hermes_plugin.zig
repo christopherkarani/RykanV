@@ -15,7 +15,7 @@ fn readFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     return try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .limited(1024 * 1024));
 }
 
-test "hermes plugin manifest exists and names orca" {
+test "hermes plugin manifest exists and names ryk" {
     try std.testing.expect(fileExists(manifest_path));
     const content = try readFile(std.testing.allocator, manifest_path);
     defer std.testing.allocator.free(content);
@@ -54,7 +54,7 @@ test "hermes plugin source detects stale ryk binaries and version mismatch" {
     try std.testing.expect(std.mem.indexOf(u8, content, "_supports_hermes_host") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "_handle_hook_error") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "RYK_HERMES_FAIL_OPEN") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "_orca_executable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "_ryk_executable") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "Allowing tool call WITHOUT ryk guardrails") != null);
 }
 

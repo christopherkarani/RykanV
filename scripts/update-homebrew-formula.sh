@@ -2,8 +2,8 @@
 set -eu
 
 VERSION="${1:-${RYK_VERSION:-}}"
-HOMEBREW_TAP_DIR="${RYK_HOMEBREW_TAP_DIR:-${RYK_HOMEBREW_TAP_DIR:-${HOME}/code/homebrew-ryk}}"
-FORMULA_OUT="${RYK_HOMEBREW_FORMULA:-${RYK_HOMEBREW_FORMULA:-${HOMEBREW_TAP_DIR}/Formula/ryk.rb}}"
+HOMEBREW_TAP_DIR="${RYK_HOMEBREW_TAP_DIR:-${HOME}/code/homebrew-ryk}"
+FORMULA_OUT="${RYK_HOMEBREW_FORMULA:-${HOMEBREW_TAP_DIR}/Formula/ryk.rb}"
 TEMPLATE="${RYK_HOMEBREW_TEMPLATE:-packaging/homebrew/Formula/ryk.rb}"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ryk-homebrew.XXXXXX")"
 
@@ -30,24 +30,16 @@ else
 fi
 
 for plat in darwin-arm64 darwin-amd64 linux-arm64 linux-amd64; do
-  # Prefer primary ryk-v* artifacts; fall back to dual-published ryk-v*.
   artifact="ryk-v${VERSION}-${plat}.tar.gz"
-  legacy="ryk-v${VERSION}-${plat}.tar.gz"
   output="${TMP_DIR}/${artifact}"
 
   printf '  → %s\n' "$artifact"
   if [ -n "$DIST_DIR" ] && [ -f "${DIST_DIR}/${artifact}" ]; then
     cp "${DIST_DIR}/${artifact}" "$output"
-  elif [ -n "$DIST_DIR" ] && [ -f "${DIST_DIR}/${legacy}" ]; then
-    cp "${DIST_DIR}/${legacy}" "$output"
   elif command -v curl >/dev/null 2>&1; then
-    if ! curl -fsSL -o "$output" "${BASE_URL}/${artifact}"; then
-      curl -fsSL -o "$output" "${BASE_URL}/${legacy}" || fail "failed to download ryk or ryk artifact for $plat"
-    fi
+    curl -fsSL -o "$output" "${BASE_URL}/${artifact}" || fail "failed to download ryk artifact for $plat"
   elif command -v wget >/dev/null 2>&1; then
-    if ! wget -q -O "$output" "${BASE_URL}/${artifact}"; then
-      wget -q -O "$output" "${BASE_URL}/${legacy}" || fail "failed to download ryk or ryk artifact for $plat"
-    fi
+    wget -q -O "$output" "${BASE_URL}/${artifact}" || fail "failed to download ryk artifact for $plat"
   else
     fail "curl or wget is required"
   fi

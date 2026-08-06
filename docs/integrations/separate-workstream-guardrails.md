@@ -33,7 +33,7 @@ Existing drone tests should continue to pass or have safe skip reasons documente
 
 ## Plugin Package Contents
 
-Plugin artifacts (`ryk-codex-plugin-vX.Y.Z.zip` and `orca-claude-code-plugin-vX.Y.Z.zip`) contain only:
+Plugin artifacts (`ryk-codex-plugin-vX.Y.Z.zip` and `ryk-claude-code-plugin-vX.Y.Z.zip`) contain only:
 
 - Plugin manifest (`plugin.json`)
 - Skills (doctor, init, protect, redteam, replay)

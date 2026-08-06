@@ -30,7 +30,7 @@
 # Exit 0 when full attach is proven, or partial when platform-skip / no backend
 # expected. Exit 1 on suite failure, contradictory attach claims, (on
 # linux/darwin) green suite without dual attach proof when deny did not SKIP,
-# or when --require-attach is set without packaged orca_run + 64-hex profile_hash.
+# or when --require-attach is set without packaged ryk_run + 64-hex profile_hash.
 
 set -euo pipefail
 
@@ -277,7 +277,7 @@ validate_evidence_control_rules() {
     esac
   fi
   if [[ "$attach_ok" == true && "$attach_detail" == "ryk_run_os_sandbox_on_active" && ${#phash} -ne 64 ]]; then
-    echo "FAIL: orca_run attach requires 64-hex profile_hash (evidence.zig MissingProfileHash)" >&2
+    echo "FAIL: ryk_run attach requires 64-hex profile_hash (evidence.zig MissingProfileHash)" >&2
     return 1
   fi
   return 0
@@ -285,7 +285,7 @@ validate_evidence_control_rules() {
 
 # --require-attach gate (CI matrix).
 # Args: <require> <ctrl_attach_ok> <attach_detail> [profile_hash] [os_name]
-# On linux/darwin: primary attach must be packaged orca_run + 64-hex profile_hash.
+# On linux/darwin: primary attach must be packaged ryk_run + 64-hex profile_hash.
 # Unit dual-proof greps are support evidence only under --require-attach.
 require_attach_gate() {
   local require="$1"
@@ -302,7 +302,7 @@ require_attach_gate() {
   fi
   if [[ "$os_name" == "linux" || "$os_name" == "darwin" ]]; then
     if [[ "$detail" != "ryk_run_os_sandbox_on_active" ]]; then
-      echo "FAIL: --require-attach on ${os_name} requires packaged orca_run attach + profile_hash (detail=${detail}); unit dual-proof is support only" >&2
+      echo "FAIL: --require-attach on ${os_name} requires packaged ryk_run attach + profile_hash (detail=${detail}); unit dual-proof is support only" >&2
       return 1
     fi
     if [[ ${#phash} -ne 64 ]]; then
@@ -467,10 +467,10 @@ run_e2e_selftest() {
   # M-4: packaged attach detail + 64-hex hash passes --require-attach on linux.
   local pack_hash="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   if ! require_attach_gate true true "ryk_run_os_sandbox_on_active" "$pack_hash" "linux"; then
-    echo "FAIL fixture packaged-attach: --require-attach should pass for orca_run + hash" >&2
+    echo "FAIL fixture packaged-attach: --require-attach should pass for ryk_run + hash" >&2
     fails=$((fails + 1))
   else
-    echo "OK fixture packaged-attach: --require-attach passes for orca_run + 64-hex hash"
+    echo "OK fixture packaged-attach: --require-attach passes for ryk_run + 64-hex hash"
   fi
   if require_attach_gate true true "ryk_run_os_sandbox_on_active" "" "linux" 2>/dev/null; then
     echo "FAIL fixture packaged-attach-no-hash: --require-attach must fail without hash" >&2
@@ -487,16 +487,16 @@ run_e2e_selftest() {
     echo "OK validate: unit dual-proof passes evidence control rules"
   fi
   if validate_evidence_control_rules true "ryk_run_os_sandbox_on_active" true "" 2>/dev/null; then
-    echo "FAIL validate: orca_run without hash must fail" >&2
+    echo "FAIL validate: ryk_run without hash must fail" >&2
     fails=$((fails + 1))
   else
-    echo "OK validate: orca_run without hash fails (MissingProfileHash)"
+    echo "OK validate: ryk_run without hash fails (MissingProfileHash)"
   fi
   if ! validate_evidence_control_rules true "ryk_run_os_sandbox_on_active" true "$pack_hash"; then
-    echo "FAIL validate: orca_run + hash should pass" >&2
+    echo "FAIL validate: ryk_run + hash should pass" >&2
     fails=$((fails + 1))
   else
-    echo "OK validate: orca_run + 64-hex hash passes"
+    echo "OK validate: ryk_run + 64-hex hash passes"
   fi
   if validate_evidence_control_rules true "zig_real_fs_deny_canary_and_handshake" false "" 2>/dev/null; then
     echo "FAIL validate: attach without TEST-DENY must fail" >&2
@@ -599,7 +599,7 @@ if [[ -z "$BINARY" ]]; then
   if [[ -x ./zig-out/bin/ryk ]]; then
     BINARY=./zig-out/bin/ryk
   else
-    echo "building orca..."
+    echo "building ryk..."
     ./scripts/zig build
     BINARY=./zig-out/bin/ryk
   fi
@@ -844,7 +844,7 @@ if [[ "$ctrl_attach_ok" == true ]]; then
     echo "FAIL: CTRL-ATTACH claimed (${attach_detail}) but dual proof incomplete (deny=${test_deny_ok} neighbor=${ctrl_neighbor_ok} handshake=${handshake_ok})" >&2
     exit 1
   fi
-  # M-4 / CI: --require-attach needs packaged orca_run + hash on linux/darwin.
+  # M-4 / CI: --require-attach needs packaged ryk_run + hash on linux/darwin.
   require_attach_gate "$REQUIRE_ATTACH" "$ctrl_attach_ok" "$attach_detail" "$profile_hash" "$OS_NAME" || exit 1
   echo "PASS: sandbox proofs green (attach=${attach_detail})"
   exit 0

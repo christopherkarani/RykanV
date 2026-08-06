@@ -1,13 +1,13 @@
 # Packaging
 
-Primary CLI binary is **ryk**; **orca** is a PATH/package compat alias for one major (Phase 5a). Artifacts are `ryk-v{version}-*` (optional dual-publish `ryk-v*`).
+The canonical CLI binary is **ryk** (Rykan V). Artifacts are `ryk-v{version}-*`.
 
 Production package templates live under:
 
-- `homebrew/Formula/ryk.rb` (primary), `homebrew/Formula/orca.rb` (compat)
-- `scoop/ryk.json` (primary), `scoop/orca.json` (compat)
-- `winget/ryk.yaml` (primary), `winget/orca.yaml` (compat)
-- `npm/package.json` (`@rykan/ryk`, bins `ryk` + `ryk`)
+- `homebrew/Formula/ryk.rb`
+- `scoop/ryk.json`
+- `winget/ryk.yaml`
+- `npm/package.json` (`@rykan/ryk`, bin `ryk`)
 - `docker/Dockerfile` (ENTRYPOINT `ryk`)
 - `edge/Dockerfile`
 - `systemd/edge.service`

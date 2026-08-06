@@ -55,7 +55,7 @@ Copy or symlink this directory into your project:
 ```bash
 # From the ryk repo root
 mkdir -p .opencode/plugins
-cp integrations/opencode-plugin/orca.ts .opencode/plugins/ryk.ts
+cp integrations/opencode-plugin/ryk.ts .opencode/plugins/ryk.ts
 ```
 
 See `examples/project-plugin-path.md` for details.
@@ -66,7 +66,7 @@ Copy or symlink to the OpenCode global plugins directory:
 
 ```bash
 mkdir -p ~/.config/opencode/plugins
-cp integrations/opencode-plugin/orca.ts ~/.config/opencode/plugins/ryk.ts
+cp integrations/opencode-plugin/ryk.ts ~/.config/opencode/plugins/ryk.ts
 ```
 
 See `examples/global-plugin-path.md` for details.

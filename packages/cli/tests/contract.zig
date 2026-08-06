@@ -15,7 +15,7 @@ test "cli package exposes existing command surface without becoming edge" {
     try std.testing.expect(ryk_cli.cli.help.findCommand("edge") == null);
 }
 
-test "cli package help still renders ryk CLI command summary" {
+test "cli package help still renders the public ryk CLI summary" {
     var buffer: [8192]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
@@ -23,6 +23,6 @@ test "cli package help still renders ryk CLI command summary" {
     const written = writer.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, written, "ryk") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "Getting Started") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "redteam") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "Common tasks") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "start") != null);
 }

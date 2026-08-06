@@ -1,4 +1,4 @@
-# orca-protect
+# ryk-protect
 
 Explain how to run the current Codex workflow under ryk protection.
 

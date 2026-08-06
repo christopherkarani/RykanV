@@ -10,7 +10,7 @@ The plugin is a thin layer. All policy decisions are made by the ryk CLI. The pl
 
 ## Prerequisites
 
-- Zig 0.15.2 (to build ryk from source)
+- Zig 0.16.0 (to build ryk from source)
 - ryk CLI built and available in PATH
 - Claude Code host binary installed
 
@@ -26,7 +26,7 @@ zig build
 
 1. Download the latest plugin zip from the release page:
    ```text
-   orca-claude-code-plugin-vX.Y.Z.zip
+   ryk-claude-code-plugin-vX.Y.Z.zip
    ```
 
 2. Verify the checksum:
@@ -36,7 +36,7 @@ zig build
 
 3. Extract the plugin to your preferred location:
    ```bash
-   unzip orca-claude-code-plugin-vX.Y.Z.zip -d ~/ryk-plugins/claude
+   unzip ryk-claude-code-plugin-vX.Y.Z.zip -d ~/ryk-plugins/claude
    ```
 
 4. Point Claude Code to the extracted plugin directory.
@@ -64,13 +64,13 @@ If your Claude Code version supports repo marketplace sources, add this reposito
 
 ```bash
 claude plugin marketplace add christopherkarani/rykan
-claude plugin install orca@ryk --scope user
+claude plugin install ryk@ryk-local-plugins --scope user
 ```
 
 Or inside Claude Code:
 ```text
 /plugin marketplace add christopherkarani/rykan
-/plugin install orca@orca
+/plugin install ryk@ryk-local-plugins
 /reload-plugins
 ```
 
@@ -203,7 +203,7 @@ The marketplace catalog uses a relative path (`../claude-code-plugin`). If your 
 ## Limitations
 
 - Hooks are advisory; enforcement depends on Claude Code host support.
-- The strongest protection is `ryk claude`.
+- The strongest protection is the process-level wrapper `ryk run -- <claude-code-command>` (the `ryk claude` launcher uses the same protected path).
 - Plugin installation is a preview/dry-run by default.
 - No telemetry is collected.
 - Official marketplace availability is not yet implemented.

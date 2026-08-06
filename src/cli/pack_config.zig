@@ -77,7 +77,7 @@ pub fn isBaselineDisabledToken(id: []const u8) bool {
 /// True when `RYK_OPERATOR=1` (or `true`/`yes`) is set — CLI break-glass for
 /// baseline pack disable and other operator-only mutations.
 pub fn isOperatorBreakGlass() bool {
-    return envFlagTruthy("RYK_OPERATOR") or envFlagTruthy("RYK_OPERATOR");
+    return envFlagTruthy("RYK_OPERATOR");
 }
 
 fn envFlagTruthy(name: [*:0]const u8) bool {

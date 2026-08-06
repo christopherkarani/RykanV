@@ -12,7 +12,7 @@ if [ -z "$HOST" ]; then
 fi
 
 case "$HOST" in
-  opencode|openclaw|hermes|hermess|codex|claude) ;;
+  opencode|openclaw|hermes|codex|claude) ;;
   *)
     echo "unsupported host: $HOST (expected opencode|openclaw|hermes|codex|claude)" >&2
     exit 2
@@ -27,19 +27,15 @@ case "$SCOPE" in
     ;;
 esac
 
-if [ "$HOST" = "hermess" ]; then
-  HOST="hermes"
-fi
-
 read_repo_version() {
   if [ -f "${REPO_ROOT}/VERSION" ]; then
     tr -d '[:space:]' < "${REPO_ROOT}/VERSION"
   else
-    printf '1.2.0'
+    printf '1.2.9'
   fi
 }
 
-orca_executable() {
+ryk_executable() {
   candidate="$1"
   if [ -x "$candidate" ]; then
     printf '%s\n' "$candidate"
@@ -52,27 +48,25 @@ orca_executable() {
   return 1
 }
 
-orca_supports_hermes() {
+ryk_supports_hermes() {
   ryk_bin="$1"
   smoke_fixture="${REPO_ROOT}/tests/fixtures/hook-safe.json"
   output=$(cat "${smoke_fixture}" | "$ryk_bin" hook hermes pre_tool_call 2>/dev/null) || return 1
+  [ -n "$output" ] || return 1
   if command -v python3 >/dev/null 2>&1; then
-    printf '%s' "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(1 if d.get("decision") == "block" else 0)' 2>/dev/null
+    printf '%s' "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if d.get("decision") in {"allow", "warn", "ask"} else 1)' 2>/dev/null
     return $?
   fi
-  case "$output" in
-    *'"decision":"block"'*|*'"decision": "block"'*) return 1 ;;
-    *) return 0 ;;
-  esac
+  printf '%s' "$output" | grep -E '"decision"[[:space:]]*:[[:space:]]*"(allow|warn|ask)"' >/dev/null
 }
 
-orca_candidate_ok() {
+ryk_candidate_ok() {
   ryk_bin="$1"
   if [ "$HOST" = "hermes" ]; then
-    orca_supports_hermes "$ryk_bin"
+    ryk_supports_hermes "$ryk_bin"
     return $?
   fi
-  orca_executable "$ryk_bin" >/dev/null 2>&1
+  ryk_executable "$ryk_bin" >/dev/null 2>&1
 }
 
 resolve_ryk_bin() {
@@ -84,9 +78,9 @@ resolve_ryk_bin() {
     "$(command -v ryk 2>/dev/null || true)"
   do
     [ -n "$candidate" ] || continue
-    resolved="$(orca_executable "$candidate" 2>/dev/null || true)"
+    resolved="$(ryk_executable "$candidate" 2>/dev/null || true)"
     [ -n "$resolved" ] || continue
-    if orca_candidate_ok "$resolved"; then
+    if ryk_candidate_ok "$resolved"; then
       printf '%s\n' "$resolved"
       return 0
     fi
@@ -101,17 +95,17 @@ if ! RYK_BIN="$(resolve_ryk_bin)"; then
   fi
   "${REPO_ROOT}/scripts/install.sh"
   INSTALL_DIR="${RYK_INSTALL_DIR:-${HOME}/.local/bin}"
-  RYK_BIN="${INSTALL_DIR}/orca"
+  RYK_BIN="${INSTALL_DIR}/ryk"
 fi
 
-if ! orca_executable "$RYK_BIN" >/dev/null 2>&1; then
+if ! ryk_executable "$RYK_BIN" >/dev/null 2>&1; then
   echo "ryk binary not found after install attempt" >&2
   exit 1
 fi
 
-RYK_BIN="$(orca_executable "$RYK_BIN")"
+RYK_BIN="$(ryk_executable "$RYK_BIN")"
 
-if [ "$HOST" = "hermes" ] && ! orca_supports_hermes "$RYK_BIN"; then
+if [ "$HOST" = "hermes" ] && ! ryk_supports_hermes "$RYK_BIN"; then
   echo "ryk at ${RYK_BIN} does not support Hermes hooks (upgrade required)" >&2
   echo "Hint: build locally (zig build) or set RYK_BIN to a current ryk binary" >&2
   exit 1

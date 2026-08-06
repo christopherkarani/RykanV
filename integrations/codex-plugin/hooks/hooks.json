@@ -5,7 +5,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "sh -c 'if command -v ryk >/dev/null 2>&1; then exec ryk hook codex SessionStart; elif command -v ryk >/dev/null 2>&1; then exec ryk hook codex SessionStart; else exec ryk hook codex SessionStart; fi'",
+          "command": "sh -c 'ryk_bin=\"$RYK_BIN\"; case \"$ryk_bin\" in /*) [ -x \"$ryk_bin\" ] || ryk_bin=\"\";; *) ryk_bin=\"\";; esac; if [ -z \"$ryk_bin\" ]; then for candidate in \"$HOME/.local/bin/ryk\" \"$HOME/.ryk/bin/ryk\" \"/usr/local/bin/ryk\" \"/opt/homebrew/bin/ryk\"; do if [ -x \"$candidate\" ]; then ryk_bin=\"$candidate\"; break; fi; done; fi; if [ -n \"$ryk_bin\" ]; then exec \"$ryk_bin\" hook codex SessionStart; fi; printf \"%s\\n\" \"{\\\"version\\\":1,\\\"decision\\\":\\\"block\\\",\\\"risk\\\":\\\"unknown\\\",\\\"category\\\":\\\"tool\\\",\\\"reason\\\":\\\"ryk_unavailable\\\",\\\"message\\\":\\\"ryk binary unavailable; blocked fail-closed\\\"}\"'",
           "timeout": 10,
           "statusMessage": "Checking ryk plugin status"
         }
@@ -18,7 +18,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "sh -c 'if command -v ryk >/dev/null 2>&1; then exec ryk hook codex UserPromptSubmit; elif command -v ryk >/dev/null 2>&1; then exec ryk hook codex UserPromptSubmit; else exec ryk hook codex UserPromptSubmit; fi'",
+          "command": "sh -c 'ryk_bin=\"$RYK_BIN\"; case \"$ryk_bin\" in /*) [ -x \"$ryk_bin\" ] || ryk_bin=\"\";; *) ryk_bin=\"\";; esac; if [ -z \"$ryk_bin\" ]; then for candidate in \"$HOME/.local/bin/ryk\" \"$HOME/.ryk/bin/ryk\" \"/usr/local/bin/ryk\" \"/opt/homebrew/bin/ryk\"; do if [ -x \"$candidate\" ]; then ryk_bin=\"$candidate\"; break; fi; done; fi; if [ -n \"$ryk_bin\" ]; then exec \"$ryk_bin\" hook codex UserPromptSubmit; fi; printf \"%s\\n\" \"{\\\"version\\\":1,\\\"decision\\\":\\\"block\\\",\\\"risk\\\":\\\"unknown\\\",\\\"category\\\":\\\"tool\\\",\\\"reason\\\":\\\"ryk_unavailable\\\",\\\"message\\\":\\\"ryk binary unavailable; blocked fail-closed\\\"}\"'",
           "timeout": 10,
           "statusMessage": "Checking prompt with ryk"
         }
@@ -31,7 +31,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "sh -c 'if command -v ryk >/dev/null 2>&1; then exec ryk hook codex PreToolUse; elif command -v ryk >/dev/null 2>&1; then exec ryk hook codex PreToolUse; else exec ryk hook codex PreToolUse; fi'",
+          "command": "sh -c 'ryk_bin=\"$RYK_BIN\"; case \"$ryk_bin\" in /*) [ -x \"$ryk_bin\" ] || ryk_bin=\"\";; *) ryk_bin=\"\";; esac; if [ -z \"$ryk_bin\" ]; then for candidate in \"$HOME/.local/bin/ryk\" \"$HOME/.ryk/bin/ryk\" \"/usr/local/bin/ryk\" \"/opt/homebrew/bin/ryk\"; do if [ -x \"$candidate\" ]; then ryk_bin=\"$candidate\"; break; fi; done; fi; if [ -n \"$ryk_bin\" ]; then exec \"$ryk_bin\" hook codex PreToolUse; fi; printf \"%s\\n\" \"{\\\"version\\\":1,\\\"decision\\\":\\\"block\\\",\\\"risk\\\":\\\"unknown\\\",\\\"category\\\":\\\"tool\\\",\\\"reason\\\":\\\"ryk_unavailable\\\",\\\"message\\\":\\\"ryk binary unavailable; blocked fail-closed\\\"}\"'",
           "timeout": 15,
           "statusMessage": "Checking tool use with ryk"
         }
@@ -44,7 +44,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "sh -c 'if command -v ryk >/dev/null 2>&1; then exec ryk hook codex PermissionRequest; elif command -v ryk >/dev/null 2>&1; then exec ryk hook codex PermissionRequest; else exec ryk hook codex PermissionRequest; fi'",
+          "command": "sh -c 'ryk_bin=\"$RYK_BIN\"; case \"$ryk_bin\" in /*) [ -x \"$ryk_bin\" ] || ryk_bin=\"\";; *) ryk_bin=\"\";; esac; if [ -z \"$ryk_bin\" ]; then for candidate in \"$HOME/.local/bin/ryk\" \"$HOME/.ryk/bin/ryk\" \"/usr/local/bin/ryk\" \"/opt/homebrew/bin/ryk\"; do if [ -x \"$candidate\" ]; then ryk_bin=\"$candidate\"; break; fi; done; fi; if [ -n \"$ryk_bin\" ]; then exec \"$ryk_bin\" hook codex PermissionRequest; fi; printf \"%s\\n\" \"{\\\"version\\\":1,\\\"decision\\\":\\\"block\\\",\\\"risk\\\":\\\"unknown\\\",\\\"category\\\":\\\"tool\\\",\\\"reason\\\":\\\"ryk_unavailable\\\",\\\"message\\\":\\\"ryk binary unavailable; blocked fail-closed\\\"}\"'",
           "timeout": 15,
           "statusMessage": "Checking permission request with ryk"
         }
@@ -57,7 +57,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "sh -c 'if command -v ryk >/dev/null 2>&1; then exec ryk hook codex PostToolUse; elif command -v ryk >/dev/null 2>&1; then exec ryk hook codex PostToolUse; else exec ryk hook codex PostToolUse; fi'",
+          "command": "sh -c 'ryk_bin=\"$RYK_BIN\"; case \"$ryk_bin\" in /*) [ -x \"$ryk_bin\" ] || ryk_bin=\"\";; *) ryk_bin=\"\";; esac; if [ -z \"$ryk_bin\" ]; then for candidate in \"$HOME/.local/bin/ryk\" \"$HOME/.ryk/bin/ryk\" \"/usr/local/bin/ryk\" \"/opt/homebrew/bin/ryk\"; do if [ -x \"$candidate\" ]; then ryk_bin=\"$candidate\"; break; fi; done; fi; if [ -n \"$ryk_bin\" ]; then exec \"$ryk_bin\" hook codex PostToolUse; fi; printf \"%s\\n\" \"{\\\"version\\\":1,\\\"decision\\\":\\\"block\\\",\\\"risk\\\":\\\"unknown\\\",\\\"category\\\":\\\"tool\\\",\\\"reason\\\":\\\"ryk_unavailable\\\",\\\"message\\\":\\\"ryk binary unavailable; blocked fail-closed\\\"}\"'",
           "timeout": 10,
           "statusMessage": "Acknowledging tool use to ryk"
         }
@@ -70,7 +70,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "sh -c 'if command -v ryk >/dev/null 2>&1; then exec ryk hook codex Stop; elif command -v ryk >/dev/null 2>&1; then exec ryk hook codex Stop; else exec ryk hook codex Stop; fi'",
+          "command": "sh -c 'ryk_bin=\"$RYK_BIN\"; case \"$ryk_bin\" in /*) [ -x \"$ryk_bin\" ] || ryk_bin=\"\";; *) ryk_bin=\"\";; esac; if [ -z \"$ryk_bin\" ]; then for candidate in \"$HOME/.local/bin/ryk\" \"$HOME/.ryk/bin/ryk\" \"/usr/local/bin/ryk\" \"/opt/homebrew/bin/ryk\"; do if [ -x \"$candidate\" ]; then ryk_bin=\"$candidate\"; break; fi; done; fi; if [ -n \"$ryk_bin\" ]; then exec \"$ryk_bin\" hook codex Stop; fi; printf \"%s\\n\" \"{\\\"version\\\":1,\\\"decision\\\":\\\"block\\\",\\\"risk\\\":\\\"unknown\\\",\\\"category\\\":\\\"tool\\\",\\\"reason\\\":\\\"ryk_unavailable\\\",\\\"message\\\":\\\"ryk binary unavailable; blocked fail-closed\\\"}\"'",
           "timeout": 10,
           "statusMessage": "Notifying ryk of session stop"
         }

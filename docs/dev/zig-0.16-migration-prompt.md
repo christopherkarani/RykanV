@@ -1,22 +1,22 @@
-# Zig 0.16 migration prompt — ryk / Aegis
+# Zig 0.16 maintenance prompt — Rykan V / ryk
 
 Copy this entire file into a new agent session, or run: `pbcopy < docs/dev/zig-0.16-migration-prompt.md`
 
-**Recommended:** reasoning effort **high** · branch **`feat/zig-0.16`**
+**Recommended:** reasoning effort **high** · use a focused maintenance branch
 
 ---
 
-You are a senior Zig systems engineer porting the **ryk** repository (`christopherkarani/rykan`) from **Zig 0.15.2 → Zig 0.16.0**.
+You are a senior Zig systems engineer maintaining the **ryk** repository (`christopherkarani/rykan`) on **Zig 0.16.0**.
 
-This is an **explicit, approved** 0.16 migration. Override any prior repo guidance that says “stay on 0.15.2 only” for this task.
+The 0.15-to-0.16 migration is complete. Do not re-open it as a migration task; use this prompt to verify current behavior and make narrowly scoped 0.16-compatible changes.
 
 ## Repository facts (do not guess)
 
-- **Current pin (pre-migration):** `.zigversion` = `0.15.2`, `build.zig.zon` → `minimum_zig_version = "0.15.2"`
-- **CI:** `.github/workflows/{ci,test,build,release}.yml` use `mlugg/setup-zig@v2` with `version: 0.15.2`
+- **Current pin:** `.zigversion` = `0.16.0`, `build.zig.zon` → `minimum_zig_version = "0.16.0"`
+- **CI:** `.github/workflows/{ci,test,build,release}.yml` use `mlugg/setup-zig@v2` with `version: 0.16.0`
 - **Toolchain scripts:** `scripts/ensure-zig-toolchain.sh`, `scripts/zig`, `.envrc`, `scripts/test-fast.sh`, `build.zig` step `test-fast`
-- **Layout:** `src/` (orca CLI + lib), `packages/core/`, `packages/cli/`, `tests/phase*.zig`, `build.zig`
-- **Build API:** already uses `root_module`, `b.addModule`, `b.createModule` — validate against 0.16 release notes
+- **Layout:** `src/` (ryk CLI + lib), `packages/core/`, `packages/cli/`, `tests/phase*.zig`, `build.zig`
+- **Build API:** uses `root_module`, `b.addModule`, and `b.createModule`; preserve the 0.16 API surface
 - **High-risk I/O surfaces (grep first):**
   - `src/mcp/proxy.zig` — heavy `std.Io.Reader` / `std.Io.Writer`
   - `src/policy/load.zig`, `src/intercept/files.zig`, `src/audit/*`, `src/cli/hook.zig`, `src/cli/decide.zig`, `src/cli/run.zig`
@@ -27,51 +27,29 @@ This is an **explicit, approved** 0.16 migration. Override any prior repo guidan
 
 ## Goal
 
-Single focused PR on **`feat/zig-0.16`** that:
+Make a focused maintenance change that:
 
 1. Builds cleanly with **Zig 0.16.0** (macOS + Linux CI).
 2. Passes `zig build`, `zig build test-fast`, `zig build test`, `./scripts/quick-install-dx-verify.sh`.
-3. Updates all version pins and docs (no more “never migrate to 0.16”).
+3. Keeps version pins and docs synchronized with 0.16.0.
 4. Preserves behavior — no generic-agent policy rebalance unless compile forces it.
 
 ## Out of scope
 
 - Policy preset content changes (unless compile-only)
-- Unrelated refactors, release packaging, Node plugin migrations
+- Unrelated refactors, release packaging, and Node plugin migrations
 
-## Migration strategy
+## Maintenance loop
 
-### Phase 0 — Branch & toolchain
+1. Verify the pinned toolchain and inspect the nearest domain code before editing.
+2. Keep `std.Io` ownership and allocator lifetimes explicit across blocking I/O.
+3. Preserve the in-process Zig shell authority and fail-closed behavior.
+4. Add a focused regression test for every behavior or compatibility fix.
+5. Run the narrowest gate first, then the full relevant gate.
 
-1. Work on branch **`feat/zig-0.16`** from latest **`main`**.
-2. Install Zig **0.16.0**; update `.zigversion`.
-3. Update `scripts/ensure-zig-toolchain.sh` for 0.16.0 archives.
-4. `zig build` → fix compile errors in waves.
+Do not use `usingnamespace`, `async`/`await`, bare `@Type`, or bare `@cImport`.
 
-### Phase 1 — Pin bump
-
-| File | Change |
-|------|--------|
-| `.zigversion` | `0.16.0` |
-| `build.zig.zon` | `minimum_zig_version = "0.16.0"` |
-| `.github/workflows/*.yml` | `version: 0.16.0` |
-| `AGENTS.md`, `CONTRIBUTING.md`, `docs/quickstart.md`, `docs/troubleshooting.md`, `docs/install.md`, `README.md` | toolchain text |
-
-### Phase 2 — `std.Io` port
-
-Thread `io: std.Io` from entry points (`main`, CLI, tests) through blocking I/O. Priority: `src/mcp/`, `policy/load.zig`, `intercept/files.zig`, `audit/`, CLI hooks.
-
-Do not use: `usingnamespace`, `async`/`await`, `@Type`, bare `@cImport`.
-
-### Phase 3 — Build system
-
-Fix `build.zig` for 0.16 I/O/allocation APIs. Keep `test-fast` step.
-
-### Phase 4 — Mechanical sweep
-
-`ArrayList` init, `@typeInfo` enum fields, writer `flush`, `std.fs` → `std.Io.Dir` per compiler.
-
-### Phase 5 — Verification
+## Verification
 
 ```sh
 zig version    # 0.16.0
@@ -83,20 +61,16 @@ zig build test
 
 Do not pipe full `build test` through `tail` or `rg | head`.
 
-### Phase 6 — PR
-
-Title: `build: migrate toolchain and std.Io usage to Zig 0.16.0`
-
 ## Constraints
 
 - Surgical diffs only.
-- `./scripts/zig` must invoke 0.16.0 after `ensure-zig-toolchain.sh` update.
+- `./scripts/zig` must invoke 0.16.0.
 
 ## Success criteria
 
 - [ ] CI/docs pin 0.16.0
-- [ ] `zig build test` green
+- [ ] `zig build test` green, or the exact platform blocker is recorded
 - [ ] quick-install verify green (policy unchanged)
-- [ ] AGENTS.md allows 0.16
+- [ ] No stale 0.15.2 migration instructions remain in the active maintenance docs
 
-Begin Phase 0–1, then compile-fix loop. Report after each phase.
+Report the changed files, focused proof, full-gate result, and any platform-specific limitation.

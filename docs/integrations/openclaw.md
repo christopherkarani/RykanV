@@ -179,7 +179,7 @@ cat tests/plugin-fixtures/openclaw/tool_command_safe.json \
 Remove the plugin from your OpenClaw configuration:
 
 ```bash
-openclaw plugins uninstall orca
+openclaw plugins uninstall ryk
 ```
 
 This plugin does not mutate host configuration beyond the plugin file itself, so uninstalling is safe.
@@ -212,10 +212,10 @@ The plugin uses synthetic test secrets in fixtures only. If you see redaction wa
 - The strongest protection is `ryk openclaw`.
 - Plugin installation is a preview/dry-run by default.
 - No telemetry is collected.
-- npm package `ryk-openclaw-plugin@1.1.3` is published.
-- ClawHub package `ryk-openclaw-plugin@1.1.3` is published.
+- npm package name: `ryk-openclaw-plugin`.
+- ClawHub package name: `ryk-openclaw-plugin`.
 - The OpenClaw plugin does not add MCP server behavior or drone-specific plugin features.
-- **Plugin ID mismatch warning:** OpenClaw may warn that the plugin manifest id (`ryk`) differs from the npm package name (`ryk-openclaw-plugin`). This is intentional: the manifest id must remain `ryk` so that `openclaw plugins install clawhub:orca` resolves correctly. The warning is harmless and does not affect functionality.
+- OpenClaw uses the manifest id `ryk`; the npm and ClawHub package name is `ryk-openclaw-plugin`.
 
 ## Security model
 

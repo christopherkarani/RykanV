@@ -12,7 +12,7 @@
  * - Even with session bash bypass (/ryk-stop), secrets are still scrubbed/blocked.
  *
  * Storage: append/update NAME=value under workspace `.ryk/dev-secrets.env`
- * (matches the legacy env-file-dev broker path contract: under .ryk, contains "dev", ends with .env).
+ * (matches the local env-file-dev broker path contract: under .ryk, contains "dev", ends with .env).
  */
 
 import {
@@ -234,9 +234,7 @@ export function inferEnvName(match: SecretMatch, index = 0): string {
 export function isSecretCaptureDisabled(
 	env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-	const raw = (env.RYK_PI_SECRET_CAPTURE ?? env.RYK_PI_SECRET_CAPTURE)
-		?.trim()
-		.toLowerCase();
+	const raw = env.RYK_PI_SECRET_CAPTURE?.trim().toLowerCase();
 	return raw === "false" || raw === "0" || raw === "off" || raw === "no";
 }
 

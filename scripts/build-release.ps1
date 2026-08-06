@@ -1,5 +1,5 @@
 param(
-    [string]$Version = $(if ($env:RYK_VERSION) { $env:RYK_VERSION } else { "1.1.0" }),
+    [string]$Version,
     [string]$Commit = $(if ($env:RYK_COMMIT) { $env:RYK_COMMIT } else { "unknown" }),
     [string]$BuildDate = $(if ($env:RYK_BUILD_DATE) { $env:RYK_BUILD_DATE } else { (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ") }),
     [string]$DistDir = $(if ($env:RYK_DIST_DIR) { $env:RYK_DIST_DIR } else { "dist" }),
@@ -7,6 +7,18 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $Version) {
+    if ($env:RYK_VERSION) {
+        $Version = $env:RYK_VERSION
+    } else {
+        $versionPath = Join-Path $PSScriptRoot "..\VERSION"
+        if (-not (Test-Path -LiteralPath $versionPath)) {
+            throw "Version is required when scripts/build-release.ps1 is not run from a checkout; pass -Version or set RYK_VERSION."
+        }
+        $Version = (Get-Content -LiteralPath $versionPath -TotalCount 1).Trim()
+    }
+}
 
 $targets = @(
     @{ Os = "darwin"; Arch = "amd64"; Zig = "x86_64-macos"; Ext = "tar.gz"; Bin = "ryk" },
@@ -19,7 +31,7 @@ $targets = @(
 function Copy-ReleasePayload($Root) {
     New-Item -ItemType Directory -Force -Path $Root | Out-Null
     Copy-Item README.md, LICENSE, SECURITY.md, CONTRIBUTING.md -Destination $Root
-    foreach ($path in @("docs", "policies", "schemas", "fixtures", "examples", "packages", "packaging", "scripts")) {
+    foreach ($path in @("docs", "policies", "schemas", "fixtures", "examples", "packages", "packaging", "scripts", "integrations", "ryk-pi")) {
         Copy-Item $path -Destination $Root -Recurse
     }
     Get-ChildItem -LiteralPath $Root -Recurse -Force -Directory |
@@ -80,7 +92,7 @@ Write-Host "Wrote $checksumsPath"
 $sbomPath = Join-Path $DistDir "sbom.json"
 $sbom = [ordered]@{
     sbom_format = "placeholder"
-    name = "orca-core"
+    name = "ryk-core"
     version = $Version
     generator = "scripts/build-release.ps1"
     status = "hook-only"

@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("opencode", "openclaw", "hermes", "hermess")]
+    [ValidateSet("opencode", "openclaw", "hermes")]
     [string]$Host,
     [ValidateSet("project", "global")]
     [string]$Scope = "project"
@@ -9,17 +9,17 @@ param(
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $scriptDir "..")
-$doctorHost = if ($Host -eq "hermess") { "hermes" } else { $Host }
+$doctorHost = $Host
 
 function Get-RepoVersion {
     $versionPath = Join-Path $repoRoot "VERSION"
     if (Test-Path -LiteralPath $versionPath) {
         return (Get-Content -LiteralPath $versionPath -TotalCount 1).Trim()
     }
-    return "1.2.0"
+    return "1.2.9"
 }
 
-function Resolve-OrcaExecutable([string]$Candidate) {
+function Resolve-RykExecutable([string]$Candidate) {
     if (-not $Candidate) { return $null }
     if (Test-Path -LiteralPath $Candidate) { return (Resolve-Path -LiteralPath $Candidate).Path }
     $command = Get-Command $Candidate -ErrorAction SilentlyContinue
@@ -27,30 +27,30 @@ function Resolve-OrcaExecutable([string]$Candidate) {
     return $null
 }
 
-function Test-OrcaSupportsHermes([string]$OrcaBin) {
+function Test-RykSupportsHermes([string]$RykBin) {
     $payload = Get-Content -Raw (Join-Path $repoRoot "tests/fixtures/hook-safe.json")
-    $output = $payload | & $OrcaBin hook hermes pre_tool_call 2>$null
+    $output = $payload | & $RykBin hook hermes pre_tool_call 2>$null
     if ($LASTEXITCODE -ne 0) { return $false }
-    if (-not $output) { return $true }
+    if (-not $output) { return $false }
     try {
         $parsed = $output | ConvertFrom-Json
-        return $parsed.decision -ne 'block'
+        return $parsed.decision -in @('allow', 'warn', 'ask')
     } catch {
-        return $output -notmatch '"decision"\s*:\s*"block"'
+        return $output -match '"decision"\s*:\s*"(allow|warn|ask)"'
     }
 }
 
-function Test-OrcaCandidate([string]$Candidate) {
-    $resolved = Resolve-OrcaExecutable $Candidate
+function Test-RykCandidate([string]$Candidate) {
+    $resolved = Resolve-RykExecutable $Candidate
     if (-not $resolved) { return $null }
     if ($doctorHost -eq "hermes") {
-        if (Test-OrcaSupportsHermes $resolved) { return $resolved }
+        if (Test-RykSupportsHermes $resolved) { return $resolved }
         return $null
     }
     return $resolved
 }
 
-function Resolve-OrcaBin {
+function Resolve-RykBin {
     $candidates = @(
         $env:RYK_BIN,
         (Join-Path $repoRoot "zig-out/bin/ryk.exe"),
@@ -60,17 +60,17 @@ function Resolve-OrcaBin {
         (Join-Path $HOME ".ryk/bin/ryk.exe"),
         (Join-Path $HOME ".ryk/bin/ryk")
     )
-    $pathOrca = Get-Command "ryk" -ErrorAction SilentlyContinue
-    if ($pathOrca) { $candidates += $pathOrca.Source }
+    $pathRyk = Get-Command "ryk" -ErrorAction SilentlyContinue
+    if ($pathRyk) { $candidates += $pathRyk.Source }
 
     foreach ($candidate in $candidates) {
-        $resolved = Test-OrcaCandidate $candidate
+        $resolved = Test-RykCandidate $candidate
         if ($resolved) { return $resolved }
     }
     return $null
 }
 
-$rykBin = Resolve-OrcaBin
+$rykBin = Resolve-RykBin
 if (-not $rykBin) {
     $env:RYK_VERSION = Get-RepoVersion
     $distDir = Join-Path $repoRoot "dist"
@@ -86,14 +86,14 @@ if (-not $rykBin) {
     $rykBin = Join-Path $installDir "ryk.exe"
 }
 
-$resolvedOrca = Resolve-OrcaExecutable $rykBin
-if (-not $resolvedOrca) {
-    throw "orca binary not found after install attempt"
+$resolvedRyk = Resolve-RykExecutable $rykBin
+if (-not $resolvedRyk) {
+    throw "ryk binary not found after install attempt"
 }
-$rykBin = $resolvedOrca
+$rykBin = $resolvedRyk
 
-if ($doctorHost -eq "hermes" -and -not (Test-OrcaSupportsHermes $rykBin)) {
-    throw "orca at $rykBin does not support Hermes hooks (upgrade required)"
+if ($doctorHost -eq "hermes" -and -not (Test-RykSupportsHermes $rykBin)) {
+    throw "ryk at $rykBin does not support Hermes hooks (upgrade required)"
 }
 
 if ($doctorHost -eq "opencode") {

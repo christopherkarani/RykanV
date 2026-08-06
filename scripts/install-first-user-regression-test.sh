@@ -5,7 +5,6 @@ set -euo pipefail
 # Executes scripts/install.sh against a mock product binary. After co-migration
 # the primary post-binary door is `"$DESTINATION" doctor --fix --from-install`.
 # When the mock advertises doctor --fix, start --auto is poison (must not green).
-# A separate legacy section proves pre-W1 binaries fall back to start --auto.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -64,7 +63,7 @@ for dir in integrations fixtures schemas policies ryk-pi; do
   printf 'fixture\n' > "${release_root}/${dir}/fixture.txt"
 done
 
-# Mock product binary installed as ryk (or ryk compat). Implements doctor for
+# Mock product binary installed as ryk. Implements doctor for
 # the W1 ensure door; start is poison so restoring start --auto cannot green
 # when doctor --fix is advertised. doctor --help must list --fix so the
 # installer's capability probe selects the W1 door (not legacy start --auto).
@@ -132,7 +131,11 @@ case "${1:-}" in
     printf 'export RYK_FIRST_USER_ACTIVATED=1\n'
     ;;
   version|--version)
-    printf 'orca 0.0.0\n'
+    if [ "${2:-}" = "--json" ]; then
+      printf '{"product":"ryk","version":"0.0.0"}\n'
+    else
+      printf 'ryk 0.0.0\n'
+    fi
     ;;
 esac
 EOF
@@ -213,7 +216,7 @@ resource_root="${share_dir}/${VERSION}"
 # must be replaced, not followed (which plants current/current and fails install).
 old_runtime="${share_dir}/0.0.0-old"
 mkdir -p "${old_runtime}"
-printf 'orca-runtime-v1\nversion=0.0.0-old\n' > "${old_runtime}/.ryk-install"
+printf 'ryk-runtime-v1\nversion=0.0.0-old\n' > "${old_runtime}/.ryk-install"
 # Plant the failure mode from buggy installs: nested selector inside the target.
 ln -sfn "${resource_root}" "${old_runtime}/current"
 ln -sfn "${old_runtime}" "${share_dir}/current"
@@ -450,123 +453,6 @@ if find "${share_dir}" "${install_dir}" -maxdepth 1 \
   fail "installer left atomic-install staging paths behind"
 fi
 
-# ── Release/install skew: pre-W1 binary (no doctor --fix) falls back ─────
-# Models tagged v1.2.9 (or any artifact whose doctor help omits --fix) while
-# install.sh already prefers the W1 door. Capability probe must select
-# start --auto; doctor --fix must not be attempted as the ensure door.
-legacy_home="${tmp_root}/legacy-home"
-legacy_install_dir="${legacy_home}/bin"
-legacy_share_dir="${legacy_home}/share"
-legacy_artifact_dir="${tmp_root}/legacy-artifacts"
-legacy_release_root="${tmp_root}/orca-v${VERSION}-legacy-${os}-${arch}"
-legacy_artifact="ryk-v${VERSION}-${os}-${arch}.tar.gz"
-legacy_onboard_log="${tmp_root}/legacy-onboard.log"
-mkdir -p "${legacy_home}" "${legacy_install_dir}" "${legacy_share_dir}" \
-  "${legacy_artifact_dir}" "${legacy_release_root}/bin"
-for dir in integrations fixtures schemas policies orca-pi; do
-  mkdir -p "${legacy_release_root}/${dir}"
-  printf 'fixture\n' > "${legacy_release_root}/${dir}/fixture.txt"
-done
-cat > "${legacy_release_root}/bin/ryk" <<'EOF'
-#!/usr/bin/env sh
-# Pre-W1 mock: doctor help has no --fix; start --auto is the ensure door.
-log_scope() {
-  door_line="$1"
-  shift
-  printf '%s\n' "${door_line}" >> "${RYK_TEST_ONBOARD_LOG:?}"
-  printf 'cwd=%s\n' "$PWD" >> "${RYK_TEST_ONBOARD_LOG}"
-  printf 'ryk_resource=%s\n' "${RYK_RESOURCE_ROOT:-}" >> "${RYK_TEST_ONBOARD_LOG}"
-  printf 'resource=%s\n' "${RYK_RESOURCE_ROOT:-}" >> "${RYK_TEST_ONBOARD_LOG}"
-  printf 'argv=' >> "${RYK_TEST_ONBOARD_LOG}"
-  first=1
-  for a in "$@"; do
-    if [ "$first" -eq 1 ]; then
-      printf '%s' "$a" >> "${RYK_TEST_ONBOARD_LOG}"
-      first=0
-    else
-      printf ' %s' "$a" >> "${RYK_TEST_ONBOARD_LOG}"
-    fi
-  done
-  printf '\n' >> "${RYK_TEST_ONBOARD_LOG}"
-}
-case "${1:-}" in
-  doctor)
-    if [ "${2:-}" = "--help" ] || [ "${2:-}" = "-h" ]; then
-      # Mirrors released v1.2.9: no --fix in usage.
-      printf 'Usage:\n  ryk doctor [-v|--verbose] [--check] [--json]\n'
-      exit 0
-    fi
-    # If install still calls doctor --fix, surface the real product error.
-    log_scope "doctor${2:+ $2}" "$@"
-    printf "ryk doctor: unknown option '%s'.\n" "${2:---}" >&2
-    exit 2
-    ;;
-  start)
-    log_scope "start${2:+ $2}" "$@"
-    if [ "${2:-}" != "--auto" ]; then
-      printf 'mock start: expected --auto for legacy ensure\n' >&2
-      exit 3
-    fi
-    # Installer may pass --skip-verify for soft-success parity with doctor --fix.
-    printf 'ryk ensure: core ready via start --auto (legacy mock)\n'
-    ;;
-  env|--print-install-env)
-    printf 'export RYK_FIRST_USER_ACTIVATED=1\n'
-    ;;
-  version|--version)
-    printf 'ryk 1.2.9\n'
-    ;;
-esac
-EOF
-chmod +x "${legacy_release_root}/bin/ryk"
-tar -czf "${legacy_artifact_dir}/${legacy_artifact}" -C "${tmp_root}" "$(basename "${legacy_release_root}")"
-if command -v sha256sum >/dev/null 2>&1; then
-  legacy_checksum="$(sha256sum "${legacy_artifact_dir}/${legacy_artifact}" | awk '{print $1}')"
-else
-  legacy_checksum="$(shasum -a 256 "${legacy_artifact_dir}/${legacy_artifact}" | awk '{print $1}')"
-fi
-printf '%s  %s\n' "${legacy_checksum}" "${legacy_artifact}" > "${legacy_artifact_dir}/checksums.txt"
-
-: > "${legacy_onboard_log}"
-legacy_output="$(
-  HOME="${legacy_home}" \
-  SHELL=/bin/sh \
-  RYK_VERSION="${VERSION}" \
-  RYK_ARTIFACT_DIR="${legacy_artifact_dir}" \
-  RYK_INSTALL_DIR="${legacy_install_dir}" \
-  RYK_SHARE_DIR="${legacy_share_dir}" \
-  RYK_INSTALL_FORCE=1 \
-  RYK_TEST_ONBOARD_LOG="${legacy_onboard_log}" \
-  sh "${INSTALL_SH}"
-)" || fail "legacy (pre-doctor --fix) install failed (version skew fallback broken)"
-
-# Must use legacy ensure door (start --auto, optionally with --skip-verify), not doctor --fix.
-grep -qE '^start --auto$' "${legacy_onboard_log}" ||
-  fail "legacy install did not invoke start --auto (log=$(cat "${legacy_onboard_log}" 2>/dev/null || true))"
-grep -qE '^argv=start --auto --skip-verify' "${legacy_onboard_log}" ||
-  fail "legacy install missing start --auto --skip-verify (got: $(grep '^argv=' "${legacy_onboard_log}" 2>/dev/null || true))"
-# grep -c prints 0 but exits 1 when no matches — do not `|| echo 0` (that doubles).
-legacy_doctor_fix_count="$(grep -c '^doctor --fix$' "${legacy_onboard_log}" 2>/dev/null || true)"
-[[ "${legacy_doctor_fix_count}" == "0" ]] ||
-  fail "legacy install still ran doctor --fix against a pre-W1 binary (count=${legacy_doctor_fix_count}; log=$(cat "${legacy_onboard_log}" 2>/dev/null || true))"
-legacy_cwd="$(sed -n 's/^cwd=//p' "${legacy_onboard_log}" | head -n 1)"
-[[ -n "${legacy_cwd}" && "${legacy_cwd}" -ef "${legacy_home}" ]] ||
-  fail "legacy ensure did not run from HOME (cwd=${legacy_cwd})"
-grep -qF "resource=${legacy_share_dir}/current" "${legacy_onboard_log}" ||
-  fail "legacy ensure missing RYK_RESOURCE_ROOT at installed share current"
-legacy_plain="$(printf '%s\n' "${legacy_output}" | sed $'s/\x1b\\[[0-9;]*m//g')"
-printf '%s\n' "${legacy_plain}" | grep -Eqi 'Set up protection' ||
-  fail "legacy install missing Set up protection step"
-printf '%s\n' "${legacy_plain}" | grep -Eqi 'policy ready' ||
-  fail "legacy install missing short ensure receipt (policy ready)"
-if printf '%s\n' "${legacy_plain}" | grep -Eiq 'Try next|Re-run safely|Setup complete|host mock'; then
-  fail "legacy install streamed ensure TUI into the install receipt"
-fi
-if printf '%s\n' "${legacy_plain}" | grep -Fqi 'start --auto'; then
-  fail "legacy install still surfaces start --auto in user-facing success copy"
-fi
-assert_no_d06_full_protection "${legacy_plain}" "legacy install receipt"
-
 grep -qF 'version "1.2.9"' "${REPO_ROOT}/packaging/homebrew/Formula/ryk.rb" ||
   fail "primary Homebrew formula version does not match VERSION"
 grep -qF 'brew install christopherkarani/ryk/ryk' "${REPO_ROOT}/packaging/homebrew/README.md" ||
@@ -576,14 +462,14 @@ grep -qF 'raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install
 grep -qF 'github.com/christopherkarani/rykan/releases/download' "${REPO_ROOT}/packaging/homebrew/Formula/ryk.rb" ||
   fail "Homebrew release artifacts do not use the canonical rykan repository"
 if git -C "${REPO_ROOT}" grep -nE \
-  'github\.com/(christopherkarani|chriskarani)/(ryk|orca|ryk)([^A-Za-z0-9_-]|$)|raw\.githubusercontent\.com/(christopherkarani|chriskarani)/(ryk|orca|ryk)/' \
+  'github\.com/(christopherkarani|chriskarani)/(orca|aegis|ryk-rs)([^A-Za-z0-9_-]|$)|raw\.githubusercontent\.com/(christopherkarani|chriskarani)/(orca|aegis|ryk-rs)/' \
   -- README.md AGENTS.md scripts packaging integrations schemas macos docs; then
   fail "public metadata still contains a stale main-repository URL"
 fi
 
 # ── Static machine gates on install.sh (D84 adjunct; D86 runtime is above) ──
-# Primary ensure door remains doctor --fix --from-install. start --auto is
-# allowed only as a capability-probed legacy fallback (release/install skew).
+# The hard-cut ensure door is doctor --fix --from-install; there is no
+# pre-hard-cut fallback.
 if ! grep -nF 'cli_supports_doctor_fix' "${INSTALL_SH}" >/dev/null 2>&1; then
   fail 'scripts/install.sh missing cli_supports_doctor_fix capability probe'
 fi
@@ -593,8 +479,8 @@ fi
 if ! grep -nF '"$DESTINATION" doctor --fix --from-install' "${INSTALL_SH}" >/dev/null 2>&1; then
   fail 'scripts/install.sh missing "$DESTINATION" doctor --fix --from-install (install-scope flag)'
 fi
-if ! grep -nF '"$DESTINATION" start --auto --skip-verify' "${INSTALL_SH}" >/dev/null 2>&1; then
-  fail 'scripts/install.sh missing legacy fallback "$DESTINATION" start --auto --skip-verify for pre-W1 binaries'
+if grep -nE 'start --auto|start_auto_fallback|pre-W1|legacy fallback' "${INSTALL_SH}" >/dev/null 2>&1; then
+  fail 'scripts/install.sh still contains a removed start --auto compatibility fallback'
 fi
 # Hard-fail operator remediation must re-teach install trust scope (not bare doctor --fix).
 # Match re-teach copy (ryk doctor --fix --from-install), not only the binary invocation.
@@ -613,13 +499,11 @@ fi
 if grep -niE 'fully protected|all hosts wired|protection complete|full protection' "${INSTALL_SH}" >/dev/null 2>&1; then
   fail "scripts/install.sh contains D06 full-protection forbid phrases"
 fi
-# Interactive guided start must not be the taught W1 door; path-qualified
-# start --auto after a capability probe is the only allowed start form.
+# Interactive guided start must not be the taught hard-cut install door.
 if grep -nE '(^|[^$])ryk start' "${INSTALL_SH}" >/dev/null 2>&1; then
-  fail "scripts/install.sh still teaches bare ryk start (use doctor --fix or path-qualified legacy start --auto)"
+  fail "scripts/install.sh still teaches bare ryk start (use doctor --fix --from-install)"
 fi
-# Harness self-check (D84): capable-binary path must require doctor --fix and
-# must not green solely on counting start --auto once as the success door.
+# Harness self-check (D84): the capable-binary path must require doctor --fix.
 if ! grep -nF "grep -c '^doctor --fix$'" "${BASH_SOURCE[0]}" >/dev/null 2>&1; then
   fail "harness must count doctor --fix (D86)"
 fi

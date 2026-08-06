@@ -1,4 +1,4 @@
-# orca-redteam
+# ryk-redteam
 
 Run ryk red-team fixtures and summarize results.
 

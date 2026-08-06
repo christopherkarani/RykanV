@@ -749,7 +749,7 @@ test "shim rejects forged RYK_WORKSPACE_ROOT rebind" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     var fx = try prepareShimExecFixture(.{ .mode = "strict", .real_bin = "true", .shim_bin = "true" });
     defer fx.deinit();
-    try fx.env_map.put("RYK_WORKSPACE_ROOT", "/tmp/forged-orca-workspace");
+    try fx.env_map.put("RYK_WORKSPACE_ROOT", "/tmp/forged-ryk-workspace");
 
     var stderr_buf: [1024]u8 = undefined;
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);

@@ -33,7 +33,10 @@ for rel_path in ${PACKAGES}; do
 
   PKG_NAME="$(node -p "require('${PACKAGE_DIR}/package.json').name")"
   VERSION="$(node -p "require('${PACKAGE_DIR}/package.json').version")"
-  SAFE_NAME="$(printf '%s' "$PKG_NAME" | tr '/@' '--' | sed 's/^--//')"
+  # npm pack drops the scope marker from the tarball filename. Keep the
+  # release artifact name deterministic without a leading dash for scoped
+  # packages such as @rykan/pi-ryk.
+  SAFE_NAME="$(printf '%s' "$PKG_NAME" | sed 's/^@//' | tr '/' '-')"
 
   echo ""
   echo "========================================"

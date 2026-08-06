@@ -1,8 +1,8 @@
 import { execFileSync } from 'child_process';
-import { existsSync } from 'fs';
-import { isAbsolute, join, resolve } from 'path';
+import { existsSync, realpathSync, statSync } from 'fs';
+import { delimiter, isAbsolute, join, resolve } from 'path';
 
-interface OrcaResponse {
+interface RykResponse {
   version?: number;
   decision: 'allow' | 'block' | 'warn' | 'ask' | 'context_only' | 'error';
   risk?: 'low' | 'medium' | 'high' | 'critical' | 'unknown';
@@ -175,7 +175,7 @@ function buildPayload(event: string, data: unknown, sessionId?: string): object 
   };
 }
 
-function failClosedBlock(reason: string, message: string): OrcaResponse {
+function failClosedBlock(reason: string, message: string): RykResponse {
   return {
     decision: 'block',
     risk: 'high',
@@ -185,7 +185,7 @@ function failClosedBlock(reason: string, message: string): OrcaResponse {
   };
 }
 
-function softAllow(reason: string, message?: string): OrcaResponse {
+function softAllow(reason: string, message?: string): RykResponse {
   return {
     decision: 'allow',
     risk: 'unknown',
@@ -197,8 +197,8 @@ function softAllow(reason: string, message?: string): OrcaResponse {
 
 function normalizeBlockingDecision(
   decision: string,
-  base: Partial<OrcaResponse>
-): OrcaResponse {
+  base: Partial<RykResponse>
+): RykResponse {
   if (decision === 'block' || decision === 'error') {
     return {
       ...base,
@@ -216,12 +216,12 @@ function normalizeBlockingDecision(
   }
   if (!ALLOW_DECISIONS.has(decision)) {
     return failClosedBlock(
-      'orca_unrecognized_decision',
+      'ryk_unrecognized_decision',
       `ryk returned unrecognized decision "${decision}"; blocking as a precaution.`
     );
   }
   return {
-    decision: decision as OrcaResponse['decision'],
+    decision: decision as RykResponse['decision'],
     risk: base.risk,
     category: base.category,
     reason: base.reason,
@@ -248,13 +248,13 @@ function parseOptionalStringArray(value: unknown): string[] | undefined {
  * `error`, and unrecognized decisions. `ask` is preserved for OpenCode permission.ask UX;
  * tool.execute.before still hard-blocks ask via applyBlockingDecision.
  */
-export function parseHookResponse(stdout: string, blocking: boolean): OrcaResponse {
-  const fail = (reason: string, blockMsg: string, softMsg: string): OrcaResponse =>
+export function parseHookResponse(stdout: string, blocking: boolean): RykResponse {
+  const fail = (reason: string, blockMsg: string, softMsg: string): RykResponse =>
     blocking ? failClosedBlock(reason, blockMsg) : softAllow(reason, softMsg);
 
   if (!stdout.trim()) {
     return fail(
-      'orca_empty_response',
+      'ryk_empty_response',
       'ryk returned empty output; blocking as a precaution.',
       'ryk returned empty output; allowing non-blocking event.'
     );
@@ -265,7 +265,7 @@ export function parseHookResponse(stdout: string, blocking: boolean): OrcaRespon
     parsed = JSON.parse(stdout);
   } catch {
     return fail(
-      'orca_parse_error',
+      'ryk_parse_error',
       'ryk returned unreadable JSON; blocking as a precaution.',
       'ryk returned unreadable JSON; allowing non-blocking event.'
     );
@@ -273,7 +273,7 @@ export function parseHookResponse(stdout: string, blocking: boolean): OrcaRespon
 
   if (!parsed || typeof parsed !== 'object') {
     return fail(
-      'orca_missing_decision',
+      'ryk_missing_decision',
       'ryk response missing decision; blocking as a precaution.',
       'ryk response missing decision; allowing non-blocking event.'
     );
@@ -283,15 +283,15 @@ export function parseHookResponse(stdout: string, blocking: boolean): OrcaRespon
   const decisionRaw = record.decision;
   if (typeof decisionRaw !== 'string') {
     return fail(
-      'orca_missing_decision',
+      'ryk_missing_decision',
       'ryk response missing decision; blocking as a precaution.',
       'ryk response missing decision; allowing non-blocking event.'
     );
   }
 
-  const base: Partial<OrcaResponse> = {
+  const base: Partial<RykResponse> = {
     version: typeof record.version === 'number' ? record.version : undefined,
-    risk: record.risk as OrcaResponse['risk'],
+    risk: record.risk as RykResponse['risk'],
     category: typeof record.category === 'string' ? record.category : undefined,
     reason: typeof record.reason === 'string' ? record.reason : undefined,
     message: typeof record.message === 'string' ? record.message : undefined,
@@ -302,7 +302,7 @@ export function parseHookResponse(stdout: string, blocking: boolean): OrcaRespon
 
   if (!blocking) {
     return {
-      decision: decisionRaw as OrcaResponse['decision'],
+      decision: decisionRaw as RykResponse['decision'],
       ...base,
     };
   }
@@ -311,73 +311,103 @@ export function parseHookResponse(stdout: string, blocking: boolean): OrcaRespon
 }
 
 /**
- * Resolve the ryk/orca binary (Phase 5a dual-name).
- * Prefer absolute RYK_BIN, then PATH (`ryk` then `ryk`).
- * Relative path-shaped env bins are agent-plantable — rejected.
- * Bare names and hook spawns use argv (no shell interpolation).
+ * Resolve and attest the ryk binary. A path is not an authority: candidates
+ * must answer `ryk version --json` with product `ryk` and a semver version.
+ * Workspace candidates remain opt-in for development only. PATH lookup is
+ * implemented directly so Windows does not depend on the Unix-only `which`.
  */
-export function findOrca(cwd?: string): string | null {
+export function findRyk(cwd?: string, platform: NodeJS.Platform = process.platform): string | null {
   const envBin = process.env.RYK_BIN?.trim();
   if (envBin) {
     if (envBin.includes('/') || envBin.includes('\\')) {
       if (!isAbsolute(envBin)) return null;
-      return existsSync(envBin) ? envBin : null;
+      return attestRykCandidate(envBin, cwd) ? canonicalPath(envBin) : null;
     }
-    try {
-      const which = execFileSync('which', [envBin], {
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-      });
-      const bin = which.trim();
-      if (bin) return bin;
-    } catch {
-      // not on PATH
-    }
-    return null;
+    const bin = resolveOnPath(envBin, platform);
+    return bin && attestRykCandidate(bin, cwd) ? canonicalPath(bin) : null;
   }
 
-  for (const name of ['ryk', 'ryk'] as const) {
-    try {
-      const which = execFileSync('which', [name], {
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-      });
-      const bin = which.trim();
-      if (bin) return bin;
-    } catch {
-      // not on PATH
-    }
-  }
+  const pathBin = resolveOnPath('ryk', platform);
+  if (pathBin && attestRykCandidate(pathBin, cwd)) return canonicalPath(pathBin);
 
   // Dev-only: never trust agent-writable workspace bins in production loads.
   if (process.env.RYK_ALLOW_WORKSPACE_BIN === '1') {
     const candidates: string[] = [];
-    for (const name of ['ryk', 'ryk'] as const) {
-      if (cwd) {
-        candidates.push(join(cwd, 'zig-out', 'bin', name));
-        candidates.push(join(cwd, '..', 'zig-out', 'bin', name));
-        candidates.push(join(cwd, '..', '..', 'zig-out', 'bin', name));
-      }
-      candidates.push(resolve('zig-out', 'bin', name));
-      candidates.push(resolve('..', 'zig-out', 'bin', name));
-      candidates.push(resolve('..', '..', 'zig-out', 'bin', name));
+    if (cwd) {
+      candidates.push(join(cwd, 'zig-out', 'bin', 'ryk'));
+      candidates.push(join(cwd, '..', 'zig-out', 'bin', 'ryk'));
+      candidates.push(join(cwd, '..', '..', 'zig-out', 'bin', 'ryk'));
     }
+    candidates.push(resolve('zig-out', 'bin', 'ryk'));
+    candidates.push(resolve('..', 'zig-out', 'bin', 'ryk'));
+    candidates.push(resolve('..', '..', 'zig-out', 'bin', 'ryk'));
 
     for (const p of candidates) {
-      if (existsSync(p)) return p;
+      if (attestRykCandidate(p, cwd)) return canonicalPath(p);
     }
   }
 
   return null;
 }
 
-function callOrca(
+const RYK_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+function canonicalPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+function isWorkspaceCandidate(path: string, cwd?: string): boolean {
+  if (process.env.RYK_ALLOW_WORKSPACE_BIN === '1') return false;
+  const canonical = canonicalPath(path).replaceAll('\\', '/');
+  if (canonical.includes('/node_modules/.bin/')) return true;
+  if (!cwd) return false;
+  const workspace = canonicalPath(cwd).replaceAll('\\', '/').replace(/\/$/, '');
+  return canonical === workspace || canonical.startsWith(`${workspace}/`);
+}
+
+function attestRykCandidate(path: string, cwd?: string): boolean {
+  if (!existsSync(path) || isWorkspaceCandidate(path, cwd)) return false;
+  try {
+    if (!statSync(path).isFile()) return false;
+    const output = execFileSync(path, ['version', '--json'], {
+      encoding: 'utf-8',
+      timeout: 3000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const identity = JSON.parse(output) as { product?: unknown; version?: unknown };
+    return identity.product === 'ryk' &&
+      typeof identity.version === 'string' &&
+      RYK_VERSION_RE.test(identity.version);
+  } catch {
+    return false;
+  }
+}
+
+function resolveOnPath(name: string, platform: NodeJS.Platform): string | null {
+  const names = platform === 'win32' && !name.toLowerCase().endsWith('.exe')
+    ? [name, `${name}.exe`]
+    : [name];
+  for (const entry of (process.env.PATH ?? '').split(delimiter)) {
+    if (!entry) continue;
+    for (const candidateName of names) {
+      const candidate = resolve(entry, candidateName);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+function callRyk(
   rykBin: string,
   event: string,
   data: unknown,
   sessionId: string | undefined,
   blocking: boolean
-): OrcaResponse {
+): RykResponse {
   const payloadJson = JSON.stringify(buildPayload(event, data, sessionId));
 
   try {
@@ -397,11 +427,11 @@ function callOrca(
 
     return blocking
       ? failClosedBlock(
-          'orca_hook_error',
+          'ryk_hook_error',
           'ryk hook failed; blocking as a precaution.'
         )
       : softAllow(
-          'orca_hook_error',
+          'ryk_hook_error',
           'ryk hook failed; allowing because this event is non-blocking.'
         );
   }
@@ -420,7 +450,7 @@ function buildToolBeforePayload(
   };
 }
 
-function formatBlockMessage(response: OrcaResponse, context: string): string {
+function formatBlockMessage(response: RykResponse, context: string): string {
   const base = response.message || response.reason || 'ryk blocked this command.';
   const parts = [`ryk blocked ${context}: ${base}`];
   if (response.remediation_commands && response.remediation_commands.length > 0) {
@@ -455,7 +485,7 @@ async function maybeToast(
   }
 }
 
-function applyBlockingDecision(response: OrcaResponse, context: string): void {
+function applyBlockingDecision(response: RykResponse, context: string): void {
   if (response.decision === 'warn') {
     console.warn(`[ryk] Warning: ${response.message || response.reason}`);
     return;
@@ -482,7 +512,7 @@ const PERMISSION_STATUS: Record<string, PermissionAskOutput['status']> = {
   warn: 'ask',
 };
 
-function applyPermissionDecision(response: OrcaResponse, output: PermissionAskOutput): void {
+function applyPermissionDecision(response: RykResponse, output: PermissionAskOutput): void {
   const status = PERMISSION_STATUS[response.decision];
   if (!status) {
     const msg = response.message || response.reason || 'ryk returned an invalid permission decision';
@@ -559,12 +589,12 @@ function localDotenvGuard(tool: string, args: Record<string, unknown>): void {
 
 const MISSING_BINARY_MSG = 'ryk binary not found; blocking as a precaution.';
 
-export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHooks> {
+export default async function rykPlugin(ctx: PluginContext): Promise<PluginHooks> {
   const cwd = ctx.worktree || ctx.directory || process.cwd();
   // Fail closed on unexpected resolve errors so hooks still register.
   let rykBin: string | null = null;
   try {
-    rykBin = findOrca(cwd);
+    rykBin = findRyk(cwd);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[ryk] Binary resolve failed (fail-closed): ${message}`);
@@ -608,7 +638,7 @@ export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHook
         console.log('[ryk] Plugin ready for session.');
       }
 
-      await callOrca(
+      await callRyk(
         rykBin,
         eventType,
         auditEventPayload(event),
@@ -621,7 +651,7 @@ export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHook
       // Local defense-in-depth (.env protection) before ryk round-trip.
       localDotenvGuard(input.tool, output.args ?? {});
 
-      const response = callOrca(
+      const response = callRyk(
         rykBin,
         'tool.execute.before',
         buildToolBeforePayload(input, output),
@@ -640,7 +670,7 @@ export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHook
     },
 
     'tool.execute.after': async (input, output) => {
-      await callOrca(
+      await callRyk(
         rykBin,
         'tool.execute.after',
         {
@@ -659,7 +689,7 @@ export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHook
 
     'permission.ask': async (input, output) => {
       const sessionId = sessionIdFromRecord(input);
-      const response = callOrca(rykBin, 'permission.asked', input, sessionId, true);
+      const response = callRyk(rykBin, 'permission.asked', input, sessionId, true);
       // Host already presents permission UI: map via table (ask stays ask for resume).
       applyPermissionDecision(response, output);
       if (response.decision === 'warn' || response.decision === 'ask') {
@@ -674,7 +704,7 @@ export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHook
 
     'command.execute.before': async (input, _output) => {
       // Slash/custom commands are not shell — send as tool name so ryk uses tool policy.
-      const response = callOrca(
+      const response = callRyk(
         rykBin,
         'command.execute.before',
         {
@@ -700,7 +730,7 @@ export default async function orcaPlugin(ctx: PluginContext): Promise<PluginHook
         );
       }
 
-      await callOrca(
+      await callRyk(
         rykBin,
         'shell.env',
         {

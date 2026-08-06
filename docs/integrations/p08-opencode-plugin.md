@@ -13,7 +13,7 @@ This phase adds native OpenCode plugin support to ryk. Users can now use ryk wit
 
 - `ryk plugin doctor opencode` — Reports ryk version, OpenCode binary detection, plugin directory status, and OpenCode-specific paths.
 - `ryk plugin doctor opencode --json` — JSON output with `opencode_paths` field.
-- `ryk plugin manifest opencode` — Reports the expected OpenCode plugin path (`integrations/opencode-plugin/orca.ts`).
+- `ryk plugin manifest opencode` — Reports the expected OpenCode plugin path (`integrations/opencode-plugin/ryk.ts`).
 - `ryk plugin manifest opencode --json` — JSON output.
 - `ryk plugin install opencode --dry-run` — Previews safe install options (`.opencode/plugins/ryk.ts` and `~/.config/opencode/plugins/ryk.ts`).
 - `ryk hook opencode <event>` — Processes OpenCode lifecycle hooks.
@@ -39,7 +39,7 @@ This phase adds native OpenCode plugin support to ryk. Users can now use ryk wit
 
 ```text
 integrations/opencode-plugin/
-  orca.ts                          # TypeScript OpenCode plugin
+  ryk.ts                           # TypeScript OpenCode plugin
   README.md                        # Plugin documentation
   package.json                     # Minimal package metadata
   examples/
@@ -186,7 +186,7 @@ Release packaging is safe:
 - `src/cli/help.zig` — Updated command documentation for opencode
 
 ### Plugin Files
-- `integrations/opencode-plugin/orca.ts` — TypeScript plugin (NEW)
+- `integrations/opencode-plugin/ryk.ts` — TypeScript plugin (NEW)
 - `integrations/opencode-plugin/README.md` — Plugin docs (NEW)
 - `integrations/opencode-plugin/package.json` — Package metadata (NEW)
 - `integrations/opencode-plugin/examples/*` — Install guides and config example (NEW)

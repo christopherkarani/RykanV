@@ -4,7 +4,7 @@ This document covers common issues when installing, running, or uninstalling ryk
 
 ## ryk binary not found
 
-**Symptom:** `orca: command not found` or plugin doctor reports `ryk binary: not found`.
+**Symptom:** `ryk: command not found` or plugin doctor reports `ryk binary: not found`.
 
 **Fix:**
 1. Use the one-command bootstrap:
@@ -123,13 +123,13 @@ Expected `~/.cursor/hooks.json`:
 **Fix (bare `ryk` on PATH):** Zig `ryk` now supports Rust-compatible stdin agent-hook mode when invoked with no subcommand and piped JSON. Verify outside Cursor's agent shell:
 
 ```bash
-echo '{"tool_name":"Bash","tool_input":{"command":"git status"}}' | orca
+echo '{"tool_name":"Bash","tool_input":{"command":"git status"}}' | ryk
 # allow: empty stdout, exit 0
 
-echo '{"command":"pwd","cwd":"/tmp"}' | orca
+echo '{"command":"pwd","cwd":"/tmp"}' | ryk
 # allow: {"permission":"allow","continue":true,...}
 
-echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' | orca
+echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' | ryk
 # deny: {"hookSpecificOutput":{"permissionDecision":"deny",...}}
 ```
 

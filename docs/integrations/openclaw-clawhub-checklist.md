@@ -113,5 +113,5 @@ clawhub publish \
 After publication, users should be able to install with:
 
 ```bash
-openclaw plugins install clawhub:orca
+openclaw plugins install clawhub:ryk-openclaw-plugin
 ```

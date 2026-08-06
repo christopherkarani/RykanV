@@ -499,7 +499,7 @@ fn defaultHostVerifier(
     if (std.mem.eql(u8, host, "pi")) {
         var env_map = try env_util.createProcessMap(allocator);
         defer env_map.deinit();
-        const home = (try env_util.getOwned(&env_map, allocator, "HOME")) orelse return false;
+        const home = (try env_util.getOwnedHome(&env_map, allocator)) orelse return false;
         defer allocator.free(home);
         return @import("pi_install.zig").isCompleteAtHome(io, allocator, home);
     }

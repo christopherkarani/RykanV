@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 /// Duplicate an environment variable from a map, or null if unset.
 pub fn getOwned(map: *const std.process.Environ.Map, allocator: std.mem.Allocator, key: []const u8) !?[]u8 {
@@ -25,6 +26,16 @@ pub fn getOwnedBrand(map: *const std.process.Environ.Map, allocator: std.mem.All
     return getOwned(map, allocator, ryk_key);
 }
 
+/// Return the user home directory for host-scoped state.
+/// Windows commonly provides USERPROFILE instead of HOME; Unix keeps the
+/// existing HOME-only contract so an unrelated USERPROFILE cannot redirect
+/// local state.
+pub fn getOwnedHome(map: *const std.process.Environ.Map, allocator: std.mem.Allocator) !?[]u8 {
+    if (try getOwned(map, allocator, "HOME")) |home| return home;
+    if (comptime builtin.os.tag == .windows) return getOwned(map, allocator, "USERPROFILE");
+    return null;
+}
+
 /// Process-environ brand read: `RYK_<suffix>` only.
 /// Returns the raw C string pointer (not owned). Null if unset.
 pub fn getenvBrand(suffix: []const u8) ?[*:0]const u8 {
@@ -42,6 +53,14 @@ pub fn getenvBrandFlagTruthy(suffix: []const u8) bool {
         std.ascii.eqlIgnoreCase(raw, "true") or
         std.ascii.eqlIgnoreCase(raw, "yes") or
         std.ascii.eqlIgnoreCase(raw, "on");
+}
+
+/// Process home directory across Unix and Windows. Windows PowerShell commonly
+/// exposes USERPROFILE without HOME; product cleanup must cover both.
+pub fn getenvHome() ?[*:0]const u8 {
+    if (std.c.getenv("HOME")) |home| return home;
+    if (comptime builtin.os.tag == .windows) return std.c.getenv("USERPROFILE");
+    return null;
 }
 
 test "getOwnedFirst prefers first key" {
@@ -89,6 +108,7 @@ test "getOwnedBrand NameTooLong" {
 
 /// Read the process environment block (POSIX libc `environ`).
 pub fn processEnviron() std.process.Environ {
+    if (comptime builtin.os.tag == .windows) return .{ .block = .global };
     return .{ .block = std.process.Environ.PosixBlock{
         .slice = @ptrCast(std.c.environ[0..countCEnviron() :null]),
     } };

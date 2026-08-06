@@ -25,12 +25,13 @@ import {
 	isProtectedPiTool,
 	isSubagentSession,
 	listPendingRequests,
+	mapSelectLabelToChoice,
 	parentAskDir,
 	piCoverageLabel,
 	PRODUCT_NAME,
 	protocolBlockOptionLabel,
 	repairMessage,
-	resolveOrcaBin,
+	resolveRykBin,
 	resolvePiAskRoot,
 	resolveToolPath,
 	resolveUnavailableMode,
@@ -40,10 +41,10 @@ import {
 	protocolFailureClassFromReason,
 	isTransientProtocolFailure,
 	allowWithWarningPermitsProtocolClass,
-	runOrcaDecideFile,
-	runOrcaDecideTool,
-	runOrcaEvaluate,
-	safeOrcaReason,
+	runRykDecideFile,
+	runRykDecideTool,
+	runRykEvaluate,
+	safeRykReason,
 	SESSION_GRANT_OPTION,
 	shouldAutoDenyPolicyAsk,
 	shouldLocalSelectPolicyAsk,
@@ -52,7 +53,7 @@ import {
 	addSessionGrant,
 	hasSessionGrant,
 	PROTOCOL_DEGRADED_THRESHOLD,
-	type OrcaEvaluateRequest,
+	type RykEvaluateRequest,
 } from "../extensions/ryk.ts";
 
 type Handler = (event: any, ctx: any) => Promise<any> | any;
@@ -64,7 +65,7 @@ const packageJson = JSON.parse(
 };
 const requiredRuntimeVersion =
 	packageJson.dependencies["@rykan/ryk"] ??
-	packageJson.dependencies["@rykan/ryk"];
+	"1.2.9";
 
 class FakeChild {
 	stdinWrites: string[] = [];
@@ -259,48 +260,51 @@ function errorJson(): string {
 	});
 }
 
-test("resolveOrcaBin honors executable RYK_BIN before other candidates", () => {
-	const result = resolveOrcaBin({
+test("resolveRykBin honors executable RYK_BIN before other candidates", () => {
+	const result = resolveRykBin({
 		env: { RYK_BIN: "/trusted/ryk" },
 		bundledPackageRoot: "/package",
 		isExecutable: (path) => path === "/trusted/ryk",
-		isCompatiblePathOrca: () => true,
+		isPathCompatible: () => true,
 	});
 
 	assert.deepEqual(result, { rykBin: "/trusted/ryk", source: "explicit" });
 });
 
-test("resolveOrcaBin prefers RYK_BIN over RYK_BIN", () => {
-	const result = resolveOrcaBin({
-		env: { RYK_BIN: "/trusted/ryk", RYK_BIN: "/trusted/ryk" },
+
+test("resolveRykBin ignores the removed ORCA_BIN alias", () => {
+	const result = resolveRykBin({
+		env: { ORCA_BIN: "/old/ryk" },
 		bundledPackageRoot: "/package",
-		isExecutable: (path) => path === "/trusted/ryk" || path === "/trusted/ryk",
-		isCompatiblePathOrca: () => true,
+		isExecutable: (path) => path === "/old/ryk",
+		isPathCompatible: () => true,
 	});
-	assert.deepEqual(result, { rykBin: "/trusted/ryk", source: "explicit" });
+	assert.deepEqual(result, {
+		rykBin: "__ryk_bundled_runtime_missing__",
+		source: "missing",
+	});
 });
 
-test("resolveOrcaBin prefers the bundled runtime and requires opt-in for PATH", () => {
+test("resolveRykBin prefers the bundled runtime and requires opt-in for PATH", () => {
 	const defaults = {
 		bundledPackageRoot: "/package",
 		// Prefer ryk vendor binary when present (Phase 5a).
 		isExecutable: (path: string) =>
-			path.includes("/vendor/ryk") ||
-			path.includes("/vendor/ryk") ||
-			path.includes("/vendor/ryk-daemon"),
-		isCompatiblePathOrca: () => true,
+				path.includes("/vendor/ryk") ||
+				path.includes("/vendor/ryk-daemon"),
+		isPathCompatible: () => true,
 	};
 
-	assert.deepEqual(resolveOrcaBin({ ...defaults, env: {} }), {
+	assert.deepEqual(resolveRykBin({ ...defaults, env: {} }), {
 		rykBin: resolve("/package/vendor/ryk"),
 		daemonBin: resolve("/package/vendor/ryk-daemon"),
 		source: "bundled",
 	});
-	// Hard-cut: orca vendor alone is not a bundled runtime.
+	// A different vendor binary is not a bundled ryk runtime.
 	assert.deepEqual(
-		resolveOrcaBin({
+		resolveRykBin({
 			...defaults,
-			isExecutable: (path: string) => path.includes("/vendor/orca"),
+			isExecutable: (path: string) => path.includes("/vendor/other-runtime"),
 			env: {},
 		}),
 		{
@@ -309,7 +313,7 @@ test("resolveOrcaBin prefers the bundled runtime and requires opt-in for PATH", 
 		},
 	);
 	assert.deepEqual(
-		resolveOrcaBin({
+		resolveRykBin({
 			...defaults,
 			bundledPackageRoot: "/missing-package",
 			isExecutable: () => false,
@@ -322,12 +326,12 @@ test("resolveOrcaBin prefers the bundled runtime and requires opt-in for PATH", 
 	);
 });
 
-test("resolveOrcaBin uses bundled ryk when PATH is incompatible", () => {
-	const result = resolveOrcaBin({
+test("resolveRykBin uses bundled ryk when PATH is incompatible", () => {
+	const result = resolveRykBin({
 		env: {},
 		bundledPackageRoot: "/package",
 		isExecutable: () => true,
-		isCompatiblePathOrca: () => false,
+		isPathCompatible: () => false,
 	});
 
 	assert.equal(result.rykBin, resolve("/package/vendor/ryk"));
@@ -335,27 +339,27 @@ test("resolveOrcaBin uses bundled ryk when PATH is incompatible", () => {
 	assert.equal(result.source, "bundled");
 });
 
-test("resolveOrcaBin validates opted-in PATH version output", () => {
-	const compatible = resolveOrcaBin({
+test("resolveRykBin validates opted-in PATH version output", () => {
+	const compatible = resolveRykBin({
 		env: { RYK_PI_USE_PATH: "true" },
 		bundledPackageRoot: "/missing-package",
 		isExecutable: () => false,
 		spawnSync: (cmd: string) => ({
 			status: 0,
-		stdout: `${cmd === "ryk" ? "ryk" : "ryk"} ${requiredRuntimeVersion}\n`,
+		stdout: `ryk ${requiredRuntimeVersion}\n`,
 		}),
 	});
 	assert.equal(compatible.source, "path");
 	assert.equal(compatible.rykBin, "ryk");
 
 	for (const result of [
-		{ status: 0, stdout: "orca 0.0.0\n" },
-		{ status: 0, stdout: "not-orca\n" },
+		{ status: 0, stdout: "other-runtime 0.0.0\n" },
+		{ status: 0, stdout: "not-ryk\n" },
 		{ status: 1, stdout: `ryk ${requiredRuntimeVersion}\n` },
 		{ status: null, stdout: "", error: new Error("timeout") },
 	]) {
 		assert.equal(
-			resolveOrcaBin({
+			resolveRykBin({
 				env: { RYK_PI_USE_PATH: "true" },
 				bundledPackageRoot: "/missing-package",
 				isExecutable: () => false,
@@ -573,7 +577,7 @@ test("decide file rejects context_only for write side effects", async () => {
 	const { spawn } = makeSpawn([
 		{ code: 0, stdout: decideJson("context_only") },
 	]);
-	const result = await runOrcaDecideFile(
+	const result = await runRykDecideFile(
 		{ path: "./src/main.ts", operation: "write" },
 		{ spawn, rykBin: "ryk", timeoutMs: 1_000, cwd: process.cwd() },
 	);
@@ -591,7 +595,7 @@ test("decide file validates decision and exit-code consistency", async () => {
 	]) {
 		// Retry once on protocol error; both attempts fail → still fail-closed.
 		const { spawn } = makeSpawn([plan, plan]);
-		const result = await runOrcaDecideFile(
+		const result = await runRykDecideFile(
 			{ path: "./README.md", operation: "read" },
 			{ spawn, rykBin: "ryk", timeoutMs: 1_000, cwd: process.cwd() },
 		);
@@ -752,8 +756,8 @@ test("buildDecideToolPayload trims name", () => {
 	});
 });
 
-test("runOrcaDecideTool maps block to deny and validates exit codes", async () => {
-	const blocked = await runOrcaDecideTool(
+test("runRykDecideTool maps block to deny and validates exit codes", async () => {
+	const blocked = await runRykDecideTool(
 		{ name: "read_file" },
 		{
 			spawn: makeSpawn([
@@ -772,7 +776,7 @@ test("runOrcaDecideTool maps block to deny and validates exit codes", async () =
 		{ code: 0, stdout: "" },
 	]) {
 		// Two identical plans: protocol path retries once, still fail-closed.
-		const result = await runOrcaDecideTool(
+		const result = await runRykDecideTool(
 			{ name: "x" },
 			{
 				spawn: makeSpawn([plan, plan]).spawn,
@@ -789,10 +793,10 @@ test("runOrcaDecideTool maps block to deny and validates exit codes", async () =
 	}
 });
 
-test("runOrcaDecideTool retries once on malformed JSON then fail-closes", async () => {
+test("runRykDecideTool retries once on malformed JSON then fail-closes", async () => {
 	const bad = { code: 0, stdout: "{not-json" as string };
 	const { spawn, calls } = makeSpawn([bad, bad]);
-	const result = await runOrcaDecideTool(
+	const result = await runRykDecideTool(
 		{ name: "x" },
 		{ spawn, rykBin: "ryk", timeoutMs: 1_000, cwd: process.cwd() },
 	);
@@ -819,12 +823,12 @@ test("formatMalformedJsonDetail includes exit and stream previews", () => {
 	assert.match(detail, /--json requires a value/);
 });
 
-test("runOrcaDecideTool recovers when second attempt succeeds", async () => {
+test("runRykDecideTool recovers when second attempt succeeds", async () => {
 	const { spawn, calls } = makeSpawn([
 		{ code: 0, stdout: "{not-json" },
 		{ code: 0, stdout: decideAllowJson("tool") },
 	]);
-	const result = await runOrcaDecideTool(
+	const result = await runRykDecideTool(
 		{ name: "x" },
 		{ spawn, rykBin: "ryk", timeoutMs: 1_000, cwd: process.cwd() },
 	);
@@ -852,7 +856,7 @@ test("isTransientProtocolFailure covers spawn/json glitches only", () => {
 	assert.equal(allowWithWarningPermitsProtocolClass("unexpected"), false);
 });
 
-test("runOrcaDecideTool does not retry non-transient decision error", async () => {
+test("runRykDecideTool does not retry non-transient decision error", async () => {
 	const err = {
 		code: 1,
 		stdout: JSON.stringify({
@@ -862,7 +866,7 @@ test("runOrcaDecideTool does not retry non-transient decision error", async () =
 		}),
 	};
 	const { spawn, calls } = makeSpawn([err, err]);
-	const result = await runOrcaDecideTool(
+	const result = await runRykDecideTool(
 		{ name: "x" },
 		{ spawn, rykBin: "ryk", timeoutMs: 1_000, cwd: process.cwd() },
 	);
@@ -1476,7 +1480,7 @@ test("policy ask subagent allows when parent responds run_once", async () => {
 		const onceAudit = messages.find(
 			(m) =>
 				(m.message.details as { event?: string } | undefined)?.event ===
-				"orca_once_bypass",
+				"ryk_once_bypass",
 		);
 		assert.ok(onceAudit, "expected once-bypass audit after parent allow");
 	} finally {
@@ -1584,9 +1588,9 @@ test("session grant short-circuits decide for granted tool name", async () => {
 		const grantAudit = messages.find(
 			(m) =>
 				(m.message.details as { event?: string } | undefined)?.event ===
-				"orca_session_grant_hit",
+				"ryk_session_grant_hit",
 		);
-		assert.ok(grantAudit, "expected orca_session_grant_hit audit");
+		assert.ok(grantAudit, "expected ryk_session_grant_hit audit");
 	} finally {
 		if (previousRoot === undefined) delete process.env.RYK_PI_ASK_ROOT;
 		else process.env.RYK_PI_ASK_ROOT = previousRoot;
@@ -1652,7 +1656,7 @@ test("parent main session answers pending child ask via select", async () => {
 		const parentAudit = messages.find(
 			(m) =>
 				(m.message.details as { event?: string } | undefined)?.event ===
-				"orca_parent_ask_response",
+				"ryk_parent_ask_response",
 		);
 		assert.ok(parentAudit, "expected parent ask response audit");
 	} finally {
@@ -2198,7 +2202,7 @@ test("subagent protocol failure parent-forwards instead of silent local brick", 
 		const onceAudit = messages.find(
 			(m) =>
 				(m.message.details as { event?: string } | undefined)?.event ===
-				"orca_once_bypass",
+				"ryk_once_bypass",
 		);
 		assert.ok(onceAudit, "expected once-bypass audit after parent allow");
 	} finally {
@@ -2431,7 +2435,7 @@ test("/ryk-mode changes mode", async () => {
 
 test("no shell interpolation is used when invoking ryk", async () => {
 	const { spawn, calls } = makeSpawn([{ code: 0, stdout: allowJson() }]);
-	await runOrcaEvaluate(
+	await runRykEvaluate(
 		buildEvaluateRequest("echo safe", { cwd: process.cwd(), mode: "print" }),
 		{
 			spawn,
@@ -2443,14 +2447,14 @@ test("no shell interpolation is used when invoking ryk", async () => {
 	assert.equal(calls[0].file, "ryk");
 	assert.deepEqual(calls[0].args, ["evaluate", "--json", "--stdin"]);
 	assert.equal(calls[0].options.shell, false);
-	const request = JSON.parse(calls[0].stdin[0]) as OrcaEvaluateRequest;
+	const request = JSON.parse(calls[0].stdin[0]) as RykEvaluateRequest;
 	assert.equal(request.command, "echo safe");
 	assert.equal(request.source.host, "pi");
 });
 
-test("runOrcaEvaluate maps decision ask exit 0 to kind ask", async () => {
+test("runRykEvaluate maps decision ask exit 0 to kind ask", async () => {
 	const { spawn } = makeSpawn([{ code: 0, stdout: askJson() }]);
-	const decision = await runOrcaEvaluate(
+	const decision = await runRykEvaluate(
 		buildEvaluateRequest("git push --force", {
 			cwd: process.cwd(),
 			mode: "tui",
@@ -2504,7 +2508,7 @@ test("helpers resolve modes and sanitize reasons", () => {
 		"noninteractive-block",
 	);
 	assert.match(
-		safeOrcaReason({ reason: "blocked token=abc123", rule_id: "rule" }),
+		safeRykReason({ reason: "blocked token=abc123", rule_id: "rule" }),
 		/Rykan V blocked this bash command: blocked token=\[redacted\] • rule rule/,
 	);
 });

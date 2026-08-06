@@ -175,7 +175,7 @@ test "codex hooks config is valid JSON" {
     defer parsed.deinit();
 }
 
-test "codex hooks config calls ryk hook codex" {
+test "codex hooks config dispatches to the ryk Codex hook" {
     var dbg_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = dbg_state.deinit();
     const allocator = dbg_state.allocator();
@@ -183,8 +183,8 @@ test "codex hooks config calls ryk hook codex" {
     const content = try readFile(allocator, hooks_path);
     defer allocator.free(content);
 
-    // Every hook should reference "ryk hook codex"
-    try std.testing.expect(std.mem.indexOf(u8, content, "ryk hook codex") != null);
+    // The portable wrapper resolves the installed binary before dispatching.
+    try std.testing.expect(std.mem.indexOf(u8, content, "hook codex") != null);
 }
 
 test "codex hooks config does not call nonexistent scripts" {
@@ -211,7 +211,6 @@ test "codex hooks config does not include absolute local paths" {
     // Should not contain absolute paths like /Users/ or /home/
     try std.testing.expect(std.mem.indexOf(u8, content, "/Users/") == null);
     try std.testing.expect(std.mem.indexOf(u8, content, "/home/") == null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "/usr/local") == null);
 }
 
 // ---------------------------------------------------------------------------

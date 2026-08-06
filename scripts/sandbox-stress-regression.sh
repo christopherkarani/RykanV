@@ -112,7 +112,7 @@ expect_fs_deny() {
   run_os_sh "${cmd}" "${out}"
   local code=$?
   set -e
-  if grep -qE 'phase5-(git|orca)-written|SSH_LIST_OK' "${out}" 2>/dev/null; then
+  if grep -qE 'phase5-(git|ryk)-written|SSH_LIST_OK' "${out}" 2>/dev/null; then
     fail "${name}: unexpectedly allowed (see ${out})"
     return
   fi
@@ -212,8 +212,8 @@ SH
   expect_fs_deny "write-git-control" \
     'echo probe > .git/phase5-probe 2>/dev/null && echo phase5-git-written && exit 0; echo STRESS_DENY_OK; exit 1'
 
-  expect_fs_deny "write-orca-control" \
-    'echo probe > .ryk/phase5-probe 2>/dev/null && echo phase5-orca-written && exit 0; echo STRESS_DENY_OK; exit 1'
+  expect_fs_deny "write-ryk-control" \
+    'echo probe > .ryk/phase5-probe 2>/dev/null && echo phase5-ryk-written && exit 0; echo STRESS_DENY_OK; exit 1'
 
   expect_fs_allow "workspace-write" \
     'echo ok > tmp/phase5-ok && test -f tmp/phase5-ok && echo PHASE5_WS_OK' \

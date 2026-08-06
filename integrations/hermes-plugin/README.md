@@ -31,7 +31,7 @@ This is **not** a passive model note, and it is **not** a request for the model 
 Always-allow entries are keyed so they do not over-approve:
 
 ```text
-orca|{rule_id|policy}|{tool_name}|{sha256(args)[:12]}
+ryk|{rule_id|policy}|{tool_name}|{sha256(args)[:12]}
 ```
 
 Separators are `|` so rule ids that contain `:` stay unambiguous. Approving `curl http://a.example` under rule `core.shell:network` does **not** auto-approve a later `curl http://b.example` under the same rule.
@@ -42,7 +42,7 @@ When `CI`, `RYK_CI`, or `RYK_NONINTERACTIVE` is set truthily, ryk `ask` is harde
 
 ## Failure modes
 
-- **`pre_tool_call`**: Uses the mapping above. When ryk is missing, too old for Hermes hooks, or returns a Hermes host mismatch, the default is fail-open with a warning (`RYK_HERMES_FAIL_OPEN=1`, the default). Set `RYK_HERMES_FAIL_OPEN=0` to block tool calls until ryk is upgraded.
+- **`pre_tool_call`**: Uses the mapping above. When ryk is missing, too old for Hermes hooks, or returns a Hermes host mismatch, the default is fail-closed. Set `RYK_HERMES_FAIL_OPEN=1` only when deliberately accepting unguarded tool execution.
 - **`pre_llm_call`**: **Context-only** — Hermes cannot veto the turn or open an approval dialog on this hook. ryk `warn` / `context_only` inject advisory notes. ryk `ask` and `block` inject **honest** notes that do **not** claim enforcement or auto-triggered approval; the strongest real gate for prompts remains `ryk run -- hermes ...`. Other ryk failures log a warning and continue without injecting policy context.
 - **Informational hooks** (`post_tool_call`, session lifecycle, etc.): Log warnings on ryk failure and never block Hermes.
 
@@ -60,11 +60,11 @@ Or manually:
 
 ```sh
 ryk plugin install hermes --yes
-hermes plugins enable orca
+hermes plugins enable ryk
 ryk plugin doctor hermes
 ```
 
-The installer copies this directory to `~/.hermes/plugins/ryk/` and enables it with `hermes plugins enable orca` when the `hermes` binary is available.
+The installer copies this directory to `~/.hermes/plugins/ryk/` and enables it with `hermes plugins enable ryk` when the `hermes` binary is available.
 
 ## Hook Coverage
 
@@ -93,17 +93,17 @@ Limitations (honest):
 The plugin resolves ryk once per process (cached until `RYK_BIN` changes), probing candidates in this order:
 
 1. `RYK_BIN`
-2. `RYK_BIN` (legacy environment compatibility)
-3. `~/.local/bin/ryk` / `~/.ryk/bin` / `~/.ryk/bin`
-4. `ryk` / `ryk` on `PATH`
-5. `./zig-out/bin/ryk` (current repo and parents — last; avoids planted cwd binary beating installs)
+2. `~/.local/bin/ryk` / `~/.ryk/bin`
+3. `ryk` on `PATH`
+4. `./zig-out/bin/ryk` (current repo and parents — only when `RYK_ALLOW_WORKSPACE_BIN=1`)
 
-Only regular files that are executable and pass a Hermes `pre_tool_call` smoke test are selected (exit 0 and hook decision is not `block`, matching `tests/fixtures/hook-safe.json`). `ryk plugin doctor` uses a stricter allow-only check on the running ryk binary.
+Only regular files that are executable, identify as `product: ryk` via `ryk version --json`, and pass a Hermes `pre_tool_call` smoke test are selected (exit 0 and hook decision is not `block`, matching `tests/fixtures/hook-safe.json`). Workspace candidates require the explicit `RYK_ALLOW_WORKSPACE_BIN=1` development opt-in. `ryk plugin doctor` uses a stricter allow-only check on the running ryk binary.
 
 Environment:
 
 - `RYK_BIN` — force a specific ryk executable (must be executable on disk).
-- `RYK_HERMES_FAIL_OPEN` — `1` (default) allows Hermes tools when ryk is degraded; `0` blocks `pre_tool_call` instead.
+- `RYK_ALLOW_WORKSPACE_BIN=1` — opt into repo-local `zig-out/bin/ryk` discovery for development/testing.
+- `RYK_HERMES_FAIL_OPEN` — only recognized truthy tokens (`1`, `true`, `yes`, `on`, `fail-open`, `open`) enable degraded fail-open behavior; missing, empty, false, and unknown values block `pre_tool_call`.
 - `CI` / `RYK_CI` / `RYK_NONINTERACTIVE` — when truthy, harden ryk `ask` on tools to Hermes `block`.
 
 ## Manual verification (CLI approve UI)

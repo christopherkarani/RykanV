@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const network = @import("ryk_core").policy.network_eval;
 const core = @import("ryk_core").core;
@@ -46,6 +47,7 @@ pub const Runtime = struct {
     /// Call after sandboxed agent fork so Seatbelt `sandbox_init` is not
     /// raced with a multi-threaded parent (M-5).
     pub fn startServing(self: *Runtime) !void {
+        if (comptime builtin.os.tag == .windows) return error.ProxyUnsupportedOnWindows;
         if (self.state.serving.swap(true, .acq_rel)) return;
         self.state.thread = try std.Thread.spawn(.{}, serverLoop, .{self.state});
         self.state.thread_started = true;

@@ -72,8 +72,8 @@ else
   fail "README missing ryk-opencode-plugin reference"
 fi
 
-# 7. Plugin source calls orca
-echo "7. Plugin source calls orca"
+# 7. Plugin source calls ryk
+echo "7. Plugin source calls ryk"
 if grep -q 'hook opencode' "${PACKAGE_DIR}/src/index.ts"; then
   pass "src/index.ts calls ryk hook opencode"
 else

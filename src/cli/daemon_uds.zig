@@ -38,12 +38,14 @@ test "sockaddrUnFromPath rejects empty and overlong paths" {
 }
 
 pub fn openUnixStreamSocket() !std.posix.fd_t {
+    if (comptime builtin.os.tag != .linux and builtin.os.tag != .macos) return error.UnsupportedOs;
     const fd = std.c.socket(afUnix(), sockStream(), 0);
     if (fd < 0) return error.SocketConnectFailed;
     return fd;
 }
 
 pub fn connectUnixSocket(path: []const u8) !std.posix.fd_t {
+    if (comptime builtin.os.tag != .linux and builtin.os.tag != .macos) return error.UnsupportedOs;
     const fd = try openUnixStreamSocket();
     errdefer _ = std.c.close(fd);
 
@@ -54,6 +56,7 @@ pub fn connectUnixSocket(path: []const u8) !std.posix.fd_t {
 }
 
 pub fn bindListenUnixSocket(path: []const u8) !std.posix.fd_t {
+    if (comptime builtin.os.tag != .linux and builtin.os.tag != .macos) return error.UnsupportedOs;
     unlinkUnixSocketPath(path);
 
     const fd = try openUnixStreamSocket();
@@ -66,6 +69,7 @@ pub fn bindListenUnixSocket(path: []const u8) !std.posix.fd_t {
 }
 
 pub fn unlinkUnixSocketPath(path: []const u8) void {
+    if (comptime builtin.os.tag != .linux and builtin.os.tag != .macos) return;
     if (path.len >= std.fs.max_path_bytes) return;
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     @memcpy(path_buf[0..path.len], path);
@@ -77,7 +81,7 @@ fn afUnix() c_uint {
     return switch (builtin.os.tag) {
         .linux => @intCast(std.posix.AF.UNIX),
         .macos => 1,
-        else => @compileError("unsupported OS for UDS"),
+        else => 0,
     };
 }
 
@@ -85,6 +89,6 @@ fn sockStream() c_uint {
     return switch (builtin.os.tag) {
         .linux => @intCast(std.posix.SOCK.STREAM),
         .macos => 1,
-        else => @compileError("unsupported OS for UDS"),
+        else => 0,
     };
 }

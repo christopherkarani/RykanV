@@ -7,7 +7,7 @@ This document describes how to publish the ryk OpenClaw plugin to [ClawHub](http
 ClawHub is the OpenClaw plugin registry. After publication, users can install the ryk plugin with:
 
 ```bash
-openclaw plugins install clawhub:orca
+openclaw plugins install clawhub:ryk-openclaw-plugin
 ```
 
 **Status:** The plugin has been published to ClawHub as `ryk-openclaw-plugin@1.1.3`.

@@ -59,7 +59,7 @@ Most hosts **cannot** veto or open approve-and-resume on prompt submission. ryk 
 ```text
 allow  → None
 block  → {"action":"block","message":"..."}
-ask    → {"action":"approve","message":"...","rule_key":"orca:{rule}:{tool}:{args_fp}"}
+ask    → {"action":"approve","message":"...","rule_key":"ryk:{rule}:{tool}:{args_fp}"}
          (CI → block)
 warn   → log advisory; None (proceed)
 other  → block fail-closed

@@ -1,4 +1,4 @@
-# orca-replay
+# ryk-replay
 
 Show and explain the latest ryk session replay.
 

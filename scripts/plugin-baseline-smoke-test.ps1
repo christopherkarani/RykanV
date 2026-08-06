@@ -50,7 +50,7 @@ try {
         try { $null = & $RYK_BIN doctor 2>$null; Log-Pass "ryk doctor" } catch { Log-Fail "ryk doctor" }
         try { $null = & $RYK_BIN redteam --ci 2>$null; Log-Pass "ryk redteam --ci" } catch { Log-Fail "ryk redteam --ci" }
     } else {
-        Log-Fail "orca binary not found at $RYK_BIN"
+        Log-Fail "ryk binary not found at $RYK_BIN"
     }
     Write-Host ""
 

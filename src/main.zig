@@ -46,23 +46,28 @@ pub fn main(init: std.process.Init) !u8 {
 }
 
 fn setupWindowsConsole() void {
-    if (builtin.os.tag != .windows) return;
+    if (comptime builtin.os.tag != .windows) return;
 
-    const kernel32 = std.os.windows.kernel32;
     const DWORD = std.os.windows.DWORD;
     const HANDLE = std.os.windows.HANDLE;
 
     const STD_OUTPUT_HANDLE: DWORD = 0xFFFFFFF5;
     const ENABLE_VIRTUAL_TERMINAL_PROCESSING: DWORD = 0x0004;
 
-    _ = kernel32.SetConsoleOutputCP(65001);
+    const winapi = struct {
+        extern "kernel32" fn SetConsoleOutputCP(code_page: DWORD) callconv(.winapi) std.os.windows.BOOL;
+        extern "kernel32" fn GetStdHandle(kind: DWORD) callconv(.winapi) ?HANDLE;
+        extern "kernel32" fn GetConsoleMode(handle: HANDLE, mode: *DWORD) callconv(.winapi) std.os.windows.BOOL;
+        extern "kernel32" fn SetConsoleMode(handle: HANDLE, mode: DWORD) callconv(.winapi) std.os.windows.BOOL;
+    };
+    _ = winapi.SetConsoleOutputCP(65001);
 
-    const handle: ?HANDLE = kernel32.GetStdHandle(STD_OUTPUT_HANDLE);
+    const handle: ?HANDLE = winapi.GetStdHandle(STD_OUTPUT_HANDLE);
     if (handle == null or handle.? == std.os.windows.INVALID_HANDLE_VALUE) return;
 
     var mode: DWORD = 0;
-    if (kernel32.GetConsoleMode(handle.?, &mode) != 0) {
-        _ = kernel32.SetConsoleMode(handle.?, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    if (winapi.GetConsoleMode(handle.?, &mode).toBool()) {
+        _ = winapi.SetConsoleMode(handle.?, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
     }
 }
 

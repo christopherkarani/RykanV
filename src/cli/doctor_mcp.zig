@@ -27,7 +27,7 @@ pub fn formatMcpSetupTable(
     manifest_count: usize,
     manifest_invalid: usize,
 ) !void {
-    try writer.writeAll("MCP policy (.orca/policy.yaml):\n");
+    try writer.writeAll("MCP policy (.ryk/policy.yaml):\n");
     if (!summary.present) {
         try writer.writeAll("  default: (no policy file)\n");
         try writer.writeAll("  allow:  0 patterns   deny: 0 patterns\n");
@@ -50,9 +50,9 @@ pub fn formatMcpSetupTable(
     }
 
     if (manifest_count == 0) {
-        try writer.writeAll("  manifests under .orca/mcp: none\n");
+        try writer.writeAll("  manifests under .ryk/mcp: none\n");
     } else {
-        try writer.print("  manifests under .orca/mcp: {d} found, {d} invalid\n", .{
+        try writer.print("  manifests under .ryk/mcp: {d} found, {d} invalid\n", .{
             manifest_count,
             manifest_invalid,
         });
@@ -73,7 +73,7 @@ pub fn formatMcpSetupTable(
         }
     }
 
-    try writer.writeAll("Next: edit .orca/policy.yaml mcp:  (doctor does not rewrite policy on diagnose)\n");
+    try writer.writeAll("Next: edit .ryk/policy.yaml mcp:  (doctor does not rewrite policy on diagnose)\n");
     try writer.writeAll("  Tip: for Pi subagents, parent session must load the managed ryk extension;\n");
     try writer.writeAll("  session grants and parent-forward ask fail closed if parent is unavailable.\n");
 }
@@ -180,7 +180,7 @@ test "formatMcpSetupTable renders default ask and inventory" {
         0,
     );
     const written = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, written, "MCP policy (.orca/policy.yaml):") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "MCP policy (.ryk/policy.yaml):") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "default: ask") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "allow:  3 patterns") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "deny: 2 patterns") != null);

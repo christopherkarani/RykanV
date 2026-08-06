@@ -427,7 +427,7 @@ test "e2e-shaped unit dual-proof manifest validates and allControlsPass" {
     try std.testing.expect(std.mem.indexOf(u8, json, "zig_real_fs_deny_canary_and_handshake") != null);
 }
 
-test "e2e-shaped packaged orca_run attach requires 64-hex profile_hash" {
+test "e2e-shaped packaged ryk_run attach requires 64-hex profile_hash" {
     const hash64 = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
     var packaged = Manifest{
         .gate_ids = &.{ "P1-I-01", "P0-I-06", "M-11", "M-12", "F-1", "F-5" },

@@ -240,7 +240,7 @@ fn moreRestrictiveMode(a: policy.schema.Mode, b: policy.schema.Mode) policy.sche
 }
 
 /// Resolve evaluate mode like product hooks: discovered policy mode, with
-/// `RYK_MODE`/`RYK_MODE` only allowed to raise strictness (never ambient soften).
+/// `RYK_MODE` only allowed to raise strictness (never ambient soften).
 fn resolveEvaluateMode(base: policy.schema.Mode) policy.schema.Mode {
     const env_util = @import("../env_util.zig");
     if (env_util.getenvBrand("MODE")) |raw_c| {

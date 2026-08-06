@@ -405,7 +405,7 @@ fn homeDirOwned(allocator: std.mem.Allocator) !?[]u8 {
     // Propagate allocation failures; only genuine missing HOME → null.
     var env_map = try env_util.createProcessMap(allocator);
     defer env_map.deinit();
-    return try env_util.getOwned(&env_map, allocator, "HOME");
+    return try env_util.getOwnedHome(&env_map, allocator);
 }
 
 /// If `path` is under `.../.zig-cache/tmp/<entry>/...`, return the absolute
@@ -670,7 +670,7 @@ pub fn installOneHost(
 fn ensureProcessHome(allocator: std.mem.Allocator) ![]u8 {
     var env_map = try env_util.createProcessMap(allocator);
     defer env_map.deinit();
-    return (try env_util.getOwned(&env_map, allocator, "HOME")) orelse error.HomeNotSet;
+    return (try env_util.getOwnedHome(&env_map, allocator)) orelse error.HomeNotSet;
 }
 
 fn ensureIsProductRykBinary(path: []const u8) bool {
@@ -780,7 +780,7 @@ pub fn wireDetectedHosts(
     defer allocator.free(statuses);
 
     // Install context once. Missing HOME / non-product binary → soft wire fail (no mutation
-    // under unit-test harness where self_exe is not `ryk`/`orca`). OOM propagates.
+    // under unit-test harness where self_exe is not the product `ryk`). OOM propagates.
     const home_opt: ?[]u8 = ensureProcessHome(allocator) catch |err| switch (err) {
         error.HomeNotSet => null,
         else => return err,
@@ -1754,7 +1754,6 @@ test "EnsurePolicy existing ask mode leave-alone hash equal without false residu
     try std.testing.expectEqualStrings(ask_body, after);
     try std.testing.expectEqualSlices(u8, &hash_before, &ensurePolicySha256(after));
 }
-
 
 // ---------------------------------------------------------------------------
 // EnsureSoft — auto-wire soft success + partial honesty (w1-auto-wire-soft-success)

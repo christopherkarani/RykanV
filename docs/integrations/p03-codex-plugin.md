@@ -50,11 +50,11 @@ src/cli/hook.zig
 
 | Skill | Purpose |
 |-------|---------|
-| `orca-doctor` | Check ryk installation, policy status, host integration status, and plugin readiness |
-| `orca-init` | Create or repair a ryk policy for the current repository |
-| `orca-protect` | Explain how to run the current Codex workflow under ryk protection |
-| `orca-redteam` | Run ryk red-team fixtures and summarize results |
-| `orca-replay` | Show and explain the latest ryk session replay |
+| `ryk-doctor` | Check ryk installation, policy status, host integration status, and plugin readiness |
+| `ryk-init` | Create or repair a ryk policy for the current repository |
+| `ryk-protect` | Explain how to run the current Codex workflow under ryk protection |
+| `ryk-redteam` | Run ryk red-team fixtures and summarize results |
+| `ryk-replay` | Show and explain the latest ryk session replay |
 
 No drone skills were added.
 No MCP skills were added.

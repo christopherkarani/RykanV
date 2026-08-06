@@ -493,21 +493,17 @@ test "shouldScrubKey removes BASH_FUNC_ prefix vars" {
     try std.testing.expect(!shouldScrubKey("MY_BASH_FUNC_X")); // not a prefix match
 }
 
-test "shouldScrubKey keeps PATH HOME LANG TERM and RYK_/RYK_ session vars" {
+test "shouldScrubKey keeps PATH HOME LANG TERM and RYK_ session vars" {
     try std.testing.expect(!shouldScrubKey("PATH"));
     try std.testing.expect(!shouldScrubKey("HOME"));
     try std.testing.expect(!shouldScrubKey("LANG"));
     try std.testing.expect(!shouldScrubKey("TERM"));
     try std.testing.expect(!shouldScrubKey("RYK_SESSION_ID"));
     try std.testing.expect(!shouldScrubKey("RYK_MODE"));
-    try std.testing.expect(!shouldScrubKey("RYK_SESSION_ID"));
-    try std.testing.expect(!shouldScrubKey("RYK_MODE"));
     try std.testing.expect(isKeepClass("PATH"));
     try std.testing.expect(isKeepClass("HOME"));
     try std.testing.expect(isKeepClass("LANG"));
     try std.testing.expect(isKeepClass("TERM"));
-    try std.testing.expect(isKeepClass("RYK_SESSION_ID"));
-    try std.testing.expect(isKeepClass("RYK_MODE"));
     try std.testing.expect(isKeepClass("RYK_SESSION_ID"));
     try std.testing.expect(isKeepClass("RYK_MODE"));
 }

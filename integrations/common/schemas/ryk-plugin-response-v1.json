@@ -28,7 +28,7 @@
       ],
       "description": "Echo of the request type."
     },
-    "orca_version": {
+    "ryk_version": {
       "type": "string",
       "description": "ryk version."
     },

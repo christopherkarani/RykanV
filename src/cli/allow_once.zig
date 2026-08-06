@@ -11,7 +11,7 @@
 //!
 //! Subcommands: `<code> [-y] [--json] [--scope cwd|project]`, `list`, `clear`, `revoke`.
 //! Default redeem scope_path is the pending record cwd (grant matches deny site).
-//! Redeem is operator-bound (M-1): TTY confirmation or RYK_OPERATOR=1 / RYK_OPERATOR=1.
+//! Redeem is operator-bound (M-1): TTY confirmation or RYK_OPERATOR=1.
 
 const std = @import("std");
 const core = @import("ryk_core").core;
@@ -36,7 +36,7 @@ const usage_text =
     \\command and scope. Management: list, clear, revoke.
     \\
     \\Redeem is operator-bound: interactive TTY confirmation, or set
-    \\RYK_OPERATOR=1 / RYK_OPERATOR=1 for non-interactive operator redeem.
+    \\RYK_OPERATOR=1 for non-interactive operator redeem.
     \\-y/--yes skips TTY confirmation only (does not authorize non-TTY redeem).
     \\
     \\Paths: $XDG_DATA_HOME/ryk/ (or ~/.local/share/ryk/)
@@ -65,7 +65,7 @@ fn commandAt(io: std.Io, argv: []const []const u8, now_iso: []const u8, stdout: 
     defer _ = gpa_state.deinit();
     const gpa = gpa_state.allocator();
 
-    const data_dir = try resolveOrcaDataDir(gpa) orelse {
+    const data_dir = try resolveRykDataDir(gpa) orelse {
         try stderr.writeAll("ryk allow-once: cannot resolve data directory (set XDG_DATA_HOME or HOME)\n");
         return exit_codes.general;
     };
@@ -92,7 +92,7 @@ fn commandAt(io: std.Io, argv: []const []const u8, now_iso: []const u8, stdout: 
     return cmdRedeem(io, gpa, pending_path, once_path, now_iso, argv, stdout, stderr);
 }
 
-fn resolveOrcaDataDir(gpa: std.mem.Allocator) !?[]u8 {
+fn resolveRykDataDir(gpa: std.mem.Allocator) !?[]u8 {
     if (std.c.getenv("XDG_DATA_HOME")) |xdg_z| {
         const xdg = std.mem.span(xdg_z);
         if (xdg.len > 0) {
@@ -112,7 +112,7 @@ fn resolveOrcaDataDir(gpa: std.mem.Allocator) !?[]u8 {
 /// Agents must not be able to set this ambiently from ordinary host shells without
 /// the human operator configuring the environment (M-1).
 fn operatorRedeemAuthorized() bool {
-    return envTruthy("RYK_OPERATOR") or envTruthy("RYK_OPERATOR");
+    return envTruthy("RYK_OPERATOR");
 }
 
 fn envTruthy(name: [*:0]const u8) bool {
@@ -179,14 +179,14 @@ fn cmdRedeem(
         }
     }
     // M-1 redeem gate: fail closed unless operator-bound.
-    // - RYK_OPERATOR=1 / RYK_OPERATOR=1 → non-interactive operator redeem
+    // - RYK_OPERATOR=1 → non-interactive operator redeem
     // - stdin TTY → interactive confirmation (unless -y)
     // - else → refuse (-y alone is not enough for agents/scripts)
     if (!operatorRedeemAuthorized()) {
         const is_tty = std.Io.File.stdin().isTty(io) catch false;
         if (!is_tty) {
             try stderr.writeAll(
-                \\ryk allow-once: redeem requires interactive TTY confirmation, or RYK_OPERATOR=1 (or RYK_OPERATOR=1) for non-interactive operator redeem
+                \\ryk allow-once: redeem requires interactive TTY confirmation, or RYK_OPERATOR=1 for non-interactive operator redeem
                 \\
             );
             return exit_codes.usage;
@@ -649,7 +649,7 @@ fn sOnceCliAllowOncePath(xdg_data: []const u8) ![]u8 {
     return try sOnceCliJoin(&.{ xdg_data, "ryk", allow_once_store.allow_once_file_name });
 }
 
-fn sOnceCliEnsureOrcaDataDir(xdg_data: []const u8) !void {
+fn sOnceCliEnsureRykDataDir(xdg_data: []const u8) !void {
     const ryk_dir = try sOnceCliJoin(&.{ xdg_data, "ryk"});
     defer std.testing.allocator.free(ryk_dir);
     try std.Io.Dir.cwd().createDirPath(std.testing.io, ryk_dir);
@@ -714,7 +714,7 @@ fn sOnceCliIssuePending(
     cwd: []const u8,
     reason: []const u8,
 ) !allow_once_store.PendingIssue {
-    try sOnceCliEnsureOrcaDataDir(xdg_data);
+    try sOnceCliEnsureRykDataDir(xdg_data);
     const pending_path = try sOnceCliPendingPath(xdg_data);
     defer std.testing.allocator.free(pending_path);
     return try allow_once_store.issuePending(

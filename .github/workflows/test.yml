@@ -47,8 +47,10 @@ jobs:
           bash -n scripts/agent-gate.sh
           bash -n scripts/test-slice.sh
           bash -n scripts/ci-local-fast.sh
-          ruby -c packaging/homebrew/Formula/orca.rb
-          python3 -m json.tool packaging/scoop/orca.json >/dev/null
+          bash -n scripts/test-installer-release-contract.sh
+          ruby -c packaging/homebrew/Formula/ryk.rb
+          ruby -e 'require "yaml"; YAML.load_file("packaging/winget/ryk.yaml")'
+          python3 -m json.tool packaging/scoop/ryk.json >/dev/null
           python3 -m json.tool packaging/npm/package.json >/dev/null
           grep -q checksum packaging/docker/Dockerfile
       - name: OS sandbox e2e selftest (fixtures only)
@@ -71,6 +73,9 @@ jobs:
       - name: Release dry-run
         shell: bash
         run: ./scripts/release-dry-run.sh
+      - name: Installer and release contract smoke
+        shell: bash
+        run: ./scripts/test-installer-release-contract.sh
 
   # Dashboard only when UI tree changes (path filter via dorny/paths-filter).
   dashboard:

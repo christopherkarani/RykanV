@@ -32,7 +32,7 @@ def ci_mode(environ: dict[str, str] | None = None) -> bool:
 def stable_rule_key(response: dict[str, Any], tool_name: str, tool_input: Any) -> str:
     """Stable Hermes [a]lways allowlist grain for ryk ask decisions.
 
-    Format: ``orca|{rule}|{tool}|{args_fp}``
+    Format: ``ryk|{rule}|{tool}|{args_fp}``
     """
     rule = response.get("rule_id") or response.get("rule") or "policy"
     rule_s = str(rule).strip() or "policy"
@@ -42,7 +42,7 @@ def stable_rule_key(response: dict[str, Any], tool_name: str, tool_input: Any) -
     except (TypeError, ValueError):
         canonical = str(tool_input)
     fingerprint = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
-    return f"orca{_RULE_KEY_SEP}{rule_s}{_RULE_KEY_SEP}{tool_s}{_RULE_KEY_SEP}{fingerprint}"
+    return f"ryk{_RULE_KEY_SEP}{rule_s}{_RULE_KEY_SEP}{tool_s}{_RULE_KEY_SEP}{fingerprint}"
 
 
 def format_tool_message(response: dict[str, Any], *, default: str = "blocked by ryk") -> str:
@@ -84,7 +84,7 @@ _PROMPT_TEMPLATES: dict[str, str] = {
 
 def map_pre_llm_call(response: dict[str, Any]) -> dict[str, str] | None:
     """Map ryk decision → Hermes pre_llm_call context (advisory only)."""
-    decision = response.get("decision", "allow")
+    decision = response.get("decision")
     template = _PROMPT_TEMPLATES.get(decision) if isinstance(decision, str) else None
     if template is None:
         return None
@@ -108,7 +108,7 @@ def map_pre_tool_call(
     - warn → log advisory + None (not collapsed to block)
     - other → fail-closed block
     """
-    decision = response.get("decision", "allow")
+    decision = response.get("decision")
     if decision == "allow":
         return None
     if decision == "warn":

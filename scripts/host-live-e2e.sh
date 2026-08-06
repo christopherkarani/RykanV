@@ -8,7 +8,7 @@
 # Usage:
 #   ./scripts/host-live-e2e.sh              # all hosts
 #   ./scripts/host-live-e2e.sh codex hermes # subset
-#   RYK_BIN=/path/to/orca ./scripts/host-live-e2e.sh
+#   RYK_BIN=/path/to/ryk ./scripts/host-live-e2e.sh
 #
 # Exit: 0 if no hard failures (skips OK); 1 if any host present failed allow or deny.
 
@@ -22,7 +22,7 @@ if [[ -z "$RYK_BIN" ]]; then
   if [[ -x "$ROOT/zig-out/bin/ryk" ]]; then
     RYK_BIN="$ROOT/zig-out/bin/ryk"
   elif command -v ryk >/dev/null 2>&1; then
-    RYK_BIN="$(command -v orca)"
+    RYK_BIN="$(command -v ryk)"
   fi
 fi
 
@@ -181,7 +181,7 @@ if [[ -z "$RYK_BIN" || ! -x "$RYK_BIN" ]]; then
 fi
 
 log "ryk live host E2E"
-log "  orca: $RYK_BIN"
+log "  ryk: $RYK_BIN"
 log "  note: fixture path via ryk hook/evaluate; host CLI presence gates skip vs run"
 log ""
 

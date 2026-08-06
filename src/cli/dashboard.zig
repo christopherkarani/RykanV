@@ -188,6 +188,7 @@ const Request = struct {
 };
 
 pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
+    if (comptime builtin.os.tag == .windows) return exit_codes.unsupported;
     const options = parseOptions(io, argv, stdout, stderr) catch |err| switch (err) {
         error.HelpShown => return exit_codes.success,
         error.Usage => return exit_codes.usage,
@@ -258,7 +259,7 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
         try stderr.writeAll("ryk dashboard: --workspace and --machine cannot be used together.\n");
         return error.Usage;
     }
-    // Prefer RYK_DASHBOARD_WORKSPACE, fall back to RYK_DASHBOARD_WORKSPACE.
+    // Use the canonical dashboard workspace override when set.
     const environment_workspace = blk: {
         const env_util = @import("../env_util.zig");
         if (env_util.getenvBrand("DASHBOARD_WORKSPACE")) |value| {
@@ -336,7 +337,7 @@ fn resolveDashboardDistDirTrustedFrom(
     for ([_][]const u8{ installed_ui_dir, canonical_ui_dir }) |relative_path| {
         const resolved = resource_root.resolveResourcePath(io, allocator, .{
             // Dashboard code must never be selected from the current workspace.
-            .workspace_root = "/__orca_dashboard_workspace_assets_disabled__",
+            .workspace_root = "/__ryk_dashboard_workspace_assets_disabled__",
             .resource_root_override = resource_root_override,
         }, relative_path) catch continue;
         const index_path = std.fs.path.join(allocator, &.{ resolved, "index.html" }) catch |err| {
@@ -629,8 +630,7 @@ fn parseRequest(bytes: []const u8) !Request {
         .method = method,
         .path = path,
         .body = bytes[body_start .. body_start + content_length],
-        // Dual-read Phase 5a: prefer ryk header, accept legacy ryk header.
-        .csrf_token = headerValue(headers, "x-ryk-dashboard-token") orelse headerValue(headers, "x-ryk-dashboard-token"),
+        .csrf_token = headerValue(headers, "x-ryk-dashboard-token"),
         .host = headerValue(headers, "host"),
         .origin = headerValue(headers, "origin"),
     };

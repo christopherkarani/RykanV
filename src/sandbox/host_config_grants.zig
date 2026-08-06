@@ -1050,7 +1050,7 @@ pub fn pathIsUngrantedHostTmpContent(path: []const u8) bool {
 /// macOS: F_GETPATH. Linux: /proc/self/fd/N. Other: null.
 /// Caller must pass a buffer of at least `std.fs.max_path_bytes` (Darwin F_GETPATH
 /// writes up to PATH_MAX; a short buffer would be a length-blind kernel write).
-pub fn resolveFdPathname(fd: std.posix.fd_t, buf: []u8) ?[]const u8 {
+pub fn resolveFdPathname(io: std.Io, fd: std.posix.fd_t, buf: []u8) ?[]const u8 {
     if (buf.len < std.fs.max_path_bytes) return null;
     switch (builtin.os.tag) {
         .macos, .ios, .tvos, .watchos, .visionos => {
@@ -1064,7 +1064,7 @@ pub fn resolveFdPathname(fd: std.posix.fd_t, buf: []u8) ?[]const u8 {
         .linux => {
             var link_path_buf: [64]u8 = undefined;
             const link_path = std.fmt.bufPrint(&link_path_buf, "/proc/self/fd/{d}", .{fd}) catch return null;
-            const n = std.posix.readlink(link_path, buf) catch return null;
+            const n = std.Io.Dir.readLinkAbsolute(io, link_path, buf) catch return null;
             return buf[0..n];
         },
         else => return null,
@@ -1073,12 +1073,13 @@ pub fn resolveFdPathname(fd: std.posix.fd_t, buf: []u8) ?[]const u8 {
 
 /// True when parent process stdout (1) or stderr (2) path is under ungranted host tmp.
 /// Used for tip selection and pre-spawn warning (shell redirects open FDs before fork).
-pub fn parentStdioHasUngrantedHostTmpRisk() bool {
+pub fn parentStdioHasUngrantedHostTmpRisk(io: std.Io) bool {
+    if (comptime builtin.os.tag != .macos and builtin.os.tag != .linux) return false;
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    if (resolveFdPathname(1, &path_buf)) |path| {
+    if (resolveFdPathname(io, 1, &path_buf)) |path| {
         if (pathIsUngrantedHostTmpContent(path)) return true;
     }
-    if (resolveFdPathname(2, &path_buf)) |path| {
+    if (resolveFdPathname(io, 2, &path_buf)) |path| {
         if (pathIsUngrantedHostTmpContent(path)) return true;
     }
     return false;
@@ -1580,7 +1581,7 @@ test "resolveFdPathname round-trips a /tmp file on supported platforms" {
     defer file.close(io);
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const resolved = resolveFdPathname(file.handle, &buf) orelse return error.SkipZigTest;
+    const resolved = resolveFdPathname(io, file.handle, &buf) orelse return error.SkipZigTest;
     try std.testing.expect(pathIsUngrantedHostTmpContent(resolved));
     // macOS often returns /private/tmp/...; Linux returns /tmp/...
     try std.testing.expect(

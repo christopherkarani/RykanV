@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -21,7 +22,7 @@ def _load_mapping() -> Any:
         import importlib.util
 
         path = Path(__file__).resolve().with_name("mapping.py")
-        spec = importlib.util.spec_from_file_location("orca_hermes_mapping", path)
+        spec = importlib.util.spec_from_file_location("ryk_hermes_mapping", path)
         assert spec and spec.loader
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
@@ -82,13 +83,14 @@ _HERMES_SMOKE_PAYLOAD = json.dumps(
     separators=(",", ":"),
 )
 
-_orca_cache_env: str | None = None
-_orca_cache_path: str | None = None
+_ryk_cache_env: str | None = None
+_ryk_cache_path: str | None = None
 
 
-_FAIL_STANCE_FILENAMES = (".ryk_fail_stance", "RYK_FAIL_STANCE")
+_FAIL_STANCE_FILENAMES = (".ryk_fail_stance",)
 _FAIL_CLOSED_TOKENS = frozenset({"0", "false", "no", "off", "fail-closed", "closed"})
 _FAIL_OPEN_TOKENS = frozenset({"1", "true", "yes", "on", "fail-open", "open"})
+_RYK_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
 
 
 def _parse_fail_open_token(raw: str) -> bool | None:
@@ -124,22 +126,22 @@ def _stance_file_fail_open() -> bool | None:
 
 
 def _fail_open_enabled() -> bool:
-    """Allow Hermes to proceed without ryk when degraded.
+    """Allow Hermes to proceed without ryk only when explicitly configured.
 
-    Precedence: RYK_HERMES_FAIL_OPEN then RYK_HERMES_FAIL_OPEN env (when set) →
-    install stance file → product default fail-open.
+    Precedence: RYK_HERMES_FAIL_OPEN env (when set) → install stance file →
+    fail-closed product default.
     New installs via `ryk plugin install hermes` write `.ryk_fail_stance` = fail-closed.
     """
-    # Dual-read brand env (prefer RYK_ then RYK_) — doctor/formatFix copy matches.
-    if "RYK_HERMES_FAIL_OPEN" in os.environ:  # hard-cut
-        if key in os.environ:
-            value = os.environ.get(key, "").strip().lower()
-            if value:
-                return value not in _FAIL_CLOSED_TOKENS
+    if "RYK_HERMES_FAIL_OPEN" in os.environ:
+        parsed = _parse_fail_open_token(os.environ.get("RYK_HERMES_FAIL_OPEN", ""))
+        if parsed is not None:
+            return parsed
+        # Unknown or empty overrides must not silently opt into fail-open.
+        return False
     stance = _stance_file_fail_open()
     if stance is not None:
         return stance
-    return True
+    return False
 
 
 def _redact(value: Any) -> Any:
@@ -161,14 +163,14 @@ def _error_has_marker(error: BaseException, markers: tuple[str, ...]) -> bool:
     return any(marker in message for marker in markers)
 
 
-def _is_degraded_orca_error(error: BaseException) -> bool:
+def _is_degraded_ryk_error(error: BaseException) -> bool:
     if isinstance(error, OSError):
         return True
     return _error_has_marker(error, _PRE_TOOL_CALL_DEGRADED_MARKERS)
 
 
 def _hook_smoke_passes(stdout: str) -> bool:
-    """Probe: exit 0 and non-empty JSON whose decision is not block.
+    """Probe: exit 0 and non-empty JSON with an explicit usable decision.
 
     Empty stdout is *not* a pass — planted binaries that print nothing must not
     become the policy oracle (F4/F21).
@@ -182,10 +184,13 @@ def _hook_smoke_passes(stdout: str) -> bool:
         return False
     if not isinstance(parsed, dict):
         return False
-    return parsed.get("decision", "allow") != "block"
+    decision = parsed.get("decision")
+    if not isinstance(decision, str) or decision not in {"allow", "warn", "ask", "block"}:
+        return False
+    return decision != "block"
 
 
-def _orca_executable(candidate: str) -> str | None:
+def _ryk_executable(candidate: str) -> str | None:
     try:
         path = Path(candidate).resolve()
     except OSError:
@@ -195,10 +200,52 @@ def _orca_executable(candidate: str) -> str | None:
     return str(path)
 
 
-def _supports_hermes_host(orca: str) -> bool:
+def _is_workspace_candidate(candidate: str) -> bool:
+    if os.environ.get("RYK_ALLOW_WORKSPACE_BIN") == "1":
+        return False
+    try:
+        path = Path(candidate).resolve()
+        workspace = Path.cwd().resolve()
+        path.relative_to(workspace)
+        return True
+    except (OSError, ValueError):
+        pass
+    return "node_modules/.bin" in Path(candidate).as_posix()
+
+
+def _has_ryk_identity(ryk: str) -> bool:
     try:
         completed = subprocess.run(
-            [orca, "hook", "hermes", "pre_tool_call"],
+            [ryk, "version", "--json"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=3,
+            check=False,
+        )
+    except OSError:
+        return False
+    if completed.returncode != 0:
+        return False
+    try:
+        identity = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return False
+    version = identity.get("version") if isinstance(identity, dict) else None
+    return (
+        isinstance(identity, dict)
+        and identity.get("product") == "ryk"
+        and isinstance(version, str)
+        and bool(_RYK_VERSION_RE.fullmatch(version))
+    )
+
+
+def _supports_hermes_host(ryk: str) -> bool:
+    if not _has_ryk_identity(ryk):
+        return False
+    try:
+        completed = subprocess.run(
+            [ryk, "hook", "hermes", "pre_tool_call"],
             input=_HERMES_SMOKE_PAYLOAD,
             text=True,
             stdout=subprocess.PIPE,
@@ -215,41 +262,36 @@ def _supports_hermes_host(orca: str) -> bool:
 
 def _ryk_candidates() -> list[str]:
     trusted: list[str] = []
-    # Phase 5a dual-read: RYK_BIN only.
-    for env_key in ("RYK_BIN",):
-        configured = os.environ.get(env_key)
-        if configured:
-            resolved = _orca_executable(configured)
-            if resolved:
-                trusted.append(resolved)
+    configured = os.environ.get("RYK_BIN")
+    if configured:
+        resolved = _ryk_executable(configured)
+        if resolved:
+            trusted.append(resolved)
 
     # Trusted installs and PATH before cwd zig-out (F10): a planted
     # ./zig-out/bin/ryk must not beat ~/.local/bin or PATH when both exist.
     home = Path.home()
-    for name in ("ryk", "ryk"):
-        for path in (home / ".local" / "bin" / name, home / ".ryk" / "bin" / name, home / ".ryk" / "bin" / name):
-            resolved = _orca_executable(str(path))
-            if resolved:
-                trusted.append(resolved)
+    for path in (home / ".local" / "bin" / "ryk", home / ".ryk" / "bin" / "ryk"):
+        resolved = _ryk_executable(str(path))
+        if resolved:
+            trusted.append(resolved)
 
-    for name in ("ryk", "ryk"):
-        found = shutil.which(name)
-        if found:
-            resolved = _orca_executable(found)
-            if resolved:
-                trusted.append(resolved)
+    found = shutil.which("ryk")
+    if found:
+        resolved = _ryk_executable(found)
+        if resolved:
+            trusted.append(resolved)
 
     # F4: when any trusted candidate exists, never fall through to cwd zig-out
     # (planted binary must not become oracle after trusted smoke fails).
     candidates: list[str] = list(trusted)
-    if not trusted:
+    if not trusted and os.environ.get("RYK_ALLOW_WORKSPACE_BIN") == "1":
         directory = Path.cwd()
         for _ in range(3):
-            for name in ("ryk", "ryk"):
-                zig_out = directory / "zig-out" / "bin" / name
-                resolved = _orca_executable(str(zig_out))
-                if resolved:
-                    candidates.append(resolved)
+            zig_out = directory / "zig-out" / "bin" / "ryk"
+            resolved = _ryk_executable(str(zig_out))
+            if resolved:
+                candidates.append(resolved)
             if directory.parent == directory:
                 break
             directory = directory.parent
@@ -263,18 +305,19 @@ def _ryk_candidates() -> list[str]:
     return deduped
 
 
-def _find_orca() -> str | None:
-    global _orca_cache_env, _orca_cache_path
-    # Cache key tracks both brand env vars.
+def _find_ryk() -> str | None:
+    global _ryk_cache_env, _ryk_cache_path
     env_bin = os.environ.get("RYK_BIN")
-    if _orca_cache_path is not None and _orca_cache_env == env_bin:
-        return _orca_cache_path
+    if _ryk_cache_path is not None and _ryk_cache_env == env_bin:
+        return _ryk_cache_path
 
     for candidate in _ryk_candidates():
+        if _is_workspace_candidate(candidate):
+            continue
         try:
             if _supports_hermes_host(candidate):
-                _orca_cache_env = env_bin
-                _orca_cache_path = candidate
+                _ryk_cache_env = env_bin
+                _ryk_cache_path = candidate
                 return candidate
         except OSError:
             continue
@@ -292,7 +335,7 @@ def _warn_degraded(ctx: Any, event: str, message: str) -> None:
 
 
 def _handle_hook_error(ctx: Any, event: str, exc: BaseException) -> Any:
-    if event == "pre_tool_call" and _is_degraded_orca_error(exc):
+    if event == "pre_tool_call" and _is_degraded_ryk_error(exc):
         if not _fail_open_enabled():
             return {
                 "action": "block",
@@ -374,9 +417,9 @@ def _payload(event: str, data: Any) -> str:
     )
 
 
-def _call_orca(event: str, data: Any) -> dict[str, Any]:
-    ryk = _find_orca()
-    if not orca:
+def _call_ryk(event: str, data: Any) -> dict[str, Any]:
+    ryk = _find_ryk()
+    if not ryk:
         raise RuntimeError(
             "ryk binary not found or too old for Hermes hooks. "
             "Install ryk or set RYK_BIN to an absolute executable path."
@@ -384,7 +427,7 @@ def _call_orca(event: str, data: Any) -> dict[str, Any]:
 
     try:
         completed = subprocess.run(
-            [orca, "hook", "hermes", event],
+            [ryk, "hook", "hermes", event],
             input=_payload(event, data),
             text=True,
             stdout=subprocess.PIPE,
@@ -393,16 +436,22 @@ def _call_orca(event: str, data: Any) -> dict[str, Any]:
             check=False,
         )
     except OSError as exc:
-        raise RuntimeError(f"failed to run ryk at {orca}: {exc}") from exc
+        raise RuntimeError(f"failed to run ryk at {ryk}: {exc}") from exc
     if completed.returncode != 0:
         raise RuntimeError(completed.stderr.strip() or f"ryk exited {completed.returncode}")
     # F21: empty successful stdout is not an allow — fail closed so fail-open stance applies.
     if not completed.stdout.strip():
         raise RuntimeError(
-            f"ryk at {orca} returned empty stdout for hermes {event}; "
+            f"ryk at {ryk} returned empty stdout for hermes {event}; "
             "refusing hard-allow on empty policy response"
         )
-    return json.loads(completed.stdout)
+    response = json.loads(completed.stdout)
+    if not isinstance(response, dict):
+        raise RuntimeError(
+            f"ryk at {ryk} returned a non-object response for hermes {event}; "
+            "refusing to map an ambiguous policy result"
+        )
+    return response
 
 
 def _log_policy_warn(ctx: Any, message: str) -> None:
@@ -439,7 +488,7 @@ def _register(ctx: Any, event: str) -> None:
     def handler(*args: Any, **kwargs: Any) -> Any:
         payload = _event_payload(event, args, kwargs)
         try:
-            response = _call_orca(event, payload)
+            response = _call_ryk(event, payload)
         except (RuntimeError, json.JSONDecodeError, subprocess.SubprocessError, OSError) as exc:
             return _handle_hook_error(ctx, event, exc)
 

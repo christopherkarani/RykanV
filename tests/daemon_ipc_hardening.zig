@@ -10,12 +10,7 @@ const max_response_line_bytes: usize = 1024 * 1024;
 test "sendRequest rejects oversized NDJSON response line" {
     if (builtin.os.tag == .windows) return;
 
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const dir_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
-    defer std.testing.allocator.free(dir_path);
-    const socket_path = try std.fs.path.join(std.testing.allocator, &.{ dir_path, "oversized.sock" });
+    const socket_path = try std.fmt.allocPrint(std.testing.allocator, "/tmp/ryk-ipc-oversized-{d}.sock", .{std.c.getpid()});
     defer std.testing.allocator.free(socket_path);
 
     var server = try mock.MockServer.startOversized(socket_path, max_response_line_bytes + 64);
@@ -34,12 +29,7 @@ test "sendRequest times out when peer never sends newline" {
 
     const timeout_ms: u64 = 200;
 
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const dir_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
-    defer std.testing.allocator.free(dir_path);
-    const socket_path = try std.fs.path.join(std.testing.allocator, &.{ dir_path, "hang.sock" });
+    const socket_path = try std.fmt.allocPrint(std.testing.allocator, "/tmp/ryk-ipc-hang-{d}.sock", .{std.c.getpid()});
     defer std.testing.allocator.free(socket_path);
 
     var server = try mock.MockServer.startHang(socket_path);

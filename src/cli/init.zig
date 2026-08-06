@@ -221,7 +221,7 @@ test "init creates policy and refuses overwrite without force" {
     const code = try command(std.testing.io, tmp.dir, &.{ "--mode", "strict" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, code);
 
-    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(4096));
+    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(16 * 1024));
     defer std.testing.allocator.free(policy);
     try std.testing.expect(std.mem.indexOf(u8, policy, "version: 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, policy, "mode: strict") != null);
@@ -253,7 +253,7 @@ test "init force overwrites existing policy" {
     try std.testing.expectEqual(exit_codes.success, code);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 
-    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(4096));
+    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(16 * 1024));
     defer std.testing.allocator.free(policy);
     try std.testing.expect(std.mem.indexOf(u8, policy, "mode: observe") != null);
 }
@@ -273,7 +273,7 @@ test "init accepts generic-agent preset alias" {
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Packs: baseline only") != null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 
-    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(4096));
+    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(16 * 1024));
     defer std.testing.allocator.free(policy);
     try std.testing.expect(std.mem.indexOf(u8, policy, "version: 1") != null);
 }

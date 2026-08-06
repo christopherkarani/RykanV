@@ -51,7 +51,7 @@ test "zh2 replay verify fails closed on tampered hash chain" {
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
 
-    const session_id = try ryk.demo.createBlockedActionSession(std.testing.io, std.testing.allocator, root);
+    const session_id = try ryk.blocked_action_fixture.createBlockedActionSession(std.testing.io, std.testing.allocator, root);
     defer std.testing.allocator.free(session_id);
 
     const session_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", "sessions", session_id });
@@ -61,7 +61,7 @@ test "zh2 replay verify fails closed on tampered hash chain" {
 
     const original = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, events_path, std.testing.allocator, .limited(64 * 1024));
     defer std.testing.allocator.free(original);
-    const tampered = try std.mem.replaceOwned(u8, std.testing.allocator, original, "demo policy", "tampered policy");
+    const tampered = try std.mem.replaceOwned(u8, std.testing.allocator, original, "fixture-target", "tampered-target");
     defer std.testing.allocator.free(tampered);
     try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = events_path, .data = tampered });
 

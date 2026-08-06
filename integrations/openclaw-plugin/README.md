@@ -162,7 +162,7 @@ ryk replay --session last --verify
 Remove the plugin from your OpenClaw configuration:
 
 ```bash
-openclaw plugins uninstall orca
+openclaw plugins uninstall ryk
 ```
 
 This plugin does not mutate host configuration, so uninstalling is safe.

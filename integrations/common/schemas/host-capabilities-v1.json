@@ -1,17 +1,17 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://orca.local/schemas/host-capabilities-v1.json",
+  "$id": "https://ryk.local/schemas/host-capabilities-v1.json",
   "title": "ryk Host Capabilities v1",
   "description": "Capability report exposed to host plugins so they know what ryk can and cannot enforce.",
   "type": "object",
-  "required": ["version", "orca_version", "decisions", "limitations", "ci_mode"],
+  "required": ["version", "ryk_version", "decisions", "limitations", "ci_mode"],
   "properties": {
     "version": {
       "type": "integer",
       "minimum": 1,
       "maximum": 1
     },
-    "orca_version": {
+    "ryk_version": {
       "type": "string"
     },
     "decisions": {

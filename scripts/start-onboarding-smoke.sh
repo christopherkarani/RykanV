@@ -15,18 +15,18 @@ export HOME="$SMOKE_HOME"
 export RYK_RESOURCE_ROOT="${RYK_RESOURCE_ROOT:-$ROOT}"
 
 "$ROOT/scripts/zig" build
-ORCA="$ROOT/zig-out/bin/ryk"
+RYK_BIN="$ROOT/zig-out/bin/ryk"
 
 echo "== Fresh environment: ryk start (firewall) =="
-"$ORCA" start --auto --protection firewall --skip-verify
+"$RYK_BIN" start --auto --protection firewall --skip-verify
 
 echo "== Idempotent second run =="
-"$ORCA" start --auto --protection firewall --skip-verify
+"$RYK_BIN" start --auto --protection firewall --skip-verify
 
 echo "== doctor =="
-"$ORCA" doctor
+"$RYK_BIN" doctor
 
 echo "== version =="
-"$ORCA" version
+"$RYK_BIN" version
 
 echo "ryk start smoke completed in $SMOKE_HOME"

@@ -80,7 +80,7 @@ OpenCode loads global plugins from `~/.config/opencode/plugins/` when no project
 
 ```bash
 mkdir -p ~/.config/opencode/plugins
-cp integrations/opencode-plugin/orca.ts ~/.config/opencode/plugins/ryk.ts
+cp integrations/opencode-plugin/ryk.ts ~/.config/opencode/plugins/ryk.ts
 ```
 
 ### Manual fallback install

@@ -33,7 +33,7 @@ const ryk_state_dir = ".ryk";
 /// Environment variable override for the daemon binary path.
 const daemon_env_var = "RYK_DAEMON";
 const expected_protocol_version: i64 = 1;
-const expected_protocol_label = "orca-uds-v1";
+const expected_protocol_label = "ryk-uds-v1";
 const required_capabilities = [_][]const u8{ "Ping", "Evaluate", "ExecuteCli", "ExecuteCliCwd", "Shutdown" };
 
 /// Default time to wait for the daemon socket and Ping response after spawn.
@@ -417,7 +417,7 @@ pub fn parseResponse(allocator: std.mem.Allocator, line: []const u8) DaemonError
 /// Search order:
 /// 1. `$RYK_DAEMON` when set and executable
 /// 2. Adjacent to the current `ryk` executable
-/// 3. Repo-relative dev paths under `orca-rs/target/{release,debug}/`
+/// 3. Repo-relative dev paths under `ryk-rs/target/{release,debug}/`
 ///
 /// Returns an allocated path (caller owns memory) or `null` if not found.
 pub fn findDaemonBinary(allocator: std.mem.Allocator) DaemonError!?[]const u8 {
@@ -444,8 +444,8 @@ pub fn findDaemonBinary(allocator: std.mem.Allocator) DaemonError!?[]const u8 {
 
     const repo_root = std.fs.path.dirname(std.fs.path.dirname(self_dir) orelse return null) orelse return null;
     const dev_candidates = [_][]const u8{
-        "orca-rs/target/release/" ++ daemon_binary_name,
-        "orca-rs/target/debug/" ++ daemon_binary_name,
+        "ryk-rs/target/release/" ++ daemon_binary_name,
+        "ryk-rs/target/debug/" ++ daemon_binary_name,
     };
     for (dev_candidates) |rel| {
         const path = std.fs.path.join(allocator, &.{ repo_root, rel }) catch return error.OutOfMemory;
@@ -484,8 +484,8 @@ pub fn inspectDaemonBinary(allocator: std.mem.Allocator) DaemonError!?DaemonBina
 
     const repo_root = std.fs.path.dirname(std.fs.path.dirname(self_dir) orelse return null) orelse return null;
     const dev_candidates = [_]struct { rel: []const u8, source: DaemonBinarySource }{
-        .{ .rel = "orca-rs/target/release/" ++ daemon_binary_name, .source = .dev_release },
-        .{ .rel = "orca-rs/target/debug/" ++ daemon_binary_name, .source = .dev_debug },
+        .{ .rel = "ryk-rs/target/release/" ++ daemon_binary_name, .source = .dev_release },
+        .{ .rel = "ryk-rs/target/debug/" ++ daemon_binary_name, .source = .dev_debug },
     };
     for (dev_candidates) |candidate| {
         const path = std.fs.path.join(allocator, &.{ repo_root, candidate.rel }) catch return error.OutOfMemory;
@@ -874,6 +874,7 @@ fn pollTimeoutMs(timeout_ms: u64) i32 {
 }
 
 fn waitForPoll(fd: std.posix.fd_t, events: i16, timeout_ms: u64) DaemonError!void {
+    if (comptime builtin.os.tag == .windows) return error.SocketReadFailed;
     var fds = [_]std.posix.pollfd{.{
         .fd = fd,
         .events = events,
@@ -892,6 +893,7 @@ const poll_in: i16 = 0x0001;
 const poll_out: i16 = 0x0004;
 
 fn writeAllFdWithTimeout(io: std.Io, fd: std.posix.fd_t, bytes: []const u8, timeout_ms: u64) DaemonError!void {
+    if (comptime builtin.os.tag == .windows) return error.SocketWriteFailed;
     var written: usize = 0;
     const deadline_ms = monotonicNowMs(io) + @as(i64, @intCast(timeout_ms));
 
@@ -909,6 +911,7 @@ fn writeAllFdWithTimeout(io: std.Io, fd: std.posix.fd_t, bytes: []const u8, time
 }
 
 fn readLineFdWithTimeout(io: std.Io, allocator: std.mem.Allocator, fd: std.posix.fd_t, timeout_ms: u64) DaemonError![]u8 {
+    if (comptime builtin.os.tag == .windows) return error.SocketReadFailed;
     var read_buf: std.ArrayList(u8) = .empty;
     errdefer read_buf.deinit(allocator);
 
@@ -938,6 +941,13 @@ pub fn monotonicNowMsForTest(io: std.Io) i64 {
 }
 
 fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) !?[]const u8 {
+    if (comptime builtin.os.tag == .windows) {
+        const environ = std.process.Environ{ .block = .global };
+        return environ.getAlloc(allocator, key) catch |err| switch (err) {
+            error.EnvironmentVariableMissing => null,
+            else => |e| return e,
+        };
+    }
     const c_environ = std.c.environ;
     var env_count: usize = 0;
     while (c_environ[env_count] != null) : (env_count += 1) {}
@@ -964,21 +974,23 @@ fn pathAccessible(io: std.Io, path: []const u8) bool {
     return true;
 }
 
-fn isProcessAlive(pid: std.posix.pid_t) bool {
+fn isProcessAlive(pid: i32) bool {
+    if (comptime builtin.os.tag == .windows) return false;
     if (pid <= 0) return false;
-    std.posix.kill(pid, @enumFromInt(0)) catch |err| switch (err) {
+    std.posix.kill(@intCast(pid), @enumFromInt(0)) catch |err| switch (err) {
         error.ProcessNotFound => return false,
         else => return true,
     };
     return true;
 }
 
-fn readPidFromFile(io: std.Io, allocator: std.mem.Allocator, pid_path: []const u8) DaemonError!?std.posix.pid_t {
+fn readPidFromFile(io: std.Io, allocator: std.mem.Allocator, pid_path: []const u8) DaemonError!?i32 {
+    if (comptime builtin.os.tag == .windows) return null;
     const content = std.Io.Dir.cwd().readFileAlloc(io, pid_path, allocator, .limited(32)) catch return null;
     defer allocator.free(content);
     const trimmed = std.mem.trim(u8, content, " \t\r\n");
     if (trimmed.len == 0) return null;
-    return std.fmt.parseInt(std.posix.pid_t, trimmed, 10) catch null;
+    return std.fmt.parseInt(i32, trimmed, 10) catch null;
 }
 
 fn waitForDaemonArtifactsGone(io: std.Io, paths: RuntimePaths, timeout_ms: u64) DaemonError!void {
@@ -1092,7 +1104,7 @@ test "parseResponse accepts pong payload" {
 
 test "validateHandshakeResult accepts compatible pong payload" {
     const line =
-        "{\"id\":1,\"result\":{\"status\":\"Pong\",\"protocol_version\":1,\"protocol_label\":\"orca-uds-v1\",\"capabilities\":[\"Ping\",\"Evaluate\",\"ExecuteCli\",\"ExecuteCliCwd\",\"Shutdown\"]}}";
+        "{\"id\":1,\"result\":{\"status\":\"Pong\",\"protocol_version\":1,\"protocol_label\":\"ryk-uds-v1\",\"capabilities\":[\"Ping\",\"Evaluate\",\"ExecuteCli\",\"ExecuteCliCwd\",\"Shutdown\"]}}";
     var parsed = try parseResponse(std.testing.allocator, line);
     defer parsed.deinit();
     try validateHandshakeResult(parsed.value.result);
@@ -1107,7 +1119,7 @@ test "validateHandshakeResult rejects missing handshake fields" {
 
 test "validateHandshakeResult rejects malformed handshake fields" {
     const line =
-        "{\"id\":1,\"result\":{\"status\":\"Pong\",\"protocol_version\":\"1\",\"protocol_label\":\"orca-uds-v1\",\"capabilities\":[\"Ping\"]}}";
+        "{\"id\":1,\"result\":{\"status\":\"Pong\",\"protocol_version\":\"1\",\"protocol_label\":\"ryk-uds-v1\",\"capabilities\":[\"Ping\"]}}";
     var parsed = try parseResponse(std.testing.allocator, line);
     defer parsed.deinit();
     try std.testing.expectError(error.HandshakeMalformed, validateHandshakeResult(parsed.value.result));
@@ -1115,7 +1127,7 @@ test "validateHandshakeResult rejects malformed handshake fields" {
 
 test "validateHandshakeResult rejects protocol mismatch" {
     const line =
-        "{\"id\":1,\"result\":{\"status\":\"Pong\",\"protocol_version\":99,\"protocol_label\":\"orca-uds-v99\",\"capabilities\":[\"Ping\",\"Evaluate\",\"ExecuteCli\",\"Shutdown\"]}}";
+        "{\"id\":1,\"result\":{\"status\":\"Pong\",\"protocol_version\":99,\"protocol_label\":\"ryk-uds-v99\",\"capabilities\":[\"Ping\",\"Evaluate\",\"ExecuteCli\",\"Shutdown\"]}}";
     var parsed = try parseResponse(std.testing.allocator, line);
     defer parsed.deinit();
     try std.testing.expectError(error.ProtocolMismatch, validateHandshakeResult(parsed.value.result));

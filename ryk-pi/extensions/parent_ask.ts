@@ -23,7 +23,7 @@ export const DECISION_CUSTOM_TYPE = "rykanv-decision";
 /** Widget dock key. */
 export const BLOCK_WIDGET_KEY = "rykanv-block";
 
-/** Select labels (policy + protocol). Keep short; mapSelectLabelToChoice accepts aliases. */
+/** Canonical select labels (policy + protocol). */
 export const LABEL_ALLOW_ONCE = "Allow once";
 export const LABEL_DENY = "Deny";
 export const LABEL_DISABLE_SESSION = "Disable Rykan V for this session";
@@ -383,23 +383,15 @@ export function mapSelectLabelToChoice(
 ): ParentAskChoice {
 	switch (label) {
 		case LABEL_ALLOW_ONCE:
-		case "Run once anyway": // legacy
 			return "run_once";
 		case LABEL_DISABLE_SESSION:
-		case "Disable ryk for this Pi session": // legacy
 		case LABEL_PROTOCOL_SESSION_ALLOW:
-		case "Allow for this session":
 			return "disable_session";
 		case LABEL_SHOW_WHY:
-		case "Show policy reason":
-		case "Show repair instructions / run doctor":
 			return "show_reason";
 		case SESSION_GRANT_OPTION:
-		case "Allow this tool for this Pi session": // legacy
 			return "allow_session_tool";
 		case LABEL_DENY:
-		case "Block":
-		case "Block remaining protocol errors":
 		default:
 			return "block";
 	}
@@ -422,7 +414,7 @@ export function buildAutoDenyCopy(
 	const summary = `${PRODUCT_NAME}: needs approval but this session can't prompt (${sessionClass}). ${cleaned}`;
 	const nextStep =
 		sessionClass === "subagent"
-			? "Approve in the parent Pi session, allowlist the tool in .orca/policy.yaml mcp.allow, or re-run on main."
+			? "Approve in the parent Pi session, allowlist the tool in .ryk/policy.yaml mcp.allow, or re-run on main."
 			: "Re-run in interactive Pi, or pre-allow the tool in policy.";
 	const rule = opts?.rule ?? "rykanv:ask-no-ui";
 	// Keep "auto-denied" token for audit/search; product voice is in summary.

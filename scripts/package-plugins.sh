@@ -3,7 +3,20 @@ set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VERSION="${RYK_PLUGIN_VERSION:-${RYK_VERSION:-$(tr -d '[:space:]' < "${REPO_ROOT}/VERSION" 2>/dev/null || printf '1.2.0')}}"
+if [ -n "${RYK_PLUGIN_VERSION:-}" ]; then
+  VERSION="$RYK_PLUGIN_VERSION"
+elif [ -n "${RYK_VERSION:-}" ]; then
+  VERSION="$RYK_VERSION"
+else
+  VERSION="$(tr -d '[:space:]' < "${REPO_ROOT}/VERSION" 2>/dev/null)" || {
+    printf 'package-plugins: VERSION is required (set RYK_PLUGIN_VERSION/RYK_VERSION or provide VERSION)\n' >&2
+    exit 1
+  }
+fi
+[ -n "$VERSION" ] || {
+  printf 'package-plugins: VERSION is empty\n' >&2
+  exit 1
+}
 DIST_DIR="${RYK_DIST_DIR:-dist/plugins}"
 case "${DIST_DIR}" in
   /*) DIST_DIR_ABS="${DIST_DIR}" ;;
@@ -67,8 +80,12 @@ OPENCODE_PLUGIN_DIR="${REPO_ROOT}/integrations/opencode-plugin"
 OPENCODE_ZIP="${DIST_DIR_ABS}/ryk-opencode-plugin-v${VERSION}.zip"
 
 if [ -d "${OPENCODE_PLUGIN_DIR}" ]; then
+  [ -f "${OPENCODE_PLUGIN_DIR}/ryk.ts" ] || {
+    echo "ERROR: canonical OpenCode plugin source not found: ${OPENCODE_PLUGIN_DIR}/ryk.ts" >&2
+    exit 1
+  }
   (cd "${OPENCODE_PLUGIN_DIR}" && zip -qr "${OPENCODE_ZIP}" \
-    orca.ts \
+    ryk.ts \
     README.md \
     package.json \
     examples/ \

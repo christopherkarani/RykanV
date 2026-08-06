@@ -25,6 +25,8 @@ fn addPcre2Shim(
         .file = b.path("src/shell_engine/pcre2_shim.c"),
         .flags = &.{ "-std=c99", "-DPCRE2_STATIC" },
     });
+    mod.addCSourceFile(.{ .file = b.path("src/shell_engine/windows_acl.c"), .flags = &.{} });
+    if (target.result.os.tag == .windows) mod.linkSystemLibrary("advapi32", .{});
 }
 
 fn addRunTestTerminal(b: *std.Build, exe: *std.Build.Step.Compile) *std.Build.Step.Run {

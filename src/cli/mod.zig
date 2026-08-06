@@ -356,7 +356,7 @@ fn runWithCwdUsing(
     defer if (global_args.owned) allocator.free(global_args.argv);
     const argv = global_args.argv;
     const no_rich_env = tui.output_policy.envDisablesRich(
-        environ_map.get("RYK_NO_RICH") orelse environ_map.get("RYK_NO_RICH"),
+        environ_map.get("RYK_NO_RICH"),
     );
     const machine_output = if (argv.len == 0) false else !shouldShowBanner(argv[0], argv) and
         (isMachineArgv(argv) or isAlwaysMachineCommand(argv[0]) or isRawGeneratedInvocation(argv[0], argv));
@@ -2037,7 +2037,7 @@ test "init dispatch creates policy in provided working directory" {
     const code = try testRunWithCwd(tmp.dir, &.{ "init", "--mode", "strict" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, code);
 
-    const policy_text = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(4096));
+    const policy_text = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(16 * 1024));
     defer std.testing.allocator.free(policy_text);
     try std.testing.expect(std.mem.indexOf(u8, policy_text, "mode: strict") != null);
 }

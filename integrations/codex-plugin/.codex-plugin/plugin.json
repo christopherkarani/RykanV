@@ -1,7 +1,7 @@
 {
     "name": "ryk",
     "version": "1.2.9",
-    "description": "ryk safety hooks and skills for Codex (legacy plugin id retained for host registry compatibility).",
+    "description": "ryk safety hooks and skills for Codex.",
     "author": {
         "name": "ryk"
     },
@@ -21,7 +21,7 @@
     "interface": {
         "displayName": "ryk",
         "shortDescription": "Runtime firewall helpers for Codex.",
-        "longDescription": "Run ryk doctor, policy checks, red-team fixtures, replay, and hook-based safety checks from Codex. Hooks prefer ryk on PATH and retain a legacy binary fallback.",
+        "longDescription": "Run ryk doctor, policy checks, red-team fixtures, replay, and hook-based safety checks from Codex. Hooks use canonical ryk installation paths and fail closed when unavailable.",
         "developerName": "ryk"
     }
 }

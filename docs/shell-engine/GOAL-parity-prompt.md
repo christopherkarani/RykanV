@@ -1,4 +1,4 @@
-# /goal — Zig shell_engine 100% Rust parity
+# /goal — Zig shell_engine 100% parity
 
 Paste the block below into a coding agent as `/goal` (or as the standing
 session objective). The agent must keep working until the Done criteria are
@@ -6,7 +6,7 @@ met — not stop at MVP.
 
 **Reference oracle (temporary local repo):**
 `/Users/chriskarani/CodingProjects/ryk-rs-parity-ref`  
-(tag `baseline-eec9446f702d`, frozen from ryk `main` `orca-rs/**`)
+(tag `baseline-eec9446f702d`, frozen from the historical ryk `main` Rust oracle tree)
 
 **Backlog:** `docs/shell-engine/rust-parity-backlog.md`
 
@@ -15,7 +15,7 @@ met — not stop at MVP.
 ## Goal prompt (copy from here)
 
 ```text
-/goal Achieve 100% Zig shell_engine parity with the frozen Rust orca-rs command guard.
+/goal Achieve 100% Zig shell_engine parity with the frozen Rust command-guard oracle.
 
 ## Mission
 Port and harden ryk’s in-process Zig `src/shell_engine/` until it has:
@@ -25,7 +25,7 @@ Port and harden ryk’s in-process Zig `src/shell_engine/` until it has:
 Do not stop at the current MVP (~6 partial packs, ~47 corpus lines, ≥95% match). The goal is complete only when Done criteria below are all true.
 
 ## Workspaces
-- **Product (edit here):** `/Users/chriskarani/CodingProjects/orca`
+- **Product (edit here):** `/Users/chriskarani/CodingProjects/ryk`
 - **Oracle (read-only reference):** `/Users/chriskarani/CodingProjects/ryk-rs-parity-ref`
   - Packs: `src/packs/**`
   - Corpora: `tests/corpus/**`
@@ -93,5 +93,5 @@ Until then: keep implementing.
 
 1. Start the agent in the **ryk** product repo, not only the oracle.
 2. Keep `/Users/chriskarani/CodingProjects/ryk-rs-parity-ref` around until Done; it is the frozen oracle.
-3. There may also be a looser copy at `CodingProjects/ryk-rs` (no git) and an untracked leftover `orca/ryk-rs/` with build `target/` — **prefer the parity-ref repo** as canonical.
+3. Ignore any untracked or loose oracle copies; **prefer the parity-ref repo** as canonical.
 4. Pair with `/loop` if you want periodic progress checks, e.g. `/loop 30m continue the shell_engine parity goal; report packs done/85 and corpus %`.

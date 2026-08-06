@@ -91,16 +91,16 @@ pub fn writeManaged(
     defer allocator.free(ryk_dir);
 
     // Refuse parent `.ryk` symlink escape (component must not be a link).
-    if (try pathIsSymlink(allocator, ryk_dir)) return error.ManagedPathIsSymlink;
+    if (try pathIsSymlink(io, ryk_dir)) return error.ManagedPathIsSymlink;
     try std.Io.Dir.cwd().createDirPath(io, ryk_dir);
     // Re-check after create: race / pre-existing link.
-    if (try pathIsSymlink(allocator, ryk_dir)) return error.ManagedPathIsSymlink;
+    if (try pathIsSymlink(io, ryk_dir)) return error.ManagedPathIsSymlink;
 
     const path = try managedPath(allocator, workspace_root);
     defer allocator.free(path);
 
     // Refuse writing through a leaf symlink (integrity: product path must not be a link).
-    if (try pathIsSymlink(allocator, path)) return error.ManagedPathIsSymlink;
+    if (try pathIsSymlink(io, path)) return error.ManagedPathIsSymlink;
 
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(allocator);
@@ -127,14 +127,14 @@ pub fn writeManaged(
     }
 
     // Atomic same-directory temp write + rename (mirrors allowlist_store).
-    const pid = std.c.getpid();
-    const nonce = std.Io.Clock.Timestamp.now(io, .awake).raw.nanoseconds;
-    const temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp.{d}.{d}", .{ path, pid, nonce });
+    var nonce: u64 = undefined;
+    io.random(std.mem.asBytes(&nonce));
+    const temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp.{x}", .{ path, nonce });
     defer allocator.free(temp_path);
-    errdefer std.Io.Dir.cwd().deleteFile(io, temp_path) catch {};
 
+    const file = try std.Io.Dir.createFileAbsolute(io, temp_path, .{ .exclusive = true });
+    errdefer std.Io.Dir.cwd().deleteFile(io, temp_path) catch {};
     {
-        const file = try std.Io.Dir.createFileAbsolute(io, temp_path, .{ .exclusive = true });
         defer file.close(io);
         try file.writeStreamingAll(io, buf.items);
         try file.sync(io);
@@ -155,8 +155,8 @@ pub fn loadManaged(
     // Soft-empty on parent `.ryk` or leaf symlink (write refuses both; load must not follow).
     const ryk_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk" });
     defer allocator.free(ryk_dir);
-    if (try pathIsSymlink(allocator, ryk_dir)) return emptyStore();
-    if (try pathIsSymlink(allocator, path)) return emptyStore();
+    if ((pathIsSymlink(io, ryk_dir) catch return emptyStore())) return emptyStore();
+    if ((pathIsSymlink(io, path) catch return emptyStore())) return emptyStore();
 
     const text = std.Io.Dir.cwd().readFileAlloc(
         io,
@@ -366,15 +366,12 @@ fn isSafeSourceTag(src: []const u8) bool {
     return true;
 }
 
-fn pathIsSymlink(allocator: std.mem.Allocator, path: []const u8) !bool {
-    const path_z = try allocator.dupeZ(u8, path);
-    defer allocator.free(path_z);
+fn pathIsSymlink(io: std.Io, path: []const u8) !bool {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const n = std.c.readlink(path_z.ptr, &buf, buf.len);
-    if (n < 0) {
-        // EINVAL / not a symlink, ENOENT, etc. → treat as non-symlink.
-        return false;
-    }
+    _ = std.Io.Dir.cwd().readLink(io, path, &buf) catch |err| switch (err) {
+        error.FileNotFound, error.NotLink, error.NotDir => return false,
+        else => return err,
+    };
     return true;
 }
 

@@ -659,6 +659,7 @@ const Decoder = struct {
 };
 
 fn readKey(tty: anytype, decoder: *Decoder) !vaxis.Key {
+    if (comptime builtin.os.tag == .windows) return vaxis.Key{ .codepoint = 'q' };
     // libvaxis `Tty.read` maps VMIN=0/VTIME idle to EndOfStream; read the fd
     // directly so idle ticks do not quit the browse loop (live_view pattern).
     var buf: [256]u8 = undefined;

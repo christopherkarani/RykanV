@@ -13,6 +13,7 @@
 //! Re-exported via `shell_engine` and covered by `test-shell-engine`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 // ---------------------------------------------------------------------------
 // Types & constants
@@ -1474,7 +1475,10 @@ fn writeFile(runtime_io: std.Io, gpa: std.mem.Allocator, path: []const u8, body:
     {
         var file = try std.Io.Dir.cwd().createFile(runtime_io, tmp_path, .{
             .exclusive = true,
-            .permissions = std.Io.File.Permissions.fromMode(0o600),
+            .permissions = if (comptime builtin.os.tag == .windows)
+                .default_file
+            else
+                std.Io.File.Permissions.fromMode(0o600),
         });
         errdefer {
             file.close(runtime_io);

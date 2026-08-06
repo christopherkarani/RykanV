@@ -83,7 +83,7 @@ fn envFlagTruthy(name: [*:0]const u8) bool {
 
 /// Resolve mode for bare agent-hook (no loaded policy YAML).
 ///
-/// Floor is **strict**. `RYK_MODE`/`RYK_MODE` may only *raise* strictness (strict →
+/// Floor is **strict**. `RYK_MODE` may only *raise* strictness (strict →
 /// redteam/ci). Soft modes from env (`observe`/`ask`/`trusted`) are ignored
 /// unless the operator explicitly sets `RYK_ALLOW_MODE_SOFTEN`/`RYK_ALLOW_MODE_SOFTEN=1`, so a
 /// hostile process env cannot silently downgrade bare Cursor/agent hooks.

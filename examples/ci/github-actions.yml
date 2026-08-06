@@ -4,7 +4,7 @@ on:
   pull_request:
 
 jobs:
-  orca:
+  ryk:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -13,11 +13,11 @@ jobs:
       - name: Test
         run: zig build test
       - name: Red-team
-        run: ./zig-out/bin/ryk redteam --ci --json > orca-redteam.json
+        run: ./zig-out/bin/ryk redteam --ci --json > ryk-redteam.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: ryk-artifacts
           path: |
             .ryk/**
-            orca-redteam.json
+            ryk-redteam.json

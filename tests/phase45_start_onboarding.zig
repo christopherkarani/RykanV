@@ -76,7 +76,7 @@ test "phase45 maximum protection verifies shell path with mock evaluator" {
     try std.testing.expect(outcome.passed());
 }
 
-test "phase45 daemon missing blocks command guard onboarding" {
+test "phase45 command guard onboarding is in-process and does not require a daemon" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -88,6 +88,7 @@ test "phase45 daemon missing blocks command guard onboarding" {
     const flags = onboarding.StartFlags{
         .auto = true,
         .protection = .command_guard,
+        .hosts_csv = "",
         .skip_verify = true,
     };
 
@@ -106,8 +107,8 @@ test "phase45 daemon missing blocks command guard onboarding" {
         failing_checker,
         null,
     );
-    try std.testing.expectEqual(exit_codes.general, code);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "unavailable") != null);
+    try std.testing.expectEqual(exit_codes.success, code);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Zig shell_engine ready (in-process)") != null);
 }
 
 test "phase45 allow-only mock fails verification gate" {

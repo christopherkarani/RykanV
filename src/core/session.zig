@@ -28,7 +28,7 @@ pub const Session = struct {
     platform: platform.Os,
 };
 
-pub fn generateSessionId(now: time.Timestamp) errors.OrcaError!SessionId {
+pub fn generateSessionId(now: time.Timestamp) errors.RykError!SessionId {
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();
     var id: SessionId = .{
@@ -36,10 +36,10 @@ pub fn generateSessionId(now: time.Timestamp) errors.OrcaError!SessionId {
         .len = 0,
     };
     var timestamp_buf: [32]u8 = undefined;
-    const timestamp = now.formatFilenameSafe(&timestamp_buf) catch return errors.OrcaError.SessionCreateFailed;
+    const timestamp = now.formatFilenameSafe(&timestamp_buf) catch return errors.RykError.SessionCreateFailed;
     var suffix_buf: [4]u8 = undefined;
-    const suffix = util.randomHexSuffix(io, &suffix_buf) catch return errors.OrcaError.SessionCreateFailed;
-    const written = std.fmt.bufPrint(&id.value, "{s}_{s}", .{ timestamp, suffix }) catch return errors.OrcaError.SessionCreateFailed;
+    const suffix = util.randomHexSuffix(io, &suffix_buf) catch return errors.RykError.SessionCreateFailed;
+    const written = std.fmt.bufPrint(&id.value, "{s}_{s}", .{ timestamp, suffix }) catch return errors.RykError.SessionCreateFailed;
     id.len = written.len;
     return id;
 }

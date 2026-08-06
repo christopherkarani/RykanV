@@ -127,11 +127,11 @@ fn daemonBinaryAvailable() bool {
     if (std.c.getenv("RYK_DAEMON")) |path| {
         return fileExists(std.mem.span(path));
     }
-    // Primary product path + historical orca-rs layout probes (crate removed; still functional if present).
+    // Primary product path + historical ryk-rs layout probes (crate removed; still functional if present).
     const candidates = [_][]const u8{
         "./zig-out/bin/ryk-daemon",
-        "orca-rs/target/release/ryk-daemon",
-        "orca-rs/target/debug/ryk-daemon",
+        "ryk-rs/target/release/ryk-daemon",
+        "ryk-rs/target/debug/ryk-daemon",
     };
     for (candidates) |candidate| {
         if (fileExists(candidate)) return true;
@@ -146,12 +146,13 @@ fn readFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 fn readPipeToAlloc(io: std.Io, allocator: std.mem.Allocator, file: std.Io.File, limit: usize) ![]u8 {
     var list: std.ArrayList(u8) = .empty;
     errdefer list.deinit(allocator);
-    var buf: [4096]u8 = undefined;
-    var reader = file.reader(io, &buf);
+    var reader_buf: [4096]u8 = undefined;
+    var chunk: [4096]u8 = undefined;
+    var reader = file.reader(io, &reader_buf);
     while (list.items.len < limit) {
-        const n = reader.interface.readSliceShort(buf[0..@min(buf.len, limit - list.items.len)]) catch break;
+        const n = reader.interface.readSliceShort(chunk[0..@min(chunk.len, limit - list.items.len)]) catch break;
         if (n == 0) break;
-        try list.appendSlice(allocator, buf[0..n]);
+        try list.appendSlice(allocator, chunk[0..n]);
     }
     return try list.toOwnedSlice(allocator);
 }
@@ -364,35 +365,7 @@ test "phase2f non-shell events stay on zig path without requiring daemon" {
     }
 }
 
-/// Run every primary shell host fixture under `env_map` and assert block + a required reason needle.
-/// Codex host contract: exit code 2, empty stdout, reason on stderr (not JSON).
-fn expectShellHostsBlockWithReason(
-    allocator: std.mem.Allocator,
-    env_map: *const std.process.Environ.Map,
-    reason_needle: []const u8,
-) !void {
-    for (shell_host_cases) |host_case| {
-        const fixture = try readFile(allocator, host_case.safe_fixture);
-        defer allocator.free(fixture);
-
-        const result = try runRyk(allocator, &.{ ryk_bin, "hook", host_case.host, host_case.event }, fixture, env_map);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-
-        try expectHookDecision(allocator, host_case.host, "block", result);
-        if (std.mem.eql(u8, host_case.host, "codex")) {
-            // Host contract beyond generic block: codex deny is exit 2 with no JSON stdout.
-            try std.testing.expectEqual(codex_deny_exit_code, result.code);
-            try std.testing.expectEqual(@as(usize, 0), result.stdout.len);
-            try std.testing.expect(result.stderr.len > 0);
-        }
-        const combined = try std.fmt.allocPrint(allocator, "{s}{s}", .{ result.stdout, result.stderr });
-        defer allocator.free(combined);
-        try std.testing.expect(std.mem.indexOf(u8, combined, reason_needle) != null);
-    }
-}
-
-test "phase2f shell hooks fail closed when daemon cannot start" {
+test "phase2f shell hooks use Zig evaluation despite removed daemon overrides" {
     if (!fileExists(ryk_bin)) return;
     try requireFakeDaemonFixture();
 
@@ -401,21 +374,26 @@ test "phase2f shell hooks fail closed when daemon cannot start" {
     defer allocator.free(isolated.home);
     defer isolated.env_map.deinit();
 
-    // Spawn/start failure maps through daemonUnavailableReason ("daemon unavailable: …").
-    try expectShellHostsBlockWithReason(allocator, &isolated.env_map, "daemon unavailable");
-}
+    for (shell_host_cases) |host_case| {
+        const safe_fixture = try readFile(allocator, host_case.safe_fixture);
+        defer allocator.free(safe_fixture);
+        const safe_result = try runRyk(allocator, &.{ ryk_bin, "hook", host_case.host, host_case.event }, safe_fixture, &isolated.env_map);
+        defer allocator.free(safe_result.stdout);
+        defer allocator.free(safe_result.stderr);
+        try expectHookDecision(allocator, host_case.host, "allow", safe_result);
 
-test "phase2f shell hooks fail closed on protocol mismatch" {
-    if (!fileExists(ryk_bin)) return;
-    try requireMismatchDaemonFixture();
+        const dangerous_fixture = try readFile(allocator, host_case.dangerous_fixture);
+        defer allocator.free(dangerous_fixture);
+        const dangerous_result = try runRyk(allocator, &.{ ryk_bin, "hook", host_case.host, host_case.event }, dangerous_fixture, &isolated.env_map);
+        defer allocator.free(dangerous_result.stdout);
+        defer allocator.free(dangerous_result.stderr);
+        try expectHookDecision(allocator, host_case.host, "block", dangerous_result);
 
-    const allocator = std.testing.allocator;
-    var isolated = try makeIsolatedMismatchEnv(allocator);
-    defer allocator.free(isolated.home);
-    defer isolated.env_map.deinit();
-
-    // Protocol mismatch must surface the canonical reason fragment, not a generic block.
-    try expectShellHostsBlockWithReason(allocator, &isolated.env_map, "incompatible daemon protocol");
+        const combined = try std.fmt.allocPrint(allocator, "{s}{s}", .{ dangerous_result.stdout, dangerous_result.stderr });
+        defer allocator.free(combined);
+        try std.testing.expect(std.mem.indexOf(u8, combined, "daemon unavailable") == null);
+        try std.testing.expect(std.mem.indexOf(u8, combined, "incompatible daemon protocol") == null);
+    }
 }
 
 test "phase2f version still works when daemon is unavailable" {
@@ -448,10 +426,10 @@ test "phase2f doctor degrades gracefully when daemon is unavailable" {
 
     try std.testing.expectEqual(exit_codes.success, result.code);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "daemon unavailable") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Rebuild both binaries with `./scripts/build-all.sh`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Rebuild both binaries with `./scripts/build-all.sh`") == null);
 }
 
-test "phase2f run denies shell commands when daemon is unavailable" {
+test "phase2f run denies dangerous shell commands without a daemon" {
     if (!fileExists(ryk_bin)) return;
 
     const allocator = std.testing.allocator;
@@ -459,13 +437,13 @@ test "phase2f run denies shell commands when daemon is unavailable" {
     defer allocator.free(isolated.home);
     defer isolated.env_map.deinit();
 
-    const result = try runRyk(allocator, &.{ ryk_bin, "run", "--workspace", ".", "--", "git", "status" }, "", &isolated.env_map);
+    const result = try runRyk(allocator, &.{ ryk_bin, "run", "--workspace", ".", "--", "rm", "-rf", "/" }, "", &isolated.env_map);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
     try std.testing.expect(result.code != exit_codes.success);
     try std.testing.expect(
-        std.mem.indexOf(u8, result.stderr, "daemon unavailable") != null or
+        std.mem.indexOf(u8, result.stderr, "RYKAN-V-GUARD") != null or
             std.mem.indexOf(u8, result.stderr, "command denied") != null or
             std.mem.indexOf(u8, result.stderr, "ryk blocked") != null,
     );

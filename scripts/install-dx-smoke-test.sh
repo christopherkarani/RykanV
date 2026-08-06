@@ -44,7 +44,7 @@ trap cleanup EXIT INT TERM
 RESOURCE_ROOT="${TMP_HOME}/.local/share/ryk/${VERSION}"
 BIN_DIR="${TMP_HOME}/.local/bin"
 mkdir -p "${RESOURCE_ROOT}" "${BIN_DIR}"
-ln -sf "${RYK_BIN}" "${BIN_DIR}/orca"
+ln -sf "${RYK_BIN}" "${BIN_DIR}/ryk"
 
 for dir in integrations fixtures schemas policies; do
   cp -R "${REPO_ROOT}/${dir}" "${RESOURCE_ROOT}/"

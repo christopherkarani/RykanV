@@ -67,7 +67,7 @@ if [[ -x "${RYK_BIN}" ]]; then
         log_fail "ryk redteam --ci"
     fi
 else
-    log_fail "orca binary not found at ${RYK_BIN}"
+    log_fail "ryk binary not found at ${RYK_BIN}"
 fi
 echo ""
 

@@ -5,7 +5,7 @@ $ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $scriptDir "..")
-$defaultVersion = "1.2.0"
+$defaultVersion = "1.2.9"
 if (Test-Path -LiteralPath (Join-Path $repoRoot "VERSION")) {
     $defaultVersion = (Get-Content -LiteralPath (Join-Path $repoRoot "VERSION") -TotalCount 1).Trim()
 }
@@ -78,7 +78,7 @@ Package-Plugin -PluginDir $CODEX_PLUGIN_DIR -ZipPath $CODEX_ZIP -IncludeFiles @(
 
 # Package Claude Code plugin
 $CLAUDE_PLUGIN_DIR = Join-Path $REPO_ROOT "integrations/claude-code-plugin"
-$CLAUDE_ZIP = Join-Path $DIST_DIR "orca-claude-code-plugin-v${VERSION}.zip"
+$CLAUDE_ZIP = Join-Path $DIST_DIR "ryk-claude-code-plugin-v${VERSION}.zip"
 Package-Plugin -PluginDir $CLAUDE_PLUGIN_DIR -ZipPath $CLAUDE_ZIP -IncludeFiles @(
   ".claude-plugin/plugin.json",
   "skills",
@@ -90,8 +90,11 @@ Package-Plugin -PluginDir $CLAUDE_PLUGIN_DIR -ZipPath $CLAUDE_ZIP -IncludeFiles 
 $OPENCODE_PLUGIN_DIR = Join-Path $REPO_ROOT "integrations/opencode-plugin"
 $OPENCODE_ZIP = Join-Path $DIST_DIR "ryk-opencode-plugin-v${VERSION}.zip"
 if (Test-Path $OPENCODE_PLUGIN_DIR) {
+  if (-not (Test-Path (Join-Path $OPENCODE_PLUGIN_DIR "ryk.ts"))) {
+    throw "Canonical OpenCode plugin source not found: $OPENCODE_PLUGIN_DIR\ryk.ts"
+  }
   Package-Plugin -PluginDir $OPENCODE_PLUGIN_DIR -ZipPath $OPENCODE_ZIP -IncludeFiles @(
-    "orca.ts",
+    "ryk.ts",
     "README.md",
     "package.json",
     "examples"
@@ -102,7 +105,7 @@ if (Test-Path $OPENCODE_PLUGIN_DIR) {
 
 # Package Claude marketplace catalog
 $MARKETPLACE_DIR = Join-Path $REPO_ROOT "integrations/claude-marketplace"
-$MARKETPLACE_ZIP = Join-Path $DIST_DIR "orca-claude-marketplace-v${VERSION}.zip"
+$MARKETPLACE_ZIP = Join-Path $DIST_DIR "ryk-claude-marketplace-v${VERSION}.zip"
 if (Test-Path $MARKETPLACE_DIR) {
   Package-Plugin -PluginDir $MARKETPLACE_DIR -ZipPath $MARKETPLACE_ZIP -IncludeFiles @(
     ".claude-plugin/marketplace.json",
@@ -149,7 +152,7 @@ foreach ($file in Get-ChildItem -Path $DIST_DIR -Filter "*.zip") {
 
 # Scan file contents for secret patterns
 foreach ($file in Get-ChildItem -Path $DIST_DIR -Filter "*.zip") {
-  $tmpDir = Join-Path $env:TEMP "orca-scan-$(Get-Random)"
+  $tmpDir = Join-Path $env:TEMP "ryk-scan-$(Get-Random)"
   New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
   try {
     Expand-Archive -Path $file.FullName -DestinationPath $tmpDir -Force

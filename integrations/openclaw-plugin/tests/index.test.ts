@@ -1,7 +1,8 @@
 import { describe, it, mock } from 'node:test';
 import assert from 'node:assert';
-import orcaPlugin, {
-  findOrca,
+import { readFile } from 'node:fs/promises';
+import rykPlugin, {
+  findRyk,
   isOnNoop,
   normalizeOpenClawToolEvent,
   parseHookResponse,
@@ -9,7 +10,7 @@ import orcaPlugin, {
 } from '../src/index.ts';
 
 // Minimal mock API factory
-function makeApi(overrides: Partial<Parameters<typeof orcaPlugin>[0]> = {}) {
+function makeApi(overrides: Partial<Parameters<typeof rykPlugin>[0]> = {}) {
   const logger = {
     debug: mock.fn(),
     info: mock.fn(),
@@ -29,17 +30,17 @@ function makeApi(overrides: Partial<Parameters<typeof orcaPlugin>[0]> = {}) {
   };
 }
 
-describe('findOrca', () => {
+describe('findRyk', () => {
   it('rejects relative RYK_BIN paths (agent-plantable)', () => {
     const prevBin = process.env.RYK_BIN;
     const prevAllow = process.env.RYK_ALLOW_WORKSPACE_BIN;
     delete process.env.RYK_ALLOW_WORKSPACE_BIN;
     try {
       process.env.RYK_BIN = './zig-out/bin/ryk';
-      assert.strictEqual(findOrca(process.cwd()), null);
+      assert.strictEqual(findRyk(process.cwd()), null);
 
       process.env.RYK_BIN = 'evil/ryk';
-      assert.strictEqual(findOrca(process.cwd()), null);
+      assert.strictEqual(findRyk(process.cwd()), null);
     } finally {
       if (prevBin === undefined) delete process.env.RYK_BIN;
       else process.env.RYK_BIN = prevBin;
@@ -48,11 +49,11 @@ describe('findOrca', () => {
     }
   });
 
-  it('accepts absolute RYK_BIN when the path exists', () => {
+  it('rejects an existing non-ryk absolute RYK_BIN', () => {
     const prevBin = process.env.RYK_BIN;
     try {
       process.env.RYK_BIN = process.execPath;
-      assert.strictEqual(findOrca(), process.execPath);
+      assert.strictEqual(findRyk(), null);
     } finally {
       if (prevBin === undefined) delete process.env.RYK_BIN;
       else process.env.RYK_BIN = prevBin;
@@ -63,11 +64,19 @@ describe('findOrca', () => {
     const prevBin = process.env.RYK_BIN;
     try {
       process.env.RYK_BIN = '/tmp/ryk-definitely-missing-deadbeef';
-      assert.strictEqual(findOrca(), null);
+      assert.strictEqual(findRyk(), null);
     } finally {
       if (prevBin === undefined) delete process.env.RYK_BIN;
       else process.env.RYK_BIN = prevBin;
     }
+  });
+
+  it('publishes the canonical OpenClaw plugin id', async () => {
+    const manifest = JSON.parse(
+      await readFile(new URL('../openclaw.plugin.json', import.meta.url), 'utf8')
+    );
+    assert.strictEqual(manifest.id, 'ryk');
+    assert.strictEqual(manifest.name, 'ryk');
   });
 });
 
@@ -102,31 +111,31 @@ describe('parseHookResponse (fail-closed blocking path)', () => {
   it('empty stdout on blocking path → block', () => {
     const r = parseHookResponse('', true);
     assert.strictEqual(r.decision, 'block');
-    assert.strictEqual(r.reason, 'orca_empty_response');
+    assert.strictEqual(r.reason, 'ryk_empty_response');
   });
 
   it('whitespace-only stdout on blocking path → block', () => {
     const r = parseHookResponse('   \n\t  ', true);
     assert.strictEqual(r.decision, 'block');
-    assert.strictEqual(r.reason, 'orca_empty_response');
+    assert.strictEqual(r.reason, 'ryk_empty_response');
   });
 
   it('malformed JSON on blocking path → block', () => {
     const r = parseHookResponse('{not-json', true);
     assert.strictEqual(r.decision, 'block');
-    assert.strictEqual(r.reason, 'orca_parse_error');
+    assert.strictEqual(r.reason, 'ryk_parse_error');
   });
 
   it('missing decision on blocking path → block', () => {
     const r = parseHookResponse(JSON.stringify({ version: 1 }), true);
     assert.strictEqual(r.decision, 'block');
-    assert.strictEqual(r.reason, 'orca_missing_decision');
+    assert.strictEqual(r.reason, 'ryk_missing_decision');
   });
 
   it('non-string decision on blocking path → block', () => {
     const r = parseHookResponse(JSON.stringify({ decision: 42 }), true);
     assert.strictEqual(r.decision, 'block');
-    assert.strictEqual(r.reason, 'orca_missing_decision');
+    assert.strictEqual(r.reason, 'ryk_missing_decision');
   });
 
   it('ask decision on blocking path → block', () => {
@@ -135,7 +144,7 @@ describe('parseHookResponse (fail-closed blocking path)', () => {
       true
     );
     assert.strictEqual(r.decision, 'block');
-    assert.strictEqual(r.reason, 'orca_ask_unsupported');
+    assert.strictEqual(r.reason, 'ryk_ask_unsupported');
   });
 
   it('unrecognized decision on blocking path → block', () => {
@@ -144,7 +153,7 @@ describe('parseHookResponse (fail-closed blocking path)', () => {
       true
     );
     assert.strictEqual(r.decision, 'block');
-    assert.strictEqual(r.reason, 'orca_unrecognized_decision');
+    assert.strictEqual(r.reason, 'ryk_unrecognized_decision');
   });
 
   it('allow decision passes through', () => {
@@ -183,12 +192,12 @@ describe('normalizeOpenClawToolEvent', () => {
   });
 });
 
-describe('orcaPlugin', () => {
+describe('rykPlugin', () => {
   it('warns about unprotected noop api.on for npm installs', () => {
     const api = makeApi({
       source: '/path/to/node_modules/ryk-openclaw-plugin',
     });
-    orcaPlugin(api);
+    rykPlugin(api);
 
     const warnCalls = (api.logger.warn as any).mock.calls;
     const noopWarning = warnCalls.find(
@@ -212,7 +221,7 @@ describe('orcaPlugin', () => {
     const api = makeApi({
       source: '/Applications/OpenClaw.app/Contents/Plugins/ryk',
     });
-    orcaPlugin(api);
+    rykPlugin(api);
 
     const warnCalls = (api.logger.warn as any).mock.calls;
     const noopWarning = warnCalls.find(
@@ -229,7 +238,7 @@ describe('orcaPlugin', () => {
     delete process.env.RYK_BIN;
     delete process.env.RYK_ALLOW_WORKSPACE_BIN;
     // Force PATH miss by using a name that won't exist if which is used...
-    // findOrca uses which orca; in CI ryk may exist. Prefer RYK_BIN pointing at missing path.
+    // findRyk uses only the canonical ryk binary name. Prefer RYK_BIN pointing at a missing path.
     process.env.RYK_BIN = '/tmp/ryk-definitely-missing-deadbeef';
 
     try {
@@ -237,7 +246,7 @@ describe('orcaPlugin', () => {
       const api = makeApi({
         source: '/Applications/OpenClaw.app/Contents/Plugins/ryk',
       });
-      orcaPlugin(api);
+      rykPlugin(api);
 
       const onCalls = (api.on as any).mock.calls;
       const events = onCalls.map((c: any) => c.arguments[0]);
@@ -272,7 +281,7 @@ describe('orcaPlugin', () => {
       const api = makeApi({
         source: '/path/to/node_modules/ryk-openclaw-plugin',
       });
-      orcaPlugin(api);
+      rykPlugin(api);
 
       const onCalls = (api.on as any).mock.calls;
       assert.strictEqual(
@@ -304,7 +313,7 @@ describe('orcaPlugin', () => {
     const prevBin = process.env.RYK_BIN;
     process.env.RYK_BIN = process.execPath; // any existing absolute path
     try {
-      orcaPlugin(api);
+      rykPlugin(api);
       const onCalls = (api.on as any).mock.calls;
       assert.strictEqual(
         onCalls.length,

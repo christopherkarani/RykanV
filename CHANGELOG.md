@@ -38,48 +38,48 @@
 ## Unreleased
 
 ### Breaking
-- **Brand hard cut — Rykan V / `ryk` only (no Orca dual-compat).**
-  - **Product:** full name **Rykan V**; CLI **`ryk`** only (no `orca` binary alias).
-  - **Environment:** `RYK_*` only (no `RYK_*` dual-read/write).
-  - **Paths:** workspace `.ryk/`, config `~/.config/ryk/`, resources `share/ryk/` (no `.ryk` / `share/orca`).
-  - **Zig modules:** `ryk`, `ryk_core`, `ryk_cli` (was `orca*`).
-  - **npm scope:** `@rykan/ryk`, `@rykan/pi-ryk` (was `@orca-sec/*`).
-  - **Audit actor kind:** `"ryk"` (was `"ryk"`).
-  - **Dirs:** `ryk-pi/`, `ryk-dashboard-ui/` (was `orca-pi/`, `orca-dashboard-ui/`).
-  - Historical CHANGELOG / denylist tokens may still mention Orca/Aegis as past brands or attack surface.
-  - **Codex guard emit:** still `[[ORCA-GUARD]]`; dual-read `[[RYK-GUARD]]` if present.
-  - **Share install path:** still `~/.local/share/orca` (path migrate deferred to 5b).
+- **Brand hard cut — Rykan V / `ryk` only (no legacy-brand compatibility).**
+  - **Product:** full name **Rykan V**; CLI **`ryk`** only (no retired binary aliases).
+  - **Environment:** `RYK_*` only (no legacy-brand dual-read/write).
+  - **Paths:** workspace `.ryk/`, config `~/.config/ryk/`, resources `share/ryk/`.
+  - **Zig modules:** `ryk`, `ryk_core`, `ryk_cli`.
+  - **npm scope:** `@rykan/ryk`, `@rykan/pi-ryk`.
+  - **Audit actor kind:** `"ryk"`.
+  - **Dirs:** `ryk-pi/`, `ryk-dashboard-ui/`.
+  - Historical changelog and denylist tokens remain only where they document past brands or attack surface.
+  - **Codex guard emit:** `[[RYKAN-V-GUARD]]` only.
+  - **Share install path:** `~/.local/share/ryk`.
   - **Git remote / Zig package graph:** unchanged (`build.zig.zon` `.name = .ryk` stays).
 
 ### Changed
-- **Full Zig shell evaluator (MVP)** — `orca hook` / `orca run` / shims evaluate shell commands in-process via `src/shell_engine` by default (`RYK_SHELL_EVAL=zig`). Daemon-down no longer gates shell PreToolUse. `orca test` / `orca explain` are Zig-native. Former Rust ExecuteCli surfaces (`scan`, `simulate`, `packs`, `history`, allowlist mutators, …) stub until ported. The `orca-rs` crate is removed from the tree.
+- **Full Zig shell evaluator (MVP)** — `ryk hook` / `ryk run` / shims evaluate shell commands in-process via `src/shell_engine` by default (`RYK_SHELL_EVAL=zig`). Daemon-down no longer gates shell PreToolUse. `ryk test` / `ryk explain` are Zig-native. Former Rust ExecuteCli surfaces (`scan`, `simulate`, `packs`, `history`, allowlist mutators, …) stub until ported. The Rust daemon crate is removed from the tree.
 - **Product language cut (Safe Launch)** — public day-1 path is now:
-  - `orca start` → `orca <agent>` → `orca status` → `orca replay` (+ `orca stop` off-ramp)
-  - Default help shows only public verbs; full surface via `orca help --all`
-  - Public onboarding peers **`orca quickstart`** and **`orca setup`** are hard-removed (use `orca start`; logic retained as library for internal composition)
-  - `orca start` auto-selects **Ask on risk** (no public `--protection` grade menu)
-  - Human `orca status` is traffic light **Protected | Limited | Off** plus one mediation caveat
-  - Bare `orca replay` loads the last session; denials visually dominant; empty state teaches Safe Launch
+  - `ryk start` → `ryk <agent>` → `ryk status` → `ryk replay` (+ `ryk stop` off-ramp)
+  - Default help shows only public verbs; full surface via `ryk help --all`
+  - Public onboarding peers **`ryk quickstart`** and **`ryk setup`** are hard-removed (use `ryk start`; logic retained as library for internal composition)
+  - `ryk start` auto-selects **Ask on risk** (no public `--protection` grade menu)
+  - Human `ryk status` is traffic light **Protected | Limited | Off** plus one mediation caveat
+  - Bare `ryk replay` loads the last session; denials visually dominant; empty state teaches Safe Launch
   - Interactive deny offers **Once / Always / Never** (prompt-native; CLI allow/allow-once remain advanced fallback)
-  - Host aliases (`orca claude`, `orca codex`, …) are the taught launch path; `orca run` is the engine / advanced escape hatch
+  - Host aliases (`ryk claude`, `ryk codex`, …) are the taught launch path; `ryk run` is the engine / advanced escape hatch
   - Docs/README/quickstart/CLI reference rewritten for the cut; stop next-step points to `orca start`
 
 ### Added
 - **Phase D residual classifier** — optional `effects.classifier: local` (alias `local-embed`) runs pure-Zig prototype/token similarity on tools that catalog/structural/packs leave under-classified. Default **off**. Raise-only; matchers `classifier.local.*`; fail-closed in strict/ci/redteam when enabled but unavailable. No cloud classification; no new deps.
 - **Effect-class policy** (`effects:`) classifies host/MCP tool names into semantic effects (`comms.message`, `comms.publish`, `money.transfer`, …) so users can deny messaging/social tools without listing every name.
-- Built-in tool-name catalog and `orca policy explain tool <name>`.
+- Built-in tool-name catalog and `ryk policy explain tool <name>`.
 - Preset `no-external-comms` for strict-local plus external-comms effect denials.
-- Host `PreToolUse` generic tools, `orca decide tool`, and MCP `tools/call` enforce effect rules when `effects:` is configured (deny beats MCP allow).
+- Host `PreToolUse` generic tools, `ryk decide tool`, and MCP `tools/call` enforce effect rules when `effects:` is configured (deny beats MCP allow).
 - `effects.default` applies to unclassified tool names (catalog misses), matching surface-default semantics.
 - **Phase B structural classification** — tools renamed as `notify`/`helper` still match effects from argument key sets (e.g. `{to, body}`) and bounded value shapes; reasons use `structural.*` matcher ids (no secret values).
 - **Network effect tags** — when `effects:` is active, curated hosts (e.g. `api.twitter.com` → `comms.publish`) merge into network evaluation (`network_tag.*` matchers).
 - **Shell bypass (Zig command path)** — `open mailto:…` (and optional curl-to-tagged-host) merges effects on Zig command evaluation (`shell_bypass.*`); host shell PreToolUse uses Zig `shell_engine` MVP packs (documented residual gap vs full effect-class parity).
-- `orca policy explain tool <name> --args '<json-object>'` for structural demos (size-bounded).
-- **Phase C discovery** — `orca mcp inspect` prints inferred effects per tool; `orca tools classify <name> [--args] [--policy]` for interactive classification (no secret values in output).
+- `ryk policy explain tool <name> --args '<json-object>'` for structural demos (size-bounded).
+- **Phase C discovery** — `ryk mcp inspect` prints inferred effects per tool; `ryk tools classify <name> [--args] [--policy]` for interactive classification (no secret values in output).
 - **User effect packs** — YAML in `.ryk/effect-packs/` and `~/.config/ryk/effect-packs/` add names/tokens/structural key-sets (`pack.<id>.*` matchers). Classification-only; decisions still require policy `effects:`. Invalid packs fail closed. Example: `examples/effect-packs/demo.yaml`.
 
 ### Fixed
-- Network effect tags now apply on the **runtime proxy** path (`network_eval.evaluate` / `orca run`), not only `policy explain network`.
+- Network effect tags now apply on the **runtime proxy** path (`network_eval.evaluate` / `ryk run`), not only `policy explain network`.
 - Shell bypass: `open -a`/`-b` option values are skipped; multi-URL `curl` scans every operand; `open`/`curl` require command position (avoids `printf … open mailto:` false positives).
 - Shell bypass: wrappers with options (`sudo -u root curl …`, `env -i open …`, `xargs curl …`), escaped operators (`foo\;`), non-transfer curl values (`--referer`), and lookup-only `command -v`/`-V` are handled correctly.
 - Structural arg scan prefers interesting keys/values against decoy padding (including large objects and string-value slot exhaustion); `href`/`uri` share interesting priority with other URL keys; eviction allocates before free (OOM-safe).

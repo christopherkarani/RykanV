@@ -52,11 +52,11 @@ fn daemonBinaryAvailable() bool {
     if (std.c.getenv("RYK_DAEMON")) |path| {
         return fileExists(std.mem.span(path));
     }
-    // Primary product path + historical orca-rs layout probes (crate removed; still functional if present).
+    // Primary product path + historical ryk-rs layout probes (crate removed; still functional if present).
     const candidates = [_][]const u8{
         "./zig-out/bin/ryk-daemon",
-        "orca-rs/target/release/ryk-daemon",
-        "orca-rs/target/debug/ryk-daemon",
+        "ryk-rs/target/release/ryk-daemon",
+        "ryk-rs/target/debug/ryk-daemon",
     };
     for (candidates) |candidate| {
         if (fileExists(candidate)) return true;

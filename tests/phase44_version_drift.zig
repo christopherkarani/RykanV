@@ -30,8 +30,7 @@ test "phase 44 VERSION matches install script defaults" {
     try expectContains(install_sh, "../VERSION");
     try expectContains(install_sh, "RYK_RESOURCE_ROOT");
     try expectContains(install_sh, "integrations");
-    try expectContains(install_sh, "CLI-only");
-    try expectContains(install_sh, "shell_engine");
+    try expectContains(install_sh, "doctor --fix --from-install");
 
     const build_release = try readFile("scripts/build-release.sh");
     defer std.testing.allocator.free(build_release);
@@ -59,7 +58,7 @@ test "phase 44 VERSION matches install script defaults" {
     try expectContains(homebrew, version_needle);
     try expectContains(homebrew, "bin.install \"bin/ryk\"");
     try std.testing.expect(std.mem.indexOf(u8, homebrew, "bin.install \"bin/ryk-daemon\"") == null);
-    try expectContains(homebrew, "pkgshare.install \"ryk-dashboard-ui\"");
+    try expectContains(homebrew, "(share/\"ryk/current\").install \"ryk-dashboard-ui\"");
 
     const npm_launcher = try readFile("packaging/npm/bin/ryk.js");
     defer std.testing.allocator.free(npm_launcher);
@@ -69,8 +68,8 @@ test "phase 44 VERSION matches install script defaults" {
     const dockerfile = try readFile("packaging/docker/Dockerfile");
     defer std.testing.allocator.free(dockerfile);
     try expectContains(dockerfile, "COPY ryk /opt/ryk");
-    try expectContains(dockerfile, "RYK_RESOURCE_ROOT=\"/opt/orca\"");
-    try expectContains(dockerfile, "USER orca");
+    try expectContains(dockerfile, "RYK_RESOURCE_ROOT=\"/opt/ryk\"");
+    try expectContains(dockerfile, "USER ryk");
     try expectContains(dockerfile, "test ! -e /opt/ryk/bin/ryk-daemon");
 }
 

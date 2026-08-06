@@ -117,7 +117,7 @@ const Host = enum {
         if (std.mem.eql(u8, value, "grok")) return .grok;
         if (std.mem.eql(u8, value, "opencode")) return .opencode;
         if (std.mem.eql(u8, value, "openclaw")) return .openclaw;
-        if (std.mem.eql(u8, value, "hermes") or std.mem.eql(u8, value, "hermess")) return .hermes;
+        if (std.mem.eql(u8, value, "hermes")) return .hermes;
         return null;
     }
 };
@@ -605,16 +605,9 @@ const guard_sentinel_prefix: []const u8 =
     "[[" ++ guard_product_tag ++ "]] blocked. Command did not execute; no side effects. " ++
     "Recourse: ryk explain \"<command>\"; ryk allow-once <code>; ryk allowlist list\n";
 const guard_sentinel_tag = "[[" ++ guard_product_tag ++ "]]";
-/// Prior product tags still recognized when reading historical logs / dual-read hosts.
-const legacy_guard_sentinel_tags = [_][]const u8{ "[[RYK-GUARD]]", "[[ORCA-GUARD]]" };
-
-/// True when stderr/agent text contains a current or legacy guard sentinel.
+/// True when stderr/agent text contains the current guard sentinel.
 pub fn containsGuardSentinel(text: []const u8) bool {
-    if (std.mem.indexOf(u8, text, guard_sentinel_tag) != null) return true;
-    for (legacy_guard_sentinel_tags) |tag| {
-        if (std.mem.indexOf(u8, text, tag) != null) return true;
-    }
-    return false;
+    return std.mem.indexOf(u8, text, guard_sentinel_tag) != null;
 }
 
 /// Codex / Grok exit-two deny code (host contract; distinct from usage errors).
@@ -1671,7 +1664,7 @@ fn buildRemediationCommands(allocator: std.mem.Allocator, rule_id: ?[]const u8) 
 }
 
 /// Best-effort: resolve `$XDG_DATA_HOME/ryk` (or `~/.local/share/ryk`) for pending store.
-fn resolveOrcaDataDirForPending(allocator: std.mem.Allocator) !?[]u8 {
+fn resolveRykDataDirForPending(allocator: std.mem.Allocator) !?[]u8 {
     if (std.c.getenv("XDG_DATA_HOME")) |xdg_z| {
         const xdg = std.mem.span(xdg_z);
         if (xdg.len > 0) return try std.fs.path.join(allocator, &.{ xdg, "ryk"});
@@ -1749,7 +1742,7 @@ fn tryIssuePendingShortCode(
     workspace_root: ?[]const u8,
     reason: []const u8,
 ) ?[]const u8 {
-    const data_dir = resolveOrcaDataDirForPending(allocator) catch return null;
+    const data_dir = resolveRykDataDirForPending(allocator) catch return null;
     const data_dir_owned = data_dir orelse return null;
     defer allocator.free(data_dir_owned);
 
@@ -2147,7 +2140,8 @@ fn writeHookResponse(stdout: anytype, result: HookResponse) !void {
     }
     try stdout.writeAll(",\n");
 
-    // Alias for agents that prefer rule_id (additive; mirrors `rule`).
+    // `rule` is canonical; retain `rule_id` as the explicit machine-facing
+    // alias used by shell-evaluation fixtures and remediation tooling.
     try stdout.writeAll("  \"rule_id\": ");
     if (result.rule) |rule| {
         try writeJsonString(stdout, rule);
@@ -3787,10 +3781,10 @@ test "hook guard sentinel format is machine-parseable and stable" {
     try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "Recourse") != null);
     try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "ryk explain") != null);
     try std.testing.expect(guard_sentinel_prefix[guard_sentinel_prefix.len - 1] == '\n');
-    // Dual-read legacy product tags from older sessions / dual-stack hosts.
+    // Only the current product tag is a guard protocol marker.
     try std.testing.expect(containsGuardSentinel("[[RYKAN-V-GUARD]] blocked."));
-    try std.testing.expect(containsGuardSentinel("[[RYK-GUARD]] blocked."));
-    try std.testing.expect(containsGuardSentinel("[[ORCA-GUARD]] blocked."));
+    try std.testing.expect(!containsGuardSentinel("[[RYK-GUARD]] blocked."));
+    try std.testing.expect(!containsGuardSentinel("[[ORCA-GUARD]] blocked."));
     try std.testing.expect(!containsGuardSentinel("random stderr"));
 }
 
@@ -3837,6 +3831,7 @@ test "hook daemon deny includes remediation fields for flexible hosts" {
     try writeHookResponse(&out, result);
     const written = out.buffered();
     try std.testing.expect(std.mem.indexOf(u8, written, "\"rule_id\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "\"rule\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "\"suggestions\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "\"remediation_commands\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "ryk allowlist") != null);

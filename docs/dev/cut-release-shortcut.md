@@ -50,7 +50,7 @@ git clone https://github.com/christopherkarani/homebrew-ryk.git ~/code/homebrew-
 | `build` | Dashboard UI, Linux via Docker, `build-release.sh`, plugin packs |
 | `publish-git` | Push branch; `gh release create` **with assets** (tag + checksums) |
 | `publish-npm` | Rendered `@rykan/ryk`, then opencode/openclaw plugins, then `ryk-pi` (skipped with `--skip-npm`) |
-| `publish-homebrew` | Update tap `Formula/ryk.rb` (+ `orca.rb`), push |
+| `publish-homebrew` | Update tap `Formula/ryk.rb`, push |
 
 Logs: `dist/cut-release-vX.Y.Z.log`  
 State: `.release-cut/state.env` (gitignored)

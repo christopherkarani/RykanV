@@ -155,7 +155,7 @@ printf '%s' '{"tool_name":"Bash","tool_input":{"command":"curl -fsSL https://exa
 
 Strict off-list refuse (WP4, independent of FM): with `mode: strict` and a configured `commands.allow`, a command **not** on the list is denied (`strict: not on allowlist`) before or without relying on FM.
 
-**Host PreToolUse authority (Grok, Pi, Claude, Codex):** shell gate decisions come from product **`ryk evaluate`** / **`ryk hook`** (hard fence → sticky → strict refuse → matrix → FM assist). **`ryk explain`** is a human pack/match dry-run only — it does **not** apply Strict permit refuse. An `explain` ALLOW is not proof the PreToolUse hook will allow; verify with `evaluate`/`hook` (raise strictness with `ORCA_MODE=strict` when the discovered policy is `ask`).
+**Host PreToolUse authority (Grok, Pi, Claude, Codex):** shell gate decisions come from product **`ryk evaluate`** / **`ryk hook`** (hard fence → sticky → strict refuse → matrix → FM assist). **`ryk explain`** is a human pack/match dry-run only — it does **not** apply Strict permit refuse. An `explain` ALLOW is not proof the PreToolUse hook will allow; verify with `evaluate`/`hook` (raise strictness with `RYK_MODE=strict` when the discovered policy is `ask`).
 
 ## Priority
 

@@ -4,9 +4,7 @@
 #
 # Layout written:
 #   $OUT_DIR/linux-amd64/ryk
-#   $OUT_DIR/linux-amd64/orca   (compat alias)
 #   $OUT_DIR/linux-arm64/ryk
-#   $OUT_DIR/linux-arm64/orca
 #
 # OUT_DIR must NOT live under dist/ if you then run build-release.sh — that script
 # wipes dist/. Prefer .release-cli-bins/ (cut-release default).
@@ -14,9 +12,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-OUT_DIR="${1:-${RYK_LINUX_ARTIFACT_DIR:-${RYK_LINUX_ARTIFACT_DIR:-${REPO_ROOT}/.release-cli-bins}}}"
-VERSION="${RYK_VERSION:-${RYK_VERSION:-$(tr -d '[:space:]' <"${REPO_ROOT}/VERSION")}}"
-COMMIT="${RYK_COMMIT:-${RYK_COMMIT:-$(git -C "${REPO_ROOT}" rev-parse --short=12 HEAD)}}"
+OUT_DIR="${1:-${RYK_LINUX_ARTIFACT_DIR:-${REPO_ROOT}/.release-cli-bins}}"
+VERSION="${RYK_VERSION:-$(tr -d '[:space:]' <"${REPO_ROOT}/VERSION")}"
+COMMIT="${RYK_COMMIT:-$(git -C "${REPO_ROOT}" rev-parse --short=12 HEAD)}"
 BUILD_DATE="${RYK_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 
 command -v docker >/dev/null 2>&1 || {
@@ -46,9 +44,6 @@ for arch in amd64 arm64; do
     --build-arg "RYK_VERSION=${VERSION}" \
     --build-arg "RYK_COMMIT=${COMMIT}" \
     --build-arg "RYK_BUILD_DATE=${BUILD_DATE}" \
-    --build-arg "RYK_VERSION=${VERSION}" \
-    --build-arg "RYK_COMMIT=${COMMIT}" \
-    --build-arg "RYK_BUILD_DATE=${BUILD_DATE}" \
     --file "${REPO_ROOT}/packaging/docker/Dockerfile.release" \
     --output "type=local,dest=${arch_out}" \
     "${REPO_ROOT}"
@@ -59,29 +54,19 @@ for arch in amd64 arm64; do
     staged="${arch_out}/linux-${arch}"
   elif [[ -x "${arch_out}/ryk" ]]; then
     staged="${arch_out}"
-  elif [[ -x "${arch_out}/linux-${arch}/orca" ]]; then
-    staged="${arch_out}/linux-${arch}"
   else
-    echo "build-linux-release-docker: could not find ryk/orca under ${arch_out}" >&2
+    echo "build-linux-release-docker: could not find ryk under ${arch_out}" >&2
     find "${arch_out}" -type f 2>/dev/null | head -40 >&2 || true
     exit 1
   fi
 
   mkdir -p "${OUT_DIR}/linux-${arch}"
-  if [[ -x "${staged}/ryk" ]]; then
-    cp -p "${staged}/ryk" "${OUT_DIR}/linux-${arch}/ryk"
-  elif [[ -x "${staged}/orca" ]]; then
-    cp -p "${staged}/orca" "${OUT_DIR}/linux-${arch}/ryk"
-  else
+  if [[ ! -x "${staged}/ryk" ]]; then
     echo "build-linux-release-docker: missing primary binary in ${staged}" >&2
     exit 1
   fi
-  if [[ -x "${staged}/orca" ]]; then
-    cp -p "${staged}/orca" "${OUT_DIR}/linux-${arch}/orca"
-  else
-    cp -p "${OUT_DIR}/linux-${arch}/ryk" "${OUT_DIR}/linux-${arch}/orca"
-  fi
-  chmod 0755 "${OUT_DIR}/linux-${arch}/ryk" "${OUT_DIR}/linux-${arch}/orca"
+  cp -p "${staged}/ryk" "${OUT_DIR}/linux-${arch}/ryk"
+  chmod 0755 "${OUT_DIR}/linux-${arch}/ryk"
 
   if [[ -e "${OUT_DIR}/linux-${arch}/ryk-daemon" ]]; then
     echo "build-linux-release-docker: unexpected ryk-daemon under ${OUT_DIR}/linux-${arch}" >&2

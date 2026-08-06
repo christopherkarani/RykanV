@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import importlib.util
+import contextlib
+import io
 import json
 import os
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -20,25 +24,110 @@ _SPEC.loader.exec_module(_PLUGIN)
 
 class HermesPluginDiscoveryTests(unittest.TestCase):
     def setUp(self) -> None:
-        _PLUGIN._orca_cache_env = None
-        _PLUGIN._orca_cache_path = None
+        _PLUGIN._ryk_cache_env = None
+        _PLUGIN._ryk_cache_path = None
 
-    def test_fail_open_defaults_on(self) -> None:
+    def test_fail_open_requires_explicit_configuration(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("RYK_HERMES_FAIL_OPEN", None)
-            os.environ.pop("RYK_HERMES_FAIL_OPEN", None)
             with mock.patch.object(_PLUGIN, "_stance_file_fail_open", return_value=None):
-                self.assertTrue(_PLUGIN._fail_open_enabled())
+                self.assertFalse(_PLUGIN._fail_open_enabled())
         with mock.patch.dict(os.environ, {"RYK_HERMES_FAIL_OPEN": "0"}):
             self.assertFalse(_PLUGIN._fail_open_enabled())
-        # Dual-read: RYK_ preferred brand key also closes fail-open.
-        with mock.patch.dict(os.environ, {"RYK_HERMES_FAIL_OPEN": "0"}, clear=False):
-            os.environ.pop("RYK_HERMES_FAIL_OPEN", None)
+        with mock.patch.dict(os.environ, {"RYK_HERMES_FAIL_OPEN": "typo"}):
             self.assertFalse(_PLUGIN._fail_open_enabled())
+
+    def test_registered_pre_tool_call_fail_closes_without_mocked_policy_call(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with contextlib.chdir(directory), mock.patch.dict(
+                os.environ,
+                {"RYK_BIN": str(Path(directory) / "missing-ryk"), "HOME": directory, "PATH": directory},
+                clear=True,
+            ):
+                ctx = mock.Mock()
+                _PLUGIN._register(ctx, "pre_tool_call")
+                handler = ctx.register_hook.call_args.args[1]
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = handler(tool_name="terminal", args={"command": "git status"})
+
+        self.assertEqual(result.get("action"), "block")
+        self.assertNotIn("FAIL-OPEN", output.getvalue())
+
+    def test_registered_pre_tool_call_invokes_actual_ryk_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "ryk"
+            log = Path(directory) / "invocations.log"
+            binary.write_text(
+                "#!/bin/sh\n"
+                "if [ \"$1\" = version ]; then printf '%s\\n' '{\"product\":\"ryk\",\"version\":\"1.2.9\"}'; exit 0; fi\n"
+                "payload=$(/bin/cat)\n"
+                "printf '%s\\n' \"$*\" >> \"$RYK_HERMES_TEST_LOG\"\n"
+                "printf '%s\\n' \"$payload\" >> \"$RYK_HERMES_TEST_LOG\"\n"
+                "printf '%s\\n' '{\"decision\":\"allow\"}'\n",
+                encoding="utf-8",
+            )
+            binary.chmod(0o700)
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "RYK_BIN": str(binary),
+                    "RYK_HERMES_TEST_LOG": str(log),
+                    "HOME": directory,
+                    "PATH": directory,
+                    "RYK_ALLOW_WORKSPACE_BIN": "1",
+                },
+                clear=True,
+            ):
+                ctx = mock.Mock()
+                _PLUGIN._register(ctx, "pre_tool_call")
+                handler = ctx.register_hook.call_args.args[1]
+                result = handler(tool_name="terminal", args={"command": "git status"})
+
+            invocations = log.read_text(encoding="utf-8").splitlines()
+
+        self.assertIsNone(result)
+        self.assertEqual(invocations[0], "hook hermes pre_tool_call")
+        self.assertEqual(invocations[2], "hook hermes pre_tool_call")
+        self.assertTrue(all('"host":"hermes"' in payload for payload in (invocations[1], invocations[3])))
+        self.assertTrue(all('"event":"pre_tool_call"' in payload for payload in (invocations[1], invocations[3])))
+
+    def test_identity_probe_rejects_non_ryk_binary(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=["binary", "version", "--json"],
+            returncode=0,
+            stdout='{"product":"not-ryk","version":"1.2.9"}\n',
+            stderr="",
+        )
+        with mock.patch.object(_PLUGIN.subprocess, "run", return_value=completed):
+            self.assertFalse(_PLUGIN._has_ryk_identity("/tmp/binary"))
+
+    def test_workspace_fallback_requires_explicit_opt_in(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "zig-out" / "bin" / "ryk"
+            candidate.parent.mkdir(parents=True)
+            candidate.write_text("#!/bin/sh\n", encoding="utf-8")
+            candidate.chmod(0o700)
+            with contextlib.chdir(directory), mock.patch.dict(
+                os.environ, {"HOME": directory, "PATH": ""}, clear=True
+            ):
+                self.assertEqual(_PLUGIN._ryk_candidates(), [])
+
+    def test_call_ryk_rejects_non_object_success_response(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=["ryk", "hook", "hermes", "pre_tool_call"],
+            returncode=0,
+            stdout="[]\n",
+            stderr="",
+        )
+        with mock.patch.object(_PLUGIN, "_find_ryk", return_value="/tmp/ryk"), mock.patch.object(
+            _PLUGIN.subprocess, "run", return_value=completed
+        ):
+            with self.assertRaisesRegex(RuntimeError, "non-object response"):
+                _PLUGIN._call_ryk("pre_tool_call", {"tool_name": "terminal"})
 
     def test_fail_open_stance_file_fail_closed_for_new_installs(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("RYK_HERMES_FAIL_OPEN", None)
             os.environ.pop("RYK_HERMES_FAIL_OPEN", None)
             with mock.patch.object(_PLUGIN, "_stance_file_fail_open", return_value=False):
                 self.assertFalse(_PLUGIN._fail_open_enabled())
@@ -53,20 +142,22 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         self.assertIs(_PLUGIN._parse_fail_open_token("fail-open"), True)
         self.assertIsNone(_PLUGIN._parse_fail_open_token(""))
 
-    def test_orca_executable_rejects_missing_file(self) -> None:
-        self.assertIsNone(_PLUGIN._orca_executable("/nonexistent/ryk-binary"))
+    def test_ryk_executable_rejects_missing_file(self) -> None:
+        self.assertIsNone(_PLUGIN._ryk_executable("/nonexistent/ryk-binary"))
 
     def test_hook_smoke_passes_blocks_only(self) -> None:
         self.assertTrue(_PLUGIN._hook_smoke_passes('{"decision":"allow"}'))
         self.assertFalse(_PLUGIN._hook_smoke_passes('{"decision":"block"}'))
+        self.assertFalse(_PLUGIN._hook_smoke_passes("{}"))
+        self.assertFalse(_PLUGIN._hook_smoke_passes('{"decision":"unknown"}'))
         # F21: empty stdout must not pass smoke (planted binary oracle).
         self.assertFalse(_PLUGIN._hook_smoke_passes(""))
         self.assertFalse(_PLUGIN._hook_smoke_passes("   "))
 
-    def test_find_orca_skips_oserror_from_smoke_probe(self) -> None:
-        with mock.patch.object(_PLUGIN, "_ryk_candidates", return_value=["/tmp/orca"]):
+    def test_find_ryk_skips_oserror_from_smoke_probe(self) -> None:
+        with mock.patch.object(_PLUGIN, "_ryk_candidates", return_value=["/tmp/ryk"]):
             with mock.patch.object(_PLUGIN, "_supports_hermes_host", side_effect=OSError("spawn failed")):
-                self.assertIsNone(_PLUGIN._find_orca())
+                self.assertIsNone(_PLUGIN._find_ryk())
 
     def test_pre_tool_call_fail_closed_when_disabled(self) -> None:
         ctx = mock.Mock()
@@ -96,7 +187,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         handler = ctx.register_hook.call_args.args[1]
         with mock.patch.object(
             _PLUGIN,
-            "_call_orca",
+            "_call_ryk",
             return_value={"decision": "block", "message": "block by ryk"},
         ):
             result = handler(tool_name="terminal", args={"command": "rm -rf /"})
@@ -112,7 +203,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
                 os.environ.pop(key, None)
             with mock.patch.object(
                 _PLUGIN,
-                "_call_orca",
+                "_call_ryk",
                 return_value={
                     "decision": "ask",
                     "message": "approval required by ryk",
@@ -125,7 +216,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         self.assertEqual(result.get("action"), "approve")
         self.assertIn("approval required by ryk", result.get("message", ""))
         rule_key = result.get("rule_key", "")
-        self.assertTrue(rule_key.startswith("orca|"), rule_key)
+        self.assertTrue(rule_key.startswith("ryk|"), rule_key)
         self.assertIn("core.filesystem:destructive_rm", rule_key)
         self.assertIn("|terminal|", f"|{rule_key}|")
 
@@ -136,7 +227,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CI": "true"}):
             with mock.patch.object(
                 _PLUGIN,
-                "_call_orca",
+                "_call_ryk",
                 return_value={"decision": "ask", "message": "approval required by ryk"},
             ):
                 result = handler(tool_name="terminal", args={"command": "rm -rf /tmp/x"})
@@ -150,7 +241,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         handler = ctx.register_hook.call_args.args[1]
         with mock.patch.object(
             _PLUGIN,
-            "_call_orca",
+            "_call_ryk",
             return_value={"decision": "warn", "message": "warn by ryk"},
         ):
             with mock.patch("builtins.print") as printed:
@@ -172,8 +263,8 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
             {"command": "curl http://b.example"},
         )
         self.assertNotEqual(key_a, key_b)
-        self.assertTrue(key_a.startswith("orca|core.shell:network|terminal|"), key_a)
-        self.assertTrue(key_b.startswith("orca|core.shell:network|terminal|"), key_b)
+        self.assertTrue(key_a.startswith("ryk|core.shell:network|terminal|"), key_a)
+        self.assertTrue(key_b.startswith("ryk|core.shell:network|terminal|"), key_b)
 
         # Same args → same key (stable).
         key_a2 = _PLUGIN._stable_rule_key(
@@ -189,7 +280,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         handler = ctx.register_hook.call_args.args[1]
         with mock.patch.object(
             _PLUGIN,
-            "_call_orca",
+            "_call_ryk",
             return_value={"decision": "warn", "message": "warn by ryk"},
         ):
             with mock.patch("builtins.print") as printed:
@@ -235,7 +326,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
             environ={},
         )
         self.assertEqual(approved["action"], "approve")
-        self.assertTrue(approved["rule_key"].startswith("orca|"))
+        self.assertTrue(approved["rule_key"].startswith("ryk|"))
 
     def test_pre_tool_call_surfaces_remediation_commands(self) -> None:
         ctx = mock.Mock()
@@ -243,7 +334,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         handler = ctx.register_hook.call_args.args[1]
         with mock.patch.object(
             _PLUGIN,
-            "_call_orca",
+            "_call_ryk",
             return_value={
                 "decision": "block",
                 "message": "blocked by ryk",
@@ -261,12 +352,13 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         ctx = mock.Mock()
         _PLUGIN._register(ctx, "pre_tool_call")
         handler = ctx.register_hook.call_args.args[1]
-        with mock.patch.object(_PLUGIN, "_call_orca", return_value={"decision": "allow"}):
+        with mock.patch.object(_PLUGIN, "_call_ryk", return_value={"decision": "allow"}):
             self.assertIsNone(handler(tool_name="terminal", args={"command": "git status"}))
 
-        for malformed in ([], "error", "unexpected"):
+        for malformed in (None, [], "error", "unexpected"):
             with self.subTest(decision=malformed):
-                with mock.patch.object(_PLUGIN, "_call_orca", return_value={"decision": malformed}):
+                response = {} if malformed is None else {"decision": malformed}
+                with mock.patch.object(_PLUGIN, "_call_ryk", return_value=response):
                     result = handler(tool_name="terminal", args={"command": "git status"})
                 self.assertEqual(result.get("action"), "block")
 
@@ -276,7 +368,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         handler = ctx.register_hook.call_args.args[1]
         with mock.patch.object(
             _PLUGIN,
-            "_call_orca",
+            "_call_ryk",
             return_value={"decision": "warn", "message": "warn by ryk"},
         ):
             result = handler(session_id="session-1", user_message="review me")
@@ -293,7 +385,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         handler = ctx.register_hook.call_args.args[1]
         with mock.patch.object(
             _PLUGIN,
-            "_call_orca",
+            "_call_ryk",
             return_value={"decision": "ask", "message": "ask by ryk"},
         ):
             result = handler(session_id="session-1", user_message="review me")
@@ -315,7 +407,7 @@ class HermesPluginDiscoveryTests(unittest.TestCase):
         handler = ctx.register_hook.call_args.args[1]
         with mock.patch.object(
             _PLUGIN,
-            "_call_orca",
+            "_call_ryk",
             return_value={"decision": "block", "message": "block by ryk"},
         ):
             result = handler(session_id="session-1", user_message="review me")

@@ -17,7 +17,8 @@
   },
   "os": [
     "darwin",
-    "linux"
+    "linux",
+    "win32"
   ],
   "cpu": [
     "x64",
@@ -33,13 +34,15 @@
       "darwin-amd64",
       "darwin-arm64",
       "linux-amd64",
-      "linux-arm64"
+      "linux-arm64",
+      "windows-amd64"
     ],
     "checksums": {
       "darwin-amd64": "PLACEHOLDER_DARWIN_AMD64_SHA256",
       "darwin-arm64": "PLACEHOLDER_DARWIN_ARM64_SHA256",
       "linux-amd64": "PLACEHOLDER_LINUX_AMD64_SHA256",
-      "linux-arm64": "PLACEHOLDER_LINUX_ARM64_SHA256"
+      "linux-arm64": "PLACEHOLDER_LINUX_ARM64_SHA256",
+      "windows-amd64": "PLACEHOLDER_WINDOWS_AMD64_SHA256"
     }
   }
 }

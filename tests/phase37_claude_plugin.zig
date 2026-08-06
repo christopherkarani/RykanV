@@ -176,7 +176,7 @@ test "claude hooks config is valid JSON" {
     defer parsed.deinit();
 }
 
-test "claude hooks config calls ryk hook claude" {
+test "claude hooks config dispatches to the ryk Claude hook" {
     var dbg_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = dbg_state.deinit();
     const allocator = dbg_state.allocator();
@@ -184,8 +184,8 @@ test "claude hooks config calls ryk hook claude" {
     const content = try readFile(allocator, hooks_path);
     defer allocator.free(content);
 
-    // Every hook should reference "ryk hook claude"
-    try std.testing.expect(std.mem.indexOf(u8, content, "ryk hook claude") != null);
+    // The portable wrapper resolves the installed binary before dispatching.
+    try std.testing.expect(std.mem.indexOf(u8, content, "hook claude") != null);
 }
 
 test "claude hooks config does not call nonexistent scripts" {
@@ -212,7 +212,6 @@ test "claude hooks config does not include absolute local paths" {
     // Should not contain absolute paths like /Users/ or /home/
     try std.testing.expect(std.mem.indexOf(u8, content, "/Users/") == null);
     try std.testing.expect(std.mem.indexOf(u8, content, "/home/") == null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "/usr/local") == null);
 }
 
 // ---------------------------------------------------------------------------

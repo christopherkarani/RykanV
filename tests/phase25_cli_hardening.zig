@@ -70,7 +70,7 @@ test "phase25 MCP docs distinguish proxy stdin and list observation" {
 }
 
 test "phase25 Core facade is the shared CLI policy audit replay and redaction surface" {
-    try std.testing.expect(@hasDecl(orca, "core_api"));
+    try std.testing.expect(@hasDecl(ryk, "core_api"));
 
     var selected = try ryk.core_api.parsePolicyFromSlice(std.testing.allocator,
         \\version: 1
@@ -92,4 +92,44 @@ test "phase25 Core facade is the shared CLI policy audit replay and redaction su
     try std.testing.expectEqual(ryk.core_api.DecisionResult.deny, evaluation.decision.result);
     const redacted = ryk.core_api.redactString("OPENAI_API_KEY=sk-fakeSyntheticOpenAIKey1234567890");
     try std.testing.expect(std.mem.indexOf(u8, redacted, "sk-fakeSynthetic") == null);
+}
+
+test "phase25 active contracts use canonical ryk identity" {
+    const schema_paths = [_][]const u8{
+        "integrations/common/schemas/hook-request-v1.json",
+        "integrations/common/schemas/hook-response-v1.json",
+        "integrations/common/schemas/host-capabilities-v1.json",
+        "integrations/common/schemas/host-decision-mapping-v1.json",
+    };
+    for (schema_paths) |path| {
+        const schema = try readFile(std.testing.allocator, path);
+        defer std.testing.allocator.free(schema);
+        try std.testing.expect(std.mem.indexOf(u8, schema, "https://ryk.local/schemas/") != null);
+        try std.testing.expect(std.mem.indexOf(u8, schema, "https://orca.local") == null);
+    }
+
+    const capabilities = try readFile(std.testing.allocator, "integrations/common/schemas/host-capabilities-v1.json");
+    defer std.testing.allocator.free(capabilities);
+    try std.testing.expect(std.mem.indexOf(u8, capabilities, "\"ryk_version\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, capabilities, "\"orca_version\"") == null);
+
+    const response = try readFile(std.testing.allocator, "integrations/common/schemas/ryk-plugin-response-v1.json");
+    defer std.testing.allocator.free(response);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"ryk_version\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"orca_version\"") == null);
+
+    const hook_response = try readFile(std.testing.allocator, "integrations/common/schemas/hook-response-v1.json");
+    defer std.testing.allocator.free(hook_response);
+    try std.testing.expect(std.mem.indexOf(u8, hook_response, "\"rule\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hook_response, "\"rule_id\"") != null);
+
+    const hermes_mapping = try readFile(std.testing.allocator, "integrations/common/schemas/examples/hermes-decision-mapping-v1.json");
+    defer std.testing.allocator.free(hermes_mapping);
+    try std.testing.expect(std.mem.indexOf(u8, hermes_mapping, "rule_key ryk|") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hermes_mapping, "rule_key orca|") == null);
+
+    const evidence = try readFile(std.testing.allocator, "src/sandbox/evidence.zig");
+    defer std.testing.allocator.free(evidence);
+    try std.testing.expect(std.mem.indexOf(u8, evidence, "ryk_run_os_sandbox_on_active") != null);
+    try std.testing.expect(std.mem.indexOf(u8, evidence, "orca_run_os_sandbox_on_active") == null);
 }

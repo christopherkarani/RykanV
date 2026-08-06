@@ -205,6 +205,14 @@ pub fn evaluate(
     var evaluation = try policy.evaluate.action(selected_policy, .{ .command_exec = .{ .argv = argv } }, .{ .mode = effective_mode }, allocator);
     errdefer evaluation.deinit(allocator);
 
+    // A broad command allow (for example `mkdir *`) must not bypass the
+    // protected workspace write roots. Shell commands do not carry a typed
+    // file-write action, so enforce the same control-directory boundary here.
+    if (protectedCommandWritePath(argv)) |path| {
+        evaluation.deinit(allocator);
+        evaluation = try protectedCommandWriteEvaluation(allocator, effective_mode, path);
+    }
+
     const classification = classifyArgv(argv);
     const final = try combineDecision(allocator, effective_mode, classification, evaluation.decision);
     return .{
@@ -214,6 +222,70 @@ pub fn evaluate(
         .owned_reason = final.owned_reason,
         .owned_rule_id = final.owned_rule_id,
     };
+}
+
+fn protectedCommandWriteEvaluation(
+    allocator: std.mem.Allocator,
+    mode: policy.schema.Mode,
+    path: []const u8,
+) !policy.schema.Evaluation {
+    const result: core.decision.DecisionResult = switch (mode) {
+        .strict, .ci, .redteam => .deny,
+        .observe => .observe,
+        .ask, .yolo, .trusted => .ask,
+    };
+    const rule_id = try allocator.dupe(u8, "builtin.files.write.deny[protected_path]");
+    errdefer allocator.free(rule_id);
+    const explanation = try std.fmt.allocPrint(allocator, "protected workspace path requires staged review: {s}", .{path});
+    errdefer allocator.free(explanation);
+    return .{
+        .decision = .{
+            .result = result,
+            .rule_id = rule_id,
+            .reason = explanation,
+            .risk_score = 100,
+            .requires_user = result == .ask,
+            .ci_may_proceed = result == .allow or result == .observe,
+        },
+        .matched_rule = .{ .id = rule_id, .pattern = "protected workspace path" },
+        .explanation = explanation,
+        .owned_rule_id = rule_id,
+    };
+}
+
+fn protectedCommandWritePath(argv: []const []const u8) ?[]const u8 {
+    if (argv.len < 2) return null;
+    const executable = basename(argv[0]);
+    const mutates_paths = std.ascii.eqlIgnoreCase(executable, "mkdir") or
+        std.ascii.eqlIgnoreCase(executable, "touch") or
+        std.ascii.eqlIgnoreCase(executable, "cp") or
+        std.ascii.eqlIgnoreCase(executable, "mv") or
+        std.ascii.eqlIgnoreCase(executable, "rmdir") or
+        std.ascii.eqlIgnoreCase(executable, "rm") or
+        std.ascii.eqlIgnoreCase(executable, "install") or
+        std.ascii.eqlIgnoreCase(executable, "ln") or
+        std.ascii.eqlIgnoreCase(executable, "chmod") or
+        std.ascii.eqlIgnoreCase(executable, "chown");
+    if (!mutates_paths) return null;
+
+    for (argv[1..]) |arg| {
+        if (arg.len == 0 or arg[0] == '-') continue;
+        if (isProtectedControlPath(arg)) return arg;
+    }
+    return null;
+}
+
+fn isProtectedControlPath(path: []const u8) bool {
+    var normalized = path;
+    while (std.mem.startsWith(u8, normalized, "./") or std.mem.startsWith(u8, normalized, ".\\")) {
+        normalized = normalized[2..];
+    }
+    return std.mem.eql(u8, normalized, ".git") or
+        std.mem.startsWith(u8, normalized, ".git/") or
+        std.mem.startsWith(u8, normalized, ".git\\") or
+        std.mem.eql(u8, normalized, ".ryk") or
+        std.mem.startsWith(u8, normalized, ".ryk/") or
+        std.mem.startsWith(u8, normalized, ".ryk\\");
 }
 
 /// PATH-resolved bare names that install session shims → `ryk shim exec` →
@@ -271,7 +343,7 @@ pub fn createShimDirectory(
     }
     inline for (shim_names) |name| {
         if (builtin.os.tag == .windows) {
-            try writeWindowsExecutableShim(allocator, shim_dir, name, ryk_executable);
+            try writeWindowsExecutableShim(io, allocator, shim_dir, name, ryk_executable);
         } else {
             try writePosixShim(io, allocator, shim_dir, name, ryk_executable);
         }
@@ -414,7 +486,10 @@ fn writePosixShim(io: std.Io, allocator: std.mem.Allocator, shim_dir: []const u8
     // Zig 0.16 Permissions.executable_file maps to default_dir (0o777). Lock 0o755
     // so new session PATH shims are not group/other-writable (RT-08).
     // Out of scope: other executable_file sites (codex_mcp_sandbox, host_mcp_sandbox, mcp.zig).
-    const shim_mode = std.Io.File.Permissions.fromMode(0o755);
+    const shim_mode: std.Io.File.Permissions = if (comptime builtin.os.tag == .windows)
+        .default_file
+    else
+        std.Io.File.Permissions.fromMode(0o755);
     const file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true, .permissions = shim_mode });
     defer file.close(io);
     const script = try std.fmt.allocPrint(allocator,
@@ -424,15 +499,15 @@ fn writePosixShim(io: std.Io, allocator: std.mem.Allocator, shim_dir: []const u8
     , .{ ryk_executable, name });
     defer allocator.free(script);
     try file.writeStreamingAll(io, script);
-    if (builtin.os.tag != .windows) try file.setPermissions(io, shim_mode);
+    if (comptime builtin.os.tag != .windows) try file.setPermissions(io, shim_mode);
 }
 
-fn writeWindowsExecutableShim(allocator: std.mem.Allocator, shim_dir: []const u8, name: []const u8, ryk_executable: []const u8) !void {
+fn writeWindowsExecutableShim(io: std.Io, allocator: std.mem.Allocator, shim_dir: []const u8, name: []const u8, ryk_executable: []const u8) !void {
     const filename = try std.fmt.allocPrint(allocator, "{s}.exe", .{name});
     defer allocator.free(filename);
     const path = try std.fs.path.join(allocator, &.{ shim_dir, filename });
     defer allocator.free(path);
-    try std.fs.copyFileAbsolute(ryk_executable, path, .{});
+    try std.Io.Dir.copyFileAbsolute(ryk_executable, path, io, .{});
 }
 
 pub fn shimAliasFromExecutablePath(executable_path: []const u8) ?[]const u8 {
@@ -1236,11 +1311,15 @@ test "generic agent preset keeps installs remote writes and dangerous commands g
 
     var mkdir_tmp = try evaluate(std.testing.allocator, &selected, .ask, &.{ "mkdir", "-p", "./tmp/ryk" });
     defer mkdir_tmp.deinit(std.testing.allocator);
-    try std.testing.expectEqual(core.decision.DecisionResult.ask, mkdir_tmp.decision.result);
+    try std.testing.expectEqual(core.decision.DecisionResult.allow, mkdir_tmp.decision.result);
 
     var mkdir_git_hooks = try evaluate(std.testing.allocator, &selected, .ask, &.{ "mkdir", "-p", ".git/hooks" });
     defer mkdir_git_hooks.deinit(std.testing.allocator);
     try std.testing.expectEqual(core.decision.DecisionResult.ask, mkdir_git_hooks.decision.result);
+
+    var mkdir_ryk = try evaluate(std.testing.allocator, &selected, .ask, &.{ "mkdir", "-p", ".ryk/sessions" });
+    defer mkdir_ryk.deinit(std.testing.allocator);
+    try std.testing.expectEqual(core.decision.DecisionResult.ask, mkdir_ryk.decision.result);
 }
 
 test "shim list covers risky aliases recognized by classifier" {

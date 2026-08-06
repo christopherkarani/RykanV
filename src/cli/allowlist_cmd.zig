@@ -335,7 +335,7 @@ pub fn isValidExpiresIsoZ(value: []const u8) bool {
 
 /// Operator break-glass for permanent exception mutations (M-2 partial).
 fn isOperatorBreakGlass() bool {
-    return envFlagTruthy("RYK_OPERATOR") or envFlagTruthy("RYK_OPERATOR");
+    return envFlagTruthy("RYK_OPERATOR");
 }
 
 fn envFlagTruthy(name: [*:0]const u8) bool {

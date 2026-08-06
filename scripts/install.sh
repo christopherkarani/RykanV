@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-# ryk installer (macOS / Linux) — Phase 5a brand cut; ryk is a PATH compat alias.
+# ryk installer (macOS / Linux) — canonical Rykan V install path.
 #
 # Documented one-liner:
 #   curl -fsSL https://rykanv.com/install | sh
@@ -20,11 +20,9 @@ set -eu
 #   NO_COLOR             Disable ANSI color even on a TTY
 #
 # Ensure door (release/install contract):
-# - Prefer W1: `doctor --fix --from-install` when the installed CLI supports it.
-# - Pre-W1 binaries (e.g. tagged v1.2.9 without --fix) fall back to
-#   `start --auto --skip-verify` (soft-success parity with doctor --fix).
-# - install.sh on main / the public curl door can lead the release binary; never
-#   hard-fail solely because the ensure flag set is newer than the artifact.
+# - The hard-cut release contract requires `doctor --fix --from-install`.
+# - An artifact whose CLI does not advertise that door is rejected instead of
+#   being silently onboarded through a removed or weaker command.
 #
 # Robust VERSION resolution (piped-safe):
 # - File execution (dev, local checkout): read ../VERSION when present.
@@ -184,9 +182,8 @@ fi
 
 VERSION="${RYK_VERSION:-${DEFAULT_VERSION:-1.2.9}}"
 BASE_URL="${RYK_BASE_URL:-https://github.com/christopherkarani/rykan/releases/download/v${VERSION}}"
-INSTALL_DIR="${RYK_INSTALL_DIR:-${RYK_INSTALL_DIR:-${HOME}/.local/bin}}"
-# Phase 5a: keep existing share layout under share/ryk (path migrate is Phase 5b).
-SHARE_DIR="${RYK_SHARE_DIR:-${RYK_SHARE_DIR:-${HOME}/.local/share/ryk}}"
+INSTALL_DIR="${RYK_INSTALL_DIR:-${HOME}/.local/bin}"
+SHARE_DIR="${RYK_SHARE_DIR:-${HOME}/.local/share/ryk}"
 RESOURCE_ROOT="${SHARE_DIR}/${VERSION}"
 CURRENT_LINK="${SHARE_DIR}/current"
 ARTIFACT_DIR="${RYK_ARTIFACT_DIR:-}"
@@ -283,17 +280,17 @@ Refuse to install a corrupted or tampered archive.
   fi
 }
 
-# Exit 0 if candidate looks like the ryk/orca CLI; print semver (may be empty) on stdout.
+# Exit 0 if candidate emits the canonical machine-readable ryk identity; print
+# semver (may be empty) on stdout. Human banners are intentionally not used for
+# product detection because they are presentation and may change.
 probe_existing_product() {
   candidate="$1"
   [ -e "$candidate" ] || return 1
-  out="$("$candidate" version 2>/dev/null)" || out="$("$candidate" --version 2>/dev/null)" || return 1
-  printf '%s\n' "$out" | grep -Eqi '"product"[[:space:]]*:[[:space:]]*"(ryk|orca)"|^(ryk|orca)([[:space:]]|$)|^[0-9]+\.[0-9]+\.[0-9]+' || return 1
-  printf '%s\n' "$out" | sed -n 's/.*\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n1 || true
+  out="$("$candidate" version --json 2>/dev/null)" || return 1
+  printf '%s\n' "$out" | grep -Eqi '"product"[[:space:]]*:[[:space:]]*"ryk"' || return 1
+  printf '%s\n' "$out" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' | head -n1 || true
   return 0
 }
-# Compat name for callers/tests.
-probe_existing_orca() { probe_existing_product "$@"; }
 
 safe_install() {
   source_bin="$1"
@@ -437,7 +434,7 @@ ensure_path_entry() {
   fi
 
   marker="# Added by ryk installer"
-  legacy_marker="# Added by ryk installer"
+  previous_marker="# Added by ryk installer"
   quoted_dir="$(shell_quote "$dir")"
   if [ "$shell_name" = "fish" ]; then
     path_line="fish_add_path -- $quoted_dir"
@@ -447,11 +444,11 @@ ensure_path_entry() {
 
   if [ -f "$rc_file" ] && {
     grep -qF "$marker" "$rc_file" 2>/dev/null ||
-      grep -qF "$legacy_marker" "$rc_file" 2>/dev/null
+      grep -qF "$previous_marker" "$rc_file" 2>/dev/null
   }; then
     tmp="$(mktemp)"
-    awk -v marker="$marker" -v legacy_marker="$legacy_marker" -v new_line="$path_line" '
-      $0 == marker || $0 == legacy_marker { print marker; print new_line; skip=1; next }
+    awk -v marker="$marker" -v previous_marker="$previous_marker" -v new_line="$path_line" '
+      $0 == marker || $0 == previous_marker { print marker; print new_line; skip=1; next }
       skip && (/^export PATH=/ || /^fish_add_path -- /) { next }
       skip && $0 == "" { skip=0 }
       { print }
@@ -468,7 +465,7 @@ ensure_resource_root_entry() {
   shell_name="$(basename "$shell_path")"
   rc_file="$(rc_file_for_shell "$shell_path")"
   marker="# ryk runtime assets"
-  legacy_marker="# ryk runtime assets"
+  previous_marker="# ryk runtime assets"
   quoted_current="$(shell_quote "$CURRENT_LINK")"
   if [ "$shell_name" = "fish" ]; then
     resource_line="set -gx RYK_RESOURCE_ROOT $quoted_current"
@@ -482,12 +479,12 @@ ensure_resource_root_entry() {
 
   if [ -f "$rc_file" ] && {
     grep -qF "$marker" "$rc_file" 2>/dev/null ||
-      grep -qF "$legacy_marker" "$rc_file" 2>/dev/null
+      grep -qF "$previous_marker" "$rc_file" 2>/dev/null
   }; then
     tmp="$(mktemp)"
-    awk -v marker="$marker" -v legacy_marker="$legacy_marker" -v new_line="$resource_line" '
-      $0 == marker || $0 == legacy_marker { print marker; print new_line; skip=1; next }
-      skip && (/^export (RYK|ORCA)_RESOURCE_ROOT=/ || /^set -gx (RYK|ORCA)_RESOURCE_ROOT /) { next }
+    awk -v marker="$marker" -v previous_marker="$previous_marker" -v new_line="$resource_line" '
+      $0 == marker || $0 == previous_marker { print marker; print new_line; skip=1; next }
+      skip && (/^export RYK_RESOURCE_ROOT=/ || /^set -gx RYK_RESOURCE_ROOT /) { next }
       skip && $0 == "" { skip=0 }
       { print }
     ' "$rc_file" > "$tmp"
@@ -530,7 +527,7 @@ print_success() {
 
   if [ "$onboarding_ran" -eq 0 ]; then
     printf '\n'
-    printf '    ryk doctor --fix\n'
+    printf '    ryk doctor --fix --from-install\n'
   fi
 
   if [ "$missing_dashboard" -eq 1 ]; then
@@ -544,20 +541,12 @@ print_success() {
 
 OS="$(detect_os)"
 ARCH="$(detect_arch)"
-# Prefer new ryk-v* artifact; fall back to legacy ryk-v* during dual-publish window.
 ARTIFACT="ryk-v${VERSION}-${OS}-${ARCH}.tar.gz"
-LEGACY_ARTIFACT="ryk-v${VERSION}-${OS}-${ARCH}.tar.gz"
 DESTINATION="$INSTALL_DIR/ryk"
-LEGACY_DESTINATION="$INSTALL_DIR/orca"
 
 # Empty = fresh install; semver or "installed" = existing CLI at destination.
 PREVIOUS_VERSION=""
 if previous_out="$(probe_existing_product "$DESTINATION")"; then
-  PREVIOUS_VERSION="$previous_out"
-  if [ -z "$PREVIOUS_VERSION" ]; then
-    PREVIOUS_VERSION="installed"
-  fi
-elif previous_out="$(probe_existing_product "$LEGACY_DESTINATION")"; then
   PREVIOUS_VERSION="$previous_out"
   if [ -z "$PREVIOUS_VERSION" ]; then
     PREVIOUS_VERSION="installed"
@@ -577,11 +566,9 @@ step_done "Resolve release" "$resolve_detail"
 if [ -n "$ARTIFACT_DIR" ]; then
   if [ -f "$ARTIFACT_DIR/$ARTIFACT" ]; then
     :
-  elif [ -f "$ARTIFACT_DIR/$LEGACY_ARTIFACT" ]; then
-    ARTIFACT="$LEGACY_ARTIFACT"
   else
-    fail "artifact not found: $ARTIFACT_DIR/$ARTIFACT (or $LEGACY_ARTIFACT)" \
-      "Expected a current or compatibility release archive under RYK_ARTIFACT_DIR."
+    fail "artifact not found: $ARTIFACT_DIR/$ARTIFACT" \
+      "Expected the canonical release archive under RYK_ARTIFACT_DIR."
   fi
   cp "$ARTIFACT_DIR/$ARTIFACT" "$TMP_DIR/$ARTIFACT"
   [ -f "$ARTIFACT_DIR/checksums.txt" ] || fail "checksums.txt not found in $ARTIFACT_DIR" \
@@ -590,12 +577,7 @@ if [ -n "$ARTIFACT_DIR" ]; then
   step_done "Use local artifacts" "$ARTIFACT_DIR"
 else
   step_active "Download archive"
-  if download "$BASE_URL/$ARTIFACT" "$TMP_DIR/$ARTIFACT" 2>/dev/null; then
-    :
-  else
-    ARTIFACT="$LEGACY_ARTIFACT"
-    download "$BASE_URL/$ARTIFACT" "$TMP_DIR/$ARTIFACT"
-  fi
+  download "$BASE_URL/$ARTIFACT" "$TMP_DIR/$ARTIFACT"
   download "$BASE_URL/checksums.txt" "$TMP_DIR/checksums.txt"
   step_done "Download archive" "$ARTIFACT"
 fi
@@ -621,23 +603,13 @@ EXTRACT_ROOT="$(find "$TMP_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 FOUND_BIN=""
 if [ -x "$EXTRACT_ROOT/bin/ryk" ]; then
   FOUND_BIN="$EXTRACT_ROOT/bin/ryk"
-elif [ -x "$EXTRACT_ROOT/bin/ryk" ]; then
-  FOUND_BIN="$EXTRACT_ROOT/bin/ryk"
-else
-  FOUND_BIN="$(find "$EXTRACT_ROOT" -type f \( -name ryk -o -name ryk \) -perm -111 | head -n 1)"
 fi
 [ -n "$FOUND_BIN" ] || fail "artifact did not contain an executable ryk binary" \
   "Unexpected archive layout for ${ARTIFACT}."
 
 safe_install "$FOUND_BIN" "$DESTINATION"
-# Compat alias: same product as ryk for ≥1 major.
-if [ -x "$EXTRACT_ROOT/bin/ryk" ]; then
-  safe_install "$EXTRACT_ROOT/bin/ryk" "$LEGACY_DESTINATION"
-else
-  safe_install "$FOUND_BIN" "$LEGACY_DESTINATION"
-fi
 install_runtime_assets "$EXTRACT_ROOT"
-step_done "Install binaries + runtime" "ryk + compatibility alias + assets"
+step_done "Install binaries + runtime" "ryk + assets"
 
 ensure_path_entry "$INSTALL_DIR"
 ensure_resource_root_entry "$CURRENT_LINK"
@@ -651,31 +623,24 @@ step_done "Configure shell" "PATH + runtime resource root"
 # Soft host fails exit 0 with partial honesty from the ensure door — install
 # must not claim full-protection completion copy.
 #
-# Release/install contract: prefer doctor --fix --from-install; fall back to
-# start --auto only when the installed binary's doctor help does not advertise
-# --fix (version skew between curl install.sh and an older release artifact).
-# Never fall back when --fix is present but ensure fails for other reasons.
+# Release/install contract: the installed binary must advertise the canonical
+# hard-cut ensure door before the installer invokes it.
 
 # Returns 0 when BIN supports the W1 ensure door (help advertises --fix).
 cli_supports_doctor_fix() {
   _cli_bin="$1"
   _cli_help="$("$_cli_bin" doctor --help 2>&1)" || true
-  printf '%s\n' "$_cli_help" | grep -Eq -- '(^|[[:space:]|/`[,[])--fix([[:space:]|]/],[]|]|$)'
+  printf '%s\n' "$_cli_help" | grep -Eq -- '(^|[^[:alnum:]_-])--fix([^[:alnum:]_-]|$)'
 }
 
-# Run the best available ensure door for the installed binary.
-# Sets ENSURE_MODE to doctor_fix or start_auto_legacy (for receipts/remediation).
+# Run the canonical ensure door for the installed binary.
 run_install_ensure() {
-  if cli_supports_doctor_fix "$DESTINATION"; then
-    ENSURE_MODE=doctor_fix
-    "$DESTINATION" doctor --fix --from-install
-  else
-    # Pre-W1 / pre-doctor --fix release binary (e.g. v1.2.9).
-    # --skip-verify: install soft-success matches doctor --fix (host verify is not a
-    # hard install failure; operators can re-run ensure later).
-    ENSURE_MODE=start_auto_legacy
-    "$DESTINATION" start --auto --skip-verify
+  if ! cli_supports_doctor_fix "$DESTINATION"; then
+    fail "installed ryk binary does not support the required doctor --fix ensure door" \
+      "This installer requires a current Rykan V release. Re-download the installer or set RYK_VERSION to a current release, then retry."
   fi
+  ENSURE_MODE=doctor_fix
+  "$DESTINATION" doctor --fix --from-install
 }
 
 # One-line step receipt from captured ensure output. Install owns the UI —
@@ -718,30 +683,15 @@ if [ "${RYK_INSTALL_SKIP_ONBOARD:-0}" != "1" ]; then
   # Always capture ensure: install owns presentation (no second banner / TUI dump).
   (
     cd "$HOME"
-    RYK_RESOURCE_ROOT="$CURRENT_LINK"
-    RYK_RESOURCE_ROOT="$CURRENT_LINK"
-    export RYK_RESOURCE_ROOT RYK_RESOURCE_ROOT
+    export RYK_RESOURCE_ROOT="$CURRENT_LINK"
     PATH="$INSTALL_DIR:$PATH"
     export PATH
     # Prefer plain ensure output if the CLI honors NO_COLOR / non-TTY.
     NO_COLOR=1
     export NO_COLOR
-    # Probe + ensure in the same subshell.
-    if cli_supports_doctor_fix "$DESTINATION"; then
-      ENSURE_MODE=doctor_fix
-      "$DESTINATION" doctor --fix --from-install
-    else
-      ENSURE_MODE=start_auto_legacy
-      "$DESTINATION" start --auto --skip-verify
-    fi
+    run_install_ensure
   ) >"$TMP_DIR/.onboarding.out" 2>"$TMP_DIR/.onboarding.err"
   _ob_exit=$?
-  # Parent needs ENSURE_MODE for fail copy; re-probe (help is cheap).
-  if cli_supports_doctor_fix "$DESTINATION"; then
-    ENSURE_MODE=doctor_fix
-  else
-    ENSURE_MODE=start_auto_legacy
-  fi
   set -e
   if [ "$_ob_exit" -ne 0 ]; then
     # Fail path only: short remediation + a few ensure lines (not full TUI).
@@ -754,20 +704,12 @@ if [ "${RYK_INSTALL_SKIP_ONBOARD:-0}" != "1" ]; then
         grep -Ei 'error|failed|unknown option|refusing' "$TMP_DIR/.onboarding.out" 2>/dev/null |
         head -4 | sed 's/^/    /' >&2 || true
     fi
-    if [ "$ENSURE_MODE" = "doctor_fix" ]; then
-      # Re-teach install trust scope: HOME cwd + --from-install.
-      fail "ryk protection setup failed (exit ${_ob_exit})" \
-        "The CLI was installed, but protection setup did not finish.
+    # Re-teach install trust scope: HOME cwd + --from-install.
+    fail "ryk protection setup failed (exit ${_ob_exit})" \
+      "The CLI was installed, but protection setup did not finish.
 Re-run from your home directory: ryk doctor --fix --from-install
 (cd \"\$HOME\" first; keep RYK_RESOURCE_ROOT on the installed share current link if you set them.)
-Or re-run the installer after resolving the host integration error."
-    else
-      fail "ryk protection setup failed (exit ${_ob_exit})" \
-        "The CLI was installed, but protection setup did not finish.
-Re-run from your home directory: cd \"\$HOME\" && $(shell_quote "$DESTINATION") start --auto --skip-verify
-(keep RYK_RESOURCE_ROOT on the installed share current link if you set them.)
-Or upgrade to a release that supports doctor --fix, then re-run the installer."
-    fi
+Re-run the installer after resolving the host integration error."
   fi
   # Merge stderr into summary scan (some CLIs put status on stderr).
   if [ -s "$TMP_DIR/.onboarding.err" ]; then

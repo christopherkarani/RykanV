@@ -422,7 +422,7 @@ fn installSelectedHosts(
 fn processHome(allocator: std.mem.Allocator) ![]u8 {
     var env_map = try env_util.createProcessMap(allocator);
     defer env_map.deinit();
-    return (try env_util.getOwned(&env_map, allocator, "HOME")) orelse error.HomeNotSet;
+    return (try env_util.getOwnedHome(&env_map, allocator)) orelse error.HomeNotSet;
 }
 
 /// Soft product-path refresh for start (DIS-1). Always unions selected ∪

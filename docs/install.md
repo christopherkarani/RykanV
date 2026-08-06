@@ -8,11 +8,11 @@
 ./zig-out/bin/ryk version --json
 ```
 
-Use Zig `0.16.0` (see `.zigversion`; prefer `./scripts/zig`). The product CLI is Zig-only: shell evaluation runs in-process via `shell_engine` (no Rust toolchain or `ryk-daemon` companion). `./scripts/build-all.sh` and `./scripts/zig build` both produce `./zig-out/bin/ryk` (and `ryk` compat alias).
+Use Zig `0.16.0` (see `.zigversion`; prefer `./scripts/zig`). The product CLI is Zig-only: shell evaluation runs in-process via `shell_engine` (no Rust toolchain or `ryk-daemon` companion). `./scripts/build-all.sh` and `./scripts/zig build` both produce `./zig-out/bin/ryk`.
 
 ## Release Artifacts
 
-Release helpers build checksum-covered **ryk** archives (primary `ryk-v*`; dual-publish `ryk-v*` when enabled) into `dist/`:
+Release helpers build checksum-covered **ryk** archives into `dist/`:
 
 ```sh
 ./scripts/build-release.sh
@@ -23,7 +23,7 @@ Windows archive smoke-test helper:
 
 ```powershell
 .\scripts\build-release.ps1 -ArchiveOnly
-.\scripts\install.ps1 -Version 1.1.0 -ArtifactDir .\dist -InstallDir "$env:USERPROFILE\bin"
+.\scripts\install.ps1 -Version 1.2.9 -ArtifactDir .\dist -InstallDir "$env:USERPROFILE\bin"
 ```
 
 `scripts/build-release.ps1` does not produce `release-manifest.json` or rendered package manifests. Use `scripts/build-release.sh` plus `scripts/verify-release.sh` for production release verification.
@@ -38,9 +38,9 @@ Maintainer release flow:
 
 ```sh
 ./scripts/build-release.sh
-brew audit --strict --online dist/package-manifests/homebrew/Formula/orca.rb
-brew install --build-from-source dist/package-manifests/homebrew/Formula/orca.rb
-brew test dist/package-manifests/homebrew/Formula/orca.rb
+brew audit --strict --online dist/package-manifests/homebrew/Formula/ryk.rb
+brew install --build-from-source dist/package-manifests/homebrew/Formula/ryk.rb
+brew test dist/package-manifests/homebrew/Formula/ryk.rb
 ```
 
 User install after the tap repository is published:
@@ -54,7 +54,7 @@ brew install christopherkarani/ryk/ryk
 1. Download or build the archive for your OS and CPU.
 2. Verify its SHA-256 digest against `dist/checksums.txt`.
 3. Extract the archive, or run `scripts/install.sh` / `scripts/install.ps1` to install the binary and runtime assets together.
-4. Paste the activation command printed by the installer (the highlighted `eval "$(… env …)"` block on Unix). It invokes the absolute installed binary, so it also works in the shell that launched a first-time install before `ryk` is on `PATH`. Then run `ryk start` to get protected (policy + host integrations).
+4. Paste the activation command printed by the installer (the highlighted `eval "$(… env …)"` block on Unix). It invokes the absolute installed binary, so it also works in the shell that launched a first-time install before `ryk` is on `PATH`. The installer runs `ryk doctor --fix --from-install` to configure protection.
 
 ### Updating
 
@@ -68,7 +68,7 @@ ryk update --yes    # non-interactive
 
 `ryk update` reuses the official installer (checksums + atomic replace). Homebrew/npm installs should use `brew upgrade ryk` / `npm update -g @rykan/ryk` instead (or `ryk update --force` to override).
 
-The curl installer (`scripts/install.sh`) prints a step-based receipt (brand header, phases, activation hero). It honors `NO_COLOR` and `RYK_INSTALL_QUIET=1` (non-error silence; activation line still printed). Host configuration is never performed by the installer — that remains `ryk start`.
+The installers print a step-based receipt (brand header, phases, activation hero). They honor `NO_COLOR` and `RYK_INSTALL_QUIET=1` (non-error silence; activation line still printed) and run the canonical `doctor --fix --from-install` setup door.
 
 Windows (`scripts/install.ps1`) shares the same core contracts (checksum verify, binary + runtime install, structured failures, quiet mode, activation handoff) with a smaller surface: it does not manage `PATH` (use your profile / user PATH) and does not soft-warn on a missing dashboard UI bundle.
 

@@ -1,7 +1,7 @@
 # ryk CLI Command Reference
 
 > Aligned with Safe Launch product surface (`src/cli/help.zig`, `src/cli/mod.zig`, command modules).
-> Version: 1.2.8 (from `VERSION`)
+> Version: 1.2.9 (from `VERSION`)
 > Product: **ryk** (formerly ryk) — Graded policy mediation for AI agent actions (Codex, Claude Code, OpenCode, OpenClaw, Hermes, Pi)
 > Dual-name: primary binary **`ryk`**; **`ryk`** is a PATH alias of the same product for ≥1 major.
 > Workspace paths still use `.ryk/` in Phase 5a (migration is Phase 5b).
@@ -196,7 +196,7 @@ Disable ryk plugins from host agents (binary and policy remain). Restart with `r
 | `--quiet` | Suppress informational output |
 | `--help`, `-h` | Show help |
 
-**Available presets** (from `orca_policy.presets.AgentPreset`):
+**Available presets** (from `ryk_core.policy.presets.AgentPreset`):
 `generic-agent`, `claude-code`, `codex`, `cursor-agent`, `opencode`, `cline-roo`, `mcp-dev`, `github-actions`, `solo-dev`, `strict-local`, `team-ci`, `openclaw-hermes`, `trusted-local`
 
 ---
@@ -514,4 +514,3 @@ Prints platform-appropriate `export PATH=...` (Unix) or `set PATH=...` (Windows)
 **Also available as hidden flag:** `ryk --print-install-env`
 
 ---
-

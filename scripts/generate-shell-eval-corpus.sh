@@ -2,7 +2,7 @@
 # Regenerate MVP shell-eval goldens from an *independent* oracle binary.
 #
 # Usage:
-#   RYK_ORACLE_BIN=/path/to/pinned-orca ./scripts/generate-shell-eval-corpus.sh commands.txt
+#   RYK_ORACLE_BIN=/path/to/pinned-ryk ./scripts/generate-shell-eval-corpus.sh commands.txt
 #
 # Refuses to use this checkout's zig-out binary (that would copy bugs into goldens).
 # Without RYK_ORACLE_BIN, leaves the checked-in JSONL unchanged.

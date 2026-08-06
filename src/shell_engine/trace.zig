@@ -210,10 +210,8 @@ fn detailsSummaryAlloc(allocator: std.mem.Allocator, details: TraceDetails) !?[]
 }
 
 pub fn monotonicUs() u64 {
-    var ts: std.c.timespec = undefined;
-    if (std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts) != 0) return 0;
-    return @as(u64, @intCast(ts.sec)) * 1_000_000 +
-        @divTrunc(@as(u64, @intCast(ts.nsec)), 1000);
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    return @intCast(std.Io.Timestamp.now(threaded.io(), .awake).toMicroseconds());
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

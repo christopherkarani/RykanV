@@ -662,14 +662,14 @@ fn writeMcpSetupReport(io: std.Io, stdout: anytype, context: IntegrationContext)
     };
     var allow_patterns: []const []const u8 = &.{};
     // Concrete policy schema (not opaque boundary handle) so we can read mcp.* counts.
-    var owned_policy: ?orca_policy.schema.Policy = null;
+    var owned_policy: ?policy_mod.schema.Policy = null;
     defer if (owned_policy) |*policy| policy.deinit();
 
     if (context.policy_present and context.policy_valid) {
-        const policy_path = std.fs.path.join(context.allocator, &.{ context.workspace_root, ".orca", "policy.yaml" }) catch null;
+        const policy_path = std.fs.path.join(context.allocator, &.{ context.workspace_root, ".ryk", "policy.yaml" }) catch null;
         if (policy_path) |path| {
             defer context.allocator.free(path);
-            if (orca_policy.load.loadFile(io, context.allocator, path)) |policy| {
+            if (policy_mod.load.loadFile(io, context.allocator, path)) |policy| {
                 owned_policy = policy;
                 const loaded = &owned_policy.?;
                 summary.default_decision = if (loaded.mcp.default) |d| d.toString() else "ask";
@@ -869,8 +869,8 @@ fn writeHermesFailOpenWarning(io: std.Io, stdout: anytype, context: IntegrationC
         io,
         stdout,
         .warn,
-        "Hermes effective fail-open",
-        "Hermes allows tools when ryk is missing/old. Not silent (warning each degraded allow). New installs write fail-closed stance; existing stay open until you set RYK_HERMES_FAIL_OPEN=0 or use `ryk run -- hermes`. Gateway chats may omit the block reason — check agent tool errors.",
+        "Hermes explicit fail-open",
+        "Hermes blocks tools when ryk is missing/old by default. An explicit RYK_HERMES_FAIL_OPEN=1 allows degraded execution with a warning; use `ryk run -- hermes` for outer enforcement. Gateway chats may omit the block reason — check agent tool errors.",
     );
 }
 
@@ -895,7 +895,7 @@ fn writePacksSection(io: std.Io, stdout: anytype, context: IntegrationContext) !
     try pack_state.writeDoctorPacksSectionWithConfig(stdout, summary, config_path, null);
 }
 
-/// Effective Hermes fail-open default matches integrations/hermes-plugin (default allow when degraded).
+/// Effective Hermes fail-open matches integrations/hermes-plugin (default deny when degraded).
 pub fn hermesFailOpenFromEnvValue(value: ?[]const u8) bool {
     return host_status.hermesFailOpenFromEnvValue(value);
 }
@@ -1228,7 +1228,7 @@ test "doctor writeReport includes MCP setup table" {
 
     try writeReport(std.testing.io, &stdout_writer, os, report, context, false);
     const written = stdout_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, written, "MCP policy (.orca/policy.yaml):") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "MCP policy (.ryk/policy.yaml):") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "Host MCP inventory") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "does not rewrite policy") != null);
 }
@@ -1653,7 +1653,7 @@ test "doctor host table lists managed hosts and shell gates" {
     try std.testing.expect(std.mem.indexOf(u8, written, "ryk" ++ " start") == null);
 }
 
-test "doctor warns when Hermes is installed with fail-open default" {
+test "doctor warns when Hermes is explicitly fail-open" {
     var stdout_buf: [16384]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     const report = sandbox.backend.detect(.linux);
@@ -1665,18 +1665,20 @@ test "doctor warns when Hermes is installed with fail-open default" {
 
     try writeReport(std.testing.io, &stdout_writer, .linux, report, context, false);
     const written = stdout_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, written, "Hermes effective fail-open") != null or std.mem.indexOf(u8, written, "fail-open") != null);
-    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_HERMES_FAIL_OPEN=0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "explicitly fail-open") != null or std.mem.indexOf(u8, written, "fail-open") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "RYK_HERMES_FAIL_OPEN") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "ryk run -- hermes") != null);
 }
 
-test "hermesFailOpenFromEnvValue defaults to fail-open" {
-    try std.testing.expect(hermesFailOpenFromEnvValue(null));
+test "hermesFailOpenFromEnvValue defaults to fail-closed" {
+    try std.testing.expect(!hermesFailOpenFromEnvValue(null));
     try std.testing.expect(hermesFailOpenFromEnvValue("1"));
     try std.testing.expect(hermesFailOpenFromEnvValue("true"));
     try std.testing.expect(!hermesFailOpenFromEnvValue("0"));
     try std.testing.expect(!hermesFailOpenFromEnvValue("false"));
     try std.testing.expect(!hermesFailOpenFromEnvValue("off"));
+    try std.testing.expect(!hermesFailOpenFromEnvValue("typo"));
+    try std.testing.expect(!hermesFailOpenFromEnvValue(""));
 }
 
 test "doctor rejects unknown option" {
@@ -2673,7 +2675,7 @@ fn testHostRows(allocator: std.mem.Allocator) ![]HostDoctorRow {
         .{ .name = "claude", .gate = "PreToolUse", .stance = "fail-closed shell" },
         .{ .name = "opencode", .gate = "tool.execute.before", .stance = "fail-closed shell" },
         .{ .name = "openclaw", .gate = "tool.before", .stance = "fail-closed shell" },
-        .{ .name = "hermes", .gate = "pre_tool_call", .stance = "fail-open (default)" },
+        .{ .name = "hermes", .gate = "pre_tool_call", .stance = "fail-closed" },
         .{ .name = "pi", .gate = "extension-managed (smoke not run)", .stance = "mode-dependent" },
     };
     var list: std.ArrayList(HostDoctorRow) = .empty;

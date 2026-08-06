@@ -87,7 +87,7 @@ Secret scan: **passed**
 Excluded from package:
 - Source TypeScript (`src/`)
 - `node_modules/`
-- `orca.ts` (canonical source, not needed at runtime)
+- `ryk.ts` (canonical source, not needed at runtime)
 - Test files
 - Build tooling configs
 

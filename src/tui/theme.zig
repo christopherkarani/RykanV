@@ -442,6 +442,7 @@ fn detectBackground(io: std.Io, is_tty: bool) Background {
 /// exit path. Returns `null` on any failure (caller falls back).
 fn queryBackgroundOsc(io: std.Io) ?Background {
     if (comptime builtin.is_test) return null;
+    if (comptime builtin.os.tag == .windows) return null;
     const vaxis = @import("vaxis");
 
     var tty_buf: [4096]u8 = undefined;

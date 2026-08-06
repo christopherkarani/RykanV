@@ -22,6 +22,7 @@
 //! Re-exported via `shell_engine` and covered by `test-shell-engine`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 // ---------------------------------------------------------------------------
 // Permanent pack-exception allowlist (product path). Distinct from Layered.
@@ -500,23 +501,34 @@ fn writeFile(runtime_io: std.Io, gpa: std.mem.Allocator, path: []const u8, body:
     }
     const perms: std.Io.File.Permissions = @enumFromInt(0o600);
     // Unique suffix so concurrent writers do not clobber each other's temps.
-    const pid = std.c.getpid();
-    const nonce = std.Io.Clock.Timestamp.now(runtime_io, .awake).raw.nanoseconds;
-    const temp_path = try std.fmt.allocPrint(gpa, "{s}.tmp.{d}.{d}", .{ path, pid, nonce });
+    var nonce: u64 = undefined;
+    runtime_io.random(std.mem.asBytes(&nonce));
+    const temp_path = try std.fmt.allocPrint(gpa, "{s}.tmp.{x}", .{ path, nonce });
     defer gpa.free(temp_path);
-    errdefer std.Io.Dir.cwd().deleteFile(runtime_io, temp_path) catch {};
 
+    // Cleanup begins only after exclusive creation succeeds. Otherwise a
+    // PathAlreadyExists error could delete another writer's temp file.
+    const file = try std.Io.Dir.cwd().createFile(runtime_io, temp_path, .{
+        .exclusive = true,
+        .permissions = perms,
+    });
+    errdefer std.Io.Dir.cwd().deleteFile(runtime_io, temp_path) catch {};
     {
-        var file = try std.Io.Dir.cwd().createFile(runtime_io, temp_path, .{
-            .exclusive = true,
-            .permissions = perms,
-        });
-        errdefer file.close(runtime_io);
+        defer file.close(runtime_io);
         try file.writeStreamingAll(runtime_io, body);
         try file.sync(runtime_io);
-        file.close(runtime_io);
     }
+    try enforceOwnerOnlyWindows(gpa, temp_path);
     try std.Io.Dir.renameAbsolute(temp_path, path, runtime_io);
+}
+
+extern fn ryk_set_owner_only_acl(path: [*:0]const u16) callconv(.c) c_int;
+
+fn enforceOwnerOnlyWindows(gpa: std.mem.Allocator, path: []const u8) !void {
+    if (comptime builtin.os.tag != .windows) return;
+    const wide_path = try std.unicode.utf8ToUtf16LeAllocZ(gpa, path);
+    defer gpa.free(wide_path);
+    if (ryk_set_owner_only_acl(wide_path.ptr) == 0) return error.WindowsAclFailed;
 }
 
 fn renderToml(gpa: std.mem.Allocator, entries: []const PermanentEntry) ![]u8 {
@@ -611,7 +623,7 @@ fn parseToml(gpa: std.mem.Allocator, raw: []const u8, layer: Layer) ParseError!S
             continue;
         }
 
-        if (std.mem.startsWith(u8, line, "[[") ) {
+        if (std.mem.startsWith(u8, line, "[[")) {
             // Unknown array-of-tables → corrupt
             return error.Corrupt;
         }

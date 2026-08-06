@@ -38,7 +38,7 @@ def pong(request_id: int) -> bytes:
         "result": {
             "status": "Pong",
             "protocol_version": 99,
-            "protocol_label": "orca-uds-v99",
+            "protocol_label": "ryk-uds-v99",
             "capabilities": ["Ping", "Evaluate", "ExecuteCli", "Shutdown"],
         },
     }

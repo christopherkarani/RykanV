@@ -49,7 +49,7 @@ class Ryk < Formula
       "PATH" => ([bin.to_s] + user_bins + [ENV.fetch("PATH", "")]).join(File::PATH_SEPARATOR),
     }
     success = Dir.chdir(Dir.home) do
-      system onboard_env, "#{bin}/ryk", "start", "--auto"
+      system onboard_env, "#{bin}/ryk", "doctor", "--fix", "--from-install"
     end
     odie "ryk was installed, but protection setup failed; resolve the reported host error and reinstall ryk" unless success
   end

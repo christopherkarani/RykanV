@@ -6,7 +6,6 @@ on:
       version:
         description: Version without leading v
         required: true
-        default: 1.2.3
       signing_enabled:
         description: Run optional signing hook
         required: true
@@ -26,6 +25,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate release version
+        shell: bash
+        env:
+          RELEASE_VERSION_INPUT: ${{ github.event.inputs.version || github.ref_name }}
+        run: |
+          set -eu
+          version="${RELEASE_VERSION_INPUT#v}"
+          case "$version" in
+            ''|*[!0-9.]*|*.*.*.*) echo "::error::invalid release version: $RELEASE_VERSION_INPUT" >&2; exit 1 ;;
+          esac
+          if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::release version must be X.Y.Z: $RELEASE_VERSION_INPUT" >&2
+            exit 1
+          fi
+          source_version="$(tr -d '[:space:]' < VERSION)"
+          if [ "$version" != "$source_version" ]; then
+            echo "::error::release version $version does not match VERSION $source_version" >&2
+            exit 1
+          fi
+          echo "RYK_VERSION=$version" >> "$GITHUB_ENV"
+
       # Mac cut-release (scripts/cut-release.sh) is the primary publisher. When a
       # v* tag is pushed after assets already exist (checksums.txt on the release),
       # skip the full CI rebuild so we do not double-upload or race the Mac cutter.
@@ -43,35 +63,53 @@ jobs:
             exit 0
           fi
           if gh release view "v${VER}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            # Require a minimum inventory before skipping: checksums + primary ryk archive + SBOM.
-            # checksums.txt alone is too weak (partial/hostile upload could green-path skip).
+            # Require the complete five-target inventory before skipping. A
+            # partial release must not green-path the build on a tag race.
             assets="$(gh release view "v${VER}" --repo "$GITHUB_REPOSITORY" --json assets \
               --jq '.assets[].name' 2>/dev/null || true)"
             has_checksums=0
-            has_primary=0
             has_sbom=0
+            has_darwin_amd64=0
+            has_darwin_arm64=0
+            has_linux_amd64=0
+            has_linux_arm64=0
+            has_windows_amd64=0
+            has_homebrew=0
+            has_npm=0
+            has_scoop=0
+            has_winget=0
             while IFS= read -r name; do
               [ -n "$name" ] || continue
               case "$name" in
                 checksums.txt) has_checksums=1 ;;
                 sbom.json) has_sbom=1 ;;
-                ryk-v*.tar.gz|ryk-v*.zip) has_primary=1 ;;
+                "ryk-v${VER}-darwin-amd64.tar.gz") has_darwin_amd64=1 ;;
+                "ryk-v${VER}-darwin-arm64.tar.gz") has_darwin_arm64=1 ;;
+                "ryk-v${VER}-linux-amd64.tar.gz") has_linux_amd64=1 ;;
+                "ryk-v${VER}-linux-arm64.tar.gz") has_linux_arm64=1 ;;
+                "ryk-v${VER}-windows-amd64.zip") has_windows_amd64=1 ;;
+                ryk.rb) has_homebrew=1 ;;
+                package.json) has_npm=1 ;;
+                ryk.json) has_scoop=1 ;;
+                ryk.yaml) has_winget=1 ;;
               esac
-            done <<EOF
-${assets}
-EOF
-            if [ "$has_checksums" = 1 ] && [ "$has_primary" = 1 ] && [ "$has_sbom" = 1 ]; then
-              echo "Release v${VER} has checksums.txt + primary ryk-v* + sbom.json; skipping CI release job (Mac cut-release primary)."
+            done <<< "$assets"
+            if [ "$has_checksums" = 1 ] && [ "$has_sbom" = 1 ] && \
+              [ "$has_darwin_amd64" = 1 ] && [ "$has_darwin_arm64" = 1 ] && \
+              [ "$has_linux_amd64" = 1 ] && [ "$has_linux_arm64" = 1 ] && \
+              [ "$has_windows_amd64" = 1 ] && [ "$has_homebrew" = 1 ] && \
+              [ "$has_npm" = 1 ] && [ "$has_scoop" = 1 ] && [ "$has_winget" = 1 ]; then
+              echo "Release v${VER} has all five CLI artifacts, checksums.txt, sbom.json, and package manifests; skipping CI release job (Mac cut-release primary)."
               echo "SKIP_RELEASE=1" >> "$GITHUB_ENV"
               exit 0
             fi
-            echo "Release v${VER} incomplete (checksums=${has_checksums} primary_ryk=${has_primary} sbom=${has_sbom}); running CI release."
+            echo "Release v${VER} incomplete (checksums=${has_checksums} darwin_amd64=${has_darwin_amd64} darwin_arm64=${has_darwin_arm64} linux_amd64=${has_linux_amd64} linux_arm64=${has_linux_arm64} windows_amd64=${has_windows_amd64} sbom=${has_sbom} homebrew=${has_homebrew} npm=${has_npm} scoop=${has_scoop} winget=${has_winget}); running CI release."
           fi
           echo "SKIP_RELEASE=0" >> "$GITHUB_ENV"
 
       - name: Early exit when skipped
         if: env.SKIP_RELEASE == '1'
-        run: echo "No-op: assets already published for this tag."
+        run: 'echo "No-op: assets already published for this tag."'
 
       - uses: mlugg/setup-zig@v2
         if: env.SKIP_RELEASE != '1'
@@ -181,8 +219,6 @@ EOF
           path: |
             dist/ryk-v*.tar.gz
             dist/ryk-v*.zip
-            dist/ryk-v*.tar.gz
-            dist/ryk-v*.zip
             dist/checksums.txt
             dist/sbom.json
             dist/release-manifest.json
@@ -214,11 +250,13 @@ EOF
           assets=(
             dist/ryk-v*.tar.gz
             dist/ryk-v*.zip
-            dist/ryk-v*.tar.gz
-            dist/ryk-v*.zip
             dist/checksums.txt
             dist/sbom.json
             dist/release-manifest.json
+            dist/package-manifests/homebrew/Formula/ryk.rb
+            dist/package-manifests/npm/package.json
+            dist/package-manifests/scoop/ryk.json
+            dist/package-manifests/winget/ryk.yaml
             dist/plugins/*.zip
             dist/plugins/ryk-plugin-checksums.txt
           )

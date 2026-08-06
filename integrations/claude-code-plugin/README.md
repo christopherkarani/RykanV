@@ -11,7 +11,7 @@ The plugin is a thin integration layer. The ryk CLI remains the source of truth 
 ## Prerequisites
 
 - ryk CLI built and available in PATH (or use `./zig-out/bin/ryk` from the repo)
-- Zig 0.15.2 to build ryk from source
+- Zig 0.16.0 to build ryk from source
 - Claude Code host binary installed
 
 ## Install from local path

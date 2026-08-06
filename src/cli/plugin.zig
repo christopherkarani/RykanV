@@ -125,7 +125,7 @@ fn doctorCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: 
             target = .openclaw;
             continue;
         }
-        if (std.mem.eql(u8, arg, "hermes") or std.mem.eql(u8, arg, "hermess")) {
+        if (std.mem.eql(u8, arg, "hermes")) {
             target = .hermes;
             continue;
         }
@@ -385,7 +385,7 @@ pub fn collectPluginDoctorReportWithHermesSmoke(
             break :blk try std.fs.path.join(allocator, &.{ "~", ".config", "opencode", "plugins", "ryk.ts" });
         };
         defer env_map.deinit();
-        const home_owned = env_util.getOwned(&env_map, allocator, "HOME") catch {
+        const home_owned = env_util.getOwnedHome(&env_map, allocator) catch {
             break :blk try std.fs.path.join(allocator, &.{ "~", ".config", "opencode", "plugins", "ryk.ts" });
         };
         const home = home_owned orelse break :blk try std.fs.path.join(allocator, &.{ "~", ".config", "opencode", "plugins", "ryk.ts" });
@@ -693,8 +693,8 @@ fn writeDoctorPlain(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, r
             const hermes_wired: []const u8 = if (hostPluginInstalledFromReport("hermes", report)) "yes" else if (report.host_binaries.hermes) "no" else "—";
             try stdout.print("  fail stance: {s}\n", .{host_status.failStance("hermes", hermes_fail_open, hermes_wired)});
             if (hermes_fail_open) {
-                try stdout.writeAll("    → WARN: Hermes is fail-open when ryk is degraded (default product stance).\n");
-                try stdout.writeAll("    → Fix: export RYK_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes\n");
+                try stdout.writeAll("    → WARN: Hermes is explicitly fail-open when ryk is degraded.\n");
+                try stdout.writeAll("    → Fix: unset RYK_HERMES_FAIL_OPEN  # or: ryk run -- hermes\n");
             }
             try stdout.print("  hook smoke test (pre_tool_call allow): {s}\n", .{if (report.hermes_hook_smoke_passed) "passed" else "FAILED"});
             if (!report.hermes_hook_smoke_passed) try stdout.writeAll("    → Fix: upgrade ryk and reinstall the Hermes integration\n");
@@ -997,7 +997,7 @@ fn manifestCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr
             target = .openclaw;
             continue;
         }
-        if (std.mem.eql(u8, arg, "hermes") or std.mem.eql(u8, arg, "hermess")) {
+        if (std.mem.eql(u8, arg, "hermes")) {
             target = .hermes;
             continue;
         }
@@ -1366,7 +1366,7 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
             target_explicit = true;
             continue;
         }
-        if (std.mem.eql(u8, arg, "hermes") or std.mem.eql(u8, arg, "hermess")) {
+        if (std.mem.eql(u8, arg, "hermes")) {
             target = .hermes;
             target_explicit = true;
             continue;
@@ -1610,8 +1610,8 @@ fn installCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr:
                         try stdout.writeAll("    → Written: ~/.hermes/plugins/ryk/.ryk_fail_stance\n");
                         try stdout.writeAll("    → Override: export RYK_HERMES_FAIL_OPEN=1  (or: ryk run -- hermes for process wrap)\n");
                     } else {
-                        try stdout.writeAll("  fail stance: left unchanged (existing install; product default is fail-open unless env/stance set)\n");
-                        try stdout.writeAll("    → Safer path: export RYK_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes\n");
+                        try stdout.writeAll("  fail stance: left unchanged (existing install; missing/invalid stance is fail-closed)\n");
+                        try stdout.writeAll("    → Explicit degraded override: export RYK_HERMES_FAIL_OPEN=1  # or: ryk run -- hermes\n");
                     }
                     if (binaryInPath(io, allocator, "hermes")) {
                         const status = try runHermesEnable(allocator);
@@ -1882,7 +1882,7 @@ pub fn detectOpenClawHostInstall(io: std.Io, allocator: std.mem.Allocator, openc
         };
     };
     defer env_map.deinit();
-    const home_owned = try env_util.getOwned(&env_map, allocator, "HOME");
+    const home_owned = try env_util.getOwnedHome(&env_map, allocator);
     const home = home_owned orelse return .{
         .host_plugin_installed = false,
         .plugin_manifest_exists = false,
@@ -2032,7 +2032,7 @@ fn jsonBoolField(object: std.json.ObjectMap, key: []const u8) bool {
 fn ensureOpenCodeConfigSane(io: std.Io, allocator: std.mem.Allocator) ![]const u8 {
     var env_map = try env_util.createProcessMap(allocator);
     defer env_map.deinit();
-    const home = (try env_util.getOwned(&env_map, allocator, "HOME")) orelse return error.HomeNotSet;
+    const home = (try env_util.getOwnedHome(&env_map, allocator)) orelse return error.HomeNotSet;
     defer allocator.free(home);
 
     const config_dir = try std.fs.path.join(allocator, &.{ home, ".config", "opencode" });
@@ -2075,7 +2075,7 @@ pub fn resolveOpenCodeDestination(allocator: std.mem.Allocator, workspace_root: 
         .global => blk: {
             var env_map = env_util.createProcessMap(allocator) catch return std.fs.path.join(allocator, &.{ "~", ".config", "opencode", "plugins", "ryk.ts" });
             defer env_map.deinit();
-            const home = env_util.getOwned(&env_map, allocator, "HOME") catch return std.fs.path.join(allocator, &.{ "~", ".config", "opencode", "plugins", "ryk.ts" });
+            const home = env_util.getOwnedHome(&env_map, allocator) catch return std.fs.path.join(allocator, &.{ "~", ".config", "opencode", "plugins", "ryk.ts" });
             const home_owned = home orelse return std.fs.path.join(allocator, &.{ "~", ".config", "opencode", "plugins", "ryk.ts" });
             defer allocator.free(home_owned);
             break :blk std.fs.path.join(allocator, &.{ home_owned, ".config", "opencode", "plugins", "ryk.ts" });
@@ -2106,7 +2106,8 @@ fn hermesHomeFromEnvMap(
     if (env_map.get("HERMES_HOME")) |custom| {
         if (std.fs.path.isAbsolute(custom)) return allocator.dupe(u8, custom);
     }
-    const home = env_map.get("HOME") orelse return std.fs.path.join(allocator, &.{ "~", ".hermes" });
+    const home = (try env_util.getOwnedHome(env_map, allocator)) orelse return std.fs.path.join(allocator, &.{ "~", ".hermes" });
+    defer allocator.free(home);
     return std.fs.path.join(allocator, &.{ home, ".hermes" });
 }
 
@@ -2276,7 +2277,7 @@ fn writeHermesEnableHelper(allocator: std.mem.Allocator, plugin_dir: []const u8)
     const resolved_dir = if (std.mem.startsWith(u8, plugin_dir, "~/")) blk: {
         var env_map = env_util.createProcessMap(allocator) catch return;
         defer env_map.deinit();
-        const home = env_util.getOwned(&env_map, allocator, "HOME") catch return;
+        const home = env_util.getOwnedHome(&env_map, allocator) catch return;
         const home_owned = home orelse return;
         defer allocator.free(home_owned);
         break :blk try std.fs.path.join(allocator, &.{ home_owned, plugin_dir[2..] });
@@ -2295,14 +2296,14 @@ fn writeHermesEnableHelper(allocator: std.mem.Allocator, plugin_dir: []const u8)
 }
 
 /// New Hermes installs: write fail-closed stance next to the plugin (hybrid L4).
-/// Env `RYK_HERMES_FAIL_OPEN` (and its legacy alias) overrides this file.
+/// Env `RYK_HERMES_FAIL_OPEN` overrides this file.
 fn writeHermesFailClosedStance(allocator: std.mem.Allocator, plugin_dir: []const u8) !void {
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();
     const resolved_dir = if (std.mem.startsWith(u8, plugin_dir, "~/")) blk: {
         var env_map = env_util.createProcessMap(allocator) catch return;
         defer env_map.deinit();
-        const home = env_util.getOwned(&env_map, allocator, "HOME") catch return;
+        const home = env_util.getOwnedHome(&env_map, allocator) catch return;
         const home_owned = home orelse return;
         defer allocator.free(home_owned);
         break :blk try std.fs.path.join(allocator, &.{ home_owned, plugin_dir[2..] });
@@ -2344,6 +2345,29 @@ test "plugin command help and invalid subcommands are stable" {
     const bad_code = try command(std.testing.io, &.{"unknown"}, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.usage, bad_code);
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "unknown subcommand") != null);
+}
+
+test "plugin commands reject the retired hermess target spelling" {
+    var stdout_buf: [4096]u8 = undefined;
+    var stderr_buf: [1024]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const doctor_code = try command(std.testing.io, &.{ "doctor", "hermess" }, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.usage, doctor_code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "hermess") != null);
+
+    stdout_writer = .fixed(&stdout_buf);
+    stderr_writer = .fixed(&stderr_buf);
+    const manifest_code = try command(std.testing.io, &.{ "manifest", "hermess" }, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.usage, manifest_code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "hermess") != null);
+
+    stdout_writer = .fixed(&stdout_buf);
+    stderr_writer = .fixed(&stderr_buf);
+    const install_code = try command(std.testing.io, &.{ "install", "hermess", "--dry-run" }, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.usage, install_code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "hermess") != null);
 }
 
 test "plugin doctor prints expected sections" {
@@ -2465,7 +2489,7 @@ test "binaryOnSearchPath finds names on a synthetic PATH" {
     defer allocator.free(dir_path);
 
     // Empty dir → miss.
-    try std.testing.expect(!binaryOnSearchPath(io, allocator, dir_path, "orca-not-present-xyz"));
+    try std.testing.expect(!binaryOnSearchPath(io, allocator, dir_path, "ryk-not-present-xyz"));
 
     // Create a file that looks like a binary entry.
     try tmp.dir.writeFile(io, .{ .sub_path = "fake-host-bin", .data = "x" });
@@ -2949,7 +2973,7 @@ test "plugin install --yes switches out of dry-run when dry-run is not explicit"
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
-    const code = try installCommand(std.testing.io, &.{ "codex", "--path", "does-not-exist-orca-test-plugin", "--yes" }, &stdout_writer, &stderr_writer);
+    const code = try installCommand(std.testing.io, &.{ "codex", "--path", "does-not-exist-ryk-test-plugin", "--yes" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.general, code);
 
     const output = stdout_writer.buffered();
@@ -3071,7 +3095,7 @@ test "plugin install opencode --yes writes global plugin under HOME" {
             std.mem.indexOf(u8, output, "host CLI not on PATH") != null,
     );
 
-    const plugin_path = try std.fs.path.join(std.testing.allocator, &.{ home, ".config", "opencode", "plugins", "orca.ts" });
+    const plugin_path = try std.fs.path.join(std.testing.allocator, &.{ home, ".config", "opencode", "plugins", "ryk.ts" });
     defer std.testing.allocator.free(plugin_path);
     try std.testing.expect(fileExistsAbsolute(std.testing.io, plugin_path));
 

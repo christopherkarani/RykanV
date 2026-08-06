@@ -1,4 +1,4 @@
-# orca-init
+# ryk-init
 
 Create or repair an ryk policy for the current repository.
 

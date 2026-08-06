@@ -10,7 +10,7 @@ The plugin is a thin layer. All policy decisions are made by the ryk CLI. The pl
 
 ## Prerequisites
 
-- Zig 0.15.2 (to build ryk from source)
+- Zig 0.16.0 (to build ryk from source)
 - ryk CLI built and available in PATH
 - Codex host binary installed
 
@@ -80,10 +80,10 @@ integrations/codex-plugin/examples/marketplace.json
 
 This is a documented example only. The exact schema depends on your Codex version.
 
-The root-level marketplace file for repo marketplace install is:
+The tracked repository marketplace file for repo marketplace install is:
 
 ```text
-.agents/plugins/marketplace.json
+.agents/plugins/marketplace.json (plugin source: integrations/codex-plugin/)
 ```
 
 ### Manual fallback install
@@ -141,11 +141,11 @@ Expected: `allow` decision in valid JSON.
 
 | Skill | File | Purpose |
 |-------|------|---------|
-| `orca-doctor` | `skills/ryk-doctor/SKILL.md` | Check installation and readiness |
-| `orca-init` | `skills/ryk-init/SKILL.md` | Create or repair a policy |
-| `orca-protect` | `skills/ryk-protect/SKILL.md` | Explain strongest protection |
-| `orca-redteam` | `skills/ryk-redteam/SKILL.md` | Run red-team fixtures |
-| `orca-replay` | `skills/ryk-replay/SKILL.md` | Replay latest session |
+| `ryk-doctor` | `skills/ryk-doctor/SKILL.md` | Check installation and readiness |
+| `ryk-init` | `skills/ryk-init/SKILL.md` | Create or repair a policy |
+| `ryk-protect` | `skills/ryk-protect/SKILL.md` | Explain strongest protection |
+| `ryk-redteam` | `skills/ryk-redteam/SKILL.md` | Run red-team fixtures |
+| `ryk-replay` | `skills/ryk-replay/SKILL.md` | Replay latest session |
 
 ## Hook list
 
@@ -191,7 +191,7 @@ The plugin uses synthetic test secrets (e.g., `fake_p05_secret_value`) in fixtur
 ## Limitations
 
 - Hooks are advisory; enforcement depends on Codex host support.
-- The strongest protection is `ryk codex`.
+- The strongest protection is the process-level wrapper `ryk run -- <codex-command>` (the `ryk codex` launcher uses the same protected path).
 - Plugin installation is a preview/dry-run by default.
 - No telemetry is collected.
 - Official marketplace availability is not yet implemented.

@@ -157,7 +157,7 @@ pub fn isEnabled() bool {
 }
 
 /// Resolve fm-steward binary path. Caller frees.
-/// Product order: `RYK_FM_STEWARD_BIN` / `RYK_FM_STEWARD_BIN` (if set) → `"fm-steward"` on PATH.
+/// Product order: `RYK_FM_STEWARD_BIN` (if set) → `"fm-steward"` on PATH.
 /// Never resolves cwd-relative `.build/` candidates (those are developer-local only).
 pub fn resolveBinary(allocator: std.mem.Allocator) ![]const u8 {
     if (env_util.getenvBrand("FM_STEWARD_BIN")) |raw| {

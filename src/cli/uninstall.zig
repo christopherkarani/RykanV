@@ -180,7 +180,7 @@ fn disablePlugins(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) !bo
 }
 
 // ---------------------------------------------------------------------------
-// Binary removal — self path, sibling aliases, known install locations
+// Binary removal — self path and known install locations
 // ---------------------------------------------------------------------------
 
 fn removeBinaries(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, dry_run: bool) !bool {
@@ -205,7 +205,7 @@ fn removeBinaries(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, dry
 
 fn removeKnownDefaultBinaries(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, dry_run: bool) !bool {
     var removed_any = false;
-    const home_z = std.c.getenv("HOME") orelse return false;
+    const home_z = env_util.getenvHome() orelse return false;
     const home = std.mem.span(home_z);
 
     // Unix curl installer default: ~/.local/bin/ryk
@@ -330,7 +330,7 @@ fn removeShareProduct(
         }
     }
 
-    if (std.c.getenv("HOME")) |home_z| {
+    if (env_util.getenvHome()) |home_z| {
         const home = std.mem.span(home_z);
         const unix_share = try std.fs.path.join(allocator, &.{ home, ".local", "share", "ryk" });
         defer allocator.free(unix_share);
@@ -640,8 +640,9 @@ fn runtimeLooksInstallerOwned(io: std.Io, allocator: std.mem.Allocator, target: 
 
     const marker = std.fs.path.join(allocator, &.{ target, ".ryk-installation" }) catch return false;
     defer allocator.free(marker);
-    const marker_text = std.Io.Dir.cwd().readFileAlloc(io, marker, allocator, .limited(128)) catch return false;
+    var marker_text = std.Io.Dir.cwd().readFileAlloc(io, marker, allocator, .limited(128)) catch return false;
     defer allocator.free(marker_text);
+    if (std.mem.startsWith(u8, marker_text, "\xEF\xBB\xBF")) marker_text = marker_text[3..];
     if (!std.mem.startsWith(u8, marker_text, "ryk-runtime-v1\nversion=")) return false;
 
     for ([_][]const u8{ "integrations", "fixtures", "schemas", "policies" }) |name| {
@@ -657,7 +658,7 @@ fn runtimeLooksInstallerOwned(io: std.Io, allocator: std.mem.Allocator, target: 
 // ---------------------------------------------------------------------------
 
 fn removeInstallerProfileEntries(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, dry_run: bool) !bool {
-    const home_z = std.c.getenv("HOME") orelse return false;
+    const home_z = env_util.getenvHome() orelse return false;
     const home = std.mem.span(home_z);
     var removed_any = false;
 
@@ -791,7 +792,7 @@ fn removeConfigDirs(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, d
         if (std.c.getenv("XDG_CONFIG_HOME")) |xdg| {
             break :blk std.fs.path.join(allocator, &.{ std.mem.span(xdg), "ryk" }) catch null;
         }
-        const home = std.c.getenv("HOME") orelse break :blk null;
+        const home = env_util.getenvHome() orelse break :blk null;
         break :blk std.fs.path.join(allocator, &.{ std.mem.span(home), ".config", "ryk" }) catch null;
     };
     defer if (config_dir) |p| allocator.free(p);
@@ -806,19 +807,19 @@ fn removeConfigDirs(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, d
         }
     }
 
-    // Legacy user data dir ~/.ryk (also Windows install root for bin/share).
-    const legacy_dir = blk: {
-        const home = std.c.getenv("HOME") orelse break :blk null;
+    // Windows user data dir ~/.ryk (also the install root for bin/share).
+    const win_data_dir = blk: {
+        const home = env_util.getenvHome() orelse break :blk null;
         break :blk std.fs.path.join(allocator, &.{ std.mem.span(home), ".ryk" }) catch null;
     };
-    defer if (legacy_dir) |p| allocator.free(p);
+    defer if (win_data_dir) |p| allocator.free(p);
 
-    if (legacy_dir) |ld| {
+    if (win_data_dir) |ld| {
         if (plugin.dirExists(ld) or plugin.fileExistsAbsolute(io, ld)) {
             if (dry_run) {
                 try stdout.print("  [dry-run] would remove: {s}\n", .{ld});
             } else {
-                try removePathSafely(io, ld, stdout, "legacy data");
+                try removePathSafely(io, ld, stdout, "Windows user data");
             }
         }
     }
@@ -880,11 +881,11 @@ test "uninstall --dry-run does not require --yes" {
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "dry-run") != null);
 }
 
-test "uninstall removes both ryk and ryk binaryes plus daemon" {
+test "uninstall removes the ryk CLI and daemon" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.createDirPath(std.testing.io, "custom/bin");
-    for ([_][]const u8{ "ryk", "ryk", "ryk-daemon" }) |name| {
+    for ([_][]const u8{ "ryk", "ryk-daemon" }) |name| {
         const path = try std.fmt.allocPrint(std.testing.allocator, "custom/bin/{s}", .{name});
         defer std.testing.allocator.free(path);
         const f = try tmp.dir.createFile(std.testing.io, path, .{});
@@ -901,7 +902,6 @@ test "uninstall removes both ryk and ryk binaryes plus daemon" {
     try std.testing.expect(try removeInstalledBinariesAt(std.testing.io, std.testing.allocator, cli_path, &stdout_writer, false));
 
     try std.testing.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "custom/bin/ryk", .{}));
-    try std.testing.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "custom/bin/ryk", .{}));
     try std.testing.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "custom/bin/ryk-daemon", .{}));
 }
 
@@ -911,8 +911,8 @@ test "uninstall dry-run leaves binaries in place" {
     try tmp.dir.createDirPath(std.testing.io, "custom/bin");
     const cli = try tmp.dir.createFile(std.testing.io, "custom/bin/ryk", .{});
     cli.close(std.testing.io);
-    const alias = try tmp.dir.createFile(std.testing.io, "custom/bin/ryk", .{});
-    alias.close(std.testing.io);
+    const daemon = try tmp.dir.createFile(std.testing.io, "custom/bin/ryk-daemon", .{});
+    daemon.close(std.testing.io);
 
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
@@ -923,7 +923,7 @@ test "uninstall dry-run leaves binaries in place" {
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     try std.testing.expect(try removeInstalledBinariesAt(std.testing.io, std.testing.allocator, cli_path, &stdout_writer, true));
     try tmp.dir.access(std.testing.io, "custom/bin/ryk", .{});
-    try tmp.dir.access(std.testing.io, "custom/bin/ryk", .{});
+    try tmp.dir.access(std.testing.io, "custom/bin/ryk-daemon", .{});
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "[dry-run]") != null);
 }
 
@@ -1102,8 +1102,6 @@ test "uninstall removes ryk profile blocks and preserves unrelated lines" {
         \\fish_add_path -- '/custom/bin'
         \\# ryk runtime assets
         \\export RYK_RESOURCE_ROOT="/custom/share/ryk/current"
-        \\# ryk runtime assets (RYK_RESOURCE_ROOT dual-name)
-        \\$env:RYK_RESOURCE_ROOT = "/custom/share/ryk/current"
         \\export ALSO_KEEP_ME=1
         \\
     );
@@ -1153,4 +1151,3 @@ test "uninstall refuses to rewrite a symlinked shell profile" {
     defer std.testing.allocator.free(content);
     try std.testing.expect(std.mem.indexOf(u8, content, "Added by ryk") != null);
 }
-

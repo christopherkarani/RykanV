@@ -24,7 +24,7 @@ ryk doctor
 
 ### Missing ryk binary
 
-If `ryk` is not found in PATH, install ryk first. Build from source with Zig 0.15.2:
+If `ryk` is not found in PATH, install ryk first. Build from source with Zig 0.16.0:
 
 ```bash
 zig build
