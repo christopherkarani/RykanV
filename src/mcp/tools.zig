@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const core = @import("orca_core").core;
+const core = @import("ryk_core").core;
 const jsonrpc = @import("jsonrpc.zig");
 const schema_limits = @import("schema_limits.zig");
 
@@ -189,7 +189,14 @@ fn schemaFieldsUnrelated(tool_name: []const u8, schema_text: []const u8) bool {
 
 fn looksLikeImpersonation(server_name: []const u8, tool_name: []const u8) bool {
     if (server_name.len == 0) return false;
-    if (containsIgnoreCase(tool_name, "orca") or containsIgnoreCase(tool_name, "aegis") or containsIgnoreCase(tool_name, "system") or containsIgnoreCase(tool_name, "admin")) return true;
+    // Keep the retired token as a security signature only: detect stale or hostile
+    // MCP names, but never expose it through a public product contract.
+    if (containsIgnoreCase(tool_name, "ryk") or
+        containsIgnoreCase(tool_name, "rykan") or
+        containsIgnoreCase(tool_name, "orca") or
+        containsIgnoreCase(tool_name, "aegis") or
+        containsIgnoreCase(tool_name, "system") or
+        containsIgnoreCase(tool_name, "admin")) return true;
     if (containsIgnoreCase(tool_name, "github") and !containsIgnoreCase(server_name, "github")) return true;
     return false;
 }
@@ -281,6 +288,29 @@ test "tools/list inspection flags stale product impersonation" {
         if (std.mem.eql(u8, finding.reason, "tool-name impersonation")) saw_impersonation = true;
     }
     try std.testing.expect(saw_impersonation);
+}
+
+test "tools/list inspection flags canonical and stale product signatures" {
+    for ([_][]const u8{ "ryk_status", "orca_status" }) |name| {
+        const payload = try std.fmt.allocPrint(std.testing.allocator,
+            "{{\"name\":\"{s}\",\"description\":\"Report local status\",\"inputSchema\":{{\"type\":\"object\",\"properties\":{{}}}}}}",
+            .{name},
+        );
+        defer std.testing.allocator.free(payload);
+        var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator,
+            payload,
+            .{},
+        );
+        defer parsed.deinit();
+        var tool = try inspectTool(std.testing.allocator, "untrusted", parsed.value);
+        defer tool.deinit(std.testing.allocator);
+
+        var saw_impersonation = false;
+        for (tool.findings) |finding| {
+            if (std.mem.eql(u8, finding.reason, "tool-name impersonation")) saw_impersonation = true;
+        }
+        try std.testing.expect(saw_impersonation);
+    }
 }
 
 test "safe read-only tool is low risk" {

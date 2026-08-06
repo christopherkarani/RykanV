@@ -1,6 +1,6 @@
 # Leaky Agent Demo
 
-This deterministic demo shows how Orca handles a prompt-injection-shaped local workflow without using a real LLM, real secrets, or the external network.
+This deterministic demo shows how ryk handles a prompt-injection-shaped local workflow without using a real LLM, real secrets, or the external network.
 
 ## Scenario
 
@@ -9,7 +9,7 @@ The local project contains a malicious README that tells an agent to read `.env`
 1. A shell-mediated `.env` read.
 2. A network-like exfiltration command to a synthetic domain.
 
-Orca runs those requested actions through protected sessions, blocks them before they execute, records audit events, and lets replay verify the last session. The demo intentionally does not claim transparent filesystem interception for arbitrary child process file IO.
+ryk runs those requested actions through protected sessions, blocks them before they execute, records audit events, and lets replay verify the last session. The demo intentionally does not claim transparent filesystem interception for arbitrary child process file IO.
 
 ## Run
 
@@ -19,7 +19,7 @@ From the repository root:
 zig build
 cd examples/leaky-agent-demo
 ./run-demo.sh
-../../zig-out/bin/orca replay --session last --verify
+../../zig-out/bin/ryk replay --session last --verify
 ```
 
 PowerShell users can run:
@@ -36,4 +36,4 @@ PowerShell users can run:
 - The fake secret is created only inside a temporary demo workspace.
 - The fake secret value must not appear in terminal output, `events.jsonl`, `summary.json`, `summary.md`, or replay output.
 
-The script prints the temporary workspace path and the Orca session id so the run can be used for terminal recordings.
+The script prints the temporary workspace path and the ryk session id so the run can be used for terminal recordings.

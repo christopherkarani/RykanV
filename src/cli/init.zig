@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const orca_policy = @import("orca_core").policy;
-const core = @import("orca_core").core;
+const policy_mod = @import("ryk_core").policy;
+const core = @import("ryk_core").core;
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
 const style = @import("style.zig");
@@ -10,7 +10,7 @@ const pack_state = @import("pack_state.zig");
 
 const InitOptions = struct {
     mode: ?[]const u8 = null,
-    preset: orca_policy.presets.AgentPreset = .generic_agent,
+    preset: policy_mod.presets.AgentPreset = .generic_agent,
     force: bool = false,
     quiet: bool = false,
 };
@@ -22,29 +22,29 @@ pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: an
         else => return err,
     };
 
-    cwd.createDirPath(io, ".orca") catch |err| {
-        try stderr.print("ryk init: failed to create .orca: {s}\n", .{@errorName(err)});
+    cwd.createDirPath(io, ".ryk") catch |err| {
+        try stderr.print("ryk init: failed to create .ryk: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
 
     const flags: std.Io.Dir.CreateFileOptions = if (options.force) .{} else .{ .exclusive = true };
-    const file = cwd.createFile(io, ".orca/policy.yaml", flags) catch |err| switch (err) {
+    const file = cwd.createFile(io, ".ryk/policy.yaml", flags) catch |err| switch (err) {
         error.PathAlreadyExists => {
-            try stderr.writeAll("ryk init: .orca/policy.yaml already exists; use --force to overwrite.\n");
+            try stderr.writeAll("ryk init: .ryk/policy.yaml already exists; use --force to overwrite.\n");
             return exit_codes.general;
         },
         else => {
-            try stderr.print("ryk init: failed to write .orca/policy.yaml: {s}\n", .{@errorName(err)});
+            try stderr.print("ryk init: failed to write .ryk/policy.yaml: {s}\n", .{@errorName(err)});
             return exit_codes.general;
         },
     };
     defer file.close(io);
 
-    const preset_text = orca_policy.presets.agentPresetText(options.preset);
+    const preset_text = policy_mod.presets.agentPresetText(options.preset);
     try writePolicy(io, file, preset_text, options.mode);
-    const info = orca_policy.presets.agentPresetInfo(options.preset);
+    const info = policy_mod.presets.agentPresetInfo(options.preset);
 
-    // Additive pack enablement for the daemon evaluator (project `.orca.toml` when in a git
+    // Additive pack enablement for the daemon evaluator (project `.ryk.toml` when in a git
     // repo, else user config). Zig still owns policy.yaml; packs config is additive.
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_state.deinit();
@@ -67,17 +67,17 @@ pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: an
         // maybeColor, matching the style of setup.zig and run.zig warm paths.
         try stdout.writeAll("\n");
         var msg_buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&msg_buf, "{s} Created .orca/policy.yaml from preset '{s}'.\n", .{ style.Glyph.check, info.name }) catch null;
+        const msg = std.fmt.bufPrint(&msg_buf, "{s} Created .ryk/policy.yaml from preset '{s}'.\n", .{ style.Glyph.check, info.name }) catch null;
         if (msg) |m| {
             try style.maybeColor(io, stdout, style.Style.green, m);
         } else {
             // Buffer too small (should never happen): fall back to manual gating.
             if (style.useColor(io, stdout)) {
                 try stdout.writeAll(style.Style.green);
-                try stdout.print("{s} Created .orca/policy.yaml from preset '{s}'.\n", .{ style.Glyph.check, info.name });
+                try stdout.print("{s} Created .ryk/policy.yaml from preset '{s}'.\n", .{ style.Glyph.check, info.name });
                 try stdout.writeAll(style.Style.reset);
             } else {
-                try stdout.print("{s} Created .orca/policy.yaml from preset '{s}'.\n", .{ style.Glyph.check, info.name });
+                try stdout.print("{s} Created .ryk/policy.yaml from preset '{s}'.\n", .{ style.Glyph.check, info.name });
             }
         }
         try stdout.print("{s}\n", .{packs_result.message});
@@ -89,7 +89,7 @@ pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: an
             "Your policy is ready.\n" ++
             "\n" ++
             "Next steps:\n" ++
-            "  ryk policy check .orca/policy.yaml\n" ++
+            "  ryk policy check .ryk/policy.yaml\n" ++
             "  ryk doctor\n" ++
             "  ryk run -- <command>\n" ++
             "\n");
@@ -109,7 +109,7 @@ pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: an
 // ---------------------------------------------------------------------------
 
 /// Re-export for tests and start.zig composition (product API is network_discovered).
-pub const refreshManagedDiscovery = orca_policy.network_discovered.refreshManagedDiscovery;
+pub const refreshManagedDiscovery = policy_mod.network_discovered.refreshManagedDiscovery;
 
 fn softRefreshInitDiscovery(
     io: std.Io,
@@ -155,7 +155,7 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
                 try stderr.writeAll("ryk init: --preset requires a preset name.\n");
                 return error.Usage;
             }
-            const preset = orca_policy.presets.AgentPreset.parse(argv[index]) orelse {
+            const preset = policy_mod.presets.AgentPreset.parse(argv[index]) orelse {
                 try suggestions.writeInvalidValue(stderr, "ryk init", "--preset", argv[index], &.{ "generic-agent", "claude-code", "codex", "cursor-agent", "opencode", "cline-roo", "mcp-dev", "github-actions", "solo-dev", "strict-local", "team-ci", "openclaw-hermes", "trusted-local" }, "init");
                 return error.Usage;
             };
@@ -221,7 +221,7 @@ test "init creates policy and refuses overwrite without force" {
     const code = try command(std.testing.io, tmp.dir, &.{ "--mode", "strict" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, code);
 
-    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".orca/policy.yaml", std.testing.allocator, .limited(4096));
+    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(16 * 1024));
     defer std.testing.allocator.free(policy);
     try std.testing.expect(std.mem.indexOf(u8, policy, "version: 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, policy, "mode: strict") != null);
@@ -237,9 +237,9 @@ test "init force overwrites existing policy" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const existing = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const existing = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer existing.close(std.testing.io);
         try existing.writeStreamingAll(std.testing.io, "old\n");
     }
@@ -253,7 +253,7 @@ test "init force overwrites existing policy" {
     try std.testing.expectEqual(exit_codes.success, code);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 
-    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".orca/policy.yaml", std.testing.allocator, .limited(4096));
+    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(16 * 1024));
     defer std.testing.allocator.free(policy);
     try std.testing.expect(std.mem.indexOf(u8, policy, "mode: observe") != null);
 }
@@ -273,12 +273,12 @@ test "init accepts generic-agent preset alias" {
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Packs: baseline only") != null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 
-    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".orca/policy.yaml", std.testing.allocator, .limited(4096));
+    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(16 * 1024));
     defer std.testing.allocator.free(policy);
     try std.testing.expect(std.mem.indexOf(u8, policy, "version: 1") != null);
 }
 
-test "init team-ci enables opt-in packs in project .orca.toml" {
+test "init team-ci enables opt-in packs in project .ryk.toml" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.createDirPath(std.testing.io, ".git");
@@ -295,11 +295,11 @@ test "init team-ci enables opt-in packs in project .orca.toml" {
     try std.testing.expect(std.mem.indexOf(u8, out, "containers.docker") != null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 
-    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".orca/policy.yaml", std.testing.allocator, .limited(16 * 1024));
+    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(16 * 1024));
     defer std.testing.allocator.free(policy);
     try std.testing.expect(std.mem.indexOf(u8, policy, "version: 1") != null);
 
-    const packs_cfg = try tmp.dir.readFileAlloc(std.testing.io, ".orca.toml", std.testing.allocator, .limited(8192));
+    const packs_cfg = try tmp.dir.readFileAlloc(std.testing.io, ".ryk.toml", std.testing.allocator, .limited(8192));
     defer std.testing.allocator.free(packs_cfg);
     try std.testing.expect(std.mem.indexOf(u8, packs_cfg, "containers.docker") != null);
     try std.testing.expect(std.mem.indexOf(u8, packs_cfg, "kubernetes.kubectl") != null);
@@ -310,7 +310,7 @@ test "init team-ci enables opt-in packs in project .orca.toml" {
     stderr_writer = .fixed(&stderr_buf);
     const second = try command(std.testing.io, tmp.dir, &.{ "--preset", "team-ci", "--force" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, second);
-    const packs_cfg2 = try tmp.dir.readFileAlloc(std.testing.io, ".orca.toml", std.testing.allocator, .limited(8192));
+    const packs_cfg2 = try tmp.dir.readFileAlloc(std.testing.io, ".ryk.toml", std.testing.allocator, .limited(8192));
     defer std.testing.allocator.free(packs_cfg2);
     try std.testing.expect(std.mem.indexOf(u8, packs_cfg2, "containers.docker") != null);
 }
@@ -334,11 +334,11 @@ test "init writes requested phase 18 presets as valid policies" {
         try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Your policy is ready") != null);
         try std.testing.expectEqualStrings("", stderr_writer.buffered());
 
-        const policy = try tmp.dir.readFileAlloc(std.testing.io, ".orca/policy.yaml", std.testing.allocator, .limited(16 * 1024));
+        const policy = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(16 * 1024));
         defer std.testing.allocator.free(policy);
-        var loaded = try orca_policy.load.parseFromSlice(std.testing.allocator, policy, ".orca/policy.yaml");
+        var loaded = try policy_mod.load.parseFromSlice(std.testing.allocator, policy, ".ryk/policy.yaml");
         defer loaded.deinit();
-        try orca_policy.validate.policy(&loaded);
+        try policy_mod.validate.policy(&loaded);
     }
 }
 
@@ -441,7 +441,7 @@ fn p3InitPlantOpencodeHome(home_dir: anytype) !void {
     try p3InitWriteRel(home_dir, ".local/share/opencode/auth.json", p3_init_opencode_auth_json);
 }
 
-fn p3InitStoreContainsHost(store: orca_policy.network_discovered.ManagedStore, needle: []const u8) bool {
+fn p3InitStoreContainsHost(store: policy_mod.network_discovered.ManagedStore, needle: []const u8) bool {
     for (store.hosts) |entry| {
         if (std.mem.eql(u8, entry.host, needle)) return true;
     }
@@ -457,7 +457,7 @@ fn p3InitAssertNoSecretsInBytes(bytes: []const u8) !void {
 
 test "init refreshManagedDiscovery pi/opencode writes managed yaml hostnames+sources only" {
     // Acceptance: Synthetic HOME+tmp workspace refresh for pi/opencode writes
-    // <workspace>/.orca/network-discovered.yaml with hostnames+sources only.
+    // <workspace>/.ryk/network-discovered.yaml with hostnames+sources only.
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -475,7 +475,7 @@ test "init refreshManagedDiscovery pi/opencode writes managed yaml hostnames+sou
 
     try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{ "pi", "opencode" });
 
-    var store = try orca_policy.network_discovered.loadManaged(io, allocator, workspace_root);
+    var store = try policy_mod.network_discovered.loadManaged(io, allocator, workspace_root);
     defer store.deinit(allocator);
 
     try std.testing.expect(p3InitStoreContainsHost(store, "auth.x.ai"));
@@ -486,7 +486,7 @@ test "init refreshManagedDiscovery pi/opencode writes managed yaml hostnames+sou
         try std.testing.expect(std.mem.indexOf(u8, entry.host, "://") == null);
     }
 
-    const path = try orca_policy.network_discovered.managedPath(allocator, workspace_root);
+    const path = try policy_mod.network_discovered.managedPath(allocator, workspace_root);
     defer allocator.free(path);
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64 * 1024));
     defer allocator.free(bytes);
@@ -523,14 +523,14 @@ test "init refreshManagedDiscovery rediscovery leaves policy.yaml user allows un
         \\
     ;
     {
-        const f = try ws_tmp.dir.createFile(io, ".orca/policy.yaml", .{});
+        const f = try ws_tmp.dir.createFile(io, ".ryk/policy.yaml", .{});
         defer f.close(io);
         try f.writeStreamingAll(io, user_policy);
     }
-    const policy_before = try ws_tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(4096));
+    const policy_before = try ws_tmp.dir.readFileAlloc(io, ".ryk/policy.yaml", allocator, .limited(4096));
     defer allocator.free(policy_before);
 
-    try orca_policy.network_discovered.writeManaged(io, allocator, workspace_root, &.{
+    try policy_mod.network_discovered.writeManaged(io, allocator, workspace_root, &.{
         .{ .host = "stale-init-managed.invalid", .sources = &.{"fixture:stale"} },
     });
 
@@ -543,18 +543,18 @@ test "init refreshManagedDiscovery rediscovery leaves policy.yaml user allows un
     try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{"pi"});
     try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{"pi"});
 
-    var store = try orca_policy.network_discovered.loadManaged(io, allocator, workspace_root);
+    var store = try policy_mod.network_discovered.loadManaged(io, allocator, workspace_root);
     defer store.deinit(allocator);
     try std.testing.expect(p3InitStoreContainsHost(store, "auth.x.ai"));
     try std.testing.expect(!p3InitStoreContainsHost(store, "stale-init-managed.invalid"));
 
-    const policy_after = try ws_tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(4096));
+    const policy_after = try ws_tmp.dir.readFileAlloc(io, ".ryk/policy.yaml", allocator, .limited(4096));
     defer allocator.free(policy_after);
     try std.testing.expectEqualStrings(policy_before, policy_after);
     try std.testing.expect(std.mem.indexOf(u8, policy_after, "user-init-preserve.example") != null);
 }
 
-test "init refreshManagedDiscovery nested-cwd lands at workspace-root .orca" {
+test "init refreshManagedDiscovery nested-cwd lands at workspace-root .ryk" {
     // Composition: nested-cwd refresh → managed at workspace-root (not under nested).
     const allocator = std.testing.allocator;
     const io = std.testing.io;
@@ -580,12 +580,12 @@ test "init refreshManagedDiscovery nested-cwd lands at workspace-root .orca" {
 
     try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{"opencode"});
 
-    var store = try orca_policy.network_discovered.loadManaged(io, allocator, workspace_root);
+    var store = try policy_mod.network_discovered.loadManaged(io, allocator, workspace_root);
     defer store.deinit(allocator);
     try std.testing.expect(p3InitStoreContainsHost(store, "api.x.ai"));
     try std.testing.expect(p3InitStoreContainsHost(store, "auth.x.ai"));
 
-    if (ws_tmp.dir.access(io, "nested/cwd/.orca/network-discovered.yaml", .{})) |_| {
+    if (ws_tmp.dir.access(io, "nested/cwd/.ryk/network-discovered.yaml", .{})) |_| {
         try std.testing.expect(false);
     } else |_| {}
 }
@@ -618,7 +618,7 @@ test "init command succeeds and refresh soft-succeeds when no hosts detected" {
     try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{ "pi", "opencode" });
 
     // Policy created by init must still exist and be readable.
-    const policy = try ws_tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(16 * 1024));
+    const policy = try ws_tmp.dir.readFileAlloc(io, ".ryk/policy.yaml", allocator, .limited(16 * 1024));
     defer allocator.free(policy);
     try std.testing.expect(std.mem.indexOf(u8, policy, "mode: observe") != null);
 }
@@ -649,12 +649,12 @@ test "init force still succeeds after refreshManagedDiscovery with fixtures" {
 
     try refreshManagedDiscovery(io, allocator, workspace_root, home, &.{ "pi", "opencode" });
 
-    var store = try orca_policy.network_discovered.loadManaged(io, allocator, workspace_root);
+    var store = try policy_mod.network_discovered.loadManaged(io, allocator, workspace_root);
     defer store.deinit(allocator);
     try std.testing.expect(p3InitStoreContainsHost(store, "auth.x.ai"));
     try std.testing.expect(p3InitStoreContainsHost(store, "api.x.ai"));
 
-    const policy = try ws_tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(16 * 1024));
+    const policy = try ws_tmp.dir.readFileAlloc(io, ".ryk/policy.yaml", allocator, .limited(16 * 1024));
     defer allocator.free(policy);
     try std.testing.expect(std.mem.indexOf(u8, policy, "mode: ask") != null);
     // Managed secrets must not leak into policy.

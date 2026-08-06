@@ -4,7 +4,7 @@
 //! contain raw secret values or live canary bodies.
 
 const std = @import("std");
-const util = @import("orca_core").core.util;
+const util = @import("ryk_core").core.util;
 
 pub const schema_version: u16 = 1;
 
@@ -13,7 +13,7 @@ pub const schema_version: u16 = 1;
 // Unit dual-proof (test-fast greps) and packaged binary attach.
 pub const allowlisted_attach_details = [_][]const u8{
     "zig_real_fs_deny_canary_and_handshake",
-    "orca_run_os_sandbox_on_active",
+    "ryk_run_os_sandbox_on_active",
 };
 
 pub const ControlResult = struct {
@@ -81,7 +81,7 @@ pub const Manifest = struct {
         }
         // Packaged binary attach must carry a real profile hash.
         if (self.ctrl_attach.ok and
-            std.mem.eql(u8, self.ctrl_attach.detail, "orca_run_os_sandbox_on_active") and
+            std.mem.eql(u8, self.ctrl_attach.detail, "ryk_run_os_sandbox_on_active") and
             self.profile_hash.len != 64)
         {
             return error.MissingProfileHash;
@@ -427,7 +427,7 @@ test "e2e-shaped unit dual-proof manifest validates and allControlsPass" {
     try std.testing.expect(std.mem.indexOf(u8, json, "zig_real_fs_deny_canary_and_handshake") != null);
 }
 
-test "e2e-shaped packaged orca_run attach requires 64-hex profile_hash" {
+test "e2e-shaped packaged ryk_run attach requires 64-hex profile_hash" {
     const hash64 = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
     var packaged = Manifest{
         .gate_ids = &.{ "P1-I-01", "P0-I-06", "M-11", "M-12", "F-1", "F-5" },
@@ -442,11 +442,11 @@ test "e2e-shaped packaged orca_run attach requires 64-hex profile_hash" {
         .exit_code = 0,
         .ctrl_baseline = .{ .ok = true, .detail = "binary_present" },
         .ctrl_prepare = .{ .ok = true, .detail = "zig_fork_apply_handshake" },
-        .ctrl_attach = .{ .ok = true, .detail = "orca_run_os_sandbox_on_active" },
+        .ctrl_attach = .{ .ok = true, .detail = "ryk_run_os_sandbox_on_active" },
         .test_deny = .{ .ok = true, .detail = "outside_unreadable_under_sandbox" },
         .ctrl_neighbor = .{ .ok = true, .detail = "workspace_neighbor_rw" },
         .ctrl_off = .{ .ok = true, .detail = "apply_mode_off_disabled_receipt" },
-        .canary_fingerprint = "packaged:orca_run_os_sandbox_on_active",
+        .canary_fingerprint = "packaged:ryk_run_os_sandbox_on_active",
         .rerun = "./scripts/os-sandbox-adversarial-e2e.sh --case ci-linux",
     };
     try std.testing.expectError(error.MissingProfileHash, packaged.validate());
@@ -457,7 +457,7 @@ test "e2e-shaped packaged orca_run attach requires 64-hex profile_hash" {
     try std.testing.expect(packaged.allControlsPass());
     const json = try writeJson(std.testing.allocator, packaged);
     defer std.testing.allocator.free(json);
-    try std.testing.expect(std.mem.indexOf(u8, json, "orca_run_os_sandbox_on_active") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "ryk_run_os_sandbox_on_active") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, hash64) != null);
 }
 
@@ -473,7 +473,7 @@ test "e2e-shaped attach without TEST-DENY fails validate" {
         .profile_hash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
         .command = "ryk run --os-sandbox on",
         .ctrl_baseline = .{ .ok = true },
-        .ctrl_attach = .{ .ok = true, .detail = "orca_run_os_sandbox_on_active" },
+        .ctrl_attach = .{ .ok = true, .detail = "ryk_run_os_sandbox_on_active" },
         .test_deny = .{ .ok = false, .detail = "not_proven" },
         .ctrl_neighbor = .{ .ok = true },
         .ctrl_off = .{ .ok = true },

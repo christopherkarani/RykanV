@@ -15,7 +15,7 @@ As of 2026-05-13:
 
 - Latest tagged Zig release: `0.16.0` from 2026-04-13.
 - Current development downloads: `0.17.0-dev.*`.
-- ryk is pinned in `build.zig.zon` to `minimum_zig_version = "0.15.2"`.
+- ryk is pinned in `build.zig.zon` to `minimum_zig_version = "0.16.0"`.
 
 Project pins win. Do not update code to 0.16 APIs unless the user asked for migration or the repo already targets 0.16.
 

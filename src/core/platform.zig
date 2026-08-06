@@ -102,14 +102,14 @@ pub fn reportCapability(os: Os, capability: Capability) CapabilityReport {
             .active => switch (capability) {
                 .process_supervision => "Linux backend uses process-group cleanup where available",
                 .env_filtering => "child environment filtering is implemented and tested",
-                .path_staging => "Orca-mediated write staging is implemented and tested",
+                .path_staging => "ryk-mediated write staging is implemented and tested",
                 .mcp_stdio_proxy => "stdio MCP proxy enforcement is implemented and tested",
                 .network_policy_engine => "pure policy decisions are implemented and tested",
                 else => "backend reported active",
             },
             .partial => switch (capability) {
                 .process_supervision => "direct-child supervision is implemented; Linux process-tree cleanup is backend-specific",
-                .network_observe => "network audit events exist for Orca-mediated decisions; transparent observation is platform-dependent",
+                .network_observe => "network audit events exist for ryk-mediated decisions; transparent observation is platform-dependent",
                 else => "partial backend support",
             },
             .limited => switch (capability) {

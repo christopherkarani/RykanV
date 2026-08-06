@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const core_api = @import("orca_core").api;
+const core_api = @import("ryk_core").api;
 
 pub const synthetic_secret = "sk-fakeSyntheticOpenAIKey1234567890";
 
@@ -12,7 +12,7 @@ pub const SessionOptions = struct {
 pub fn syntheticSecretReplaySession(allocator: std.mem.Allocator, options: SessionOptions) !core_api.ReplaySession {
     const raw = try std.fmt.allocPrint(
         allocator,
-        \\{{"version":1,"session_id":"{s}","event_id":"e1","timestamp":"2026-01-01T00:00:00Z","type":"command_denied","actor":{{"kind":"orca","id":null,"display":"orca"}},"target":{{"kind":"command","value":"OPENAI_API_KEY={s}"}},"decision":{{"result":"deny","rule_id":"commands.deny","reason":"blocked token {s} in command","risk_score":90,"requires_user":false,"ci_may_proceed":false}},"redactions":{{"count":0,"labels":[]}},"previous_hash":null,"event_hash":"00"}}
+        \\{{"version":1,"session_id":"{s}","event_id":"e1","timestamp":"2026-01-01T00:00:00Z","type":"command_denied","actor":{{"kind":"ryk","id":null,"display":"ryk"}},"target":{{"kind":"command","value":"OPENAI_API_KEY={s}"}},"decision":{{"result":"deny","rule_id":"commands.deny","reason":"blocked token {s} in command","risk_score":90,"requires_user":false,"ci_may_proceed":false}},"redactions":{{"count":0,"labels":[]}},"previous_hash":null,"event_hash":"00"}}
     ,
         .{ options.session_id, synthetic_secret, synthetic_secret },
     );
@@ -23,7 +23,7 @@ pub fn syntheticSecretReplaySession(allocator: std.mem.Allocator, options: Sessi
         .session_id = try allocator.dupe(u8, options.session_id),
         .session_dir_path = try std.fmt.allocPrint(allocator, "/tmp/{s}", .{options.session_id}),
         .command_display = try allocator.dupe(u8, "ryk run"),
-        .policy = try allocator.dupe(u8, ".orca/policy.yaml"),
+        .policy = try allocator.dupe(u8, ".ryk/policy.yaml"),
         .status_display = try allocator.dupe(u8, "exited 1"),
         .events = try allocator.alloc(core_api.ReplayEvent, 1),
         .verified = options.verified,

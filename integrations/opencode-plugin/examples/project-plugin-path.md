@@ -14,13 +14,13 @@ This example shows how to install the ryk plugin locally within a single project
 
    ```bash
    # Adjust the source path to point to the ryk repository
-   cp /path/to/orca-repo/integrations/opencode-plugin/orca.ts .opencode/plugins/orca.ts
+   cp /path/to/ryk-repo/integrations/opencode-plugin/ryk.ts .opencode/plugins/ryk.ts
    ```
 
    Or create a symlink:
 
    ```bash
-   ln -s /path/to/orca-repo/integrations/opencode-plugin/orca.ts .opencode/plugins/orca.ts
+   ln -s /path/to/ryk-repo/integrations/opencode-plugin/ryk.ts .opencode/plugins/ryk.ts
    ```
 
 3. OpenCode will automatically discover plugins in `.opencode/plugins/` when running inside the project.

@@ -33,7 +33,7 @@ The red-team suite runs synthetic fixtures against ryk policy to check:
 
 - No external network access is required.
 - No real LLM is required.
-- A valid `.orca/policy.yaml` is recommended but not strictly required; the suite can fall back to built-in presets.
+- A valid `.ryk/policy.yaml` is recommended but not strictly required; the suite can fall back to built-in presets.
 
 ## Interpreting results
 

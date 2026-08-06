@@ -4,7 +4,7 @@
   "risk": "unknown",
   "category": "command",
   "reason": "matched commands.allow rule \"echo *\"",
-  "rule": "commands.allow[14]",
+  "rule": "commands.allow[21]",
   "message": "command allowed by ryk policy.",
   "redactions": [
   ]

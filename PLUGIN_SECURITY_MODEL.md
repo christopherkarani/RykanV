@@ -3,12 +3,12 @@
 > Version: 1.1.0
 > Status: Active
 
-This document defines the trust boundaries, sandbox expectations, and permission model for Orca plugins.
+This document defines the trust boundaries, sandbox expectations, and permission model for ryk plugins.
 
 ## Principles
 
-1. **Orca is the source of truth.** Plugins call Orca; they do not reimplement policy logic.
-2. **Strongest protection is `orca run`.** Plugin hooks are additive, not a replacement for supervised execution.
+1. **ryk is the source of truth.** Plugins call ryk; they do not reimplement policy logic.
+2. **Strongest protection is `ryk run`.** Plugin hooks are additive, not a replacement for supervised execution.
 3. **Default deny.** If a plugin cannot verify safety, it must fail closed.
 4. **No silent mutation.** Host configs, policies, and credentials are never changed without explicit user approval.
 5. **No telemetry by default.** The plugin surface does not phone home.
@@ -20,13 +20,13 @@ This document defines the trust boundaries, sandbox expectations, and permission
 │  Host IDE (Codex, Claude Code, etc.)    │  ← Untrusted by default
 │  Runs arbitrary agent code                │
 ├─────────────────────────────────────────┤
-│  Orca Plugin (future package)          │  ← Semi-trusted; read-only
-│  Calls Orca for decisions            │
+│  ryk Plugin (future package)          │  ← Semi-trusted; read-only
+│  Calls ryk for decisions            │
 ├─────────────────────────────────────────┤
-│  Orca (`orca plugin *`)           │  ← Trusted local surface
+│  ryk (`ryk plugin *`)           │  ← Trusted local surface
 │  Owns policy, audit, replay               │
 ├─────────────────────────────────────────┤
-│  Orca Core (policy engine, audit)      │  ← Trusted
+│  ryk Core (policy engine, audit)      │  ← Trusted
 │  Local-only, no network dependency        │
 └─────────────────────────────────────────┘
 ```
@@ -35,16 +35,16 @@ This document defines the trust boundaries, sandbox expectations, and permission
 
 | Level | What It Can Do | Example |
 |-------|----------------|---------|
-| **Read-only** | Query status, read policy, check manifests | `orca plugin doctor`, `orca plugin manifest` |
-| **Preview** | Simulate changes without writing | `orca plugin install --dry-run` |
+| **Read-only** | Query status, read policy, check manifests | `ryk plugin doctor`, `ryk plugin manifest` |
+| **Preview** | Simulate changes without writing | `ryk plugin install --dry-run` |
 | **Mutate** | Modify host config or policy | Requires `--yes` + explicit user confirmation |
 | **Actuate** | Trigger real-world effects | **Not exposed by default** |
 
 ## Plugin Default Behavior
 
-- `orca plugin install` defaults to `--dry-run`.
-- `orca plugin doctor` does not print secrets or raw env values.
-- `orca plugin mcp-server` is a documented stub; no real server starts.
+- `ryk plugin install` defaults to `--dry-run`.
+- `ryk plugin doctor` does not print secrets or raw env values.
+- `ryk plugin mcp-server` is a documented stub; no real server starts.
 - Drone-related operations are default-deny.
 
 ## Credential Handling
@@ -55,7 +55,7 @@ This document defines the trust boundaries, sandbox expectations, and permission
 
 ## Host Config Mutations
 
-- Orca plugin commands must not silently overwrite Codex, Claude Code, or other host configs.
+- ryk plugin commands must not silently overwrite Codex, Claude Code, or other host configs.
 - Any config change must be previewed with `--dry-run` first.
 - Any actual change requires `--yes`.
 
@@ -68,7 +68,7 @@ The plugin surface does not claim to sandbox the host IDE. It provides:
 - Safe installation previews
 
 Actual sandboxing is provided by:
-- `orca run -- <command>` for child process supervision
+- `ryk run -- <command>` for child process supervision
 - Host IDE's own extension sandbox (if any)
 - OS-level protections
 
@@ -83,5 +83,5 @@ A plugin request is rejected if it would:
 
 ## See Also
 
-- `docs/integrations/orca-plugin.md`
+- `docs/integrations/ryk-plugin.md`
 - `docs/integrations/drone-safety.md`

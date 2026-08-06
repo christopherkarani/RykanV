@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/christopherkarani/rykan/schemas/policy-v1.json",
-  "title": "Orca Policy v1",
+  "title": "ryk Policy v1",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "mode"],

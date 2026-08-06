@@ -5,16 +5,16 @@
 //! policy `allowlist.Layered` / `Entry.prefix`.
 //!
 //! Paths (must match product-wire loaders):
-//!   project → `<workspace>/.orca/allowlist.toml` (workspace-root walk-up)
-//!   user    → `$XDG_CONFIG_HOME/orca/allowlist.toml` else `~/.config/orca/allowlist.toml`
+//!   project → `<workspace>/.ryk/allowlist.toml` (workspace-root walk-up)
+//!   user    → `$XDG_CONFIG_HOME/ryk/allowlist.toml` else `~/.config/ryk/allowlist.toml`
 //! Default layer when neither `--project` nor `--user`: project when the resolved
-//! workspace root has `.git` or `.orca/policy.yaml`, else user.
+//! workspace root has `.git` or `.ryk/policy.yaml`, else user.
 //!
 //! Subcommands: `add`, `add-command`, `list`, `remove`, `validate`, `prune`.
 //! Shortcuts: `commandAllow` → add, `commandUnallow` → remove.
 
 const std = @import("std");
-const core = @import("orca_core").core;
+const core = @import("ryk_core").core;
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
 const suggestions = @import("suggestions.zig");
@@ -46,9 +46,9 @@ const usage_text =
     \\           ryk unallow <key> …     → remove rule or exact command
     \\
     \\Permanent pack exceptions (not policy commands.allow). Paths:
-    \\  project → <workspace>/.orca/allowlist.toml (git / workspace root walk-up)
-    \\  user    → $XDG_CONFIG_HOME/orca/allowlist.toml or ~/.config/orca/allowlist.toml
-    \\Default layer: project when workspace root has .git or .orca/policy.yaml, else user.
+    \\  project → <workspace>/.ryk/allowlist.toml (git / workspace root walk-up)
+    \\  user    → $XDG_CONFIG_HOME/ryk/allowlist.toml or ~/.config/ryk/allowlist.toml
+    \\Default layer: project when workspace root has .git or .ryk/policy.yaml, else user.
     \\
 ;
 
@@ -247,7 +247,7 @@ fn workspaceHasProjectMarker(io: std.Io, gpa: std.mem.Allocator, workspace_root:
     const git_path = std.fs.path.join(gpa, &.{ workspace_root, ".git" }) catch return false;
     defer gpa.free(git_path);
     std.Io.Dir.accessAbsolute(io, git_path, .{}) catch {
-        const policy_path = std.fs.path.join(gpa, &.{ workspace_root, ".orca", "policy.yaml" }) catch return false;
+        const policy_path = std.fs.path.join(gpa, &.{ workspace_root, ".ryk", "policy.yaml" }) catch return false;
         defer gpa.free(policy_path);
         std.Io.Dir.accessAbsolute(io, policy_path, .{}) catch return false;
         return true;
@@ -271,23 +271,23 @@ fn resolveUserPath(gpa: std.mem.Allocator) !?[]u8 {
     if (std.c.getenv("XDG_CONFIG_HOME")) |xdg_z| {
         const xdg = std.mem.span(xdg_z);
         if (xdg.len > 0) {
-            return try std.fs.path.join(gpa, &.{ xdg, "orca", "allowlist.toml" });
+            return try std.fs.path.join(gpa, &.{ xdg, "ryk", "allowlist.toml" });
         }
     }
     if (std.c.getenv("HOME")) |home_z| {
         const home = std.mem.span(home_z);
         if (home.len > 0) {
-            return try std.fs.path.join(gpa, &.{ home, ".config", "orca", "allowlist.toml" });
+            return try std.fs.path.join(gpa, &.{ home, ".config", "ryk", "allowlist.toml" });
         }
     }
     return null;
 }
 
 fn resolveProjectPath(gpa: std.mem.Allocator, io: std.Io) ![]u8 {
-    // Must match shell_eval.loadProductShellStores: `<workspace>/.orca/allowlist.toml`.
+    // Must match shell_eval.loadProductShellStores: `<workspace>/.ryk/allowlist.toml`.
     const root = try resolveWorkspaceRootPath(gpa, io);
     defer gpa.free(root);
-    return try std.fs.path.join(gpa, &.{ root, ".orca", "allowlist.toml" });
+    return try std.fs.path.join(gpa, &.{ root, ".ryk", "allowlist.toml" });
 }
 
 fn resolvePathForLayer(gpa: std.mem.Allocator, io: std.Io, layer: allowlist_store.Layer) ![]u8 {
@@ -335,7 +335,7 @@ pub fn isValidExpiresIsoZ(value: []const u8) bool {
 
 /// Operator break-glass for permanent exception mutations (M-2 partial).
 fn isOperatorBreakGlass() bool {
-    return envFlagTruthy("ORCA_OPERATOR") or envFlagTruthy("RYK_OPERATOR");
+    return envFlagTruthy("RYK_OPERATOR");
 }
 
 fn envFlagTruthy(name: [*:0]const u8) bool {
@@ -355,8 +355,8 @@ fn requireAllowlistMutateGate(io: std.Io, stderr: anytype) !bool {
         (std.Io.File.stdout().isTty(io) catch false);
     if (is_tty) return true;
     try stderr.writeAll(
-        \\ryk allowlist: permanent exception mutations require ORCA_OPERATOR=1 or an interactive TTY
-        \\(agent-reachable FULL ALLOW path). Re-run as an operator, or set ORCA_OPERATOR=1.
+        \\ryk allowlist: permanent exception mutations require RYK_OPERATOR=1 or an interactive TTY
+        \\(agent-reachable FULL ALLOW path). Re-run as an operator, or set RYK_OPERATOR=1.
         \\
     );
     return false;
@@ -1020,7 +1020,7 @@ const SAllowlistCliEnv = struct {
     fn deinit(self: *@This()) void {
         sAllowlistCliRestoreEnv("XDG_CONFIG_HOME", self.prev_config);
         sAllowlistCliRestoreEnv("HOME", self.prev_home);
-        sAllowlistCliRestoreEnv("ORCA_OPERATOR", self.prev_operator);
+        sAllowlistCliRestoreEnv("RYK_OPERATOR", self.prev_operator);
         std.testing.allocator.free(self.config_root);
         self.config_tmp.cleanup();
     }
@@ -1039,7 +1039,7 @@ fn sAllowlistCliIsolateXdg() !SAllowlistCliEnv {
     errdefer if (prev_config) |p| std.testing.allocator.free(p);
     const prev_home = try sAllowlistCliDupEnvZ("HOME");
     errdefer if (prev_home) |p| std.testing.allocator.free(p);
-    const prev_operator = try sAllowlistCliDupEnvZ("ORCA_OPERATOR");
+    const prev_operator = try sAllowlistCliDupEnvZ("RYK_OPERATOR");
     errdefer if (prev_operator) |p| std.testing.allocator.free(p);
 
     const config_z0 = try std.testing.allocator.dupeZ(u8, config_root);
@@ -1048,7 +1048,7 @@ fn sAllowlistCliIsolateXdg() !SAllowlistCliEnv {
     // Pin HOME away from the real home so user-path fallback never touches the host.
     try std.testing.expectEqual(@as(c_int, 0), setenv("HOME", config_z0.ptr, 1));
     // Operator break-glass so non-TTY unit tests can exercise permanent mutations.
-    try std.testing.expectEqual(@as(c_int, 0), setenv("ORCA_OPERATOR", "1", 1));
+    try std.testing.expectEqual(@as(c_int, 0), setenv("RYK_OPERATOR", "1", 1));
 
     return .{
         .config_tmp = config_tmp,
@@ -1167,11 +1167,11 @@ fn sAllowlistCliHasNotFoundMsg(blob: []const u8) bool {
 }
 
 fn sAllowlistCliProjectPath(workspace_root: []const u8) ![]u8 {
-    return try sAllowlistCliJoin(&.{ workspace_root, ".orca", "allowlist.toml" });
+    return try sAllowlistCliJoin(&.{ workspace_root, ".ryk", "allowlist.toml" });
 }
 
 fn sAllowlistCliUserPath(xdg_config: []const u8) ![]u8 {
-    return try sAllowlistCliJoin(&.{ xdg_config, "orca", "allowlist.toml" });
+    return try sAllowlistCliJoin(&.{ xdg_config, "ryk", "allowlist.toml" });
 }
 
 fn sAllowlistCliReadFile(path: []const u8) ![]u8 {
@@ -1494,9 +1494,9 @@ test "s-allowlist-cli: prune removes expired entries; dry-run leaves file intact
     const path = try sAllowlistCliProjectPath(ws.root);
     defer std.testing.allocator.free(path);
     {
-        const orca_dir = try sAllowlistCliJoin(&.{ ws.root, ".orca" });
-        defer std.testing.allocator.free(orca_dir);
-        try std.Io.Dir.cwd().createDirPath(std.testing.io, orca_dir);
+        const ryk_dir = try sAllowlistCliJoin(&.{ ws.root, ".ryk" });
+        defer std.testing.allocator.free(ryk_dir);
+        try std.Io.Dir.cwd().createDirPath(std.testing.io, ryk_dir);
     }
 
     try allowlist_store.addEntry(
@@ -1554,7 +1554,7 @@ test "s-allowlist-cli: prune removes expired entries; dry-run leaves file intact
     try std.testing.expectEqualStrings("core.git:reset-hard", loaded.store.entries[0].id.?);
 }
 
-test "s-allowlist-cli: --user writes under XDG_CONFIG_HOME/orca/allowlist.toml" {
+test "s-allowlist-cli: --user writes under XDG_CONFIG_HOME/ryk/allowlist.toml" {
     var xdg = try sAllowlistCliIsolateXdg();
     defer xdg.deinit();
     var ws = try sAllowlistCliGitWorkspace();
@@ -1611,7 +1611,7 @@ test "s-allowlist-cli: nested cwd --project writes workspace-root allowlist" {
     defer sAllowlistCliFreeRun(run);
     try std.testing.expectEqual(exit_codes.success, run.code);
 
-    // Product path: <workspace>/.orca/allowlist.toml
+    // Product path: <workspace>/.ryk/allowlist.toml
     const project_path = try sAllowlistCliProjectPath(ws.root);
     defer std.testing.allocator.free(project_path);
     var loaded = try allowlist_store.loadFile(std.testing.io, std.testing.allocator, project_path, .project);
@@ -1621,7 +1621,7 @@ test "s-allowlist-cli: nested cwd --project writes workspace-root allowlist" {
     try std.testing.expectEqualStrings("core.git:reset-hard", loaded.store.entries[0].id.?);
 
     // Must not create a cwd-only nested allowlist that loaders never see.
-    const nested_path = try sAllowlistCliJoin(&.{ nested, ".orca", "allowlist.toml" });
+    const nested_path = try sAllowlistCliJoin(&.{ nested, ".ryk", "allowlist.toml" });
     defer std.testing.allocator.free(nested_path);
     std.Io.Dir.cwd().access(std.testing.io, nested_path, .{}) catch {
         // Missing nested file is the success case (AccessDenied / FileNotFound).

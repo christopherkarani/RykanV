@@ -1,5 +1,5 @@
 const std = @import("std");
-const plugin = @import("orca").cli.plugin;
+const plugin = @import("ryk").cli.plugin;
 
 test "phase 44 hostPluginInstalledFromDoctorJson detects opencode project install" {
     const json =
@@ -94,8 +94,8 @@ test "phase 44 hostPluginInstalledFromReport matches doctor JSON semantics" {
     const cwd = try std.testing.allocator.dupeZ(u8, "");
     defer std.testing.allocator.free(cwd);
     const report = plugin.PluginDoctorReport{
-        .orca_version = "test",
-        .orca_binary_path = null,
+        .ryk_version = "test",
+        .ryk_binary_path = null,
         .cwd = cwd,
         .workspace_root = "",
         .policy_present = false,

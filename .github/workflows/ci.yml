@@ -16,12 +16,12 @@ jobs:
       # PCRE2 is Zig-built from source via build.zig.zon (static link).
       - name: Build CLI
         run: ./scripts/zig build
-      - name: Fast unit tests (lib + orca_core)
+      - name: Fast unit tests (lib + ryk core)
         run: ./scripts/zig build test-fast
       - name: Zig shell_engine pack + corpus parity
         run: ./scripts/zig build test-shell-engine
   # Landlock (ubuntu) / Seatbelt (macos-14) attach + adversarial e2e.
-  # --require-attach is single authority (packaged orca_run + profile_hash + evidence.zig rules).
+  # --require-attach is single authority (packaged ryk_run + profile_hash + evidence.zig rules).
   # Thin jq checks packaged primary detail only — no third copy of unit dual-proof greps.
   os-sandbox:
     strategy:
@@ -41,7 +41,7 @@ jobs:
         with:
           version: 0.16.0
       # PCRE2 is Zig-built from source via build.zig.zon (static link).
-      - name: Build orca
+      - name: Build ryk
         run: ./scripts/zig build
       - name: Secret boundary adversarial canary
         run: ./scripts/adversarial/secret-boundary-canary.sh --binary ./zig-out/bin/ryk
@@ -53,14 +53,14 @@ jobs:
           ./scripts/os-sandbox-adversarial-e2e.sh \
             --require-attach \
             --case "$CASE_ID" \
-            --binary ./zig-out/bin/orca \
+            --binary ./zig-out/bin/ryk \
             --out planning/security/evidence
-          test -n "$(ls "planning/security/evidence/${CASE_ID}"-*.json 2>/dev/null)"
-          newest="$(ls -t "planning/security/evidence/${CASE_ID}"-*.json | head -1)"
+          test -n "$(find planning/security/evidence -maxdepth 1 -type f -name "${CASE_ID}-*.json" -print -quit)"
+          newest="$(find planning/security/evidence -maxdepth 1 -type f -name "${CASE_ID}-*.json" -print | sort | tail -1)"
           # Packaged primary attach + 64-hex hash + TEST-DENY (defense-in-depth with --require-attach).
           jq -e '
             .controls["CTRL-ATTACH"].ok == true
-            and .controls["CTRL-ATTACH"].detail == "orca_run_os_sandbox_on_active"
+            and .controls["CTRL-ATTACH"].detail == "ryk_run_os_sandbox_on_active"
             and (.profile_hash | length) == 64
             and .controls["TEST-DENY"].ok == true
           ' "$newest"

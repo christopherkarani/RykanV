@@ -1,26 +1,26 @@
 # P02 Agent Host Integration API Handoff
 
-> Scope: P02, agent host integration contract for `orca decide` and `orca hook`
+> Scope: P02, agent host integration contract for `ryk decide` and `ryk hook`
 > Version: 1.0.0
 
 ## Phase Overview
 
-P02 adds the local integration layer that lets agent hosts ask Orca for policy decisions without reimplementing policy logic. The goal of this phase was to expose a direct decision command for tools and a host hook adapter for Codex and Claude Code, both backed by the same policy engine and the same `.orca/policy.yaml` source of truth.
+P02 adds the local integration layer that lets agent hosts ask ryk for policy decisions without reimplementing policy logic. The goal of this phase was to expose a direct decision command for tools and a host hook adapter for Codex and Claude Code, both backed by the same policy engine and the same `.ryk/policy.yaml` source of truth.
 
-This phase does not add a new enforcement boundary. Hook enforcement is additive and still depends on the host exposing the event. The stronger control remains `orca run -- <command>`.
+This phase does not add a new enforcement boundary. Hook enforcement is additive and still depends on the host exposing the event. The stronger control remains `ryk run -- <command>`.
 
 ## What Was Delivered
 
 - `src/cli/decide.zig`
-  - Added `orca decide`.
+  - Added `ryk decide`.
   - Supports four decision kinds: `command`, `file`, `prompt`, and `tool`.
   - Accepts input with `--json` or `--stdin`.
   - Supports `--ci`, which converts `ask` to `block`.
   - Uses semantic exit codes on policy outcomes: `0` allow/context_only, `3` block, `7` ask, `8` warn; `1` general error and `2` usage for failures before JSON is emitted. See `docs/integrations/integration-api.md` for the full table.
-  - Reads `.orca/policy.yaml` during evaluation.
+  - Reads `.ryk/policy.yaml` during evaluation.
 
 - `src/cli/hook.zig`
-  - Added `orca hook`.
+  - Added `ryk hook`.
   - Supports two hosts, `codex` and `claude`.
   - Supports seven events: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `Stop`, and `SessionEnd`.
   - Reads JSON payloads from stdin with a 256 KiB limit.
@@ -48,18 +48,18 @@ This phase does not add a new enforcement boundary. Hook enforcement is additive
 
 ## Architecture Summary
 
-### `orca decide`
+### `ryk decide`
 
 `decide` is the direct policy evaluation API. It is meant for host integrations, plugin packages, and local tooling that need one policy answer for one request.
 
 Flow:
 
 1. Parse kind and payload.
-2. Load `.orca/policy.yaml`.
+2. Load `.ryk/policy.yaml`.
 3. Evaluate the request against the matching decision path.
 4. Return a structured decision with a stable exit code.
 
-### `orca hook`
+### `ryk hook`
 
 `hook` is the host event adapter. It accepts a host and an event, normalizes the payload, and routes the request into the same policy engine used by `decide`.
 
@@ -79,11 +79,11 @@ The Codex and Claude adapters exist to hide host-specific payload shape differen
 
 ### Commands
 
-- `orca decide <kind> --json '<payload>'`
-- `orca decide <kind> --stdin`
-- `orca decide <kind> --ci`
-- `orca hook codex <event>`
-- `orca hook claude <event>`
+- `ryk decide <kind> --json '<payload>'`
+- `ryk decide <kind> --stdin`
+- `ryk decide <kind> --ci`
+- `ryk hook codex <event>`
+- `ryk hook claude <event>`
 
 ### Decision kinds
 
@@ -137,22 +137,22 @@ The Codex and Claude adapters exist to hide host-specific payload shape differen
 Verified acceptance flows:
 
 - `zig build` passes.
-- `orca decide command --json '{"command":"git status"}'` returns allow.
-- `orca decide command --json '{"command":"rm -rf *"}'` returns block.
-- `orca decide file --json '{"path":"/etc/passwd","operation":"write"}'` returns block.
-- `orca decide prompt --stdin` with a secret returns warn.
-- `orca hook codex SessionStart` with fixture input returns allow.
-- `orca hook codex UserPromptSubmit` with fixture input returns warn.
-- `orca hook codex PreToolUse` with a safe command fixture returns allow.
-- `orca hook codex PreToolUse` with a dangerous command fixture returns block.
-- `orca hook claude PreToolUse` with a file write fixture returns block.
+- `ryk decide command --json '{"command":"git status"}'` returns allow.
+- `ryk decide command --json '{"command":"rm -rf *"}'` returns block.
+- `ryk decide file --json '{"path":"/etc/passwd","operation":"write"}'` returns block.
+- `ryk decide prompt --stdin` with a secret returns warn.
+- `ryk hook codex SessionStart` with fixture input returns allow.
+- `ryk hook codex UserPromptSubmit` with fixture input returns warn.
+- `ryk hook codex PreToolUse` with a safe command fixture returns allow.
+- `ryk hook codex PreToolUse` with a dangerous command fixture returns block.
+- `ryk hook claude PreToolUse` with a file write fixture returns block.
 
 ## Known Limitations and Issues
 
 - `zig build test` hangs because a pre-existing MCP proxy test reads real stdin and conflicts with Zig test runner `--listen=-` handling.
 - Individual test binaries pass when run directly.
 - Current reported state: 267 of 273 tests pass, with 6 skipped.
-- Hook enforcement is additive. It does not replace `orca run` supervision.
+- Hook enforcement is additive. It does not replace `ryk run` supervision.
 - File tool detection is heuristic and based on tool name matching.
 - Secret detection uses the existing pattern-based redaction engine.
 
@@ -160,34 +160,34 @@ Verified acceptance flows:
 
 P01 plugin-surface commands still work after this phase.
 
-- `orca plugin doctor`
-- `orca plugin manifest`
-- `orca plugin install --dry-run`
+- `ryk plugin doctor`
+- `ryk plugin manifest`
+- `ryk plugin install --dry-run`
 
 No P01 behavior was removed or renamed by this phase.
 
 ## Next Steps for P03/P04
 
-- Build the actual Codex plugin package that calls `orca hook`.
-- Build the actual Claude Code plugin package that calls `orca hook`.
+- Build the actual Codex plugin package that calls `ryk hook`.
+- Build the actual Claude Code plugin package that calls `ryk hook`.
 - Keep both plugin packages thin.
-- Plugin packages must call the Orca and must not duplicate policy logic.
-- Plugin docs must not claim stronger enforcement than Orca actually provides.
+- Plugin packages must call the ryk and must not duplicate policy logic.
+- Plugin docs must not claim stronger enforcement tha ryk actually provides.
 - Do not add MCP server behavior here.
 - Do not add drone plugin behavior here.
 
 ## Acceptance Criteria Checklist
 
 - [x] `zig build` passes.
-- [x] `orca decide command --json '{"command":"git status"}'` returns allow.
-- [x] `orca decide command --json '{"command":"rm -rf *"}'` returns block.
-- [x] `orca decide file --json '{"path":"/etc/passwd","operation":"write"}'` returns block.
-- [x] `orca decide prompt --stdin` with a secret returns warn.
-- [x] `orca hook codex SessionStart` with fixture input returns allow.
-- [x] `orca hook codex UserPromptSubmit` with fixture input returns warn.
-- [x] `orca hook codex PreToolUse` with a safe command fixture returns allow.
-- [x] `orca hook codex PreToolUse` with a dangerous command fixture returns block.
-- [x] `orca hook claude PreToolUse` with a file write fixture returns block.
-- [x] `orca plugin doctor` still works.
-- [x] `orca plugin manifest` still works.
-- [x] `orca plugin install --dry-run` still works.
+- [x] `ryk decide command --json '{"command":"git status"}'` returns allow.
+- [x] `ryk decide command --json '{"command":"rm -rf *"}'` returns block.
+- [x] `ryk decide file --json '{"path":"/etc/passwd","operation":"write"}'` returns block.
+- [x] `ryk decide prompt --stdin` with a secret returns warn.
+- [x] `ryk hook codex SessionStart` with fixture input returns allow.
+- [x] `ryk hook codex UserPromptSubmit` with fixture input returns warn.
+- [x] `ryk hook codex PreToolUse` with a safe command fixture returns allow.
+- [x] `ryk hook codex PreToolUse` with a dangerous command fixture returns block.
+- [x] `ryk hook claude PreToolUse` with a file write fixture returns block.
+- [x] `ryk plugin doctor` still works.
+- [x] `ryk plugin manifest` still works.
+- [x] `ryk plugin install --dry-run` still works.

@@ -3,9 +3,9 @@ const std = @import("std");
 const env_util = @import("../env_util.zig");
 const env_schema = @import("env_schema.zig");
 const sandbox_env = @import("../sandbox/env_scrub.zig");
-const audit = @import("orca_core").audit;
-const core = @import("orca_core").core;
-const policy = @import("orca_core").policy;
+const audit = @import("ryk_core").audit;
+const core = @import("ryk_core").core;
+const policy = @import("ryk_core").policy;
 
 pub const implemented = true;
 
@@ -452,7 +452,7 @@ test "secretless constructs a public-only environment without local dummy refere
     try current.put("MYSQL_PWD", "SuperSecretPass99");
     try current.put("RANDOM_HOST_VALUE", "must-not-survive");
     try current.put("HTTP_PROXY", "http://synthetic:proxypass@proxy.invalid:8080");
-    try current.put("ORCA_HOST_SECRET", "must-not-survive");
+    try current.put("RYK_HOST_SECRET", "must-not-survive");
     try current.put("RYK_HOST_SECRET", "must-not-survive");
     try current.put("LC_SECRET", "must-not-survive");
     try current.put("XDG_SECRET", "must-not-survive");
@@ -476,7 +476,7 @@ test "secretless constructs a public-only environment without local dummy refere
     try std.testing.expect(filtered.env_map.get("MYSQL_PWD") == null);
     try std.testing.expect(filtered.env_map.get("RANDOM_HOST_VALUE") == null);
     try std.testing.expect(filtered.env_map.get("HTTP_PROXY") == null);
-    try std.testing.expect(filtered.env_map.get("ORCA_HOST_SECRET") == null);
+    try std.testing.expect(filtered.env_map.get("RYK_HOST_SECRET") == null);
     try std.testing.expect(filtered.env_map.get("RYK_HOST_SECRET") == null);
     try std.testing.expect(filtered.env_map.get("LC_SECRET") == null);
     try std.testing.expect(filtered.env_map.get("XDG_SECRET") == null);

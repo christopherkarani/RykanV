@@ -4,7 +4,7 @@
 //! next identical fingerprint (or class) skips re-ask. Critical / hard-fence
 //! severity can never be sticky-allowed.
 //!
-//! Lifetime: process/session only — no `.orca/` persistence (MVP).
+//! Lifetime: process/session only — no `.ryk/` persistence (MVP).
 
 const std = @import("std");
 

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const core = @import("orca_core").core;
+const core = @import("ryk_core").core;
 const ci_check = @import("../ci_check.zig");
 const supervisor = core.supervisor;
 const exit_codes = @import("exit_codes.zig");

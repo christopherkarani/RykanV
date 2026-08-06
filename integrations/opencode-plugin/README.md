@@ -32,14 +32,14 @@ Add to your `opencode.json`:
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["orca-opencode-plugin"]
+  "plugin": ["ryk-opencode-plugin"]
 }
 ```
 
 Then install dependencies:
 
 ```bash
-npm install orca-opencode-plugin
+npm install ryk-opencode-plugin
 ```
 
 The strongest local protection remains running OpenCode through `ryk run -- opencode`; the OpenCode plugin provides native hooks and guardrails inside OpenCode.
@@ -55,7 +55,7 @@ Copy or symlink this directory into your project:
 ```bash
 # From the ryk repo root
 mkdir -p .opencode/plugins
-cp integrations/opencode-plugin/orca.ts .opencode/plugins/orca.ts
+cp integrations/opencode-plugin/ryk.ts .opencode/plugins/ryk.ts
 ```
 
 See `examples/project-plugin-path.md` for details.
@@ -66,7 +66,7 @@ Copy or symlink to the OpenCode global plugins directory:
 
 ```bash
 mkdir -p ~/.config/opencode/plugins
-cp integrations/opencode-plugin/orca.ts ~/.config/opencode/plugins/orca.ts
+cp integrations/opencode-plugin/ryk.ts ~/.config/opencode/plugins/ryk.ts
 ```
 
 See `examples/global-plugin-path.md` for details.
@@ -162,13 +162,13 @@ Remove the plugin from your OpenCode configuration:
 
 ```bash
 # npm package
-npm uninstall orca-opencode-plugin
+npm uninstall ryk-opencode-plugin
 
 # Project-local file
-rm .opencode/plugins/orca.ts
+rm .opencode/plugins/ryk.ts
 
 # Global file
-rm ~/.config/opencode/plugins/orca.ts
+rm ~/.config/opencode/plugins/ryk.ts
 ```
 
 This plugin does not mutate host configuration, so uninstalling is safe.

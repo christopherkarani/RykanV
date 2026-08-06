@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const core_api = @import("orca_core").api;
-const core = @import("orca_core").core;
+const core_api = @import("ryk_core").api;
+const core = @import("ryk_core").core;
 const presentation = @import("../presentation/mod.zig");
 const feed_writer = @import("../cli/feed_writer.zig");
 const rust_visibility = @import("../cli/rust_visibility.zig");
@@ -197,7 +197,7 @@ fn loadBoundedSessions(
 
     var health: SessionLoadHealth = .healthy;
     for (workspaces) |workspace| {
-        const sessions_root = try std.fs.path.join(allocator, &.{ workspace.root, ".orca", "sessions" });
+        const sessions_root = try std.fs.path.join(allocator, &.{ workspace.root, ".ryk", "sessions" });
         defer allocator.free(sessions_root);
         var dir = std.Io.Dir.cwd().openDir(io, sessions_root, .{ .iterate = true }) catch |err| switch (err) {
             error.FileNotFound => continue,
@@ -324,7 +324,7 @@ fn retainNewestSession(
 }
 
 fn sessionDirectoryExists(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8, session_id: []const u8) !bool {
-    const path = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "sessions", session_id });
+    const path = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "sessions", session_id });
     defer allocator.free(path);
     var dir = std.Io.Dir.cwd().openDir(io, path, .{}) catch return false;
     dir.close(io);
@@ -533,7 +533,7 @@ test "sessions are globally sorted before truncation and filesystem sessions kee
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    const sessions_root = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", "sessions" });
+    const sessions_root = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", "sessions" });
     defer std.testing.allocator.free(sessions_root);
     try std.Io.Dir.cwd().createDirPath(std.testing.io, sessions_root);
 
@@ -586,7 +586,7 @@ test "large session directories retain only the requested top k and zero is safe
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    const sessions_root = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", "sessions" });
+    const sessions_root = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", "sessions" });
     defer std.testing.allocator.free(sessions_root);
     try std.Io.Dir.cwd().createDirPath(std.testing.io, sessions_root);
 
@@ -669,7 +669,7 @@ test "machine sessions enrich records beyond the former one thousand row cap" {
 
     const target_id = try core.session.generateSessionId(core.time.Timestamp.fromUnixSeconds(1_700_000_000));
     const target = target_id.slice();
-    const session_path = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", "sessions", target });
+    const session_path = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", "sessions", target });
     defer std.testing.allocator.free(session_path);
     try std.Io.Dir.cwd().createDirPath(std.testing.io, session_path);
 
@@ -736,9 +736,9 @@ test "machine sessions sort across workspaces before truncation" {
     defer std.testing.allocator.free(newer_root);
     const older_id = try core.session.generateSessionId(core.time.Timestamp.fromUnixSeconds(1_700_000_000));
     const newer_id = try core.session.generateSessionId(core.time.Timestamp.fromUnixSeconds(1_700_000_100));
-    const older_path = try std.fs.path.join(std.testing.allocator, &.{ older_root, ".orca", "sessions", older_id.slice() });
+    const older_path = try std.fs.path.join(std.testing.allocator, &.{ older_root, ".ryk", "sessions", older_id.slice() });
     defer std.testing.allocator.free(older_path);
-    const newer_path = try std.fs.path.join(std.testing.allocator, &.{ newer_root, ".orca", "sessions", newer_id.slice() });
+    const newer_path = try std.fs.path.join(std.testing.allocator, &.{ newer_root, ".ryk", "sessions", newer_id.slice() });
     defer std.testing.allocator.free(newer_path);
     try std.Io.Dir.cwd().createDirPath(std.testing.io, older_path);
     try std.Io.Dir.cwd().createDirPath(std.testing.io, newer_path);
@@ -760,7 +760,7 @@ test "session directory access failures report degraded aggregation" {
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    const sessions_path = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", "sessions" });
+    const sessions_path = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", "sessions" });
     defer std.testing.allocator.free(sessions_path);
     try std.Io.Dir.cwd().createDirPath(std.testing.io, std.fs.path.dirname(sessions_path).?);
     const invalid_dir = try std.Io.Dir.cwd().createFile(std.testing.io, sessions_path, .{});

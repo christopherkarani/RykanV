@@ -1,4 +1,4 @@
-# Orca preset: codex
+# ryk preset: codex
 # Generic/experimental: designed for local Codex-style coding tasks without assuming model-provider secrets.
 # Network and writes stay reviewable by default.
 version: 1
@@ -53,8 +53,8 @@ files:
       # Dual patterns (see generic-agent.yaml for rationale).
       - "./.git/**"
       - ".git/**"
-      - "./.orca/**"
-      - ".orca/**"
+      - "./.ryk/**"
+      - ".ryk/**"
     mode: staged
 
 commands:

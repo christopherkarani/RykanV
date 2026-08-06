@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://orca.local/schemas/hook-response-v1.json",
+  "$id": "https://ryk.local/schemas/hook-response-v1.json",
   "title": "ryk Hook Response v1",
   "description": "JSON response emitted by the ryk hook command to stdout.",
   "type": "object",
@@ -35,6 +35,10 @@
       "type": ["string", "null"],
       "description": "Matched policy rule identifier, if any."
     },
+    "rule_id": {
+      "type": ["string", "null"],
+      "description": "Explicit machine-facing alias of rule."
+    },
     "message": {
       "type": "string",
       "description": "Human-readable message suitable for surfacing to the user."
@@ -55,10 +59,6 @@
       "type": "array",
       "items": { "type": "string" },
       "description": "Honest notes about host enforcement limits."
-    },
-    "rule_id": {
-      "type": ["string", "null"],
-      "description": "Alias of rule for agent-facing remediation (additive)."
     },
     "suggestions": {
       "type": "array",

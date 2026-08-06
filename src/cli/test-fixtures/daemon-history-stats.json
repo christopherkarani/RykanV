@@ -7,7 +7,7 @@
     { "name": "force-push", "count": 8, "pack_id": "core.git" },
     { "name": "uncategorized", "count": 2 }
   ],
-  "top_projects": [{ "path": "/work/orca", "command_count": 42 }],
+  "top_projects": [{ "path": "/work/ryk", "command_count": 42 }],
   "agents": [{ "name": "claude-code", "count": 42 }],
   "performance": { "p50_us": 80, "p95_us": 220, "p99_us": 500, "max_us": 900 },
   "trends": {

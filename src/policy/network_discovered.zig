@@ -71,15 +71,15 @@ pub const ManagedStore = struct {
     }
 };
 
-/// Product path: `<workspace_root>/.orca/network-discovered.yaml`.
+/// Product path: `<workspace_root>/.ryk/network-discovered.yaml`.
 /// Allocator-owned; caller frees. Independent of process cwd.
 pub fn managedPath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
-    return try std.fs.path.join(allocator, &.{ workspace_root, ".orca", managed_filename });
+    return try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", managed_filename });
 }
 
 /// Full-file regenerate of managed discovery YAML under workspace_root.
 /// Writes hostnames + source tags only (A-P3-2 / SEC-3). Never tokens/keys/refresh.
-/// Creates `.orca/` as needed. Atomic temp+rename; refuses symlink product path.
+/// Creates `.ryk/` as needed. Atomic temp+rename; refuses symlink product path.
 /// Soft-skips invalid hosts / sources on write (never panics).
 pub fn writeManaged(
     io: std.Io,
@@ -87,20 +87,20 @@ pub fn writeManaged(
     workspace_root: []const u8,
     hosts: []const ManagedHost,
 ) !void {
-    const orca_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".orca" });
-    defer allocator.free(orca_dir);
+    const ryk_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk" });
+    defer allocator.free(ryk_dir);
 
-    // Refuse parent `.orca` symlink escape (component must not be a link).
-    if (try pathIsSymlink(allocator, orca_dir)) return error.ManagedPathIsSymlink;
-    try std.Io.Dir.cwd().createDirPath(io, orca_dir);
+    // Refuse parent `.ryk` symlink escape (component must not be a link).
+    if (try pathIsSymlink(io, ryk_dir)) return error.ManagedPathIsSymlink;
+    try std.Io.Dir.cwd().createDirPath(io, ryk_dir);
     // Re-check after create: race / pre-existing link.
-    if (try pathIsSymlink(allocator, orca_dir)) return error.ManagedPathIsSymlink;
+    if (try pathIsSymlink(io, ryk_dir)) return error.ManagedPathIsSymlink;
 
     const path = try managedPath(allocator, workspace_root);
     defer allocator.free(path);
 
     // Refuse writing through a leaf symlink (integrity: product path must not be a link).
-    if (try pathIsSymlink(allocator, path)) return error.ManagedPathIsSymlink;
+    if (try pathIsSymlink(io, path)) return error.ManagedPathIsSymlink;
 
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(allocator);
@@ -127,14 +127,14 @@ pub fn writeManaged(
     }
 
     // Atomic same-directory temp write + rename (mirrors allowlist_store).
-    const pid = std.c.getpid();
-    const nonce = std.Io.Clock.Timestamp.now(io, .awake).raw.nanoseconds;
-    const temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp.{d}.{d}", .{ path, pid, nonce });
+    var nonce: u64 = undefined;
+    io.random(std.mem.asBytes(&nonce));
+    const temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp.{x}", .{ path, nonce });
     defer allocator.free(temp_path);
-    errdefer std.Io.Dir.cwd().deleteFile(io, temp_path) catch {};
 
+    const file = try std.Io.Dir.createFileAbsolute(io, temp_path, .{ .exclusive = true });
+    errdefer std.Io.Dir.cwd().deleteFile(io, temp_path) catch {};
     {
-        const file = try std.Io.Dir.createFileAbsolute(io, temp_path, .{ .exclusive = true });
         defer file.close(io);
         try file.writeStreamingAll(io, buf.items);
         try file.sync(io);
@@ -152,11 +152,11 @@ pub fn loadManaged(
     const path = try managedPath(allocator, workspace_root);
     defer allocator.free(path);
 
-    // Soft-empty on parent `.orca` or leaf symlink (write refuses both; load must not follow).
-    const orca_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".orca" });
-    defer allocator.free(orca_dir);
-    if (try pathIsSymlink(allocator, orca_dir)) return emptyStore();
-    if (try pathIsSymlink(allocator, path)) return emptyStore();
+    // Soft-empty on parent `.ryk` or leaf symlink (write refuses both; load must not follow).
+    const ryk_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk" });
+    defer allocator.free(ryk_dir);
+    if ((pathIsSymlink(io, ryk_dir) catch return emptyStore())) return emptyStore();
+    if ((pathIsSymlink(io, path) catch return emptyStore())) return emptyStore();
 
     const text = std.Io.Dir.cwd().readFileAlloc(
         io,
@@ -366,15 +366,12 @@ fn isSafeSourceTag(src: []const u8) bool {
     return true;
 }
 
-fn pathIsSymlink(allocator: std.mem.Allocator, path: []const u8) !bool {
-    const path_z = try allocator.dupeZ(u8, path);
-    defer allocator.free(path_z);
+fn pathIsSymlink(io: std.Io, path: []const u8) !bool {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const n = std.c.readlink(path_z.ptr, &buf, buf.len);
-    if (n < 0) {
-        // EINVAL / not a symlink, ENOENT, etc. → treat as non-symlink.
-        return false;
-    }
+    _ = std.Io.Dir.cwd().readLink(io, path, &buf) catch |err| switch (err) {
+        error.FileNotFound, error.NotLink, error.NotDir => return false,
+        else => return err,
+    };
     return true;
 }
 
@@ -625,7 +622,7 @@ const fixture_secret_needles = [_][]const u8{
 };
 
 const managed_filename = "network-discovered.yaml";
-const managed_rel = ".orca/network-discovered.yaml";
+const managed_rel = ".ryk/network-discovered.yaml";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -705,7 +702,7 @@ fn entrySourcesContain(entry: anytype, needle: []const u8) bool {
 // Composition — product path is workspace-root based (not process cwd)
 // ---------------------------------------------------------------------------
 
-test "network_discovered managedPath is workspace_root/.orca/network-discovered.yaml" {
+test "network_discovered managedPath is workspace_root/.ryk/network-discovered.yaml" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const root = try workspaceAbs(&tmp);
@@ -717,8 +714,8 @@ test "network_discovered managedPath is workspace_root/.orca/network-discovered.
     try std.testing.expect(std.mem.startsWith(u8, path, root));
     try std.testing.expect(std.mem.endsWith(u8, path, managed_rel) or
         std.mem.endsWith(u8, path, "network-discovered.yaml"));
-    // Path join under root: .../.orca/network-discovered.yaml
-    const expected = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", managed_filename });
+    // Path join under root: .../.ryk/network-discovered.yaml
+    const expected = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", managed_filename });
     defer std.testing.allocator.free(expected);
     try std.testing.expectEqualStrings(expected, path);
 }
@@ -762,7 +759,7 @@ test "network_discovered nested-cwd write then workspace-root load hits the same
     try assertNoFixtureSecretsInBytes(bytes);
 
     // Nested relative path must not hold a decoy product file from a cwd-relative writer.
-    if (tmp.dir.access(std.testing.io, "nested/deep/cwd/.orca/network-discovered.yaml", .{})) |_| {
+    if (tmp.dir.access(std.testing.io, "nested/deep/cwd/.ryk/network-discovered.yaml", .{})) |_| {
         try std.testing.expect(false);
     } else |_| {}
 
@@ -910,7 +907,7 @@ test "network_discovered A-P3-2 rewrite regenerates and drops hand-corrupted sec
     // regenerate must replace the file so secret needles are gone (SEC-3 / DIS-7).
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
         const polluted =
             \\version: 1
@@ -958,7 +955,7 @@ test "network_discovered loadManaged soft-empty when managed file is missing" {
 test "network_discovered loadManaged soft-empty when managed file is corrupt" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
         const f = try tmp.dir.createFile(std.testing.io, managed_rel, .{});
         defer f.close(std.testing.io);
@@ -975,7 +972,7 @@ test "network_discovered loadManaged soft-empty when managed file is corrupt" {
 test "network_discovered loadManaged soft-empty when managed file is empty" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
         const f = try tmp.dir.createFile(std.testing.io, managed_rel, .{});
         defer f.close(std.testing.io);
@@ -1199,7 +1196,7 @@ test "network_discovered load then mergePreserveUserAllows preserves user and ad
 test "network_discovered loadManaged soft-drops reserved class tokens and wildcards" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
         const polluted =
             \\version: 1
@@ -1248,8 +1245,8 @@ test "network_discovered writeManaged refuses symlink product path" {
     const root = try workspaceAbs(&tmp);
     defer std.testing.allocator.free(root);
 
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
-    // Target outside .orca; product path is a symlink to it.
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
+    // Target outside .ryk; product path is a symlink to it.
     {
         const target = try tmp.dir.createFile(std.testing.io, "outside-target.txt", .{});
         defer target.close(std.testing.io);
@@ -1436,7 +1433,7 @@ test "network_discovered refresh soft-empty adapter preserves prior host_key ent
 test "network_discovered loadManaged soft-drops pastebin sink hosts" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
         const f = try tmp.dir.createFile(std.testing.io, managed_rel, .{});
         defer f.close(std.testing.io);

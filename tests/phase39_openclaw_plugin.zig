@@ -4,7 +4,7 @@ const std = @import("std");
 // OpenClaw Plugin Structure Tests
 // ---------------------------------------------------------------------------
 // These tests validate the P09 OpenClaw plugin package without requiring
-// the Orca binary to be built. They check file existence, JSON validity,
+// the ryk binary to be built. They check file existence, JSON validity,
 // and content invariants.
 // ---------------------------------------------------------------------------
 
@@ -69,7 +69,7 @@ test "openclaw plugin manifest contains expected fields" {
     try std.testing.expect(obj.get("configSchema") != null);
 
     const id = obj.get("id").?.string;
-    try std.testing.expectEqualStrings("orca", id);
+    try std.testing.expectEqualStrings("ryk", id);
 }
 
 test "openclaw plugin manifest has configSchema" {
@@ -138,7 +138,7 @@ test "openclaw package.json has correct name" {
     defer parsed.deinit();
 
     const name = parsed.value.object.get("name").?.string;
-    try std.testing.expectEqualStrings("orca-openclaw-plugin", name);
+    try std.testing.expectEqualStrings("ryk-openclaw-plugin", name);
 }
 
 test "openclaw package.json main points to dist/index.js" {
@@ -237,11 +237,11 @@ test "openclaw plugin source exists" {
     try std.testing.expect(fileExists(source_path));
 }
 
-test "openclaw plugin source contains orca hook call" {
+test "openclaw plugin source contains ryk hook call" {
     const content = try readFile(std.testing.allocator, source_path);
     defer std.testing.allocator.free(content);
 
-    // argv form: execFileSync(orcaBin, ['hook', 'openclaw', event], ...)
+    // argv form: execFileSync(rykBin, ['hook', 'openclaw', event], ...)
     try std.testing.expect(std.mem.indexOf(u8, content, "'hook'") != null or std.mem.indexOf(u8, content, "\"hook\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "'openclaw'") != null or std.mem.indexOf(u8, content, "\"openclaw\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "execFileSync") != null);
@@ -301,7 +301,7 @@ test "openclaw plugin README promotes wrapper and labels npm unprotected" {
     const content = try readFile(std.testing.allocator, readme_path);
     defer std.testing.allocator.free(content);
 
-    try std.testing.expect(std.mem.indexOf(u8, content, "orca run -- openclaw") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "ryk run -- openclaw") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "unprotected") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "wrapper") != null);
 }
@@ -324,7 +324,7 @@ test "openclaw plugin README has npm install instructions demoted as unprotected
     const content = try readFile(std.testing.allocator, readme_path);
     defer std.testing.allocator.free(content);
 
-    try std.testing.expect(std.mem.indexOf(u8, content, "openclaw plugins install npm:orca-openclaw-plugin") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "openclaw plugins install npm:ryk-openclaw-plugin") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "NOT recommended for security") != null or
         std.mem.indexOf(u8, content, "unprotected") != null);
 }

@@ -1,7 +1,7 @@
 //! Daemon binary discovery, UDS connectivity, and NDJSON IPC (Zig side).
 //!
 //! This module provides utilities for the Zig CLI to locate the Rust
-//! `orca-daemon` companion binary, check whether a daemon instance is
+//! `ryk-daemon` companion binary, check whether a daemon instance is
 //! already running, start it when needed, and exchange request/response
 //! messages over a Unix Domain Socket.
 //!
@@ -19,7 +19,7 @@ pub const trust = daemon_trust;
 pub const uds = daemon_uds;
 
 /// Name of the Rust daemon binary.
-const daemon_binary_name = if (builtin.os.tag == .windows) "orca-daemon.exe" else "orca-daemon";
+const daemon_binary_name = if (builtin.os.tag == .windows) "ryk-daemon.exe" else "ryk-daemon";
 
 /// Name of the Unix Domain Socket file used to detect a running daemon.
 const daemon_socket_name = "daemon.sock";
@@ -28,12 +28,12 @@ const daemon_socket_name = "daemon.sock";
 const daemon_pid_name = "daemon.pid";
 
 /// Directory under $HOME where ryk runtime state lives.
-const orca_state_dir = ".orca";
+const ryk_state_dir = ".ryk";
 
 /// Environment variable override for the daemon binary path.
-const daemon_env_var = "ORCA_DAEMON";
+const daemon_env_var = "RYK_DAEMON";
 const expected_protocol_version: i64 = 1;
-const expected_protocol_label = "orca-uds-v1";
+const expected_protocol_label = "ryk-uds-v1";
 const required_capabilities = [_][]const u8{ "Ping", "Evaluate", "ExecuteCli", "ExecuteCliCwd", "Shutdown" };
 
 /// Default time to wait for the daemon socket and Ping response after spawn.
@@ -134,7 +134,7 @@ pub const DaemonError = error{
     MissingHandshake,
     HandshakeMalformed,
     ProtocolMismatch,
-    /// `ORCA_SHELL_EVAL=rust` requested; Rust daemon Evaluate is no longer a product path.
+    /// `RYK_SHELL_EVAL=rust` requested; Rust daemon Evaluate is no longer a product path.
     RustShellEvalRemoved,
 };
 
@@ -150,7 +150,7 @@ pub const DaemonBinaryInspection = struct {
     source: DaemonBinarySource,
     exists: bool,
     executable: bool,
-    /// True when `ORCA_DAEMON` points at a world-writable path (other-write bit set).
+    /// True when `RYK_DAEMON` points at a world-writable path (other-write bit set).
     untrusted: bool = false,
 
     pub fn deinit(self: DaemonBinaryInspection, allocator: std.mem.Allocator) void {
@@ -160,7 +160,7 @@ pub const DaemonBinaryInspection = struct {
 
 var ensure_daemon_lock: std.Io.Mutex = .init;
 
-/// Resolve `$HOME/.orca/daemon.sock` and `$HOME/.orca/daemon.pid`.
+/// Resolve `$HOME/.ryk/daemon.sock` and `$HOME/.ryk/daemon.pid`.
 pub const RuntimePaths = struct {
     socket: []const u8,
     pid: []const u8,
@@ -170,7 +170,7 @@ pub const RuntimePaths = struct {
 ///
 /// Caller owns both returned slices.
 pub fn runtimePathsForHome(allocator: std.mem.Allocator, home: []const u8) !RuntimePaths {
-    const state_dir = try std.fs.path.join(allocator, &.{ home, orca_state_dir });
+    const state_dir = try std.fs.path.join(allocator, &.{ home, ryk_state_dir });
     defer allocator.free(state_dir);
 
     return .{
@@ -190,7 +190,7 @@ pub fn runtimePaths(allocator: std.mem.Allocator) DaemonError!RuntimePaths {
     };
 }
 
-/// Resolve the daemon socket path: `$HOME/.orca/daemon.sock`.
+/// Resolve the daemon socket path: `$HOME/.ryk/daemon.sock`.
 ///
 /// Caller owns the returned memory.
 pub fn socketPath(allocator: std.mem.Allocator) DaemonError![]const u8 {
@@ -199,7 +199,7 @@ pub fn socketPath(allocator: std.mem.Allocator) DaemonError![]const u8 {
     return allocator.dupe(u8, paths.socket) catch error.OutOfMemory;
 }
 
-/// Resolve the daemon PID file path: `$HOME/.orca/daemon.pid`.
+/// Resolve the daemon PID file path: `$HOME/.ryk/daemon.pid`.
 ///
 /// Caller owns the returned memory.
 pub fn pidPath(allocator: std.mem.Allocator) DaemonError![]const u8 {
@@ -412,12 +412,12 @@ pub fn parseResponse(allocator: std.mem.Allocator, line: []const u8) DaemonError
     }) catch error.ResponseParseFailed;
 }
 
-/// Locate the `orca-daemon` binary for local development and installed layouts.
+/// Locate the `ryk-daemon` binary for local development and installed layouts.
 ///
 /// Search order:
-/// 1. `$ORCA_DAEMON` when set and executable
-/// 2. Adjacent to the current `orca` executable
-/// 3. Repo-relative dev paths under `orca-rs/target/{release,debug}/`
+/// 1. `$RYK_DAEMON` when set and executable
+/// 2. Adjacent to the current `ryk` executable
+/// 3. Repo-relative dev paths under `ryk-rs/target/{release,debug}/`
 ///
 /// Returns an allocated path (caller owns memory) or `null` if not found.
 pub fn findDaemonBinary(allocator: std.mem.Allocator) DaemonError!?[]const u8 {
@@ -444,8 +444,8 @@ pub fn findDaemonBinary(allocator: std.mem.Allocator) DaemonError!?[]const u8 {
 
     const repo_root = std.fs.path.dirname(std.fs.path.dirname(self_dir) orelse return null) orelse return null;
     const dev_candidates = [_][]const u8{
-        "orca-rs/target/release/" ++ daemon_binary_name,
-        "orca-rs/target/debug/" ++ daemon_binary_name,
+        "ryk-rs/target/release/" ++ daemon_binary_name,
+        "ryk-rs/target/debug/" ++ daemon_binary_name,
     };
     for (dev_candidates) |rel| {
         const path = std.fs.path.join(allocator, &.{ repo_root, rel }) catch return error.OutOfMemory;
@@ -484,8 +484,8 @@ pub fn inspectDaemonBinary(allocator: std.mem.Allocator) DaemonError!?DaemonBina
 
     const repo_root = std.fs.path.dirname(std.fs.path.dirname(self_dir) orelse return null) orelse return null;
     const dev_candidates = [_]struct { rel: []const u8, source: DaemonBinarySource }{
-        .{ .rel = "orca-rs/target/release/" ++ daemon_binary_name, .source = .dev_release },
-        .{ .rel = "orca-rs/target/debug/" ++ daemon_binary_name, .source = .dev_debug },
+        .{ .rel = "ryk-rs/target/release/" ++ daemon_binary_name, .source = .dev_release },
+        .{ .rel = "ryk-rs/target/debug/" ++ daemon_binary_name, .source = .dev_debug },
     };
     for (dev_candidates) |candidate| {
         const path = std.fs.path.join(allocator, &.{ repo_root, candidate.rel }) catch return error.OutOfMemory;
@@ -606,7 +606,7 @@ pub fn executeCliAt(allocator: std.mem.Allocator, argv: []const []const u8, cwd:
     return parsed;
 }
 
-/// Run a CLI subcommand by spawning the local `orca-daemon` binary (no UDS).
+/// Run a CLI subcommand by spawning the local `ryk-daemon` binary (no UDS).
 ///
 /// Used for mutating commands (`allow`, `allowlist add`, …) that ExecuteCli
 /// refuses over the socket. stdout/stderr are forwarded to the provided writers.
@@ -726,7 +726,7 @@ pub fn cleanupStaleArtifacts(io: std.Io, paths: RuntimePaths) void {
     std.Io.Dir.cwd().deleteFile(io, paths.pid) catch {};
 }
 
-/// Spawn `orca-daemon --daemon-mode` without waiting for readiness.
+/// Spawn `ryk-daemon --daemon-mode` without waiting for readiness.
 pub fn startDaemon(allocator: std.mem.Allocator, daemon_binary: []const u8) DaemonError!void {
     var threaded = std.Io.Threaded.init(allocator, .{
         .environ = env_util.processEnviron(),
@@ -874,6 +874,7 @@ fn pollTimeoutMs(timeout_ms: u64) i32 {
 }
 
 fn waitForPoll(fd: std.posix.fd_t, events: i16, timeout_ms: u64) DaemonError!void {
+    if (comptime builtin.os.tag == .windows) return error.SocketReadFailed;
     var fds = [_]std.posix.pollfd{.{
         .fd = fd,
         .events = events,
@@ -892,6 +893,7 @@ const poll_in: i16 = 0x0001;
 const poll_out: i16 = 0x0004;
 
 fn writeAllFdWithTimeout(io: std.Io, fd: std.posix.fd_t, bytes: []const u8, timeout_ms: u64) DaemonError!void {
+    if (comptime builtin.os.tag == .windows) return error.SocketWriteFailed;
     var written: usize = 0;
     const deadline_ms = monotonicNowMs(io) + @as(i64, @intCast(timeout_ms));
 
@@ -909,6 +911,7 @@ fn writeAllFdWithTimeout(io: std.Io, fd: std.posix.fd_t, bytes: []const u8, time
 }
 
 fn readLineFdWithTimeout(io: std.Io, allocator: std.mem.Allocator, fd: std.posix.fd_t, timeout_ms: u64) DaemonError![]u8 {
+    if (comptime builtin.os.tag == .windows) return error.SocketReadFailed;
     var read_buf: std.ArrayList(u8) = .empty;
     errdefer read_buf.deinit(allocator);
 
@@ -938,6 +941,13 @@ pub fn monotonicNowMsForTest(io: std.Io) i64 {
 }
 
 fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) !?[]const u8 {
+    if (comptime builtin.os.tag == .windows) {
+        const environ = std.process.Environ{ .block = .global };
+        return environ.getAlloc(allocator, key) catch |err| switch (err) {
+            error.EnvironmentVariableMissing => null,
+            else => |e| return e,
+        };
+    }
     const c_environ = std.c.environ;
     var env_count: usize = 0;
     while (c_environ[env_count] != null) : (env_count += 1) {}
@@ -964,21 +974,23 @@ fn pathAccessible(io: std.Io, path: []const u8) bool {
     return true;
 }
 
-fn isProcessAlive(pid: std.posix.pid_t) bool {
+fn isProcessAlive(pid: i32) bool {
+    if (comptime builtin.os.tag == .windows) return false;
     if (pid <= 0) return false;
-    std.posix.kill(pid, @enumFromInt(0)) catch |err| switch (err) {
+    std.posix.kill(@intCast(pid), @enumFromInt(0)) catch |err| switch (err) {
         error.ProcessNotFound => return false,
         else => return true,
     };
     return true;
 }
 
-fn readPidFromFile(io: std.Io, allocator: std.mem.Allocator, pid_path: []const u8) DaemonError!?std.posix.pid_t {
+fn readPidFromFile(io: std.Io, allocator: std.mem.Allocator, pid_path: []const u8) DaemonError!?i32 {
+    if (comptime builtin.os.tag == .windows) return null;
     const content = std.Io.Dir.cwd().readFileAlloc(io, pid_path, allocator, .limited(32)) catch return null;
     defer allocator.free(content);
     const trimmed = std.mem.trim(u8, content, " \t\r\n");
     if (trimmed.len == 0) return null;
-    return std.fmt.parseInt(std.posix.pid_t, trimmed, 10) catch null;
+    return std.fmt.parseInt(i32, trimmed, 10) catch null;
 }
 
 fn waitForDaemonArtifactsGone(io: std.Io, paths: RuntimePaths, timeout_ms: u64) DaemonError!void {
@@ -1046,27 +1058,27 @@ pub fn shutdownDaemon(allocator: std.mem.Allocator) DaemonError!ShutdownResult {
 
 test "runtimePathsForHome builds socket and pid paths" {
     const allocator = std.testing.allocator;
-    const paths = try runtimePathsForHome(allocator, "/tmp/orca-home");
+    const paths = try runtimePathsForHome(allocator, "/tmp/ryk-home");
     defer freeRuntimePaths(allocator, paths);
 
-    try std.testing.expectEqualStrings("/tmp/orca-home/.orca/daemon.sock", paths.socket);
-    try std.testing.expectEqualStrings("/tmp/orca-home/.orca/daemon.pid", paths.pid);
+    try std.testing.expectEqualStrings("/tmp/ryk-home/.ryk/daemon.sock", paths.socket);
+    try std.testing.expectEqualStrings("/tmp/ryk-home/.ryk/daemon.pid", paths.pid);
 }
 
-test "socketPath returns a path under $HOME/.orca" {
+test "socketPath returns a path under $HOME/.ryk" {
     const allocator = std.testing.allocator;
     const path = try socketPath(allocator);
     defer allocator.free(path);
 
-    try std.testing.expect(std.mem.endsWith(u8, path, "/.orca/daemon.sock"));
+    try std.testing.expect(std.mem.endsWith(u8, path, "/.ryk/daemon.sock"));
 }
 
-test "pidPath returns a path under $HOME/.orca" {
+test "pidPath returns a path under $HOME/.ryk" {
     const allocator = std.testing.allocator;
     const path = try pidPath(allocator);
     defer allocator.free(path);
 
-    try std.testing.expect(std.mem.endsWith(u8, path, "/.orca/daemon.pid"));
+    try std.testing.expect(std.mem.endsWith(u8, path, "/.ryk/daemon.pid"));
 }
 
 test "DaemonRequest serializes to NDJSON envelope" {
@@ -1092,7 +1104,7 @@ test "parseResponse accepts pong payload" {
 
 test "validateHandshakeResult accepts compatible pong payload" {
     const line =
-        "{\"id\":1,\"result\":{\"status\":\"Pong\",\"protocol_version\":1,\"protocol_label\":\"orca-uds-v1\",\"capabilities\":[\"Ping\",\"Evaluate\",\"ExecuteCli\",\"ExecuteCliCwd\",\"Shutdown\"]}}";
+        "{\"id\":1,\"result\":{\"status\":\"Pong\",\"protocol_version\":1,\"protocol_label\":\"ryk-uds-v1\",\"capabilities\":[\"Ping\",\"Evaluate\",\"ExecuteCli\",\"ExecuteCliCwd\",\"Shutdown\"]}}";
     var parsed = try parseResponse(std.testing.allocator, line);
     defer parsed.deinit();
     try validateHandshakeResult(parsed.value.result);
@@ -1107,7 +1119,7 @@ test "validateHandshakeResult rejects missing handshake fields" {
 
 test "validateHandshakeResult rejects malformed handshake fields" {
     const line =
-        "{\"id\":1,\"result\":{\"status\":\"Pong\",\"protocol_version\":\"1\",\"protocol_label\":\"orca-uds-v1\",\"capabilities\":[\"Ping\"]}}";
+        "{\"id\":1,\"result\":{\"status\":\"Pong\",\"protocol_version\":\"1\",\"protocol_label\":\"ryk-uds-v1\",\"capabilities\":[\"Ping\"]}}";
     var parsed = try parseResponse(std.testing.allocator, line);
     defer parsed.deinit();
     try std.testing.expectError(error.HandshakeMalformed, validateHandshakeResult(parsed.value.result));
@@ -1115,7 +1127,7 @@ test "validateHandshakeResult rejects malformed handshake fields" {
 
 test "validateHandshakeResult rejects protocol mismatch" {
     const line =
-        "{\"id\":1,\"result\":{\"status\":\"Pong\",\"protocol_version\":99,\"protocol_label\":\"orca-uds-v99\",\"capabilities\":[\"Ping\",\"Evaluate\",\"ExecuteCli\",\"Shutdown\"]}}";
+        "{\"id\":1,\"result\":{\"status\":\"Pong\",\"protocol_version\":99,\"protocol_label\":\"ryk-uds-v99\",\"capabilities\":[\"Ping\",\"Evaluate\",\"ExecuteCli\",\"Shutdown\"]}}";
     var parsed = try parseResponse(std.testing.allocator, line);
     defer parsed.deinit();
     try std.testing.expectError(error.ProtocolMismatch, validateHandshakeResult(parsed.value.result));
@@ -1251,8 +1263,8 @@ test "isStaleDaemonArtifacts true when socket exists without pid file" {
     const paths = try runtimePathsForHome(std.testing.allocator, home);
     defer freeRuntimePaths(std.testing.allocator, paths);
 
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
-    const sock = try tmp.dir.createFile(std.testing.io, ".orca/daemon.sock", .{});
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
+    const sock = try tmp.dir.createFile(std.testing.io, ".ryk/daemon.sock", .{});
     sock.close(std.testing.io);
 
     try std.testing.expect(try isStaleDaemonArtifacts(std.testing.allocator, paths));
@@ -1268,14 +1280,14 @@ test "isStaleDaemonArtifacts true when live unrelated pid cannot serve ping" {
     const paths = try runtimePathsForHome(std.testing.allocator, home);
     defer freeRuntimePaths(std.testing.allocator, paths);
 
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
-    const sock = try tmp.dir.createFile(std.testing.io, ".orca/daemon.sock", .{});
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
+    const sock = try tmp.dir.createFile(std.testing.io, ".ryk/daemon.sock", .{});
     sock.close(std.testing.io);
 
     const pid_text = try std.fmt.allocPrint(std.testing.allocator, "{d}", .{std.c.getpid()});
     defer std.testing.allocator.free(pid_text);
     try tmp.dir.writeFile(std.testing.io, .{
-        .sub_path = ".orca/daemon.pid",
+        .sub_path = ".ryk/daemon.pid",
         .data = pid_text,
     });
 
@@ -1303,7 +1315,7 @@ test "sendRequest connect failure surfaces SocketConnectFailed" {
     const home = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(home);
 
-    const missing = try std.fs.path.join(std.testing.allocator, &.{ home, ".orca", "missing.sock" });
+    const missing = try std.fs.path.join(std.testing.allocator, &.{ home, ".ryk", "missing.sock" });
     defer std.testing.allocator.free(missing);
 
     const result = sendRequest(std.testing.allocator, missing, .{
@@ -1314,7 +1326,7 @@ test "sendRequest connect failure surfaces SocketConnectFailed" {
     try std.testing.expectError(error.SocketConnectFailed, result);
 }
 
-test "integration: ensureDaemonRunning when ORCA_DAEMON is set" {
+test "integration: ensureDaemonRunning when RYK_DAEMON is set" {
     const allocator = std.testing.allocator;
     const maybe_daemon_path = getEnvVar(allocator, daemon_env_var) catch return;
     defer if (maybe_daemon_path) |p| allocator.free(p);
@@ -1334,11 +1346,11 @@ test "cleanupStaleArtifacts clears stale socket so isStaleDaemonArtifacts is fal
     const paths = try runtimePathsForHome(std.testing.allocator, home);
     defer freeRuntimePaths(std.testing.allocator, paths);
 
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
-    const sock = try tmp.dir.createFile(std.testing.io, ".orca/daemon.sock", .{});
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
+    const sock = try tmp.dir.createFile(std.testing.io, ".ryk/daemon.sock", .{});
     sock.close(std.testing.io);
     try tmp.dir.writeFile(std.testing.io, .{
-        .sub_path = ".orca/daemon.pid",
+        .sub_path = ".ryk/daemon.pid",
         .data = "999999\n",
     });
 
@@ -1350,7 +1362,7 @@ test "cleanupStaleArtifacts clears stale socket so isStaleDaemonArtifacts is fal
 }
 
 test "validateBinaryInspection accepts trusted adjacent binary" {
-    const path = try std.testing.allocator.dupe(u8, "/tmp/orca-daemon");
+    const path = try std.testing.allocator.dupe(u8, "/tmp/ryk-daemon");
     defer std.testing.allocator.free(path);
 
     try validateBinaryInspection(.{

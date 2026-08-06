@@ -19,7 +19,7 @@ pub const ActorKind = enum {
     process,
     mcp_client,
     mcp_server,
-    orca,
+    ryk,
     unknown,
 };
 
@@ -60,10 +60,10 @@ pub const Path = struct {
     raw: []const u8,
     kind: PathKind,
 
-    pub fn init(raw: []const u8) errors.OrcaError!Path {
-        if (raw.len == 0 or raw.len > limits.max_path_len) return errors.OrcaError.InvalidPath;
-        if (!std.unicode.utf8ValidateSlice(raw)) return errors.OrcaError.InvalidUtf8;
-        if (std.mem.indexOfScalar(u8, raw, 0) != null) return errors.OrcaError.InvalidPath;
+    pub fn init(raw: []const u8) errors.RykError!Path {
+        if (raw.len == 0 or raw.len > limits.max_path_len) return errors.RykError.InvalidPath;
+        if (!std.unicode.utf8ValidateSlice(raw)) return errors.RykError.InvalidUtf8;
+        if (std.mem.indexOfScalar(u8, raw, 0) != null) return errors.RykError.InvalidPath;
         return .{
             .raw = raw,
             .kind = if (std.fs.path.isAbsolute(raw)) .absolute else .relative,
@@ -152,7 +152,7 @@ test "path wrapper validates utf8 and classifies path kind" {
     const relative = try Path.init("src/root.zig");
     try std.testing.expectEqual(PathKind.relative, relative.kind);
 
-    const absolute = try Path.init("/tmp/orca");
+    const absolute = try Path.init("/tmp/ryk");
     try std.testing.expectEqual(PathKind.absolute, absolute.kind);
 
     try std.testing.expectError(error.InvalidPath, Path.init(""));

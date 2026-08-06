@@ -1,5 +1,5 @@
-# Orca preset: mcp-dev
-# Conservative preset for developing stdio MCP servers through Orca.
+# ryk preset: mcp-dev
+# Conservative preset for developing stdio MCP servers through ryk.
 # Manifests still need explicit command/hash binding; this policy does not trust servers by name alone.
 version: 1
 mode: ask
@@ -50,7 +50,7 @@ files:
       - "./**"
     deny:
       - "./.git/**"
-      - "./.orca/**"
+      - "./.ryk/**"
     mode: staged
 
 commands:

@@ -5,12 +5,12 @@ $ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $scriptDir "..")
-$defaultVersion = "1.2.0"
+$defaultVersion = "1.2.9"
 if (Test-Path -LiteralPath (Join-Path $repoRoot "VERSION")) {
     $defaultVersion = (Get-Content -LiteralPath (Join-Path $repoRoot "VERSION") -TotalCount 1).Trim()
 }
-$VERSION = if ($env:ORCA_PLUGIN_VERSION) { $env:ORCA_PLUGIN_VERSION } elseif ($env:ORCA_VERSION) { $env:ORCA_VERSION } else { $defaultVersion }
-$DIST_DIR = if ($env:ORCA_DIST_DIR) { $env:ORCA_DIST_DIR } else { "dist/plugins" }
+$VERSION = if ($env:RYK_PLUGIN_VERSION) { $env:RYK_PLUGIN_VERSION } elseif ($env:RYK_VERSION) { $env:RYK_VERSION } else { $defaultVersion }
+$DIST_DIR = if ($env:RYK_DIST_DIR) { $env:RYK_DIST_DIR } else { "dist/plugins" }
 $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
 $REPO_ROOT = Resolve-Path (Join-Path $SCRIPT_DIR "..")
 
@@ -32,7 +32,7 @@ function Package-Plugin {
     Write-Error "Plugin directory not found: $PluginDir"
   }
 
-  $tempDir = Join-Path $env:TEMP "orca-plugin-$(Get-Random)"
+  $tempDir = Join-Path $env:TEMP "ryk-plugin-$(Get-Random)"
   New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 
   try {
@@ -68,7 +68,7 @@ function Package-Plugin {
 
 # Package Codex plugin
 $CODEX_PLUGIN_DIR = Join-Path $REPO_ROOT "integrations/codex-plugin"
-$CODEX_ZIP = Join-Path $DIST_DIR "orca-codex-plugin-v${VERSION}.zip"
+$CODEX_ZIP = Join-Path $DIST_DIR "ryk-codex-plugin-v${VERSION}.zip"
 Package-Plugin -PluginDir $CODEX_PLUGIN_DIR -ZipPath $CODEX_ZIP -IncludeFiles @(
   ".codex-plugin/plugin.json",
   "skills",
@@ -78,7 +78,7 @@ Package-Plugin -PluginDir $CODEX_PLUGIN_DIR -ZipPath $CODEX_ZIP -IncludeFiles @(
 
 # Package Claude Code plugin
 $CLAUDE_PLUGIN_DIR = Join-Path $REPO_ROOT "integrations/claude-code-plugin"
-$CLAUDE_ZIP = Join-Path $DIST_DIR "orca-claude-code-plugin-v${VERSION}.zip"
+$CLAUDE_ZIP = Join-Path $DIST_DIR "ryk-claude-code-plugin-v${VERSION}.zip"
 Package-Plugin -PluginDir $CLAUDE_PLUGIN_DIR -ZipPath $CLAUDE_ZIP -IncludeFiles @(
   ".claude-plugin/plugin.json",
   "skills",
@@ -88,10 +88,13 @@ Package-Plugin -PluginDir $CLAUDE_PLUGIN_DIR -ZipPath $CLAUDE_ZIP -IncludeFiles 
 
 # Package OpenCode plugin
 $OPENCODE_PLUGIN_DIR = Join-Path $REPO_ROOT "integrations/opencode-plugin"
-$OPENCODE_ZIP = Join-Path $DIST_DIR "orca-opencode-plugin-v${VERSION}.zip"
+$OPENCODE_ZIP = Join-Path $DIST_DIR "ryk-opencode-plugin-v${VERSION}.zip"
 if (Test-Path $OPENCODE_PLUGIN_DIR) {
+  if (-not (Test-Path (Join-Path $OPENCODE_PLUGIN_DIR "ryk.ts"))) {
+    throw "Canonical OpenCode plugin source not found: $OPENCODE_PLUGIN_DIR\ryk.ts"
+  }
   Package-Plugin -PluginDir $OPENCODE_PLUGIN_DIR -ZipPath $OPENCODE_ZIP -IncludeFiles @(
-    "orca.ts",
+    "ryk.ts",
     "README.md",
     "package.json",
     "examples"
@@ -102,7 +105,7 @@ if (Test-Path $OPENCODE_PLUGIN_DIR) {
 
 # Package Claude marketplace catalog
 $MARKETPLACE_DIR = Join-Path $REPO_ROOT "integrations/claude-marketplace"
-$MARKETPLACE_ZIP = Join-Path $DIST_DIR "orca-claude-marketplace-v${VERSION}.zip"
+$MARKETPLACE_ZIP = Join-Path $DIST_DIR "ryk-claude-marketplace-v${VERSION}.zip"
 if (Test-Path $MARKETPLACE_DIR) {
   Package-Plugin -PluginDir $MARKETPLACE_DIR -ZipPath $MARKETPLACE_ZIP -IncludeFiles @(
     ".claude-plugin/marketplace.json",
@@ -114,7 +117,7 @@ if (Test-Path $MARKETPLACE_DIR) {
 
 # Generate checksums
 Write-Host "Generating checksums..."
-$CHECKSUMS_FILE = Join-Path $DIST_DIR "orca-plugin-checksums.txt"
+$CHECKSUMS_FILE = Join-Path $DIST_DIR "ryk-plugin-checksums.txt"
 $checksums = @()
 
 foreach ($file in Get-ChildItem -Path $DIST_DIR -Filter "*.zip") {
@@ -149,7 +152,7 @@ foreach ($file in Get-ChildItem -Path $DIST_DIR -Filter "*.zip") {
 
 # Scan file contents for secret patterns
 foreach ($file in Get-ChildItem -Path $DIST_DIR -Filter "*.zip") {
-  $tmpDir = Join-Path $env:TEMP "orca-scan-$(Get-Random)"
+  $tmpDir = Join-Path $env:TEMP "ryk-scan-$(Get-Random)"
   New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
   try {
     Expand-Archive -Path $file.FullName -DestinationPath $tmpDir -Force

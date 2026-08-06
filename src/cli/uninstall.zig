@@ -136,7 +136,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     } else {
         try stdout.writeAll("\n✅ Uninstall complete.\n");
         if (!opts.keep_config) {
-            try stdout.writeAll("User config removed: ~/.config/orca/\n");
+            try stdout.writeAll("User config removed: ~/.config/ryk/\n");
         }
     }
 
@@ -152,8 +152,8 @@ fn writeManualCleanupHints(stdout: anytype) !void {
     try stdout.writeAll(
         \\
         \\Manual cleanup may still be needed:
-        \\  - Project workspace .orca/ dirs are left in place (project policy).
-        \\    Find them with: find . -type d -name .orca
+        \\  - Project workspace .ryk/ dirs are left in place (project policy).
+        \\    Find them with: find . -type d -name .ryk
         \\  - Package-manager installs (if you used one):
         \\      brew uninstall ryk          # Homebrew
         \\      scoop uninstall ryk         # Scoop
@@ -180,7 +180,7 @@ fn disablePlugins(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) !bo
 }
 
 // ---------------------------------------------------------------------------
-// Binary removal — self path, sibling aliases, known install locations
+// Binary removal — self path and known install locations
 // ---------------------------------------------------------------------------
 
 fn removeBinaries(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, dry_run: bool) !bool {
@@ -205,16 +205,16 @@ fn removeBinaries(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, dry
 
 fn removeKnownDefaultBinaries(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, dry_run: bool) !bool {
     var removed_any = false;
-    const home_z = std.c.getenv("HOME") orelse return false;
+    const home_z = env_util.getenvHome() orelse return false;
     const home = std.mem.span(home_z);
 
-    // Unix curl installer default: ~/.local/bin/{ryk,orca}
+    // Unix curl installer default: ~/.local/bin/ryk
     const local_bin = try std.fs.path.join(allocator, &.{ home, ".local", "bin" });
     defer allocator.free(local_bin);
     removed_any = try removeProductBinariesInDir(io, allocator, local_bin, stdout, dry_run) or removed_any;
 
-    // Windows install.ps1 default: ~/.orca/bin
-    const win_bin = try std.fs.path.join(allocator, &.{ home, ".orca", "bin" });
+    // Windows install.ps1 default: ~/.ryk/bin
+    const win_bin = try std.fs.path.join(allocator, &.{ home, ".ryk", "bin" });
     defer allocator.free(win_bin);
     removed_any = try removeProductBinariesInDir(io, allocator, win_bin, stdout, dry_run) or removed_any;
 
@@ -294,13 +294,13 @@ fn isPackageManagerBinDir(bin_dir: []const u8) bool {
 
 fn productBinaryNames(os: std.Target.Os.Tag) []const []const u8 {
     return if (os == .windows)
-        &.{ "ryk.exe", "orca.exe", "orca-daemon.exe" }
+        &.{ "ryk.exe", "ryk-daemon.exe" }
     else
-        &.{ "ryk", "orca", "orca-daemon" };
+        &.{ "ryk", "ryk-daemon" };
 }
 
 // ---------------------------------------------------------------------------
-// Share / runtime / data removal under ~/.local/share/orca (and Windows paths)
+// Share / runtime / data removal under ~/.local/share/ryk (and Windows paths)
 // ---------------------------------------------------------------------------
 
 fn removeShareProduct(
@@ -312,7 +312,7 @@ fn removeShareProduct(
 ) !bool {
     var removed_any = false;
 
-    // Prefer explicit resource root env (RYK_ then ORCA_). Only full-wipe product-shaped shares;
+    // Prefer explicit RYK_RESOURCE_ROOT. Only full-wipe product-shaped shares;
     // otherwise remove only a marked runtime selected by `current` (never sweep arbitrary parents).
     if (env_util.getenvBrand("RESOURCE_ROOT")) |resource_root| {
         const root = std.mem.span(resource_root);
@@ -330,19 +330,19 @@ fn removeShareProduct(
         }
     }
 
-    if (std.c.getenv("HOME")) |home_z| {
+    if (env_util.getenvHome()) |home_z| {
         const home = std.mem.span(home_z);
-        const unix_share = try std.fs.path.join(allocator, &.{ home, ".local", "share", "orca" });
+        const unix_share = try std.fs.path.join(allocator, &.{ home, ".local", "share", "ryk" });
         defer allocator.free(unix_share);
         removed_any = try wipeShareDir(io, allocator, unix_share, stdout, dry_run, keep_user_data) or removed_any;
 
-        const win_share = try std.fs.path.join(allocator, &.{ home, ".orca", "share" });
+        const win_share = try std.fs.path.join(allocator, &.{ home, ".ryk", "share" });
         defer allocator.free(win_share);
         removed_any = try wipeShareDir(io, allocator, win_share, stdout, dry_run, keep_user_data) or removed_any;
     }
 
     if (std.c.getenv("XDG_DATA_HOME")) |xdg_z| {
-        const xdg_share = try std.fs.path.join(allocator, &.{ std.mem.span(xdg_z), "orca" });
+        const xdg_share = try std.fs.path.join(allocator, &.{ std.mem.span(xdg_z), "ryk" });
         defer allocator.free(xdg_share);
         removed_any = try wipeShareDir(io, allocator, xdg_share, stdout, dry_run, keep_user_data) or removed_any;
     }
@@ -350,7 +350,7 @@ fn removeShareProduct(
     return removed_any;
 }
 
-/// If `resource_root` is `.../share/orca/current` or `.../share/orca/<ver>`, return `.../share/orca`.
+/// If `resource_root` is `.../share/ryk/current` or `.../share/ryk/<ver>`, return `.../share/ryk`.
 fn shareDirFromResourceRoot(resource_root: []const u8) ?[]const u8 {
     const base = std.fs.path.basename(resource_root);
     if (std.mem.eql(u8, base, "current") or versionLooksInstallerOwned(base)) {
@@ -360,14 +360,14 @@ fn shareDirFromResourceRoot(resource_root: []const u8) ?[]const u8 {
 }
 
 /// Product share shapes from installers:
-/// - `…/share/orca` (Unix curl default / Homebrew share)
-/// - `…/.orca/share` (Windows install.ps1 default)
+/// - `…/share/ryk` (Unix curl default / Homebrew share)
+/// - `…/.ryk/share` (Windows install.ps1 default)
 fn isProductShareDir(share_dir: []const u8) bool {
     const base = std.fs.path.basename(share_dir);
     const parent = std.fs.path.dirname(share_dir) orelse return false;
     const parent_base = std.fs.path.basename(parent);
-    if (std.mem.eql(u8, base, "orca") and std.mem.eql(u8, parent_base, "share")) return true;
-    if (std.mem.eql(u8, base, "share") and std.mem.eql(u8, parent_base, ".orca")) return true;
+    if (std.mem.eql(u8, base, "ryk") and std.mem.eql(u8, parent_base, "share")) return true;
+    if (std.mem.eql(u8, base, "share") and std.mem.eql(u8, parent_base, ".ryk")) return true;
     return false;
 }
 
@@ -487,8 +487,7 @@ fn removeInstallerStagingEntries(
     var removed_any = false;
     var it = dir.iterate();
     while (it.next(io) catch null) |entry| {
-        const is_staging = std.mem.startsWith(u8, entry.name, ".ryk-") or
-            std.mem.startsWith(u8, entry.name, ".orca-");
+        const is_staging = std.mem.startsWith(u8, entry.name, ".ryk-");
         if (!is_staging) continue;
 
         const path = try std.fs.path.join(allocator, &.{ share_dir, entry.name });
@@ -639,11 +638,12 @@ fn runtimeLooksInstallerOwned(io: std.Io, allocator: std.mem.Allocator, target: 
     const version = std.fs.path.basename(target);
     if (!versionLooksInstallerOwned(version)) return false;
 
-    const marker = std.fs.path.join(allocator, &.{ target, ".orca-installation" }) catch return false;
+    const marker = std.fs.path.join(allocator, &.{ target, ".ryk-installation" }) catch return false;
     defer allocator.free(marker);
-    const marker_text = std.Io.Dir.cwd().readFileAlloc(io, marker, allocator, .limited(128)) catch return false;
+    var marker_text = std.Io.Dir.cwd().readFileAlloc(io, marker, allocator, .limited(128)) catch return false;
     defer allocator.free(marker_text);
-    if (!std.mem.startsWith(u8, marker_text, "orca-runtime-v1\nversion=")) return false;
+    if (std.mem.startsWith(u8, marker_text, "\xEF\xBB\xBF")) marker_text = marker_text[3..];
+    if (!std.mem.startsWith(u8, marker_text, "ryk-runtime-v1\nversion=")) return false;
 
     for ([_][]const u8{ "integrations", "fixtures", "schemas", "policies" }) |name| {
         const path = std.fs.path.join(allocator, &.{ target, name }) catch return false;
@@ -654,11 +654,11 @@ fn runtimeLooksInstallerOwned(io: std.Io, allocator: std.mem.Allocator, target: 
 }
 
 // ---------------------------------------------------------------------------
-// Profile cleanup — ryk + legacy Orca markers
+// Profile cleanup — ryk installer markers
 // ---------------------------------------------------------------------------
 
 fn removeInstallerProfileEntries(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, dry_run: bool) !bool {
-    const home_z = std.c.getenv("HOME") orelse return false;
+    const home_z = env_util.getenvHome() orelse return false;
     const home = std.mem.span(home_z);
     var removed_any = false;
 
@@ -690,13 +690,13 @@ fn removeInstallerProfileEntries(io: std.Io, allocator: std.mem.Allocator, stdou
 
 fn isPathMarker(line: []const u8) bool {
     return std.mem.eql(u8, line, "# Added by ryk installer") or
-        std.mem.eql(u8, line, "# Added by Orca installer");
+        std.mem.eql(u8, line, "# Added by ryk installer");
 }
 
 fn isRuntimeMarker(line: []const u8) bool {
     return std.mem.eql(u8, line, "# ryk runtime assets") or
-        std.mem.eql(u8, line, "# Orca runtime assets") or
-        std.mem.eql(u8, line, "# ryk runtime assets (ORCA_RESOURCE_ROOT dual-name)");
+        std.mem.eql(u8, line, "# ryk runtime assets") or
+        std.mem.eql(u8, line, "# ryk runtime assets (RYK_RESOURCE_ROOT dual-name)");
 }
 
 fn isManagedPathLine(line: []const u8) bool {
@@ -706,11 +706,11 @@ fn isManagedPathLine(line: []const u8) bool {
 
 fn isManagedResourceLine(line: []const u8) bool {
     return std.mem.startsWith(u8, line, "export RYK_RESOURCE_ROOT=") or
-        std.mem.startsWith(u8, line, "export ORCA_RESOURCE_ROOT=") or
+        std.mem.startsWith(u8, line, "export RYK_RESOURCE_ROOT=") or
         std.mem.startsWith(u8, line, "set -gx RYK_RESOURCE_ROOT ") or
-        std.mem.startsWith(u8, line, "set -gx ORCA_RESOURCE_ROOT ") or
+        std.mem.startsWith(u8, line, "set -gx RYK_RESOURCE_ROOT ") or
         std.mem.startsWith(u8, line, "$env:RYK_RESOURCE_ROOT") or
-        std.mem.startsWith(u8, line, "$env:ORCA_RESOURCE_ROOT");
+        std.mem.startsWith(u8, line, "$env:RYK_RESOURCE_ROOT");
 }
 
 fn removeInstallerProfileEntriesAt(
@@ -787,13 +787,13 @@ fn removeInstallerProfileEntriesAt(
 // ---------------------------------------------------------------------------
 
 fn removeConfigDirs(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, dry_run: bool) !void {
-    // User config dir: ~/.config/orca/ or $XDG_CONFIG_HOME/orca/
+    // User config dir: ~/.config/ryk/ or $XDG_CONFIG_HOME/ryk/
     const config_dir = blk: {
         if (std.c.getenv("XDG_CONFIG_HOME")) |xdg| {
-            break :blk std.fs.path.join(allocator, &.{ std.mem.span(xdg), "orca" }) catch null;
+            break :blk std.fs.path.join(allocator, &.{ std.mem.span(xdg), "ryk" }) catch null;
         }
-        const home = std.c.getenv("HOME") orelse break :blk null;
-        break :blk std.fs.path.join(allocator, &.{ std.mem.span(home), ".config", "orca" }) catch null;
+        const home = env_util.getenvHome() orelse break :blk null;
+        break :blk std.fs.path.join(allocator, &.{ std.mem.span(home), ".config", "ryk" }) catch null;
     };
     defer if (config_dir) |p| allocator.free(p);
 
@@ -807,19 +807,19 @@ fn removeConfigDirs(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, d
         }
     }
 
-    // Legacy user data dir ~/.orca (also Windows install root for bin/share).
-    const legacy_dir = blk: {
-        const home = std.c.getenv("HOME") orelse break :blk null;
-        break :blk std.fs.path.join(allocator, &.{ std.mem.span(home), ".orca" }) catch null;
+    // Windows user data dir ~/.ryk (also the install root for bin/share).
+    const win_data_dir = blk: {
+        const home = env_util.getenvHome() orelse break :blk null;
+        break :blk std.fs.path.join(allocator, &.{ std.mem.span(home), ".ryk" }) catch null;
     };
-    defer if (legacy_dir) |p| allocator.free(p);
+    defer if (win_data_dir) |p| allocator.free(p);
 
-    if (legacy_dir) |ld| {
+    if (win_data_dir) |ld| {
         if (plugin.dirExists(ld) or plugin.fileExistsAbsolute(io, ld)) {
             if (dry_run) {
                 try stdout.print("  [dry-run] would remove: {s}\n", .{ld});
             } else {
-                try removePathSafely(io, ld, stdout, "legacy data");
+                try removePathSafely(io, ld, stdout, "Windows user data");
             }
         }
     }
@@ -881,11 +881,11 @@ test "uninstall --dry-run does not require --yes" {
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "dry-run") != null);
 }
 
-test "uninstall removes both ryk and orca aliases plus daemon" {
+test "uninstall removes the ryk CLI and daemon" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.createDirPath(std.testing.io, "custom/bin");
-    for ([_][]const u8{ "ryk", "orca", "orca-daemon" }) |name| {
+    for ([_][]const u8{ "ryk", "ryk-daemon" }) |name| {
         const path = try std.fmt.allocPrint(std.testing.allocator, "custom/bin/{s}", .{name});
         defer std.testing.allocator.free(path);
         const f = try tmp.dir.createFile(std.testing.io, path, .{});
@@ -902,8 +902,7 @@ test "uninstall removes both ryk and orca aliases plus daemon" {
     try std.testing.expect(try removeInstalledBinariesAt(std.testing.io, std.testing.allocator, cli_path, &stdout_writer, false));
 
     try std.testing.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "custom/bin/ryk", .{}));
-    try std.testing.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "custom/bin/orca", .{}));
-    try std.testing.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "custom/bin/orca-daemon", .{}));
+    try std.testing.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "custom/bin/ryk-daemon", .{}));
 }
 
 test "uninstall dry-run leaves binaries in place" {
@@ -912,8 +911,8 @@ test "uninstall dry-run leaves binaries in place" {
     try tmp.dir.createDirPath(std.testing.io, "custom/bin");
     const cli = try tmp.dir.createFile(std.testing.io, "custom/bin/ryk", .{});
     cli.close(std.testing.io);
-    const alias = try tmp.dir.createFile(std.testing.io, "custom/bin/orca", .{});
-    alias.close(std.testing.io);
+    const daemon = try tmp.dir.createFile(std.testing.io, "custom/bin/ryk-daemon", .{});
+    daemon.close(std.testing.io);
 
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
@@ -924,7 +923,7 @@ test "uninstall dry-run leaves binaries in place" {
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     try std.testing.expect(try removeInstalledBinariesAt(std.testing.io, std.testing.allocator, cli_path, &stdout_writer, true));
     try tmp.dir.access(std.testing.io, "custom/bin/ryk", .{});
-    try tmp.dir.access(std.testing.io, "custom/bin/orca", .{});
+    try tmp.dir.access(std.testing.io, "custom/bin/ryk-daemon", .{});
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "[dry-run]") != null);
 }
 
@@ -932,20 +931,20 @@ test "uninstall removes only the runtime selected by the installer current link"
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     for ([_][]const u8{ "integrations", "fixtures", "schemas", "policies" }) |name| {
-        const path = try std.fmt.allocPrint(std.testing.allocator, "share/orca/1.2.0/{s}", .{name});
+        const path = try std.fmt.allocPrint(std.testing.allocator, "share/ryk/1.2.0/{s}", .{name});
         defer std.testing.allocator.free(path);
         try tmp.dir.createDirPath(std.testing.io, path);
     }
-    const marker = try tmp.dir.createFile(std.testing.io, "share/orca/1.2.0/.orca-installation", .{});
-    try marker.writeStreamingAll(std.testing.io, "orca-runtime-v1\nversion=1.2.0\n");
+    const marker = try tmp.dir.createFile(std.testing.io, "share/ryk/1.2.0/.ryk-installation", .{});
+    try marker.writeStreamingAll(std.testing.io, "ryk-runtime-v1\nversion=1.2.0\n");
     marker.close(std.testing.io);
-    try tmp.dir.createDirPath(std.testing.io, "workspace/.orca");
+    try tmp.dir.createDirPath(std.testing.io, "workspace/.ryk");
 
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    const version_root = try std.fs.path.join(std.testing.allocator, &.{ root, "share", "orca", "1.2.0" });
+    const version_root = try std.fs.path.join(std.testing.allocator, &.{ root, "share", "ryk", "1.2.0" });
     defer std.testing.allocator.free(version_root);
-    const current = try std.fs.path.join(std.testing.allocator, &.{ root, "share", "orca", "current" });
+    const current = try std.fs.path.join(std.testing.allocator, &.{ root, "share", "ryk", "current" });
     defer std.testing.allocator.free(current);
     try std.Io.Dir.cwd().symLink(std.testing.io, version_root, current, .{});
 
@@ -955,35 +954,35 @@ test "uninstall removes only the runtime selected by the installer current link"
 
     try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, current, .{}));
     try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, version_root, .{}));
-    try tmp.dir.access(std.testing.io, "workspace/.orca", .{});
+    try tmp.dir.access(std.testing.io, "workspace/.ryk", .{});
 }
 
 test "uninstall full share wipe removes allow-once data and empty share" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     for ([_][]const u8{ "integrations", "fixtures", "schemas", "policies" }) |name| {
-        const path = try std.fmt.allocPrint(std.testing.allocator, "share/orca/1.2.0/{s}", .{name});
+        const path = try std.fmt.allocPrint(std.testing.allocator, "share/ryk/1.2.0/{s}", .{name});
         defer std.testing.allocator.free(path);
         try tmp.dir.createDirPath(std.testing.io, path);
     }
-    const marker = try tmp.dir.createFile(std.testing.io, "share/orca/1.2.0/.orca-installation", .{});
-    try marker.writeStreamingAll(std.testing.io, "orca-runtime-v1\nversion=1.2.0\n");
+    const marker = try tmp.dir.createFile(std.testing.io, "share/ryk/1.2.0/.ryk-installation", .{});
+    try marker.writeStreamingAll(std.testing.io, "ryk-runtime-v1\nversion=1.2.0\n");
     marker.close(std.testing.io);
-    const allow = try tmp.dir.createFile(std.testing.io, "share/orca/allow_once.jsonl", .{});
+    const allow = try tmp.dir.createFile(std.testing.io, "share/ryk/allow_once.jsonl", .{});
     try allow.writeStreamingAll(std.testing.io, "{}\n");
     allow.close(std.testing.io);
-    const pending = try tmp.dir.createFile(std.testing.io, "share/orca/pending_exceptions.jsonl", .{});
+    const pending = try tmp.dir.createFile(std.testing.io, "share/ryk/pending_exceptions.jsonl", .{});
     try pending.writeStreamingAll(std.testing.io, "{}\n");
     pending.close(std.testing.io);
 
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    const version_root = try std.fs.path.join(std.testing.allocator, &.{ root, "share", "orca", "1.2.0" });
+    const version_root = try std.fs.path.join(std.testing.allocator, &.{ root, "share", "ryk", "1.2.0" });
     defer std.testing.allocator.free(version_root);
-    const current = try std.fs.path.join(std.testing.allocator, &.{ root, "share", "orca", "current" });
+    const current = try std.fs.path.join(std.testing.allocator, &.{ root, "share", "ryk", "current" });
     defer std.testing.allocator.free(current);
     try std.Io.Dir.cwd().symLink(std.testing.io, version_root, current, .{});
-    const share = try std.fs.path.join(std.testing.allocator, &.{ root, "share", "orca" });
+    const share = try std.fs.path.join(std.testing.allocator, &.{ root, "share", "ryk" });
     defer std.testing.allocator.free(share);
 
     var stdout_buf: [4096]u8 = undefined;
@@ -997,44 +996,44 @@ test "uninstall keep_user_data leaves allow-once files" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     for ([_][]const u8{ "integrations", "fixtures", "schemas", "policies" }) |name| {
-        const path = try std.fmt.allocPrint(std.testing.allocator, "share/orca/1.2.0/{s}", .{name});
+        const path = try std.fmt.allocPrint(std.testing.allocator, "share/ryk/1.2.0/{s}", .{name});
         defer std.testing.allocator.free(path);
         try tmp.dir.createDirPath(std.testing.io, path);
     }
-    const marker = try tmp.dir.createFile(std.testing.io, "share/orca/1.2.0/.orca-installation", .{});
-    try marker.writeStreamingAll(std.testing.io, "orca-runtime-v1\nversion=1.2.0\n");
+    const marker = try tmp.dir.createFile(std.testing.io, "share/ryk/1.2.0/.ryk-installation", .{});
+    try marker.writeStreamingAll(std.testing.io, "ryk-runtime-v1\nversion=1.2.0\n");
     marker.close(std.testing.io);
-    const allow = try tmp.dir.createFile(std.testing.io, "share/orca/allow_once.jsonl", .{});
+    const allow = try tmp.dir.createFile(std.testing.io, "share/ryk/allow_once.jsonl", .{});
     try allow.writeStreamingAll(std.testing.io, "{}\n");
     allow.close(std.testing.io);
 
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    const version_root = try std.fs.path.join(std.testing.allocator, &.{ root, "share", "orca", "1.2.0" });
+    const version_root = try std.fs.path.join(std.testing.allocator, &.{ root, "share", "ryk", "1.2.0" });
     defer std.testing.allocator.free(version_root);
-    const current = try std.fs.path.join(std.testing.allocator, &.{ root, "share", "orca", "current" });
+    const current = try std.fs.path.join(std.testing.allocator, &.{ root, "share", "ryk", "current" });
     defer std.testing.allocator.free(current);
     try std.Io.Dir.cwd().symLink(std.testing.io, version_root, current, .{});
-    const share = try std.fs.path.join(std.testing.allocator, &.{ root, "share", "orca" });
+    const share = try std.fs.path.join(std.testing.allocator, &.{ root, "share", "ryk" });
     defer std.testing.allocator.free(share);
 
     var stdout_buf: [4096]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     _ = try wipeShareDir(std.testing.io, std.testing.allocator, share, &stdout_writer, false, true);
 
-    try tmp.dir.access(std.testing.io, "share/orca/allow_once.jsonl", .{});
-    try std.testing.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "share/orca/1.2.0", .{}));
+    try tmp.dir.access(std.testing.io, "share/ryk/allow_once.jsonl", .{});
+    try std.testing.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "share/ryk/1.2.0", .{}));
 }
 
 test "uninstall refuses an unmarked sibling runtime target" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, "share/orca/valuable-data");
+    try tmp.dir.createDirPath(std.testing.io, "share/ryk/valuable-data");
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    const target = try std.fs.path.join(std.testing.allocator, &.{ root, "share", "orca", "valuable-data" });
+    const target = try std.fs.path.join(std.testing.allocator, &.{ root, "share", "ryk", "valuable-data" });
     defer std.testing.allocator.free(target);
-    const current = try std.fs.path.join(std.testing.allocator, &.{ root, "share", "orca", "current" });
+    const current = try std.fs.path.join(std.testing.allocator, &.{ root, "share", "ryk", "current" });
     defer std.testing.allocator.free(current);
     try std.Io.Dir.cwd().symLink(std.testing.io, target, current, .{});
     var stdout_buf: [2048]u8 = undefined;
@@ -1043,12 +1042,11 @@ test "uninstall refuses an unmarked sibling runtime target" {
     try std.Io.Dir.cwd().access(std.testing.io, target, .{});
 }
 
-test "uninstall product binary names cover ryk orca and daemon" {
+test "uninstall product binary names cover ryk and daemon" {
     try std.testing.expectEqualStrings("ryk.exe", productBinaryNames(.windows)[0]);
-    try std.testing.expectEqualStrings("orca.exe", productBinaryNames(.windows)[1]);
-    try std.testing.expectEqualStrings("orca-daemon.exe", productBinaryNames(.windows)[2]);
+    try std.testing.expectEqualStrings("ryk-daemon.exe", productBinaryNames(.windows)[1]);
     try std.testing.expectEqualStrings("ryk", productBinaryNames(.linux)[0]);
-    try std.testing.expectEqualStrings("orca-daemon", productBinaryNames(.linux)[2]);
+    try std.testing.expectEqualStrings("ryk-daemon", productBinaryNames(.linux)[1]);
 }
 
 test "uninstall refuses package-manager bin dirs" {
@@ -1059,8 +1057,8 @@ test "uninstall refuses package-manager bin dirs" {
 }
 
 test "uninstall only trusts product-shaped share dirs" {
-    try std.testing.expect(isProductShareDir("/Users/me/.local/share/orca"));
-    try std.testing.expect(isProductShareDir("/Users/me/.orca/share"));
+    try std.testing.expect(isProductShareDir("/Users/me/.local/share/ryk"));
+    try std.testing.expect(isProductShareDir("/Users/me/.ryk/share"));
     try std.testing.expect(!isProductShareDir("/Users/me/Projects/myapp"));
     try std.testing.expect(!isProductShareDir("/tmp/foo"));
 }
@@ -1077,7 +1075,7 @@ test "uninstall config removal unlinks symlink without wiping target" {
     defer std.testing.allocator.free(root);
     const target = try std.fs.path.join(std.testing.allocator, &.{ root, "real-notes" });
     defer std.testing.allocator.free(target);
-    const link = try std.fs.path.join(std.testing.allocator, &.{ root, "config-orca" });
+    const link = try std.fs.path.join(std.testing.allocator, &.{ root, "config-ryk" });
     defer std.testing.allocator.free(link);
     try std.Io.Dir.cwd().symLink(std.testing.io, target, link, .{});
 
@@ -1089,7 +1087,7 @@ test "uninstall config removal unlinks symlink without wiping target" {
     try tmp.dir.access(std.testing.io, "real-notes/keep.txt", .{});
 }
 
-test "uninstall removes ryk and Orca profile blocks and preserves unrelated lines" {
+test "uninstall removes ryk profile blocks and preserves unrelated lines" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const profile = try tmp.dir.createFile(std.testing.io, ".profile", .{});
@@ -1099,13 +1097,11 @@ test "uninstall removes ryk and Orca profile blocks and preserves unrelated line
         \\export PATH="/custom/bin:$PATH"
         \\alias still_here='echo yes'
         \\# ryk runtime assets
-        \\export RYK_RESOURCE_ROOT="/custom/share/orca/current"
-        \\# Added by Orca installer
+        \\export RYK_RESOURCE_ROOT="/custom/share/ryk/current"
+        \\# Added by ryk installer
         \\fish_add_path -- '/custom/bin'
-        \\# Orca runtime assets
-        \\export ORCA_RESOURCE_ROOT="/custom/share/orca/current"
-        \\# ryk runtime assets (ORCA_RESOURCE_ROOT dual-name)
-        \\$env:ORCA_RESOURCE_ROOT = "/custom/share/orca/current"
+        \\# ryk runtime assets
+        \\export RYK_RESOURCE_ROOT="/custom/share/ryk/current"
         \\export ALSO_KEEP_ME=1
         \\
     );
@@ -1155,4 +1151,3 @@ test "uninstall refuses to rewrite a symlinked shell profile" {
     defer std.testing.allocator.free(content);
     try std.testing.expect(std.mem.indexOf(u8, content, "Added by ryk") != null);
 }
-

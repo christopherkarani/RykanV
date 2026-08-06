@@ -11,8 +11,8 @@ const init = @import("init.zig");
 const exit_codes = @import("exit_codes.zig");
 const env_util = @import("../env_util.zig");
 const plugin = @import("plugin.zig");
-const core_api = @import("orca_core").api;
-const orca_policy = @import("orca_core").policy;
+const core_api = @import("ryk_core").api;
+const ryk_policy = @import("ryk_core").policy;
 const pi_install = @import("pi_install.zig");
 const grok_install = @import("grok_install.zig");
 const host_status = @import("host_status.zig");
@@ -144,7 +144,7 @@ pub fn runEnsure(
 
     const preset = options.preset orelse onboarding.default_preset;
     // Validate before init.command so invalid names never leak `ryk init:` branding (PR #95).
-    if (orca_policy.presets.AgentPreset.parse(preset) == null) {
+    if (ryk_policy.presets.AgentPreset.parse(preset) == null) {
         try stderr.print("ryk ensure: invalid --preset value '{s}'\n", .{preset});
         return coreFailedOutcome();
     }
@@ -291,11 +291,11 @@ fn inspectExistingPolicy(
             // else unreadable / no_mode.
             var root_dir = std.Io.Dir.openDirAbsolute(io, workspace_root, .{}) catch return .unreadable;
             defer root_dir.close(io);
-            const text = root_dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(256 * 1024)) catch return .unreadable;
+            const text = root_dir.readFileAlloc(io, ".ryk/policy.yaml", allocator, .limited(256 * 1024)) catch return .unreadable;
             defer allocator.free(text);
             if (text.len == 0) return .no_mode;
             const mode_raw = extractTopLevelMode(text) orelse return .no_mode;
-            const parsed = orca_policy.schema.Mode.parse(mode_raw) orelse return .no_mode;
+            const parsed = ryk_policy.schema.Mode.parse(mode_raw) orelse return .no_mode;
             return classifyMode(parsed);
         },
     };
@@ -303,7 +303,7 @@ fn inspectExistingPolicy(
     return classifyMode(loaded.mode());
 }
 
-fn classifyMode(mode: orca_policy.schema.Mode) ExistingPolicyClass {
+fn classifyMode(mode: ryk_policy.schema.Mode) ExistingPolicyClass {
     return switch (mode) {
         .observe, .trusted => .{ .non_mediating = mode.toString() },
         .ask, .yolo, .strict, .ci, .redteam => .mediating,
@@ -405,7 +405,7 @@ fn homeDirOwned(allocator: std.mem.Allocator) !?[]u8 {
     // Propagate allocation failures; only genuine missing HOME → null.
     var env_map = try env_util.createProcessMap(allocator);
     defer env_map.deinit();
-    return try env_util.getOwned(&env_map, allocator, "HOME");
+    return try env_util.getOwnedHome(&env_map, allocator);
 }
 
 /// If `path` is under `.../.zig-cache/tmp/<entry>/...`, return the absolute
@@ -484,7 +484,7 @@ fn workspaceMarkerAt(io: std.Io, dir_path: []const u8) bool {
     if (absoluteExists(io, git_path)) return true;
 
     var policy_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const policy_path = std.fmt.bufPrint(&policy_buf, "{s}/.orca/policy.yaml", .{dir_path}) catch return false;
+    const policy_path = std.fmt.bufPrint(&policy_buf, "{s}/.ryk/policy.yaml", .{dir_path}) catch return false;
     return absoluteExists(io, policy_path);
 }
 
@@ -670,12 +670,12 @@ pub fn installOneHost(
 fn ensureProcessHome(allocator: std.mem.Allocator) ![]u8 {
     var env_map = try env_util.createProcessMap(allocator);
     defer env_map.deinit();
-    return (try env_util.getOwned(&env_map, allocator, "HOME")) orelse error.HomeNotSet;
+    return (try env_util.getOwnedHome(&env_map, allocator)) orelse error.HomeNotSet;
 }
 
 fn ensureIsProductRykBinary(path: []const u8) bool {
     const base = std.fs.path.basename(path);
-    return brand.isPrimaryInvocation(base) or brand.isLegacyInvocation(base);
+    return brand.isPrimaryInvocation(base);
 }
 
 fn ensureRunChild(allocator: std.mem.Allocator, argv: []const []const u8) !u8 {
@@ -780,7 +780,7 @@ pub fn wireDetectedHosts(
     defer allocator.free(statuses);
 
     // Install context once. Missing HOME / non-product binary → soft wire fail (no mutation
-    // under unit-test harness where self_exe is not `ryk`/`orca`). OOM propagates.
+    // under unit-test harness where self_exe is not the product `ryk`). OOM propagates.
     const home_opt: ?[]u8 = ensureProcessHome(allocator) catch |err| switch (err) {
         error.HomeNotSet => null,
         else => return err,
@@ -870,14 +870,14 @@ fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
 
 fn ensureCoreWritePolicy(dir: std.Io.Dir, contents: []const u8) !void {
     const io = std.testing.io;
-    try dir.createDirPath(io, ".orca");
-    const file = try dir.createFile(io, ".orca/policy.yaml", .{});
+    try dir.createDirPath(io, ".ryk");
+    const file = try dir.createFile(io, ".ryk/policy.yaml", .{});
     defer file.close(io);
     try file.writeStreamingAll(io, contents);
 }
 
 fn ensureCoreReadPolicy(dir: std.Io.Dir) ![]u8 {
-    return dir.readFileAlloc(std.testing.io, ".orca/policy.yaml", std.testing.allocator, .limited(64 * 1024));
+    return dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(64 * 1024));
 }
 
 // ---------------------------------------------------------------------------
@@ -1068,7 +1068,7 @@ test "EnsureCore nested cwd writes policy at workspace root not process cwd" {
     defer allocator.free(root_policy);
     try std.testing.expect(root_policy.len > 0);
 
-    if (tmp.dir.access(io, "nested/deep/.orca/policy.yaml", .{})) |_| {
+    if (tmp.dir.access(io, "nested/deep/.ryk/policy.yaml", .{})) |_| {
         try std.testing.expect(false); // must not steal into nested cwd
     } else |_| {}
 
@@ -1091,7 +1091,7 @@ test "EnsureCore nested cwd writes policy at workspace root not process cwd" {
     defer allocator.free(root_after);
     try std.testing.expectEqualStrings(root_policy, root_after);
 
-    if (tmp.dir.access(io, "nested/deep/.orca/policy.yaml", .{})) |_| {
+    if (tmp.dir.access(io, "nested/deep/.ryk/policy.yaml", .{})) |_| {
         try std.testing.expect(false);
     } else |_| {}
 }
@@ -1441,7 +1441,7 @@ test "EnsurePolicy nested cwd leave-alone keeps workspace root hash stable" {
     try std.testing.expectEqualStrings(before, after);
     try std.testing.expectEqualSlices(u8, &hash_before, &ensurePolicySha256(after));
 
-    if (tmp.dir.access(io, "nested/deep/.orca/policy.yaml", .{})) |_| {
+    if (tmp.dir.access(io, "nested/deep/.ryk/policy.yaml", .{})) |_| {
         try std.testing.expect(false); // must not create under nested cwd
     } else |_| {}
 }
@@ -1578,8 +1578,8 @@ test "EnsurePolicy unreadable policy is operator-visible not silent green Ask" {
     );
 
     // Strip all perms so mode evidence cannot be read.
-    try tmp.dir.setFilePermissions(io, ".orca/policy.yaml", std.Io.File.Permissions.fromMode(0o000), .{});
-    defer tmp.dir.setFilePermissions(io, ".orca/policy.yaml", std.Io.File.Permissions.fromMode(0o644), .{}) catch {};
+    try tmp.dir.setFilePermissions(io, ".ryk/policy.yaml", std.Io.File.Permissions.fromMode(0o000), .{});
+    defer tmp.dir.setFilePermissions(io, ".ryk/policy.yaml", std.Io.File.Permissions.fromMode(0o644), .{}) catch {};
 
     var stdout_buf: [8192]u8 = undefined;
     var stderr_buf: [4096]u8 = undefined;
@@ -1754,7 +1754,6 @@ test "EnsurePolicy existing ask mode leave-alone hash equal without false residu
     try std.testing.expectEqualStrings(ask_body, after);
     try std.testing.expectEqualSlices(u8, &hash_before, &ensurePolicySha256(after));
 }
-
 
 // ---------------------------------------------------------------------------
 // EnsureSoft — auto-wire soft success + partial honesty (w1-auto-wire-soft-success)
@@ -2192,14 +2191,14 @@ test "EnsureSoft from_install HOME is policy root not process nested cwd (D32/D2
     try std.testing.expect(onboarding.policyExists(io, home_abs));
 
     // Must not steal policy into nested process cwd.
-    if (nest_tmp.dir.access(io, "nested/deep/.orca/policy.yaml", .{})) |_| {
+    if (nest_tmp.dir.access(io, "nested/deep/.ryk/policy.yaml", .{})) |_| {
         try std.testing.expect(false);
     } else |_| {}
-    if (nest_tmp.dir.access(io, ".orca/policy.yaml", .{})) |_| {
+    if (nest_tmp.dir.access(io, ".ryk/policy.yaml", .{})) |_| {
         try std.testing.expect(false);
     } else |_| {}
 
-    const policy = try home_tmp.dir.readFileAlloc(io, ".orca/policy.yaml", allocator, .limited(64 * 1024));
+    const policy = try home_tmp.dir.readFileAlloc(io, ".ryk/policy.yaml", allocator, .limited(64 * 1024));
     defer allocator.free(policy);
     try std.testing.expect(policy.len > 0);
     try std.testing.expect(std.mem.indexOf(u8, policy, "mode:") != null or std.mem.indexOf(u8, policy, "version:") != null);
@@ -2249,7 +2248,7 @@ test "EnsureSoft from_install without absolute HOME is core_failed fail-closed (
     try std.testing.expectEqual(ProtectionLabel.core_failed, outcome.protection_label);
     try std.testing.expect(processExitForOutcome(outcome) != 0);
     // No policy steal under process cwd from a failed install door.
-    if (nest_tmp.dir.access(io, ".orca/policy.yaml", .{})) |_| {
+    if (nest_tmp.dir.access(io, ".ryk/policy.yaml", .{})) |_| {
         try std.testing.expect(false);
     } else |_| {}
 }
@@ -2298,7 +2297,7 @@ test "EnsureSoft nested cwd leave-alone keeps workspace root policy stable (pack
     const after = try ensureCoreReadPolicy(tmp.dir);
     defer allocator.free(after);
     try std.testing.expectEqualStrings(before, after);
-    if (tmp.dir.access(io, "nested/deep/.orca/policy.yaml", .{})) |_| {
+    if (tmp.dir.access(io, "nested/deep/.ryk/policy.yaml", .{})) |_| {
         try std.testing.expect(false);
     } else |_| {}
 }
@@ -2380,7 +2379,7 @@ test "Ensure invalid preset fails with ensure branding not init" {
     try std.testing.expect(std.mem.indexOf(u8, err, "not-a-real-preset") != null);
 
     // Must not have created policy via init.
-    if (tmp.dir.access(io, ".orca/policy.yaml", .{})) |_| {
+    if (tmp.dir.access(io, ".ryk/policy.yaml", .{})) |_| {
         try std.testing.expect(false);
     } else |_| {}
 }

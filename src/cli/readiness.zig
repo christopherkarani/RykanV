@@ -2,8 +2,8 @@
 //! Scope: daemon health + workspace policy present/valid (not host protection grade).
 
 const std = @import("std");
-const core_api = @import("orca_core").api;
-const core = @import("orca_core").core;
+const core_api = @import("ryk_core").api;
+const core = @import("ryk_core").core;
 
 const exit_codes = @import("exit_codes.zig");
 const onboarding = @import("onboarding.zig");
@@ -103,7 +103,7 @@ pub fn assessPolicyFile(io: std.Io, allocator: std.mem.Allocator, path: []const 
     }
 }
 
-/// Assess workspace policy at `.orca/policy.yaml` under `workspace_root`.
+/// Assess workspace policy at `.ryk/policy.yaml` under `workspace_root`.
 pub fn assessWorkspacePolicy(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8) !PolicyValidity {
     const path = try onboarding.policyPath(allocator, workspace_root);
     defer allocator.free(path);

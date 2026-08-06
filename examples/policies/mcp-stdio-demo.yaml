@@ -31,7 +31,7 @@ files:
       - "./examples/mcp/**"
     deny:
       - "./.git/**"
-      - "./.orca/**"
+      - "./.ryk/**"
     mode: staged
 
 commands:

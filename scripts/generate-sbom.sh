@@ -4,18 +4,18 @@ set -eu
 ARTIFACT_DIR="${1:-dist}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VERSION="${ORCA_VERSION:-$(tr -d '[:space:]' < "${REPO_ROOT}/VERSION" 2>/dev/null || printf '1.2.0')}"
-RELEASE_PRODUCT="${ORCA_RELEASE_PRODUCT:-all}"
+VERSION="${RYK_VERSION:-$(tr -d '[:space:]' < "${REPO_ROOT}/VERSION" 2>/dev/null || printf '1.2.9')}"
+RELEASE_PRODUCT="${RYK_RELEASE_PRODUCT:-all}"
 OUTPUT="${ARTIFACT_DIR}/sbom.json"
 
 # SBOM inventory is emitted alongside checksum-verified release artifacts.
 mkdir -p "$ARTIFACT_DIR"
 
-# Always orca-core now (edge runtime removed)
-sbom_name="orca-core"
-sbom_format="orca-core-release-inventory"
+# The release inventory is for the canonical ryk core only (edge runtime removed).
+sbom_name="ryk-core"
+sbom_format="ryk-core-release-inventory"
 components='[
-  {"name": "orca", "type": "application", "language": "zig", "dependencies": []},
+  {"name": "ryk", "type": "application", "language": "zig", "dependencies": []},
   {"name": "core", "type": "library", "language": "zig", "dependencies": []}
 ]'
 build_targets='[

@@ -100,9 +100,9 @@ pub const ActorKind = enum {
     user,
     agent,
     process,
-    /// Maps to core `ActorKind.orca` in audit events. Prefer `.orca`.
+    /// Maps to core `ActorKind.ryk` in audit events. Prefer `.ryk`.
     core,
-    orca,
+    ryk,
     unknown,
 };
 
@@ -480,8 +480,8 @@ fn toCoreActor(actor: Actor) core_mod.types.Actor {
             .user => .user,
             .agent => .agent,
             .process => .process,
-            .core => .orca,
-            .orca => .orca,
+            .core => .ryk,
+            .ryk => .ryk,
             .unknown => .unknown,
         },
         .id = actor.id,

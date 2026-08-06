@@ -1,7 +1,7 @@
 //! In-process Zig shell command evaluator.
 //!
-//! Owns security decisions for `orca hook` / `orca run` / shims.
-//! Pack patterns are the frozen orca-rs oracle set (embedded JSON + PCRE2).
+//! Owns security decisions for `ryk hook` / `ryk run` / shims.
+//! Pack patterns are the historical frozen oracle set from the former orca-rs packs (embedded JSON + PCRE2).
 //! Evaluator errors fail closed with deny.
 //!
 //! Phase 1 hard fence (Mode A default packs: core.* + system.disk): structure
@@ -653,10 +653,8 @@ fn finalizeEval(
 }
 
 fn monotonicMs() i64 {
-    var ts: std.c.timespec = undefined;
-    if (std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts) != 0) return 0;
-    return @as(i64, @intCast(ts.sec)) * std.time.ms_per_s +
-        @divTrunc(@as(i64, @intCast(ts.nsec)), std.time.ns_per_ms);
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    return std.Io.Timestamp.now(threaded.io(), .awake).toMilliseconds();
 }
 
 fn elapsedMs(started_ms: i64) u64 {
@@ -2524,7 +2522,7 @@ test "s-engine: allow-once exact hit allows before packs and consumes when true"
 }
 
 test "s-engine: allow-once AccessDenied skips store and continues packs (seatbelt residual)" {
-    // Hardened Seatbelt cannot open ~/.local/share/orca/allow_once.jsonl.
+    // Hardened Seatbelt cannot open ~/.local/share/ryk/allow_once.jsonl.
     // Must not emit allow-once-store-error critical deny for every command.
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
 

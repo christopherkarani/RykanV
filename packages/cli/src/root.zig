@@ -1,13 +1,13 @@
-const orca = @import("orca");
-const orca_core = @import("orca_core");
+const ryk = @import("ryk");
+const ryk_core = @import("ryk_core");
 
-pub const cli = orca.cli;
+pub const cli = ryk.cli;
 pub const desktop = struct {
-    pub const intercept = orca.intercept;
-    pub const mcp = orca.mcp;
-    pub const sandbox = orca.sandbox;
+    pub const intercept = ryk.intercept;
+    pub const mcp = ryk.mcp;
+    pub const sandbox = ryk.sandbox;
 };
-pub const core = orca_core;
+pub const core = ryk_core;
 
 pub const phase = "23-product-split-cli-contract";
 

@@ -1,7 +1,7 @@
 const std = @import("std");
-const exit_codes = @import("orca").cli.exit_codes;
+const exit_codes = @import("ryk").cli.exit_codes;
 
-const orca_bin = "./zig-out/bin/orca";
+const ryk_bin = "./zig-out/bin/ryk";
 const fake_daemon_script = "tests/fixtures/fake-daemon-exit.sh";
 const fake_mismatch_daemon_script = "tests/fixtures/fake-daemon-protocol-mismatch.sh";
 const codex_deny_exit_code: u8 = 2;
@@ -124,13 +124,14 @@ fn requireMismatchDaemonFixture() !void {
 }
 
 fn daemonBinaryAvailable() bool {
-    if (std.c.getenv("ORCA_DAEMON")) |path| {
+    if (std.c.getenv("RYK_DAEMON")) |path| {
         return fileExists(std.mem.span(path));
     }
+    // Primary product path + historical ryk-rs layout probes (crate removed; still functional if present).
     const candidates = [_][]const u8{
-        "./zig-out/bin/orca-daemon",
-        "orca-rs/target/release/orca-daemon",
-        "orca-rs/target/debug/orca-daemon",
+        "./zig-out/bin/ryk-daemon",
+        "ryk-rs/target/release/ryk-daemon",
+        "ryk-rs/target/debug/ryk-daemon",
     };
     for (candidates) |candidate| {
         if (fileExists(candidate)) return true;
@@ -145,17 +146,18 @@ fn readFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 fn readPipeToAlloc(io: std.Io, allocator: std.mem.Allocator, file: std.Io.File, limit: usize) ![]u8 {
     var list: std.ArrayList(u8) = .empty;
     errdefer list.deinit(allocator);
-    var buf: [4096]u8 = undefined;
-    var reader = file.reader(io, &buf);
+    var reader_buf: [4096]u8 = undefined;
+    var chunk: [4096]u8 = undefined;
+    var reader = file.reader(io, &reader_buf);
     while (list.items.len < limit) {
-        const n = reader.interface.readSliceShort(buf[0..@min(buf.len, limit - list.items.len)]) catch break;
+        const n = reader.interface.readSliceShort(chunk[0..@min(chunk.len, limit - list.items.len)]) catch break;
         if (n == 0) break;
-        try list.appendSlice(allocator, buf[0..n]);
+        try list.appendSlice(allocator, chunk[0..n]);
     }
     return try list.toOwnedSlice(allocator);
 }
 
-fn runOrca(
+fn runRyk(
     allocator: std.mem.Allocator,
     args: []const []const u8,
     stdin_data: []const u8,
@@ -225,7 +227,7 @@ fn expectHookDecision(
 
 fn isolatedHomePath(allocator: std.mem.Allocator, label: []const u8) ![]const u8 {
     const pid = std.c.getpid();
-    return try std.fmt.allocPrint(allocator, "/tmp/orca-phase2f-{s}-{d}", .{ label, pid });
+    return try std.fmt.allocPrint(allocator, "/tmp/ryk-phase2f-{s}-{d}", .{ label, pid });
 }
 
 fn makeIsolatedFailClosedEnv(allocator: std.mem.Allocator) !struct {
@@ -239,7 +241,7 @@ fn makeIsolatedFailClosedEnv(allocator: std.mem.Allocator) !struct {
     errdefer env_map.deinit();
 
     try env_map.put("HOME", home);
-    try env_map.put("ORCA_DAEMON", fake_daemon_script);
+    try env_map.put("RYK_DAEMON", fake_daemon_script);
 
     return .{ .env_map = env_map, .home = home };
 }
@@ -255,7 +257,7 @@ fn makeIsolatedMismatchEnv(allocator: std.mem.Allocator) !struct {
     errdefer env_map.deinit();
 
     try env_map.put("HOME", home);
-    try env_map.put("ORCA_DAEMON", fake_mismatch_daemon_script);
+    try env_map.put("RYK_DAEMON", fake_mismatch_daemon_script);
 
     return .{ .env_map = env_map, .home = home };
 }
@@ -271,7 +273,7 @@ fn makeIsolatedNonShellEnv(allocator: std.mem.Allocator) !struct {
     errdefer env_map.deinit();
 
     try env_map.put("HOME", home);
-    try env_map.put("ORCA_DAEMON", fake_daemon_script);
+    try env_map.put("RYK_DAEMON", fake_daemon_script);
 
     return .{ .env_map = env_map, .home = home };
 }
@@ -298,7 +300,7 @@ fn expectRedactionMetadata(allocator: std.mem.Allocator, stdout: []const u8) !vo
 }
 
 test "phase2f real daemon host matrix allows safe and denies dangerous shell commands" {
-    if (!fileExists(orca_bin)) return;
+    if (!fileExists(ryk_bin)) return;
     if (!daemonBinaryAvailable()) return;
 
     const allocator = std.testing.allocator;
@@ -307,7 +309,7 @@ test "phase2f real daemon host matrix allows safe and denies dangerous shell com
         const safe_fixture = try readFile(allocator, host_case.safe_fixture);
         defer allocator.free(safe_fixture);
 
-        const safe_result = try runOrca(allocator, &.{ orca_bin, "hook", host_case.host, host_case.event }, safe_fixture, null);
+        const safe_result = try runRyk(allocator, &.{ ryk_bin, "hook", host_case.host, host_case.event }, safe_fixture, null);
         defer allocator.free(safe_result.stdout);
         defer allocator.free(safe_result.stderr);
 
@@ -319,7 +321,7 @@ test "phase2f real daemon host matrix allows safe and denies dangerous shell com
         const dangerous_fixture = try readFile(allocator, host_case.dangerous_fixture);
         defer allocator.free(dangerous_fixture);
 
-        const deny_result = try runOrca(allocator, &.{ orca_bin, "hook", host_case.host, host_case.event }, dangerous_fixture, null);
+        const deny_result = try runRyk(allocator, &.{ ryk_bin, "hook", host_case.host, host_case.event }, dangerous_fixture, null);
         defer allocator.free(deny_result.stdout);
         defer allocator.free(deny_result.stderr);
 
@@ -342,7 +344,7 @@ test "phase2f real daemon host matrix allows safe and denies dangerous shell com
 }
 
 test "phase2f non-shell events stay on zig path without requiring daemon" {
-    if (!fileExists(orca_bin)) return;
+    if (!fileExists(ryk_bin)) return;
     try requireFakeDaemonFixture();
 
     const allocator = std.testing.allocator;
@@ -354,7 +356,7 @@ test "phase2f non-shell events stay on zig path without requiring daemon" {
         const fixture = try readFile(allocator, case.fixture);
         defer allocator.free(fixture);
 
-        const result = try runOrca(allocator, &.{ orca_bin, "hook", case.host, case.event }, fixture, &isolated.env_map);
+        const result = try runRyk(allocator, &.{ ryk_bin, "hook", case.host, case.event }, fixture, &isolated.env_map);
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 
@@ -363,36 +365,8 @@ test "phase2f non-shell events stay on zig path without requiring daemon" {
     }
 }
 
-/// Run every primary shell host fixture under `env_map` and assert block + a required reason needle.
-/// Codex host contract: exit code 2, empty stdout, reason on stderr (not JSON).
-fn expectShellHostsBlockWithReason(
-    allocator: std.mem.Allocator,
-    env_map: *const std.process.Environ.Map,
-    reason_needle: []const u8,
-) !void {
-    for (shell_host_cases) |host_case| {
-        const fixture = try readFile(allocator, host_case.safe_fixture);
-        defer allocator.free(fixture);
-
-        const result = try runOrca(allocator, &.{ orca_bin, "hook", host_case.host, host_case.event }, fixture, env_map);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-
-        try expectHookDecision(allocator, host_case.host, "block", result);
-        if (std.mem.eql(u8, host_case.host, "codex")) {
-            // Host contract beyond generic block: codex deny is exit 2 with no JSON stdout.
-            try std.testing.expectEqual(codex_deny_exit_code, result.code);
-            try std.testing.expectEqual(@as(usize, 0), result.stdout.len);
-            try std.testing.expect(result.stderr.len > 0);
-        }
-        const combined = try std.fmt.allocPrint(allocator, "{s}{s}", .{ result.stdout, result.stderr });
-        defer allocator.free(combined);
-        try std.testing.expect(std.mem.indexOf(u8, combined, reason_needle) != null);
-    }
-}
-
-test "phase2f shell hooks fail closed when daemon cannot start" {
-    if (!fileExists(orca_bin)) return;
+test "phase2f shell hooks use Zig evaluation despite removed daemon overrides" {
+    if (!fileExists(ryk_bin)) return;
     try requireFakeDaemonFixture();
 
     const allocator = std.testing.allocator;
@@ -400,81 +374,86 @@ test "phase2f shell hooks fail closed when daemon cannot start" {
     defer allocator.free(isolated.home);
     defer isolated.env_map.deinit();
 
-    // Spawn/start failure maps through daemonUnavailableReason ("daemon unavailable: …").
-    try expectShellHostsBlockWithReason(allocator, &isolated.env_map, "daemon unavailable");
-}
+    for (shell_host_cases) |host_case| {
+        const safe_fixture = try readFile(allocator, host_case.safe_fixture);
+        defer allocator.free(safe_fixture);
+        const safe_result = try runRyk(allocator, &.{ ryk_bin, "hook", host_case.host, host_case.event }, safe_fixture, &isolated.env_map);
+        defer allocator.free(safe_result.stdout);
+        defer allocator.free(safe_result.stderr);
+        try expectHookDecision(allocator, host_case.host, "allow", safe_result);
 
-test "phase2f shell hooks fail closed on protocol mismatch" {
-    if (!fileExists(orca_bin)) return;
-    try requireMismatchDaemonFixture();
+        const dangerous_fixture = try readFile(allocator, host_case.dangerous_fixture);
+        defer allocator.free(dangerous_fixture);
+        const dangerous_result = try runRyk(allocator, &.{ ryk_bin, "hook", host_case.host, host_case.event }, dangerous_fixture, &isolated.env_map);
+        defer allocator.free(dangerous_result.stdout);
+        defer allocator.free(dangerous_result.stderr);
+        try expectHookDecision(allocator, host_case.host, "block", dangerous_result);
 
-    const allocator = std.testing.allocator;
-    var isolated = try makeIsolatedMismatchEnv(allocator);
-    defer allocator.free(isolated.home);
-    defer isolated.env_map.deinit();
-
-    // Protocol mismatch must surface the canonical reason fragment, not a generic block.
-    try expectShellHostsBlockWithReason(allocator, &isolated.env_map, "incompatible daemon protocol");
+        const combined = try std.fmt.allocPrint(allocator, "{s}{s}", .{ dangerous_result.stdout, dangerous_result.stderr });
+        defer allocator.free(combined);
+        try std.testing.expect(std.mem.indexOf(u8, combined, "daemon unavailable") == null);
+        try std.testing.expect(std.mem.indexOf(u8, combined, "incompatible daemon protocol") == null);
+    }
 }
 
 test "phase2f version still works when daemon is unavailable" {
-    if (!fileExists(orca_bin)) return;
+    if (!fileExists(ryk_bin)) return;
 
     const allocator = std.testing.allocator;
     var isolated = try makeIsolatedFailClosedEnv(allocator);
     defer allocator.free(isolated.home);
     defer isolated.env_map.deinit();
 
-    const result = try runOrca(allocator, &.{ orca_bin, "version" }, "", &isolated.env_map);
+    const result = try runRyk(allocator, &.{ ryk_bin, "version" }, "", &isolated.env_map);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
     try std.testing.expectEqual(exit_codes.success, result.code);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Orca") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "ryk") != null);
 }
 
 test "phase2f doctor degrades gracefully when daemon is unavailable" {
-    if (!fileExists(orca_bin)) return;
+    if (!fileExists(ryk_bin)) return;
 
     const allocator = std.testing.allocator;
     var isolated = try makeIsolatedFailClosedEnv(allocator);
     defer allocator.free(isolated.home);
     defer isolated.env_map.deinit();
 
-    const result = try runOrca(allocator, &.{ orca_bin, "doctor" }, "", &isolated.env_map);
+    const result = try runRyk(allocator, &.{ ryk_bin, "doctor" }, "", &isolated.env_map);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
     try std.testing.expectEqual(exit_codes.success, result.code);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "daemon unavailable") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Rebuild both binaries with `./scripts/build-all.sh`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Rebuild both binaries with `./scripts/build-all.sh`") == null);
 }
 
-test "phase2f run denies shell commands when daemon is unavailable" {
-    if (!fileExists(orca_bin)) return;
+test "phase2f run denies dangerous shell commands without a daemon" {
+    if (!fileExists(ryk_bin)) return;
 
     const allocator = std.testing.allocator;
     var isolated = try makeIsolatedFailClosedEnv(allocator);
     defer allocator.free(isolated.home);
     defer isolated.env_map.deinit();
 
-    const result = try runOrca(allocator, &.{ orca_bin, "run", "--workspace", ".", "--", "git", "status" }, "", &isolated.env_map);
+    const result = try runRyk(allocator, &.{ ryk_bin, "run", "--workspace", ".", "--", "rm", "-rf", "/" }, "", &isolated.env_map);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
     try std.testing.expect(result.code != exit_codes.success);
     try std.testing.expect(
-        std.mem.indexOf(u8, result.stderr, "daemon unavailable") != null or
+        std.mem.indexOf(u8, result.stderr, "RYKAN-V-GUARD") != null or
             std.mem.indexOf(u8, result.stderr, "command denied") != null or
-            std.mem.indexOf(u8, result.stderr, "Orca blocked") != null,
+            std.mem.indexOf(u8, result.stderr, "ryk blocked") != null,
     );
 }
 
 test "phase2f malformed hook JSON fails closed with block decision" {
-    if (!fileExists(orca_bin)) return;
+    if (!fileExists(ryk_bin)) return;
 
     const allocator = std.testing.allocator;
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "claude", "PreToolUse" }, "{not json", null);
+    const result = try runRyk(allocator, &.{ ryk_bin, "hook", "claude", "PreToolUse" }, "{not json", null);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -489,14 +468,14 @@ test "phase2f malformed hook JSON fails closed with block decision" {
 }
 
 test "phase2f unknown host is rejected at CLI boundary" {
-    if (!fileExists(orca_bin)) return;
+    if (!fileExists(ryk_bin)) return;
 
     const allocator = std.testing.allocator;
     const envelope =
         \\{"version":1,"host":"unknown","event":"PreToolUse","payload":{"tool":"bash","command":"git status"}}
     ;
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "unknown", "PreToolUse" }, envelope, null);
+    const result = try runRyk(allocator, &.{ ryk_bin, "hook", "unknown", "PreToolUse" }, envelope, null);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -505,7 +484,7 @@ test "phase2f unknown host is rejected at CLI boundary" {
 }
 
 test "phase2f shell tool with missing command fails closed before daemon evaluation" {
-    if (!fileExists(orca_bin)) return;
+    if (!fileExists(ryk_bin)) return;
     try requireFakeDaemonFixture();
 
     const allocator = std.testing.allocator;
@@ -517,7 +496,7 @@ test "phase2f shell tool with missing command fails closed before daemon evaluat
         \\{"version":1,"host":"codex","event":"PreToolUse","payload":{"tool":"bash"}}
     ;
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "codex", "PreToolUse" }, envelope, &isolated.env_map);
+    const result = try runRyk(allocator, &.{ ryk_bin, "hook", "codex", "PreToolUse" }, envelope, &isolated.env_map);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -525,7 +504,7 @@ test "phase2f shell tool with missing command fails closed before daemon evaluat
 }
 
 test "phase2f shell tool with empty command fails closed before daemon evaluation" {
-    if (!fileExists(orca_bin)) return;
+    if (!fileExists(ryk_bin)) return;
     try requireFakeDaemonFixture();
 
     const allocator = std.testing.allocator;
@@ -537,7 +516,7 @@ test "phase2f shell tool with empty command fails closed before daemon evaluatio
         \\{"version":1,"host":"claude","event":"PreToolUse","payload":{"tool":"Bash","command":""}}
     ;
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "claude", "PreToolUse" }, envelope, &isolated.env_map);
+    const result = try runRyk(allocator, &.{ ryk_bin, "hook", "claude", "PreToolUse" }, envelope, &isolated.env_map);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 

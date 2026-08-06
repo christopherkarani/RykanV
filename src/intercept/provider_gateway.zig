@@ -59,6 +59,7 @@ pub const Runtime = struct {
         return self.state.failed.load(.acquire);
     }
     pub fn startServing(self: *Runtime) !void {
+        if (comptime builtin.os.tag == .windows) return error.GatewayUnsupportedOnWindows;
         if (self.state.serving.swap(true, .acq_rel)) return;
         self.state.thread = std.Thread.spawn(.{}, serverLoop, .{self.state}) catch |err| {
             self.state.serving.store(false, .release);

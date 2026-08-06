@@ -530,7 +530,9 @@ test "generated completions expose only the ryk command brand" {
 
         const code = try command(std.testing.io, &.{shell}, &stdout_writer, &stderr_writer);
         try std.testing.expectEqual(exit_codes.success, code);
-        try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "orca") == null);
+        // Split retired brand so bulk renames cannot self-corrupt this assert.
+        const retired = "orc" ++ "a";
+        try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), retired) == null);
         try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "ryk") != null);
     }
 }

@@ -1,6 +1,6 @@
 # Network
 
-Orca includes a network decision engine and wrapper/proxy-mediated hooks.
+ryk includes a network decision engine and wrapper/proxy-mediated hooks.
 
 `file://` URLs are a filesystem/sandbox concern, not network policy. Treat them under FS grants and workspace mediation, not as network allowlist/exfil signals.
 
@@ -38,12 +38,12 @@ ryk run --network open -- pi
 One-release kill switch to restore pre-change agent net defaults (labels without forced mediation):
 
 ```sh
-ORCA_AGENT_NETWORK_DEFAULT=legacy ryk pi
+RYK_AGENT_NETWORK_DEFAULT=legacy ryk pi
 ```
 
 Custom `ryk run -- <command>` is **unchanged**: network mode still defaults to `ask`, backend stays policy/`decision_only` unless you pass `--network-backend proxy`. No silent lockdown on non-alias run.
 
-**Honesty rule:** host aliases must not advertise `ORCA_NETWORK_MODE=ask|allowlist` plus a populated allowlist while `ORCA_BACKEND_NETWORK_ENFORCEMENT=unavailable` without either mediation (route-forced) or an explicit open/legacy escape.
+**Honesty rule:** host aliases must not advertise `RYK_NETWORK_MODE=ask|allowlist` plus a populated allowlist while `RYK_BACKEND_NETWORK_ENFORCEMENT=unavailable` without either mediation (route-forced) or an explicit open/legacy escape.
 
 ## Policy
 
@@ -88,21 +88,21 @@ services:
     unmatched: deny
 ```
 
-The `credentials.use` value is a reference name for policy, audit, and external broker adapters. Orca does not store or inject the raw secret.
+The `credentials.use` value is a reference name for policy, audit, and external broker adapters. ryk does not store or inject the raw secret.
 
 ## Proxy Backend
 
-`network.backend: proxy` starts an explicit loopback proxy for protected agent launches (`ryk <agent>` — default) and the advanced run engine. `ryk run --network-backend proxy` is still available for custom commands. The proxy path injects `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, `ORCA_NETWORK_ENFORCEMENT=proxy-mediated`, and `ORCA_PROXY_ROUTE_FORCED`.
+`network.backend: proxy` starts an explicit loopback proxy for protected agent launches (`ryk <agent>` — default) and the advanced run engine. `ryk run --network-backend proxy` is still available for custom commands. The proxy path injects `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, `RYK_NETWORK_ENFORCEMENT=proxy-mediated`, and `RYK_PROXY_ROUTE_FORCED`.
 
 - HTTP requests are evaluated with host, port, method, and path visibility.
 - HTTPS `CONNECT` requests are evaluated by host and port only.
 - Proxy request attempts and allow/deny decisions are persisted as `network_connect_*` audit/replay events.
 - The proxy accepts concurrent client connections and uses full-duplex forwarding after the first request bytes, which supports delayed request bodies, streaming bodies, and chunked-style uploads at the proxy layer.
-- If proxy enforcement is required and the proxy fails while the child is running, Orca terminates the child and records a fail-closed proxy stop event.
-- Orca does not perform HTTPS MITM.
-- Proxy startup alone is not route forcing. `ORCA_PROXY_ROUTE_FORCED=false` means the child received proxy env only.
-- With `network.backend: proxy` plus OS sandbox attach, Orca installs child OS network rules where supported and exports `ORCA_PROXY_ROUTE_FORCED=true`. Scope differs by mechanism:
-  - **macOS Seatbelt:** outbound TCP only to the Orca **loopback** proxy port (`localhost:port` SBPL). Under default `--seatbelt-profile hardened` (and `compatible`), inbound/bind remain open (Landlock connect-only parity). Under `strict`, inbound/bind are denied. Residual mach-lookup / XPC isolation is still out of scope (see `docs/platform-macos.md` Seatbelt residual).
+- If proxy enforcement is required and the proxy fails while the child is running, ryk terminates the child and records a fail-closed proxy stop event.
+- ryk does not perform HTTPS MITM.
+- Proxy startup alone is not route forcing. `RYK_PROXY_ROUTE_FORCED=false` means the child received proxy env only.
+- With `network.backend: proxy` plus OS sandbox attach, ryk installs child OS network rules where supported and exports `RYK_PROXY_ROUTE_FORCED=true`. Scope differs by mechanism:
+  - **macOS Seatbelt:** outbound TCP only to the ryk **loopback** proxy port (`localhost:port` SBPL). Under default `--seatbelt-profile hardened` (and `compatible`), inbound/bind remain open (Landlock connect-only parity). Under `strict`, inbound/bind are denied. Residual mach-lookup / XPC isolation is still out of scope (see `docs/platform-macos.md` Seatbelt residual).
   - **Linux Landlock (ABI >= 4):** TCP **port-scoped only** (any remote IP on the proxy port; not address-scoped). **UDP/QUIC unrestricted.** Do **not** describe Landlock route force as loopback-only.
 - Host aliases **require** route-force when mediation is on: `apply` fails closed if route-force cannot start (including sandbox `off` / soft-degrade), and `ryk run` refuses spawn when mediation is requested but `network_route_forced` is still false.
 - `--require-backend network-proxy` is satisfied only when the explicit proxy backend starts successfully. `--require-backend network_enforce` is satisfied only by a route-forced OS sandbox session, not by proxy startup alone.
@@ -115,7 +115,7 @@ The `credentials.use` value is a reference name for policy, audit, and external 
 
 ## Exfiltration Heuristics
 
-Orca flags long query strings, base64-like URL parts, high-entropy DNS labels, paste sites, request bins, tunneling services, direct IP destinations, secret-like values, and repeated unknown domains.
+ryk flags long query strings, base64-like URL parts, high-entropy DNS labels, paste sites, request bins, tunneling services, direct IP destinations, secret-like values, and repeated unknown domains.
 
 These findings are **annotate/audit by default**: they are recorded for operators and do not deny allowlisted HTTPS destinations. There is no separate “enforce secrets in URL” config switch on the proxy path (see also `docs/credentials.md`).
 
@@ -144,7 +144,7 @@ Deterministic union (exact-host dedupe; first wins):
 
 **effective allow = user policy ∪ core ∪ overlay ∪ discovered(managed∩host_key + live adapter) ∪ CLI**
 
-Managed store path: `<workspace>/.orca/network-discovered.yaml` (optional; soft-skip when missing/corrupt). Contents are hostnames + source tags only — never tokens, keys, or credential-bearing URLs. Load re-validates every host (rejects wildcards, `network_eval` class tokens such as `private` / `metadata` / `direct-ip`, non-loopback IPs). Writes are atomic (temp+rename) and refuse symlink product paths.
+Managed store path: `<workspace>/.ryk/network-discovered.yaml` (optional; soft-skip when missing/corrupt). Contents are hostnames + source tags only — never tokens, keys, or credential-bearing URLs. Load re-validates every host (rejects wildcards, `network_eval` class tokens such as `private` / `metadata` / `direct-ip`, non-loopback IPs). Writes are atomic (temp+rename) and refuse symlink product paths.
 
 ### What discovery reads (and does not)
 

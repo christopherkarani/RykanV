@@ -5,9 +5,9 @@
 
 ## Overview
 
-`orca hook` receives host lifecycle events from Codex and Claude Code plugins, normalizes the payload, evaluates the event against existing Orca policy and redaction logic, then returns a host-valid decision object.
+`ryk hook` receives host lifecycle events from Codex and Claude Code plugins, normalizes the payload, evaluates the event against existing ryk policy and redaction logic, then returns a host-valid decision object.
 
-The hook is additive only. It does not replace `orca run`, and it does not claim full enforcement when the host treats hook output as advisory.
+The hook is additive only. It does not replace `ryk run`, and it does not claim full enforcement when the host treats hook output as advisory.
 
 ## Supported Hosts
 
@@ -38,18 +38,18 @@ File tool matching is case-insensitive.
 
 ### `SessionStart`
 
-No policy decision is needed. Orca returns an informational allow.
+No policy decision is needed. ryk returns an informational allow.
 
 ### `UserPromptSubmit`
 
-Orca scans the prompt text for secret-like material before any other policy check.
+ryk scans the prompt text for secret-like material before any other policy check.
 
 - Clean prompt, return `allow`
 - Secrets detected, return `warn` and include redactions
 
 ### `PreToolUse` and `PermissionRequest`
 
-Orca evaluates the request by the most specific available input.
+ryk evaluates the request by the most specific available input.
 
 1. If `command` is present, run command policy evaluation.
 2. If the tool is a file write tool and a path is present, run file write policy evaluation.
@@ -57,7 +57,7 @@ Orca evaluates the request by the most specific available input.
 
 ### `PostToolUse`
 
-No new decision is needed. Orca returns an informational allow.
+No new decision is needed. ryk returns an informational allow.
 
 ### `Stop`
 
@@ -69,7 +69,7 @@ Claude only. Informational allow.
 
 ## Decision Mapping Reference
 
-| Orca internal | Hook output | When |
+| ryk internal | Hook output | When |
 |---|---|---|
 | `allow` | `allow` | Policy allows |
 | `deny` | `block` | Policy denies |
@@ -101,7 +101,7 @@ Claude only. Informational allow.
 | `network` | `network` |
 | unknown or default | `unknown` |
 
-`mcp` may appear in host payloads, but Orca normalizes it to `tool` in the canonical hook response.
+`mcp` may appear in host payloads, but ryk normalizes it to `tool` in the canonical hook response.
 
 ## Response Fields
 
@@ -117,7 +117,7 @@ Every hook response uses the same top-level shape.
 | `rule` | yes | Matched policy rule identifier or `null` |
 | `message` | yes | Human-readable message |
 | `redactions` | yes | Array of `{field, reason}` |
-| `host_limitations` | yes | Always includes `Hook enforcement is additive; does not replace orca run supervision.` |
+| `host_limitations` | yes | Always includes `Hook enforcement is additive; does not replace ryk run supervision.` |
 
 ## Example Responses
 
@@ -134,7 +134,7 @@ Every hook response uses the same top-level shape.
   "message": "Prompt accepted.",
   "redactions": [],
   "host_limitations": [
-    "Hook enforcement is additive; does not replace orca run supervision."
+    "Hook enforcement is additive; does not replace ryk run supervision."
   ]
 }
 ```
@@ -149,10 +149,10 @@ Every hook response uses the same top-level shape.
   "category": "command",
   "reason": "command.dangerous",
   "rule": "commands.deny[1]",
-  "message": "Blocked by Orca policy.",
+  "message": "Blocked by ryk policy.",
   "redactions": [],
   "host_limitations": [
-    "Hook enforcement is additive; does not replace orca run supervision."
+    "Hook enforcement is additive; does not replace ryk run supervision."
   ]
 }
 ```
@@ -175,7 +175,7 @@ Every hook response uses the same top-level shape.
     }
   ],
   "host_limitations": [
-    "Hook enforcement is additive; does not replace orca run supervision."
+    "Hook enforcement is additive; does not replace ryk run supervision."
   ]
 }
 ```
@@ -193,7 +193,7 @@ Every hook response uses the same top-level shape.
   "message": "Write is staged for review.",
   "redactions": [],
   "host_limitations": [
-    "Hook enforcement is additive; does not replace orca run supervision."
+    "Hook enforcement is additive; does not replace ryk run supervision."
   ]
 }
 ```
@@ -211,7 +211,7 @@ Every hook response uses the same top-level shape.
   "message": "Observed tool use for context only.",
   "redactions": [],
   "host_limitations": [
-    "Hook enforcement is additive; does not replace orca run supervision."
+    "Hook enforcement is additive; does not replace ryk run supervision."
   ]
 }
 ```
@@ -226,10 +226,10 @@ Every hook response uses the same top-level shape.
   "category": "unknown",
   "reason": "hook.evaluation_failed",
   "rule": null,
-  "message": "Orca could not evaluate the hook payload.",
+  "message": "ryk could not evaluate the hook payload.",
   "redactions": [],
   "host_limitations": [
-    "Hook enforcement is additive; does not replace orca run supervision."
+    "Hook enforcement is additive; does not replace ryk run supervision."
   ]
 }
 ```
@@ -245,7 +245,7 @@ CI mode is noninteractive and fail closed.
 - debug output stays on stderr
 - no hook path may assume human confirmation is available
 
-For headless runs, Orca should report the CI limitation directly instead of pretending an approval flow exists.
+For headless runs, ryk should report the CI limitation directly instead of pretending an approval flow exists.
 
 ## Cross-host decision mapping
 
@@ -260,6 +260,6 @@ Adapters must not claim text context notes enforce approval.
 ## See Also
 
 - `docs/integrations/host-decision-mapping.md`
-- `docs/integrations/orca-cli-plugin.md`
+- `docs/integrations/ryk-cli-plugin.md`
 - `docs/integrations/plugin-security-model.md`
 - `aegis_plugin_launch_plan_v3/P02_AGENT_HOST_INTEGRATION_API.md`

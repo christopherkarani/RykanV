@@ -605,7 +605,7 @@ test "browse classifyDetailLine: command CTA, labeled, prose" {
     try std.testing.expectEqual(DetailPaintKind.command_cta, classifyDetailLine("ryk allow <rule> -r \"reason\""));
     try std.testing.expectEqual(DetailPaintKind.command_cta, classifyDetailLine("ryk allowlist add-command <cmd> -r \"reason\""));
     try std.testing.expectEqual(DetailPaintKind.labeled, classifyDetailLine("Layer: project  ·  0 permanent entries"));
-    try std.testing.expectEqual(DetailPaintKind.labeled, classifyDetailLine("Path:  /ws/.orca/allowlist.toml"));
+    try std.testing.expectEqual(DetailPaintKind.labeled, classifyDetailLine("Path:  /ws/.ryk/allowlist.toml"));
     try std.testing.expectEqual(DetailPaintKind.labeled, classifyDetailLine("kind: rule  key: core.git:reset-hard"));
     try std.testing.expectEqual(DetailPaintKind.labeled, classifyDetailLine("reason: recover"));
     try std.testing.expectEqual(DetailPaintKind.prose, classifyDetailLine("Add a permanent exception (argv):"));

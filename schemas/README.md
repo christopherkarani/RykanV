@@ -2,7 +2,7 @@
 
 Versioned v1 JSON Schemas:
 
-- `policy-v1.json`: Orca policy file shape for `version: 1`.
+- `policy-v1.json`: ryk policy file shape for `version: 1`.
 - `event-v1.json`: audit `events.jsonl` record shape for `version: 1`.
 - `mcp-manifest-v1.json`: stdio MCP manifest shape for `version: 1`.
 - `edge-policy-placeholder-v1.json`: reserved placeholder for future Edge policy schemas.

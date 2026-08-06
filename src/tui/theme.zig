@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const terminal_text = @import("terminal_text.zig");
 
-/// Orca CLI design system: palette, color-capability detection, and theme tokens.
+/// ryk CLI design system: palette, color-capability detection, and theme tokens.
 ///
 /// This module is the single source of truth for visual styling. It degrades
 /// gracefully: truecolor → 256 → 16-color → plain text. It always honours
@@ -442,6 +442,7 @@ fn detectBackground(io: std.Io, is_tty: bool) Background {
 /// exit path. Returns `null` on any failure (caller falls back).
 fn queryBackgroundOsc(io: std.Io) ?Background {
     if (comptime builtin.is_test) return null;
+    if (comptime builtin.os.tag == .windows) return null;
     const vaxis = @import("vaxis");
 
     var tty_buf: [4096]u8 = undefined;

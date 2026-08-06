@@ -8,7 +8,7 @@
 
 ## Summary
 
-Built the Orca Codex plugin package under `integrations/codex-plugin/`. The plugin includes a manifest, five skills, a hooks configuration, README, tests, and integration documentation. All verification commands pass.
+Built the ryk Codex plugin package under `integrations/codex-plugin/`. The plugin includes a manifest, five skills, a hooks configuration, README, tests, and integration documentation. All verification commands pass.
 
 ---
 
@@ -17,11 +17,11 @@ Built the Orca Codex plugin package under `integrations/codex-plugin/`. The plug
 ```text
 integrations/codex-plugin/
   .codex-plugin/plugin.json
-  skills/orca-doctor/SKILL.md
-  skills/orca-init/SKILL.md
-  skills/orca-protect/SKILL.md
-  skills/orca-redteam/SKILL.md
-  skills/orca-replay/SKILL.md
+  skills/ryk-doctor/SKILL.md
+  skills/ryk-init/SKILL.md
+  skills/ryk-protect/SKILL.md
+  skills/ryk-redteam/SKILL.md
+  skills/ryk-replay/SKILL.md
   hooks/hooks.json
   README.md
   examples/marketplace.json
@@ -50,11 +50,11 @@ src/cli/hook.zig
 
 | Skill | Purpose |
 |-------|---------|
-| `orca-doctor` | Check Orca installation, policy status, host integration status, and plugin readiness |
-| `orca-init` | Create or repair an Orca policy for the current repository |
-| `orca-protect` | Explain how to run the current Codex workflow under Orca protection |
-| `orca-redteam` | Run Orca red-team fixtures and summarize results |
-| `orca-replay` | Show and explain the latest Orca session replay |
+| `ryk-doctor` | Check ryk installation, policy status, host integration status, and plugin readiness |
+| `ryk-init` | Create or repair a ryk policy for the current repository |
+| `ryk-protect` | Explain how to run the current Codex workflow under ryk protection |
+| `ryk-redteam` | Run ryk red-team fixtures and summarize results |
+| `ryk-replay` | Show and explain the latest ryk session replay |
 
 No drone skills were added.
 No MCP skills were added.
@@ -72,7 +72,7 @@ No MCP skills were added.
 - `PostToolUse`
 - `Stop`
 
-Each hook calls `orca hook codex <event>` with a JSON payload on stdin.
+Each hook calls `ryk hook codex <event>` with a JSON payload on stdin.
 
 ---
 
@@ -100,9 +100,9 @@ Result: **23/23 passed**
 
 Tests cover:
 - Manifest exists, valid JSON, expected fields
-- Skills exist, non-empty, reference real Orca commands
+- Skills exist, non-empty, reference real ryk commands
 - No drone skill, no MCP skill
-- Hooks exist, valid JSON, call `orca hook codex`
+- Hooks exist, valid JSON, call `ryk hook codex`
 - No nonexistent scripts, no absolute paths
 - Marketplace example valid JSON
 - No fake secrets in plugin files
@@ -128,39 +128,39 @@ Result: 266/273 passed, 1 failed (pre-existing MCP proxy stdin hang), 6 skipped.
 ### Verification Commands
 
 ```bash
-./zig-out/bin/orca plugin doctor codex
+./zig-out/bin/ryk plugin doctor codex
 ```
 Result: Pass. Reports codex plugin directory as "present".
 
 ```bash
-./zig-out/bin/orca plugin manifest codex
+./zig-out/bin/ryk plugin manifest codex
 ```
 Result: Pass. Reports manifest as "exists".
 
 ```bash
 cat tests/plugin-fixtures/codex/pre_tool_use_command_safe.json \
-  | ./zig-out/bin/orca hook codex PreToolUse
+  | ./zig-out/bin/ryk hook codex PreToolUse
 ```
 Result: Pass. Returns `allow` decision.
 
 ```bash
 cat tests/plugin-fixtures/codex/user_prompt_submit_secret.json \
-  | ./zig-out/bin/orca hook codex UserPromptSubmit
+  | ./zig-out/bin/ryk hook codex UserPromptSubmit
 ```
 Result: Pass. Returns `warn` decision with redaction.
 
 ```bash
-./zig-out/bin/orca decide command --json '{"command":"git status"}'
+./zig-out/bin/ryk decide command --json '{"command":"git status"}'
 ```
 Result: Pass. Returns `allow` decision.
 
 ```bash
-./zig-out/bin/orca redteam --ci
+./zig-out/bin/ryk redteam --ci
 ```
 Result: Pass. 10/10 fixtures passed, 100%.
 
 ```bash
-./zig-out/bin/orca doctor
+./zig-out/bin/ryk doctor
 ```
 Result: Pass.
 
@@ -182,7 +182,7 @@ Result: Pass.
 - No drone demos were added.
 - No drone docs were added.
 - No drone commands were exposed.
-- The `orca plugin doctor` command still detects the separate drone workstream and reports safety mode active.
+- The `ryk plugin doctor` command still detects the separate drone workstream and reports safety mode active.
 - Existing Edge tests were not modified.
 - `edge redteam --ci` was not run because it is a separate binary and the plugin plan does not require it.
 
@@ -191,16 +191,16 @@ Result: Pass.
 ## Known Limitations
 
 - Hooks are advisory; enforcement depends on Codex host support.
-- The strongest protection remains `orca codex`.
+- The strongest protection remains `ryk codex`.
 - Plugin installation is preview/dry-run by default.
 - Official marketplace availability is not yet implemented.
-- The `orca plugin install` command does not yet perform actual host plugin installation.
+- The `ryk plugin install` command does not yet perform actual host plugin installation.
 
 ---
 
 ## Security Notes
 
-- The Orca remains the source of truth.
+- The ryk remains the source of truth.
 - The plugin does not duplicate policy logic.
 - Hook stdout is host-valid JSON.
 - Human logs go to stderr.
@@ -215,8 +215,8 @@ Result: Pass.
 **Yes.** P04 (Claude Code plugin) is safe to start.
 
 Rationale:
-- P01 commands (`orca plugin doctor`, `orca plugin manifest`, `orca plugin install`) still work.
-- P02 commands (`orca decide`, `orca hook`) still work.
+- P01 commands (`ryk plugin doctor`, `ryk plugin manifest`, `ryk plugin install`) still work.
+- P02 commands (`ryk decide`, `ryk hook`) still work.
 - The Codex plugin does not conflict with Claude Code plugin space (`integrations/claude-code-plugin/`).
 - No MCP config was added.
 - No drone features were added.

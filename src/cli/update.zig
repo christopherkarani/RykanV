@@ -204,7 +204,7 @@ pub fn detectInstallChannel(exe_path: []const u8) InstallChannel {
     }
     if (std.mem.indexOf(u8, lower, "/.local/bin/") != null or
         std.mem.indexOf(u8, lower, "\\.local\\bin\\") != null or
-        std.mem.indexOf(u8, lower, "\\.orca\\bin\\") != null)
+        std.mem.indexOf(u8, lower, "\\.ryk\\bin\\") != null)
     {
         return .curl_installer;
     }
@@ -222,7 +222,7 @@ pub fn channelAllowsInstaller(channel: InstallChannel, force: bool) bool {
 pub fn packageManagerHint(channel: InstallChannel) []const u8 {
     return switch (channel) {
         .homebrew => "brew upgrade ryk",
-        .npm => "npm update -g @orca-sec/ryk",
+        .npm => "npm update -g @rykan/ryk",
         .scoop => "scoop update ryk",
         .winget => "winget upgrade ryk",
         .curl_installer, .unknown => "curl -fsSL https://raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh | sh",
@@ -838,12 +838,12 @@ fn runUnixInstaller(
 /// Installer child must not inherit operator overrides that redirect download roots.
 const scrub_env_keys = [_][]const u8{
     "RYK_BASE_URL",
-    "ORCA_BASE_URL",
+    "RYK_BASE_URL",
     "ARTIFACT_DIR",
     "RYK_ARTIFACT_DIR",
-    "ORCA_ARTIFACT_DIR",
+    "RYK_ARTIFACT_DIR",
     "RYK_INSTALL_ROOT",
-    "ORCA_INSTALL_ROOT",
+    "RYK_INSTALL_ROOT",
 };
 
 fn scrubInstallerEnv(env_map: *std.process.Environ.Map) void {
@@ -864,14 +864,14 @@ fn execInstaller(
     defer env_map.deinit();
     scrubInstallerEnv(&env_map);
     try env_map.put("RYK_VERSION", target_version);
-    try env_map.put("ORCA_VERSION", target_version);
+    try env_map.put("RYK_VERSION", target_version);
     if (skip_onboard) {
         try env_map.put("RYK_INSTALL_SKIP_ONBOARD", "1");
-        try env_map.put("ORCA_INSTALL_SKIP_ONBOARD", "1");
+        try env_map.put("RYK_INSTALL_SKIP_ONBOARD", "1");
     }
     if (quiet_json) {
         try env_map.put("RYK_INSTALL_QUIET", "1");
-        try env_map.put("ORCA_INSTALL_QUIET", "1");
+        try env_map.put("RYK_INSTALL_QUIET", "1");
     }
 
     const stdio: std.process.SpawnOptions.StdIo = if (quiet_json) .ignore else .inherit;
@@ -970,7 +970,7 @@ test "installScriptUrlForVersion pins release tag" {
 test "detectInstallChannel classifies known layouts" {
     try std.testing.expectEqual(InstallChannel.homebrew, detectInstallChannel("/opt/homebrew/Cellar/ryk/1.2.9/bin/ryk"));
     try std.testing.expectEqual(InstallChannel.homebrew, detectInstallChannel("/home/linuxbrew/.linuxbrew/Cellar/ryk/1.0.0/bin/ryk"));
-    try std.testing.expectEqual(InstallChannel.npm, detectInstallChannel("/usr/local/lib/node_modules/@orca-sec/ryk/vendor/ryk"));
+    try std.testing.expectEqual(InstallChannel.npm, detectInstallChannel("/usr/local/lib/node_modules/@rykan/ryk/vendor/ryk"));
     try std.testing.expectEqual(InstallChannel.scoop, detectInstallChannel("C:\\Users\\me\\scoop\\apps\\ryk\\current\\ryk.exe"));
     try std.testing.expectEqual(InstallChannel.curl_installer, detectInstallChannel("/Users/me/.local/bin/ryk"));
     try std.testing.expectEqual(InstallChannel.unknown, detectInstallChannel("/Users/me/src/rykan/zig-out/bin/ryk"));
@@ -1003,7 +1003,7 @@ test "shouldProceedWithInstall upgrade downgrade rules" {
 
 test "packageManagerHint is non-empty" {
     try std.testing.expect(packageManagerHint(.homebrew).len > 0);
-    try std.testing.expect(std.mem.indexOf(u8, packageManagerHint(.npm), "@orca-sec/ryk") != null);
+    try std.testing.expect(std.mem.indexOf(u8, packageManagerHint(.npm), "@rykan/ryk") != null);
 }
 
 test "tagFromReleaseUrl strips path prefix and v" {

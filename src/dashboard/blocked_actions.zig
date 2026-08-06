@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const core = @import("orca_core").core;
-const core_api = @import("orca_core").api;
+const core = @import("ryk_core").core;
+const core_api = @import("ryk_core").api;
 const presentation = @import("../presentation/mod.zig");
 const rust_visibility = @import("../cli/rust_visibility.zig");
 

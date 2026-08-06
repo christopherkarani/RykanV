@@ -32,7 +32,7 @@ const Asset = struct {
 };
 
 const assets = [_]Asset{
-    .{ .source_name = "orca.ts", .destination_name = "runtime.ts" },
+    .{ .source_name = "ryk.ts", .destination_name = "runtime.ts" },
     .{ .source_name = "secret_capture.ts", .destination_name = "secret_capture.ts" },
     .{ .source_name = "parent_ask.ts", .destination_name = "parent_ask.ts" },
 };
@@ -68,12 +68,12 @@ pub fn install(
     rendered[0] = try std.fmt.allocPrint(
         allocator,
         ownership_marker ++
-            \\import {{ installOrcaExtension }} from "./runtime.ts";
+            \\import {{ installRykExtension }} from "./runtime.ts";
             \\
             \\export default function rykPiExtension(
-            \\  pi: Parameters<typeof installOrcaExtension>[0],
+            \\  pi: Parameters<typeof installRykExtension>[0],
             \\): void {{
-            \\  installOrcaExtension(pi, {{ orcaBin: {s} }});
+            \\  installRykExtension(pi, {{ rykBin: {s} }});
             \\}}
             \\
         ,
@@ -156,12 +156,12 @@ fn destinationChainIsSafe(io: std.Io, allocator: std.mem.Allocator, home: []cons
 fn hasExpectedInstalledShape(destination_name: []const u8, content: []const u8) bool {
     if (std.mem.eql(u8, destination_name, "index.ts")) {
         return std.mem.indexOf(u8, content, "from \"./runtime.ts\"") != null and
-            std.mem.indexOf(u8, content, "installOrcaExtension(pi, { orcaBin: \"") != null;
+            std.mem.indexOf(u8, content, "installRykExtension(pi, { rykBin: \"") != null;
     }
     if (std.mem.eql(u8, destination_name, "runtime.ts")) {
         return std.mem.indexOf(u8, content, "from \"./secret_capture.ts\"") != null and
             std.mem.indexOf(u8, content, "from \"./parent_ask.ts\"") != null and
-            std.mem.indexOf(u8, content, "export function installOrcaExtension") != null;
+            std.mem.indexOf(u8, content, "export function installRykExtension") != null;
     }
     if (std.mem.eql(u8, destination_name, "secret_capture.ts")) {
         return std.mem.indexOf(u8, content, "export function storeSecretToEnvFile") != null and
@@ -179,7 +179,7 @@ fn resolveAssetDir(io: std.Io, allocator: std.mem.Allocator, options: InstallOpt
     return resource_root.resolveResourcePath(io, allocator, .{
         .workspace_root = ".",
         .resource_root_override = options.resource_root_override,
-    }, "orca-pi/extensions");
+    }, "ryk-pi/extensions");
 }
 
 fn ensureDestinationDirectory(io: std.Io, allocator: std.mem.Allocator, home: []const u8) !void {
@@ -270,11 +270,11 @@ fn syncParentDirectory(io: std.Io, destination_path: []const u8) !void {
 fn writeFixtureAssets(io: std.Io, dir: std.Io.Dir) !void {
     try dir.createDirPath(io, "assets");
     try dir.writeFile(io, .{
-        .sub_path = "assets/orca.ts",
+        .sub_path = "assets/ryk.ts",
         .data =
         \\import { handleSecretCaptureInput } from "./secret_capture.ts";
         \\import { resolvePiAskRoot } from "./parent_ask.ts";
-        \\export function installOrcaExtension() {}
+        \\export function installRykExtension() {}
         \\
         ,
     });
@@ -312,7 +312,7 @@ test "Pi install creates a complete extension and is idempotent" {
     }));
     const wrapper = try tmp.dir.readFileAlloc(std.testing.io, relative_install_dir ++ "/index.ts", std.testing.allocator, .limited(4096));
     defer std.testing.allocator.free(wrapper);
-    try std.testing.expect(std.mem.indexOf(u8, wrapper, "orca.ts") == null);
+    try std.testing.expect(std.mem.indexOf(u8, wrapper, "ryk.ts") == null);
     try std.testing.expect(std.mem.indexOf(u8, wrapper, "../package.json") == null);
     try std.testing.expect(std.mem.indexOf(u8, wrapper, "\"/opt/ryk/bin/ryk\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, wrapper, "./runtime.ts") != null);

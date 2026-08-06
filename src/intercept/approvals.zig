@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const core = @import("orca_core").core;
+const core = @import("ryk_core").core;
 
 pub const implemented = true;
 
@@ -58,7 +58,7 @@ pub const PromptRequest = struct {
 
 pub fn prompt(reader: *std.Io.Reader, writer: anytype, request: PromptRequest) !ApprovalChoice {
     try writer.writeAll(
-        \\Orca wants your approval
+        \\ryk wants your approval
         \\
         \\Command:
         \\

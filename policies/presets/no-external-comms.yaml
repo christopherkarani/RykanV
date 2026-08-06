@@ -1,4 +1,4 @@
-# Orca preset: no-external-comms
+# ryk preset: no-external-comms
 # Strict local baseline plus effect-class denials for messaging, social publish, and payments.
 # Blocks tools like send_email / send_imessage / post_twitter by semantic effect, not exact tool names.
 version: 1
@@ -50,7 +50,7 @@ files:
       - "./**"
     deny:
       - "./.git/**"
-      - "./.orca/**"
+      - "./.ryk/**"
     mode: staged
 
 commands:

@@ -1,15 +1,15 @@
 const std = @import("std");
 
 const env_util = @import("../env_util.zig");
-const orca_mcp = @import("../mcp/mod.zig");
+const mcp_mod = @import("../mcp/mod.zig");
 const sandbox = @import("../sandbox/mod.zig");
-const core = @import("orca_core").core;
+const core = @import("ryk_core").core;
 const supervisor = core.supervisor;
-const core_api = @import("orca_core").api;
+const core_api = @import("ryk_core").api;
 const brand = @import("brand.zig");
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
-const policy = @import("orca_core").policy;
+const policy = @import("ryk_core").policy;
 const version_command = @import("version.zig");
 const suggestions = @import("suggestions.zig");
 const tui = @import("../tui/mod.zig");
@@ -213,7 +213,7 @@ fn inspect(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytyp
         };
     }
     const policy_ref: ?*const policy.schema.Policy = if (loaded_policy) |*loaded| loaded else null;
-    var server = orca_mcp.transport.ProcessServer.spawn(io, allocator, options.command_argv) catch |err| {
+    var server = mcp_mod.transport.ProcessServer.spawn(io, allocator, options.command_argv) catch |err| {
         try stderr.print("ryk mcp inspect: failed to start server: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
@@ -223,26 +223,26 @@ fn inspect(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytyp
     defer allocator.free(initialize);
     const initialized = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\",\"params\":{}}";
     const list_tools = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}";
-    const init_response = orca_mcp.transport.ProcessServer.request(&server, allocator, initialize) catch |err| {
+    const init_response = mcp_mod.transport.ProcessServer.request(&server, allocator, initialize) catch |err| {
         try stderr.print("ryk mcp inspect: initialize failed: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     allocator.free(init_response);
-    orca_mcp.transport.ProcessServer.notify(&server, initialized) catch |err| {
+    mcp_mod.transport.ProcessServer.notify(&server, initialized) catch |err| {
         try stderr.print("ryk mcp inspect: initialized notification failed: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
-    const tools_response = orca_mcp.transport.ProcessServer.request(&server, allocator, list_tools) catch |err| {
+    const tools_response = mcp_mod.transport.ProcessServer.request(&server, allocator, list_tools) catch |err| {
         try stderr.print("ryk mcp inspect: tools/list failed: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer allocator.free(tools_response);
-    var parsed = orca_mcp.jsonrpc.parseLine(allocator, tools_response) catch |err| {
+    var parsed = mcp_mod.jsonrpc.parseLine(allocator, tools_response) catch |err| {
         try stderr.print("ryk mcp inspect: invalid tools/list response: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer parsed.deinit();
-    var inventory = orca_mcp.tools.inspectToolsListResponse(allocator, options.server_name, parsed.value()) catch |err| {
+    var inventory = mcp_mod.tools.inspectToolsListResponse(allocator, options.server_name, parsed.value()) catch |err| {
         try stderr.print("ryk mcp inspect: could not inspect tools: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
@@ -276,14 +276,14 @@ fn writeInspectToolLine(
     allocator: std.mem.Allocator,
     stdout: anytype,
     server_name: []const u8,
-    tool: orca_mcp.tools.ToolInfo,
+    tool: mcp_mod.tools.ToolInfo,
     loaded_policy: ?*const policy.schema.Policy,
     effect_packs: *const policy.effects.PackSet,
 ) !void {
     try stdout.print("  {s:<24} risk: {s:<8} default: {s}", .{
         tool.name,
         tool.risk.toString(),
-        orca_mcp.tools.defaultDecisionForRisk(tool.risk),
+        mcp_mod.tools.defaultDecisionForRisk(tool.risk),
     });
     // Match evaluate/tools classify: residual when effects.classifier is enabled.
     const classifier_enabled = if (loaded_policy) |selected|
@@ -354,12 +354,12 @@ fn proxy(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
     };
     defer loaded.deinit();
     const mode = options.mode orelse loaded.policy.mode();
-    var loaded_manifest: ?orca_mcp.manifests.Manifest = null;
+    var loaded_manifest: ?mcp_mod.manifests.Manifest = null;
     defer if (loaded_manifest) |*manifest| manifest.deinit(allocator);
     var bound_launch: ?BoundManifestLaunch = null;
     defer if (bound_launch) |*binding| binding.deinit(allocator);
     if (options.manifest_path) |manifest_path| {
-        loaded_manifest = orca_mcp.manifests.loadFile(io, allocator, manifest_path) catch |err| {
+        loaded_manifest = mcp_mod.manifests.loadFile(io, allocator, manifest_path) catch |err| {
             try stderr.print("ryk mcp proxy: invalid manifest: {s}\n", .{@errorName(err)});
             return exit_codes.usage;
         };
@@ -397,7 +397,7 @@ fn proxy(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
     defer session_writer.deinit();
     try session_writer.writeLastPointer();
 
-    var server = orca_mcp.transport.ProcessServer.spawnWithEnvMap(io, allocator, spawn_argv, spawn_env) catch |err| {
+    var server = mcp_mod.transport.ProcessServer.spawnWithEnvMap(io, allocator, spawn_argv, spawn_env) catch |err| {
         try stderr.print("ryk mcp proxy: failed to start server: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
@@ -431,7 +431,7 @@ fn proxy(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
     };
     defer effect_packs.deinit();
 
-    orca_mcp.proxy.runWithServer(allocator, .{
+    mcp_mod.proxy.runWithServer(allocator, .{
         .server_name = options.server_name,
         .server_command_display = requested_argv[0],
         .policy = loaded.innerPtr(),
@@ -443,9 +443,9 @@ fn proxy(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
         .effect_packs = &effect_packs,
     }, &stdin_reader.interface, stdout, .{
         .context = &server,
-        .request = orca_mcp.transport.ProcessServer.request,
-        .notify = orca_mcp.transport.ProcessServer.notify,
-        .read = orca_mcp.transport.ProcessServer.read,
+        .request = mcp_mod.transport.ProcessServer.request,
+        .notify = mcp_mod.transport.ProcessServer.notify,
+        .read = mcp_mod.transport.ProcessServer.read,
     }) catch |err| {
         if (approval_writer_storage) |*writer| writer.interface.flush() catch {};
         var completed_session = session;
@@ -477,7 +477,7 @@ fn proxy(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype)
 
 fn safeProxyAuditDirName(value: []const u8) bool {
     if (value.len == 0 or value.len > 1024 or std.fs.path.isAbsolute(value)) return false;
-    if (!std.mem.startsWith(u8, value, ".orca-tmp/session-")) return false;
+    if (!std.mem.startsWith(u8, value, ".ryk-tmp/session-")) return false;
     var parts = std.mem.splitScalar(u8, value, '/');
     while (parts.next()) |part| {
         if (part.len == 0 or std.mem.eql(u8, part, ".") or std.mem.eql(u8, part, "..")) return false;
@@ -488,7 +488,7 @@ fn safeProxyAuditDirName(value: []const u8) bool {
 fn initializeRequestAlloc(allocator: std.mem.Allocator) ![]u8 {
     return try std.fmt.allocPrint(
         allocator,
-        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"orca\",\"version\":\"{s}\"}}}}}}",
+        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"ryk\",\"version\":\"{s}\"}}}}}}",
         .{version_command.current().version},
     );
 }
@@ -523,15 +523,15 @@ fn list(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) 
         for (inventory.items) |item| item.deinit(allocator);
         inventory.deinit(allocator);
     }
-    if (std.Io.Dir.cwd().openDir(io, ".orca/mcp", .{ .iterate = true })) |dir_value| {
+    if (std.Io.Dir.cwd().openDir(io, ".ryk/mcp", .{ .iterate = true })) |dir_value| {
         var dir = dir_value;
         defer dir.close(io);
         var it = dir.iterate();
         while (try it.next(io)) |entry| {
             if (entry.kind != .file or !(std.mem.endsWith(u8, entry.name, ".yaml") or std.mem.endsWith(u8, entry.name, ".yml"))) continue;
-            const path = try std.fs.path.join(allocator, &.{ ".orca", "mcp", entry.name });
+            const path = try std.fs.path.join(allocator, &.{ ".ryk", "mcp", entry.name });
             defer allocator.free(path);
-            var manifest = orca_mcp.manifests.loadFile(io, allocator, path) catch |err| {
+            var manifest = mcp_mod.manifests.loadFile(io, allocator, path) catch |err| {
                 try tui.render.callout(io, stdout, .warn, "Invalid MCP manifest", path);
                 try stdout.print("  Reason: {s}\n", .{@errorName(err)});
                 continue;
@@ -629,7 +629,7 @@ fn manifestCheck(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: 
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_state.deinit();
     const allocator = gpa_state.allocator();
-    var manifest = orca_mcp.manifests.loadFile(io, allocator, argv[0]) catch |err| {
+    var manifest = mcp_mod.manifests.loadFile(io, allocator, argv[0]) catch |err| {
         try stderr.print("invalid MCP manifest: {s}\n", .{@errorName(err)});
         return exit_codes.usage;
     };
@@ -671,7 +671,7 @@ fn manifestGenerate(argv: []const []const u8, stdout: anytype, stderr: anytype) 
     };
     const command_text = command_name orelse name;
     const extra_args = if (args_start) |start| argv[start..] else &.{};
-    try orca_mcp.manifests.writeStarterManifest(stdout, name, command_text, extra_args);
+    try mcp_mod.manifests.writeStarterManifest(stdout, name, command_text, extra_args);
     return exit_codes.success;
 }
 
@@ -698,7 +698,7 @@ const BoundManifestLaunch = struct {
 fn bindManifestLaunch(
     io: std.Io,
     allocator: std.mem.Allocator,
-    manifest: orca_mcp.manifests.Manifest,
+    manifest: mcp_mod.manifests.Manifest,
     requested_argv: []const []const u8,
     requested_env: ?*const std.process.Environ.Map,
 ) !BoundManifestLaunch {
@@ -853,7 +853,7 @@ test "MCP proxy audit summaries never persist server arguments" {
         io,
         allocator,
         session,
-        ".orca-tmp/session-test/mcp-audit-0",
+        ".ryk-tmp/session-test/mcp-audit-0",
     );
     defer writer.deinit();
     try core_api.writeAuditSummary(allocator, writer.session_dir_path, .{
@@ -897,9 +897,9 @@ test "mcp command help and invalid subcommands are stable" {
 }
 
 test "MCP proxy audit directory is confined to a fresh workspace session" {
-    try std.testing.expect(safeProxyAuditDirName(".orca-tmp/session-abc/mcp-audit-0"));
-    try std.testing.expect(!safeProxyAuditDirName(".orca/sessions"));
-    try std.testing.expect(!safeProxyAuditDirName(".orca-tmp/../.orca"));
+    try std.testing.expect(safeProxyAuditDirName(".ryk-tmp/session-abc/mcp-audit-0"));
+    try std.testing.expect(!safeProxyAuditDirName(".ryk/sessions"));
+    try std.testing.expect(!safeProxyAuditDirName(".ryk-tmp/../.ryk"));
     try std.testing.expect(!safeProxyAuditDirName("/tmp/mcp-audit"));
 }
 
@@ -1057,7 +1057,7 @@ test "Codex inventory refresh restores exact in-memory argv and environment" {
 test "mcp initialize request uses build version metadata" {
     const request = try initializeRequestAlloc(std.testing.allocator);
     defer std.testing.allocator.free(request);
-    try std.testing.expect(std.mem.indexOf(u8, request, "\"clientInfo\":{\"name\":\"orca\",\"version\":\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, request, "\"clientInfo\":{\"name\":\"ryk\",\"version\":\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, request, version_command.current().version) != null);
     try std.testing.expect(std.mem.indexOf(u8, request, "\"version\":\"1.0.0\"") == null or std.mem.eql(u8, version_command.current().version, "1.0.0"));
 }
@@ -1188,7 +1188,7 @@ test "writeInspectToolLine surfaces residual classifier.local when effects.class
 
     var stdout_buf: [2048]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-    const tool = orca_mcp.tools.ToolInfo{
+    const tool = mcp_mod.tools.ToolInfo{
         .name = "acme_mailer_job",
         .description = "",
         .risk = .medium,
@@ -1227,7 +1227,7 @@ test "writeInspectToolLine packs-only when classifier off" {
 
     var stdout_buf: [2048]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-    const tool = orca_mcp.tools.ToolInfo{
+    const tool = mcp_mod.tools.ToolInfo{
         .name = "acme_mailer_job",
         .description = "",
         .risk = .medium,
@@ -1276,7 +1276,7 @@ test "manifest binding requires exact argv hash and env allowlist" {
         \\  default: deny
     , .{ server_path, &hex });
     defer std.testing.allocator.free(manifest_text);
-    var manifest = try orca_mcp.manifests.parseFromSlice(std.testing.allocator, manifest_text, "test.yaml");
+    var manifest = try mcp_mod.manifests.parseFromSlice(std.testing.allocator, manifest_text, "test.yaml");
     defer manifest.deinit(std.testing.allocator);
 
     var binding = try bindManifestLaunch(
@@ -1304,7 +1304,7 @@ test "manifest binding requires exact argv hash and env allowlist" {
         \\tools:
     , .{ server_path, "0000000000000000000000000000000000000000000000000000000000000000" });
     defer std.testing.allocator.free(bad_manifest_text);
-    var bad_manifest = try orca_mcp.manifests.parseFromSlice(std.testing.allocator, bad_manifest_text, "bad.yaml");
+    var bad_manifest = try mcp_mod.manifests.parseFromSlice(std.testing.allocator, bad_manifest_text, "bad.yaml");
     defer bad_manifest.deinit(std.testing.allocator);
     try std.testing.expectError(error.ManifestExpectedHashMismatch, bindManifestLaunch(std.testing.io, std.testing.allocator, bad_manifest, &.{server_path}, null));
 }
@@ -1317,9 +1317,9 @@ test "mcp manifest check list trust and generate commands are safe" {
     try std.process.setCurrentDir(std.testing.io, tmp.dir);
     defer std.process.setCurrentPath(std.testing.io, prev_cwd) catch {};
 
-    try tmp.dir.createDirPath(std.testing.io, ".orca/mcp");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk/mcp");
     {
-        const file = try tmp.dir.createFile(std.testing.io, ".orca/mcp/github.yaml", .{});
+        const file = try tmp.dir.createFile(std.testing.io, ".ryk/mcp/github.yaml", .{});
         defer file.close(std.testing.io);
         try file.writeStreamingAll(std.testing.io,
             \\version: 1
@@ -1345,7 +1345,7 @@ test "mcp manifest check list trust and generate commands are safe" {
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
 
-    const check_code = try command(std.testing.io, &.{ "manifest", "check", ".orca/mcp/github.yaml" }, &stdout_writer, &stderr_writer);
+    const check_code = try command(std.testing.io, &.{ "manifest", "check", ".ryk/mcp/github.yaml" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, check_code);
     try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "valid MCP manifest") != null);
 

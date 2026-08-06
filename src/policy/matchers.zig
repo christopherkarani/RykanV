@@ -8,7 +8,7 @@ pub fn matchesPattern(pattern: []const u8, value: []const u8) bool {
 pub fn matchesPath(pattern: []const u8, path: []const u8) bool {
     if (matchesPattern(pattern, path)) return true;
 
-    // Quick-install DX robustness for .git/.orca (and future user rules).
+    // Quick-install DX robustness for .git/.ryk (and future user rules).
     // Try combinations of original + stripped forms for both pattern and value.
     // This ensures "./.git/**" matches ".git/config" (and vice-versa) even
     // without dual patterns in every policy.
@@ -158,24 +158,24 @@ test "domain and mcp selector matchers support wildcards" {
 
 // Quick-install DX robustness: file path variants for protected directories.
 // These protect against hook/plugin callers (Hermes pre_tool_call, OpenClaw, raw CLI)
-// that may pass ".git/..." or ".orca/..." without the leading "./" that the policy strings use.
+// that may pass ".git/..." or ".ryk/..." without the leading "./" that the policy strings use.
 // The production fix (Phase 2) adds dual explicit patterns + normalization in matchesPath.
-test "quick install protected path variants (.git and .orca, with and without ./)" {
-    // Current patterns in quick-install presets use "./.git/**" and "./.orca/**".
+test "quick install protected path variants (.git and .ryk, with and without ./)" {
+    // Current patterns in quick-install presets use "./.git/**" and "./.ryk/**".
     // Bare forms (no leading ./) must also be denied for real-world DX.
     try std.testing.expect(matchesPath("./.git/**", "./.git/config"));
     try std.testing.expect(matchesPath("./.git/**", ".git/config")); // bare form now works (Phase 2 DX fix)
     try std.testing.expect(matchesPath("./.git/**", ".git/hooks/pre-commit"));
 
-    try std.testing.expect(matchesPath("./.orca/**", "./.orca/policy.yaml"));
-    try std.testing.expect(matchesPath("./.orca/**", ".orca/secret")); // bare form now works (Phase 2 DX fix)
+    try std.testing.expect(matchesPath("./.ryk/**", "./.ryk/policy.yaml"));
+    try std.testing.expect(matchesPath("./.ryk/**", ".ryk/secret")); // bare form now works (Phase 2 DX fix)
 
     // Existing ./ forms continue to work (no regression)
     try std.testing.expect(matchesPath("./.git/**", "./.git/HEAD"));
-    try std.testing.expect(matchesPath("./.orca/**", "./.orca/sessions/abc/audit.log"));
+    try std.testing.expect(matchesPath("./.ryk/**", "./.ryk/sessions/abc/audit.log"));
 
     // Negative: a random .git deeper in tree should not accidentally match the root rule
-    // (policy intent is workspace root .git/.orca; broader protection is a separate concern)
+    // (policy intent is workspace root .git/.ryk; broader protection is a separate concern)
     try std.testing.expect(!matchesPath("./.git/**", "vendor/repo/.git/config"));
 }
 

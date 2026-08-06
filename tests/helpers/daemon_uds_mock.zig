@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const daemon_uds = @import("orca").cli.daemon_uds;
+const daemon_uds = @import("ryk").cli.daemon_uds;
 
 const Mode = enum {
     hang,

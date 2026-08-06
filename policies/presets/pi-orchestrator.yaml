@@ -1,7 +1,7 @@
-# Orca preset: pi-orchestrator
+# Rykan V preset: pi-orchestrator
 # Exact MCP / custom-tool names for Pi subagent orchestration.
 # default stays ask — do NOT set mcp.default: allow.
-# Uncomment or copy names you actually use into .orca/policy.yaml mcp.allow.
+# Uncomment or copy names you actually use into .ryk/policy.yaml mcp.allow.
 version: 1
 mode: ask
 

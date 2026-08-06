@@ -25,6 +25,8 @@ fn addPcre2Shim(
         .file = b.path("src/shell_engine/pcre2_shim.c"),
         .flags = &.{ "-std=c99", "-DPCRE2_STATIC" },
     });
+    mod.addCSourceFile(.{ .file = b.path("src/shell_engine/windows_acl.c"), .flags = &.{} });
+    if (target.result.os.tag == .windows) mod.linkSystemLibrary("advapi32", .{});
 }
 
 fn addRunTestTerminal(b: *std.Build, exe: *std.Build.Step.Compile) *std.Build.Step.Run {
@@ -47,7 +49,7 @@ fn addRunTestTerminal(b: *std.Build, exe: *std.Build.Step.Compile) *std.Build.St
         run_step.addArtifactArg(exe);
     }
     run_step.stdio = .inherit;
-    run_step.setEnvironmentVariable("ORCA_DISABLE_GLOBAL_DASHBOARD_FEED", "1");
+    run_step.setEnvironmentVariable("RYK_DISABLE_GLOBAL_DASHBOARD_FEED", "1");
     if (b.args) |args| {
         run_step.addArgs(args);
     }
@@ -61,7 +63,7 @@ pub fn build(b: *std.Build) void {
 
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const version_override = b.option([]const u8, "version", "Orca version metadata");
+    const version_override = b.option([]const u8, "version", "ryk version metadata");
     const version = blk: {
         if (version_override) |v| break :blk v;
         const io = b.graph.io;
@@ -100,47 +102,46 @@ pub fn build(b: *std.Build) void {
     });
     vaxis_mod.addImport("uucode", uucode_dep.module("uucode"));
 
-    const orca_core_engine_mod = b.createModule(.{
+    const ryk_core_engine_mod = b.createModule(.{
         .root_source_file = b.path("src/core_engine.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    const orca_core_mod = b.addModule("orca_core", .{
+    const ryk_core_mod = b.addModule("ryk_core", .{
         .root_source_file = b.path("packages/core/src/root.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "core_engine", .module = orca_core_engine_mod },
+            .{ .name = "core_engine", .module = ryk_core_engine_mod },
         },
     });
 
-    const orca_mod = b.addModule("orca", .{
+    const ryk_mod = b.addModule("ryk", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "orca_core", .module = orca_core_mod },
+            .{ .name = "ryk_core", .module = ryk_core_mod },
             .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "vaxis", .module = vaxis_mod },
         },
     });
-    orca_mod.addImport("build_options", build_options_mod);
-    orca_mod.addImport("orca", orca_mod);
+    ryk_mod.addImport("build_options", build_options_mod);
+    ryk_mod.addImport("ryk", ryk_mod);
 
-    const orca_cli_mod = b.addModule("orca_cli", .{
+    const ryk_cli_mod = b.addModule("ryk_cli", .{
         .root_source_file = b.path("packages/cli/src/root.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "orca", .module = orca_mod },
-            .{ .name = "orca_core", .module = orca_core_mod },
+            .{ .name = "ryk", .module = ryk_mod },
+            .{ .name = "ryk_core", .module = ryk_core_mod },
             .{ .name = "build_options", .module = build_options_mod },
         },
     });
 
-    // Primary product binary is `ryk`; legacy `orca` is installed as a same-product alias (Phase 5a).
-    // Zig module graph keeps the internal name `orca` — do not rename package imports here.
+    // Product binary is `ryk` only (no legacy orca alias).
     const exe = b.addExecutable(.{
         .name = "ryk",
         .root_module = b.createModule(.{
@@ -148,7 +149,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "orca", .module = orca_mod },
+                .{ .name = "ryk", .module = ryk_mod },
                 .{ .name = "build_options", .module = build_options_mod },
             },
         }),
@@ -156,28 +157,14 @@ pub fn build(b: *std.Build) void {
     exe.root_module.link_libc = true;
     exe.root_module.addImport("vaxis", vaxis_mod);
     // Attach once on the lib module (imported by the exe). Linking the same C shim on both
-    // exe.root_module and orca_mod duplicates _orca_regex_* symbols at link time.
-    addPcre2Shim(b, orca_mod, target, optimize);
+    // exe.root_module and ryk_mod duplicates _ryk_regex_* symbols at link time.
+    addPcre2Shim(b, ryk_mod, target, optimize);
 
-    // Primary install name follows exe.name ("ryk"). Legacy "orca" is a second install of the
-    // same artifact (compat ≥1 major). Prefer dual install over fragile post-install symlinks
-    // so Windows and DESTDIR prefixes stay correct. On Windows, dest_sub_path must keep .exe
-    // because InstallArtifact uses it literally (does not re-append the target extension).
     const install_ryk = b.addInstallArtifact(exe, .{});
-    const orca_alias_name: []const u8 = if (target.result.os.tag == .windows) "orca.exe" else "orca";
-    const install_orca_alias = b.addInstallArtifact(exe, .{
-        .dest_sub_path = orca_alias_name,
-    });
     b.getInstallStep().dependOn(&install_ryk.step);
-    b.getInstallStep().dependOn(&install_orca_alias.step);
 
-    const install_ryk_step = b.step("install-ryk", "Install ryk CLI (primary)");
+    const install_ryk_step = b.step("install-ryk", "Install ryk CLI");
     install_ryk_step.dependOn(&install_ryk.step);
-    install_ryk_step.dependOn(&install_orca_alias.step);
-    // Legacy step name kept for scripts/docs that still call `zig build install-orca`.
-    const install_orca_step = b.step("install-orca", "Install ryk CLI + orca compat alias (legacy step name)");
-    install_orca_step.dependOn(&install_ryk.step);
-    install_orca_step.dependOn(&install_orca_alias.step);
 
     const run_step = b.step("run", "Run the ryk CLI");
     const run_cmd = b.addRunArtifact(exe);
@@ -188,7 +175,7 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     const lib_tests = b.addTest(.{
-        .root_module = orca_mod,
+        .root_module = ryk_mod,
         .filters = test_filters,
     });
     const run_lib_tests = addRunTestTerminal(b, lib_tests);
@@ -200,7 +187,7 @@ pub fn build(b: *std.Build) void {
     const run_exe_tests = addRunTestTerminal(b, exe_tests);
 
     const core_package_tests = b.addTest(.{
-        .root_module = orca_core_mod,
+        .root_module = ryk_core_mod,
         .filters = test_filters,
     });
     const run_core_package_tests = addRunTestTerminal(b, core_package_tests);
@@ -208,9 +195,9 @@ pub fn build(b: *std.Build) void {
     const run_core_package_tests_only = addRunTestTerminal(b, core_package_tests);
 
     // Deep `src/policy/*` unit tests: package re-exports do not attach nested module
-    // tests under Zig 0.16 monopath/orca_core roots. Root at core_engine so
+    // tests under Zig 0.16 monopath/ryk_core roots. Root at core_engine so
     // agent_inference_hosts is discoverable under test-core/test-policy with
-    // `-Dtest-filter=…`. Dedicated module (not orca_core_engine_mod) — reusing the
+    // `-Dtest-filter=…`. Dedicated module (not ryk_core_engine_mod) — reusing the
     // package import as test root fails nested audit/core compile under 0.16.
     //
     // Not on test-fast / compile-test-fast: unfiltered core_engine still hits
@@ -234,7 +221,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "orca_core", .module = orca_core_mod },
+                .{ .name = "ryk_core", .module = ryk_core_mod },
             },
         }),
         .filters = test_filters,
@@ -244,7 +231,7 @@ pub fn build(b: *std.Build) void {
     const run_core_contract_tests_only = addRunTestTerminal(b, core_contract_tests);
 
     // Domain-sliced test roots: root files live under src/ so relative imports
-    // (e.g. sandbox → env_util) stay inside the module path. Avoids full orca facade
+    // (e.g. sandbox → env_util) stay inside the module path. Avoids full ryk facade
     // (cli/tui/vaxis/plugin) for focused agent iteration.
     const sandbox_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -252,7 +239,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "orca_core", .module = orca_core_mod },
+                .{ .name = "ryk_core", .module = ryk_core_mod },
             },
         }),
         .filters = test_filters,
@@ -266,7 +253,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "orca_core", .module = orca_core_mod },
+                .{ .name = "ryk_core", .module = ryk_core_mod },
             },
         }),
         .filters = test_filters,
@@ -286,7 +273,7 @@ pub fn build(b: *std.Build) void {
     const run_shell_engine_tests = addRunTestTerminal(b, shell_engine_tests);
 
     const cli_package_tests = b.addTest(.{
-        .root_module = orca_cli_mod,
+        .root_module = ryk_cli_mod,
     });
     const run_cli_package_tests = addRunTestTerminal(b, cli_package_tests);
 
@@ -296,7 +283,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "orca_cli", .module = orca_cli_mod },
+                .{ .name = "ryk_cli", .module = ryk_cli_mod },
             },
         }),
     });
@@ -308,7 +295,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "orca", .module = orca_mod },
+                .{ .name = "ryk", .module = ryk_mod },
             },
         }),
     });
@@ -320,7 +307,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "orca", .module = orca_mod },
+                .{ .name = "ryk", .module = ryk_mod },
             },
         }),
     });
@@ -332,7 +319,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "orca", .module = orca_mod },
+                .{ .name = "ryk", .module = ryk_mod },
             },
         }),
     });
@@ -344,7 +331,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "orca", .module = orca_mod },
+                .{ .name = "ryk", .module = ryk_mod },
             },
         }),
     });
@@ -356,7 +343,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "orca", .module = orca_mod },
+                .{ .name = "ryk", .module = ryk_mod },
             },
         }),
     });
@@ -368,7 +355,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "orca", .module = orca_mod },
+                .{ .name = "ryk", .module = ryk_mod },
             },
         }),
     });
@@ -380,7 +367,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "orca", .module = orca_mod },
+                .{ .name = "ryk", .module = ryk_mod },
             },
         }),
     });
@@ -420,7 +407,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "orca", .module = orca_mod },
+                .{ .name = "ryk", .module = ryk_mod },
             },
         }),
     });
@@ -459,7 +446,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "orca", .module = orca_mod },
+                .{ .name = "ryk", .module = ryk_mod },
             },
         }),
     });
@@ -471,7 +458,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "orca", .module = orca_mod },
+                .{ .name = "ryk", .module = ryk_mod },
             },
         }),
     });
@@ -483,7 +470,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "orca", .module = orca_mod },
+                .{ .name = "ryk", .module = ryk_mod },
             },
         }),
     });
@@ -495,8 +482,8 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "orca", .module = orca_mod },
-                .{ .name = "orca_core", .module = orca_core_mod },
+                .{ .name = "ryk", .module = ryk_mod },
+                .{ .name = "ryk_core", .module = ryk_core_mod },
             },
         }),
     });
@@ -507,13 +494,13 @@ pub fn build(b: *std.Build) void {
     const check_fixture_secrets_step = b.step("check-fixture-secrets", "Scan fixtures/tests for non-synthetic secret patterns");
     check_fixture_secrets_step.dependOn(&check_fixture_secrets.step);
 
-    const check_step = b.step("check", "Compile Orca CLI only (fastest compile gate)");
+    const check_step = b.step("check", "Compile ryk CLI only (fastest compile gate)");
     check_step.dependOn(&exe.step);
 
-    const compile_test_lib_step = b.step("compile-test-lib", "Compile orca lib unit tests without running");
+    const compile_test_lib_step = b.step("compile-test-lib", "Compile ryk lib unit tests without running");
     compile_test_lib_step.dependOn(&lib_tests.step);
 
-    // Keep membership identical to `test-fast` (lib + orca_core package + core contract).
+    // Keep membership identical to `test-fast` (lib + ryk_core package + core contract).
     // core_engine_tests is test-core/test-policy only (see comment at addTest) — not fast.
     // daemon_ipc_hardening is full-suite only (`test` step), not the fast gate.
     const compile_test_fast_step = b.step("compile-test-fast", "Compile test-fast artifacts without running");
@@ -521,10 +508,10 @@ pub fn build(b: *std.Build) void {
     compile_test_fast_step.dependOn(&core_package_tests.step);
     compile_test_fast_step.dependOn(&core_contract_tests.step);
 
-    const test_lib_step = b.step("test-lib", "Run orca lib inline tests only");
+    const test_lib_step = b.step("test-lib", "Run ryk lib inline tests only");
     test_lib_step.dependOn(&run_lib_tests.step);
 
-    const test_core_step = b.step("test-core", "Run orca_core package + core_engine (policy/audit) unit tests");
+    const test_core_step = b.step("test-core", "Run ryk_core package + core_engine (policy/audit) unit tests");
     test_core_step.dependOn(&run_core_package_tests_only.step);
     test_core_step.dependOn(&run_core_engine_tests_only.step);
 
@@ -562,7 +549,7 @@ pub fn build(b: *std.Build) void {
     run_core_package_tests.step.dependOn(&run_lib_tests.step);
     run_core_contract_tests.step.dependOn(&run_core_package_tests.step);
 
-    const test_fast_step = b.step("test-fast", "Run fast unit tests (orca lib + orca_core package + contract)");
+    const test_fast_step = b.step("test-fast", "Run fast unit tests (ryk lib + ryk_core package + contract)");
     test_fast_step.dependOn(&run_core_contract_tests.step);
 
     const test_step = b.step("test", "Run unit tests");
@@ -600,7 +587,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "orca", .module = orca_mod },
+                .{ .name = "ryk", .module = ryk_mod },
             },
         }),
     });
@@ -613,31 +600,31 @@ pub fn build(b: *std.Build) void {
         .cpu_arch = .x86_64,
         .os_tag = .windows,
     });
-    const windows_mod = b.addModule("orca-windows-check", .{
+    const windows_mod = b.addModule("ryk-windows-check", .{
         .root_source_file = b.path("src/root.zig"),
         .target = windows_target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "orca_core", .module = orca_core_mod },
+            .{ .name = "ryk_core", .module = ryk_core_mod },
             .{ .name = "build_options", .module = build_options_mod },
         },
     });
-    // Same as host `orca_mod`: attach once so shell_engine regex links pcre2_shim + static
+    // Same as host `ryk_mod`: attach once so shell_engine regex links pcre2_shim + static
     // pcre2-8 for the Windows cross compile; do not also link on windows_exe.root_module.
     addPcre2Shim(b, windows_mod, windows_target, optimize);
     const windows_exe = b.addExecutable(.{
-        .name = "orca-windows-check",
+        .name = "ryk-windows-check",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = windows_target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "orca", .module = windows_mod },
+                .{ .name = "ryk", .module = windows_mod },
                 .{ .name = "build_options", .module = build_options_mod },
             },
         }),
     });
     windows_exe.root_module.link_libc = true;
-    const check_windows_step = b.step("check-windows", "Compile Orca for Windows without running it");
+    const check_windows_step = b.step("check-windows", "Compile ryk for Windows without running it");
     check_windows_step.dependOn(&windows_exe.step);
 }

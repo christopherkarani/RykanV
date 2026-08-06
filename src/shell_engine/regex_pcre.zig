@@ -5,19 +5,19 @@ const c = @cImport({
 });
 
 pub const Regex = struct {
-    ptr: *c.orca_regex,
+    ptr: *c.ryk_regex,
 
     pub fn compile(pattern: []const u8) !Regex {
         var err_code: c_int = 0;
         var err_off: usize = 0;
         const pattern_ptr: [*]const u8 = if (pattern.len == 0) "".ptr else pattern.ptr;
-        const p = c.orca_regex_compile(pattern_ptr, pattern.len, &err_code, &err_off);
+        const p = c.ryk_regex_compile(pattern_ptr, pattern.len, &err_code, &err_off);
         if (p == null) return error.CompileFailed;
         return .{ .ptr = p.? };
     }
 
     pub fn deinit(self: *Regex) void {
-        c.orca_regex_free(self.ptr);
+        c.ryk_regex_free(self.ptr);
         self.* = undefined;
     }
 
@@ -38,7 +38,7 @@ pub const Regex = struct {
         const text_ptr: [*]const u8 = if (text.len == 0) "".ptr else text.ptr;
         var start: usize = 0;
         var end: usize = 0;
-        const rc = c.orca_regex_match_span(self.ptr, text_ptr, text.len, &start, &end);
+        const rc = c.ryk_regex_match_span(self.ptr, text_ptr, text.len, &start, &end);
         if (rc > 0) {
             if (end < start or end > text.len) return error.MatchInfrastructure;
             return .{ .start = start, .end = end };

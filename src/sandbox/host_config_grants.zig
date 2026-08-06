@@ -1005,7 +1005,7 @@ pub const stale_login_fail_closed_message =
 /// Primary tip when parent stdout/stderr path is under classic ungranted host tmp
 /// (inherited shell redirects). Leads with stdio/fstat residual — not re-login.
 pub const empty_backpack_stdio_fstat_exit_tip =
-    \\ryk run: empty-backpack: agent died after sandbox attach — redirected stdout/stderr lands under classic /tmp or /var/folders, which Seatbelt does not grant. Bun/Node fstat on those FDs fails (EPERM / process.stderr.fd). Capture under the workspace (e.g. .orca-tmp), use a pipe, or a TTY. Do not treat this as missing login first. Keychain FS is not granted (by design).
+    \\ryk run: empty-backpack: agent died after sandbox attach — redirected stdout/stderr lands under classic /tmp or /var/folders, which Seatbelt does not grant. Bun/Node fstat on those FDs fails (EPERM / process.stderr.fd). Capture under the workspace (e.g. .ryk-tmp), use a pipe, or a TTY. Do not treat this as missing login first. Keychain FS is not granted (by design).
     \\
 ;
 
@@ -1050,7 +1050,7 @@ pub fn pathIsUngrantedHostTmpContent(path: []const u8) bool {
 /// macOS: F_GETPATH. Linux: /proc/self/fd/N. Other: null.
 /// Caller must pass a buffer of at least `std.fs.max_path_bytes` (Darwin F_GETPATH
 /// writes up to PATH_MAX; a short buffer would be a length-blind kernel write).
-pub fn resolveFdPathname(fd: std.posix.fd_t, buf: []u8) ?[]const u8 {
+pub fn resolveFdPathname(io: std.Io, fd: std.posix.fd_t, buf: []u8) ?[]const u8 {
     if (buf.len < std.fs.max_path_bytes) return null;
     switch (builtin.os.tag) {
         .macos, .ios, .tvos, .watchos, .visionos => {
@@ -1064,7 +1064,7 @@ pub fn resolveFdPathname(fd: std.posix.fd_t, buf: []u8) ?[]const u8 {
         .linux => {
             var link_path_buf: [64]u8 = undefined;
             const link_path = std.fmt.bufPrint(&link_path_buf, "/proc/self/fd/{d}", .{fd}) catch return null;
-            const n = std.posix.readlink(link_path, buf) catch return null;
+            const n = std.Io.Dir.readLinkAbsolute(io, link_path, buf) catch return null;
             return buf[0..n];
         },
         else => return null,
@@ -1073,12 +1073,13 @@ pub fn resolveFdPathname(fd: std.posix.fd_t, buf: []u8) ?[]const u8 {
 
 /// True when parent process stdout (1) or stderr (2) path is under ungranted host tmp.
 /// Used for tip selection and pre-spawn warning (shell redirects open FDs before fork).
-pub fn parentStdioHasUngrantedHostTmpRisk() bool {
+pub fn parentStdioHasUngrantedHostTmpRisk(io: std.Io) bool {
+    if (comptime builtin.os.tag != .macos and builtin.os.tag != .linux) return false;
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    if (resolveFdPathname(1, &path_buf)) |path| {
+    if (resolveFdPathname(io, 1, &path_buf)) |path| {
         if (pathIsUngrantedHostTmpContent(path)) return true;
     }
-    if (resolveFdPathname(2, &path_buf)) |path| {
+    if (resolveFdPathname(io, 2, &path_buf)) |path| {
         if (pathIsUngrantedHostTmpContent(path)) return true;
     }
     return false;
@@ -1505,7 +1506,7 @@ test "pathIsUngrantedHostTmpContent classifies classic tmp vs workspace" {
     try std.testing.expect(pathIsUngrantedHostTmpContent("/var/folders/xx/yy/T/out.txt"));
     try std.testing.expect(pathIsUngrantedHostTmpContent("/private/var/folders/ab/cd/T/err.txt"));
     try std.testing.expect(!pathIsUngrantedHostTmpContent(""));
-    try std.testing.expect(!pathIsUngrantedHostTmpContent("/Users/me/proj/.orca-tmp/out.txt"));
+    try std.testing.expect(!pathIsUngrantedHostTmpContent("/Users/me/proj/.ryk-tmp/out.txt"));
     try std.testing.expect(!pathIsUngrantedHostTmpContent("/dev/null"));
     try std.testing.expect(!pathIsUngrantedHostTmpContent("/private/var/log/system.log"));
     // Prefix must not false-positive adjacent names.
@@ -1580,7 +1581,7 @@ test "resolveFdPathname round-trips a /tmp file on supported platforms" {
     defer file.close(io);
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const resolved = resolveFdPathname(file.handle, &buf) orelse return error.SkipZigTest;
+    const resolved = resolveFdPathname(io, file.handle, &buf) orelse return error.SkipZigTest;
     try std.testing.expect(pathIsUngrantedHostTmpContent(resolved));
     // macOS often returns /private/tmp/...; Linux returns /tmp/...
     try std.testing.expect(

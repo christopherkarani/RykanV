@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const core = @import("orca_core").core;
+const core = @import("ryk_core").core;
 const jsonrpc = @import("jsonrpc.zig");
 const stdio = @import("stdio.zig");
 

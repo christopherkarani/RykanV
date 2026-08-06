@@ -1,9 +1,10 @@
 const std = @import("std");
-const core = @import("orca_core").core;
+const core = @import("ryk_core").core;
 const supervisor = core.supervisor;
-const core_api = @import("orca_core").api;
-const policy = @import("orca_core").policy;
+const core_api = @import("ryk_core").api;
+const policy = @import("ryk_core").policy;
 
+const brand = @import("brand.zig");
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
 const daemon = @import("daemon.zig");
@@ -22,15 +23,15 @@ const max_payload_len = 256 * 1024; // 256 KiB
 // Hook evaluator dispatch (Phase 2E / Zig shell engine)
 //
 // PreToolUse shell-command events (and PermissionRequest shell/command) route to
-// the in-process Zig shell_engine (`ORCA_SHELL_EVAL=zig` or unset).
-// `ORCA_SHELL_EVAL=rust` is rejected — the legacy Rust daemon Evaluate path is gone.
+// the in-process Zig shell_engine (`RYK_SHELL_EVAL=zig` or unset).
+// `RYK_SHELL_EVAL=rust` is rejected — the legacy Rust daemon Evaluate path is gone.
 // Other events (prompt, file permission, session, stop, post-tool, informational,
 // and non-shell PreToolUse) stay on the Zig policy path.
 //
 // Invariants:
 // - Shell security authority is the Zig shell_engine only.
 // - Zig evaluator internal errors fail closed (deny).
-// - `ORCA_SHELL_EVAL=rust` hard-errors (never calls daemon.evaluate for shell).
+// - `RYK_SHELL_EVAL=rust` hard-errors (never calls daemon.evaluate for shell).
 // - Non-shell tools with incidental `command` fields stay on the Zig policy path.
 // - Shell tools with missing/invalid command fields fail closed before evaluation.
 // - File paths for PreToolUse writes and PermissionRequest file ops are normalized
@@ -116,7 +117,7 @@ const Host = enum {
         if (std.mem.eql(u8, value, "grok")) return .grok;
         if (std.mem.eql(u8, value, "opencode")) return .opencode;
         if (std.mem.eql(u8, value, "openclaw")) return .openclaw;
-        if (std.mem.eql(u8, value, "hermes") or std.mem.eql(u8, value, "hermess")) return .hermes;
+        if (std.mem.eql(u8, value, "hermes")) return .hermes;
         return null;
     }
 };
@@ -604,16 +605,9 @@ const guard_sentinel_prefix: []const u8 =
     "[[" ++ guard_product_tag ++ "]] blocked. Command did not execute; no side effects. " ++
     "Recourse: ryk explain \"<command>\"; ryk allow-once <code>; ryk allowlist list\n";
 const guard_sentinel_tag = "[[" ++ guard_product_tag ++ "]]";
-/// Prior product tags still recognized when reading historical logs / dual-read hosts.
-const legacy_guard_sentinel_tags = [_][]const u8{ "[[RYK-GUARD]]", "[[ORCA-GUARD]]" };
-
-/// True when stderr/agent text contains a current or legacy guard sentinel.
+/// True when stderr/agent text contains the current guard sentinel.
 pub fn containsGuardSentinel(text: []const u8) bool {
-    if (std.mem.indexOf(u8, text, guard_sentinel_tag) != null) return true;
-    for (legacy_guard_sentinel_tags) |tag| {
-        if (std.mem.indexOf(u8, text, tag) != null) return true;
-    }
-    return false;
+    return std.mem.indexOf(u8, text, guard_sentinel_tag) != null;
 }
 
 /// Codex / Grok exit-two deny code (host contract; distinct from usage errors).
@@ -895,7 +889,7 @@ fn evaluateHookForTest(
     payload: std.json.Value,
     ci_mode: bool,
 ) !HookResponse {
-    return evaluateHookForTestWithOptions(allocator, "/tmp/orca-hook-test", policy_value, host, event, payload, ci_mode, null);
+    return evaluateHookForTestWithOptions(allocator, "/tmp/ryk-hook-test", policy_value, host, event, payload, ci_mode, null);
 }
 
 fn evaluateHookForTestWithOptions(
@@ -923,7 +917,7 @@ fn evaluatePreToolUseForTest(
     return evaluatePreToolUse(
         std.testing.io,
         allocator,
-        "/tmp/orca-hook-test",
+        "/tmp/ryk-hook-test",
         "claude",
         policy_value,
         payload,
@@ -1195,7 +1189,7 @@ fn evaluateShellCommandRoute(
     redactions: *std.ArrayList(RedactionEntry),
     limitations: *std.ArrayList([]const u8),
     evaluator_override: ?ShellCommandEvaluatorFn,
-    /// Host-provided session id for FM risk cards; null → product default `"orca-shell"`.
+    /// Host-provided session id for FM risk cards; null → product default `brand.default_session_id`.
     session_id: ?[]const u8,
 ) !HookResponse {
     const evaluator = evaluator_override orelse defaultShellCommandEvaluator;
@@ -1244,7 +1238,7 @@ fn evaluateShellCommandRoute(
             .host = host_name,
             .cwd = shell_event.cwd,
             .workspace_root = workspace_root,
-            .session_id = session_id orelse "orca-shell",
+            .session_id = session_id orelse brand.default_session_id,
         },
     );
 }
@@ -1433,7 +1427,7 @@ fn shellEvalPluginDecisionToHook(decision: shell_eval.PluginDecision) PluginDeci
 const HookShellFmOpts = struct {
     client: ?fm_steward_client.Client = null,
     disable_fm: bool = false,
-    session_id: []const u8 = "orca-shell",
+    session_id: []const u8 = brand.default_session_id,
     tool: []const u8 = "bash",
     host: ?[]const u8 = null,
     cwd: ?[]const u8 = null,
@@ -1669,15 +1663,15 @@ fn buildRemediationCommands(allocator: std.mem.Allocator, rule_id: ?[]const u8) 
     return try list.toOwnedSlice(allocator);
 }
 
-/// Best-effort: resolve `$XDG_DATA_HOME/orca` (or `~/.local/share/orca`) for pending store.
-fn resolveOrcaDataDirForPending(allocator: std.mem.Allocator) !?[]u8 {
+/// Best-effort: resolve `$XDG_DATA_HOME/ryk` (or `~/.local/share/ryk`) for pending store.
+fn resolveRykDataDirForPending(allocator: std.mem.Allocator) !?[]u8 {
     if (std.c.getenv("XDG_DATA_HOME")) |xdg_z| {
         const xdg = std.mem.span(xdg_z);
-        if (xdg.len > 0) return try std.fs.path.join(allocator, &.{ xdg, "orca" });
+        if (xdg.len > 0) return try std.fs.path.join(allocator, &.{ xdg, "ryk"});
     }
     if (std.c.getenv("HOME")) |home_z| {
         const home = std.mem.span(home_z);
-        if (home.len > 0) return try std.fs.path.join(allocator, &.{ home, ".local", "share", "orca" });
+        if (home.len > 0) return try std.fs.path.join(allocator, &.{ home, ".local", "share", "ryk"});
     }
     return null;
 }
@@ -1748,7 +1742,7 @@ fn tryIssuePendingShortCode(
     workspace_root: ?[]const u8,
     reason: []const u8,
 ) ?[]const u8 {
-    const data_dir = resolveOrcaDataDirForPending(allocator) catch return null;
+    const data_dir = resolveRykDataDirForPending(allocator) catch return null;
     const data_dir_owned = data_dir orelse return null;
     defer allocator.free(data_dir_owned);
 
@@ -2146,7 +2140,8 @@ fn writeHookResponse(stdout: anytype, result: HookResponse) !void {
     }
     try stdout.writeAll(",\n");
 
-    // Alias for agents that prefer rule_id (additive; mirrors `rule`).
+    // `rule` is canonical; retain `rule_id` as the explicit machine-facing
+    // alias used by shell-evaluation fixtures and remediation tooling.
     try stdout.writeAll("  \"rule_id\": ");
     if (result.rule) |rule| {
         try writeJsonString(stdout, rule);
@@ -2627,7 +2622,7 @@ fn runShellRouteWithMode(
     return evaluateShellCommandRoute(
         std.testing.io,
         allocator,
-        "/tmp/orca-hook-test",
+        "/tmp/ryk-hook-test",
         "claude",
         .{ .command = command_text, .cwd = cwd },
         mode,
@@ -3786,10 +3781,10 @@ test "hook guard sentinel format is machine-parseable and stable" {
     try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "Recourse") != null);
     try std.testing.expect(std.mem.indexOf(u8, guard_sentinel_prefix, "ryk explain") != null);
     try std.testing.expect(guard_sentinel_prefix[guard_sentinel_prefix.len - 1] == '\n');
-    // Dual-read legacy product tags from older sessions / dual-stack hosts.
+    // Only the current product tag is a guard protocol marker.
     try std.testing.expect(containsGuardSentinel("[[RYKAN-V-GUARD]] blocked."));
-    try std.testing.expect(containsGuardSentinel("[[RYK-GUARD]] blocked."));
-    try std.testing.expect(containsGuardSentinel("[[ORCA-GUARD]] blocked."));
+    try std.testing.expect(!containsGuardSentinel("[[RYK-GUARD]] blocked."));
+    try std.testing.expect(!containsGuardSentinel("[[ORCA-GUARD]] blocked."));
     try std.testing.expect(!containsGuardSentinel("random stderr"));
 }
 
@@ -3836,6 +3831,7 @@ test "hook daemon deny includes remediation fields for flexible hosts" {
     try writeHookResponse(&out, result);
     const written = out.buffered();
     try std.testing.expect(std.mem.indexOf(u8, written, "\"rule_id\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "\"rule\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "\"suggestions\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "\"remediation_commands\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, written, "ryk allowlist") != null);
@@ -4243,7 +4239,7 @@ test "hook PermissionRequest shell routes through daemon evaluator" {
     shell_eval.test_last_evaluate_command = null;
     var result = try evaluateHookForTestWithOptions(
         allocator,
-        "/tmp/orca-hook-test",
+        "/tmp/ryk-hook-test",
         @ptrCast(@alignCast(policy_obj)),
         .claude,
         .PermissionRequest,
@@ -5069,7 +5065,7 @@ fn sOnceCliHookIsolateXdg() !SOnceCliHookEnv {
 }
 
 fn sOnceCliHookPendingPath(xdg_data: []const u8) ![]u8 {
-    return try sOnceCliHookJoin(&.{ xdg_data, "orca", shell_engine.allow_once.pending_file_name });
+    return try sOnceCliHookJoin(&.{ xdg_data, "ryk", shell_engine.allow_once.pending_file_name });
 }
 
 /// Extract first real 6-digit short code after `allow-once ` (not the placeholder `<code>`).
@@ -5320,7 +5316,7 @@ test "s-once-cli: hook deny without resolvable store still blocks without crash"
     _ = unsetenv("HOME");
 
     const allocator = std.testing.allocator;
-    var result = try sOnceCliHookRealZigDeny(allocator, "git reset --hard", "/tmp/orca-hook-nostore", "/tmp/orca-hook-nostore");
+    var result = try sOnceCliHookRealZigDeny(allocator, "git reset --hard", "/tmp/ryk-hook-nostore", "/tmp/ryk-hook-nostore");
     defer result.deinit(allocator);
     try std.testing.expectEqual(PluginDecision.block, result.decision);
     // Must not panic; placeholder `<code>` residual is acceptable when store is off.
@@ -5359,9 +5355,9 @@ test "s-once-cli: hook deny → pending code → redeem → evaluate allows once
 
     // Redeem via allow-once CLI (operator-bound env; same XDG data dir).
     const allow_once_cli = @import("allow_once.zig");
-    const prev_op = try sOnceCliHookDupEnvZ("ORCA_OPERATOR");
-    defer sOnceCliHookRestoreEnv("ORCA_OPERATOR", prev_op);
-    try std.testing.expectEqual(@as(c_int, 0), setenv("ORCA_OPERATOR", "1", 1));
+    const prev_op = try sOnceCliHookDupEnvZ("RYK_OPERATOR");
+    defer sOnceCliHookRestoreEnv("RYK_OPERATOR", prev_op);
+    try std.testing.expectEqual(@as(c_int, 0), setenv("RYK_OPERATOR", "1", 1));
 
     var stdout_alloc: std.Io.Writer.Allocating = .init(allocator);
     defer stdout_alloc.deinit();
@@ -5377,7 +5373,7 @@ test "s-once-cli: hook deny → pending code → redeem → evaluate allows once
     try std.testing.expect(std.mem.indexOf(u8, stderr_alloc.written(), "not implemented") == null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_alloc.written(), "not implemented") == null);
 
-    const once_path = try sOnceCliHookJoin(&.{ xdg.data_root, "orca", shell_engine.allow_once.allow_once_file_name });
+    const once_path = try sOnceCliHookJoin(&.{ xdg.data_root, "ryk", shell_engine.allow_once.allow_once_file_name });
     defer allocator.free(once_path);
 
     {

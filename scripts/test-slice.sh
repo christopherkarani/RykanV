@@ -32,7 +32,7 @@ usage: ./scripts/test-slice.sh SLICE [--filter SUBSTR] [--compile-only]
 
 Slices:
   sandbox     zig build test-sandbox      (src/sandbox only)
-  policy      zig build test-policy       (orca_core policy)
+  policy      zig build test-policy       (ryk_core policy)
   intercept   zig build test-intercept    (src/intercept only)
   lib         zig build test-lib          (full monopath — slow)
   core        zig build test-core

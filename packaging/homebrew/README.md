@@ -1,7 +1,6 @@
 # ryk Homebrew Tap
 
-This directory is the source for the `christopherkarani/homebrew-orca` tap
-(tap name kept for dual-name window; formula primary is **ryk**).
+This directory is the source for the `christopherkarani/homebrew-ryk` tap.
 
 ## Release flow
 
@@ -9,7 +8,7 @@ This directory is the source for the `christopherkarani/homebrew-orca` tap
 
 ```sh
 ./scripts/cut-release.sh --bump patch --live
-# requires clone at ~/code/homebrew-orca or RYK_HOMEBREW_TAP_DIR
+# requires clone at ~/code/homebrew-ryk or RYK_HOMEBREW_TAP_DIR
 ```
 
 Manual path:
@@ -21,20 +20,19 @@ Manual path:
 brew audit --strict --online packaging/homebrew/Formula/ryk.rb
 brew install --formula packaging/homebrew/Formula/ryk.rb
 brew test packaging/homebrew/Formula/ryk.rb
-# Compat formula (existing taps): packaging/homebrew/Formula/orca.rb
 ```
 
 ## Publish flow
 
-1. Create or update `https://github.com/christopherkarani/homebrew-orca`.
-2. Prefer `cut-release.sh` / `update-homebrew-formula.sh` writing into the tap clone (`RYK_HOMEBREW_TAP_DIR`, default `~/code/homebrew-orca`).
-3. Or copy rendered `Formula/ryk.rb` (+ `orca.rb` compat) into the tap and push after GitHub Release assets exist.
+1. Create or update `https://github.com/christopherkarani/homebrew-ryk`.
+2. Prefer `cut-release.sh` / `update-homebrew-formula.sh` writing into the tap clone (`RYK_HOMEBREW_TAP_DIR`, default `~/code/homebrew-ryk`).
+3. Or copy the rendered `Formula/ryk.rb` into the tap and push after GitHub Release assets exist.
 4. Verify formula sha256 values match `dist/checksums.txt`.
 
 ## User install
 
 ```sh
-brew install christopherkarani/orca/ryk
+brew install christopherkarani/ryk/ryk
 ryk version
 ryk doctor
 ```

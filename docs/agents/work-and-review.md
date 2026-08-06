@@ -26,7 +26,7 @@ Hard rules live in [`AGENTS.md`](../../AGENTS.md). This file is the full SOP for
 
 Rules:
 
-- Sub-agent output is **advisory until the main agent verifies** against the tree, the narrowest useful test gate, and Orca product rules in `AGENTS.md`.
+- Sub-agent output is **advisory until the main agent verifies** against the tree, the narrowest useful test gate, and ryk product rules in `AGENTS.md`.
 - “Plan first” means **todos / a brief internal plan** for multi-step work — not “block on human go-ahead” by default.
 - Preserve user-owned dirty changes.
 
@@ -35,7 +35,7 @@ Rules:
 Resolve skills in this order (first hit wins):
 
 1. Repo Grok links: `.grok/skills/<name>/SKILL.md`
-2. Repo plugin pack: `.agents/plugins/orca/skills/<name>/SKILL.md`
+2. Repo plugin pack: `.agents/plugins/ryk/skills/<name>/SKILL.md`
 3. User agents tree: `~/.agents/skills/<name>/SKILL.md`
 4. User Grok skills: `~/.grok/skills/<name>/SKILL.md`
 
@@ -44,12 +44,12 @@ Known names used by this playbook:
 | Name | Typical location(s) |
 |------|---------------------|
 | `zig` | `.grok/skills/zig` → `~/.agents/skills/zig` |
-| `zig-best-practices` | `.grok/skills/zig-best-practices`, `.agents/plugins/orca/skills/zig-best-practices` |
+| `zig-best-practices` | `.grok/skills/zig-best-practices`, `.agents/plugins/ryk/skills/zig-best-practices` |
 | `zig-code-review` | `.grok/skills/zig-code-review` |
-| `zig-memory-safety` | `.agents/plugins/orca/skills/zig-memory-safety` |
-| `zig-abstractions` | `.agents/plugins/orca/skills/zig-abstractions` |
-| `zig-build-system-complexity` | `.agents/plugins/orca/skills/zig-build-system-complexity` |
-| `zig-ecosystem-tooling-gaps` | `.agents/plugins/orca/skills/zig-ecosystem-tooling-gaps` |
+| `zig-memory-safety` | `.agents/plugins/ryk/skills/zig-memory-safety` |
+| `zig-abstractions` | `.agents/plugins/ryk/skills/zig-abstractions` |
+| `zig-build-system-complexity` | `.agents/plugins/ryk/skills/zig-build-system-complexity` |
+| `zig-ecosystem-tooling-gaps` | `.agents/plugins/ryk/skills/zig-ecosystem-tooling-gaps` |
 | `thermo-nuclear-code-quality-review` | `~/.grok/skills/thermo-nuclear-code-quality-review` |
 
 If a required skill is missing: **fail the lane or pause implementation**, report the missing path, and do not improvise from training-data “Zig vibes.”
@@ -64,7 +64,7 @@ When the task touches Zig (`.zig`, `build.zig`, `build.zig.zon`, Zig packages un
 | **Style / idioms** | `zig-best-practices` language/style references (`language-patterns.md` and related). |
 | **Review — behavior** | `zig-best-practices` + `zig-code-review` (+ `zig` if API drift risk). |
 | **Review — style** | `zig-best-practices` style refs + `zig-code-review` as needed. |
-| **Review — safety** | `zig-memory-safety` + `zig-best-practices` performance/security refs + Orca fail-closed rules from `AGENTS.md`. |
+| **Review — safety** | `zig-memory-safety` + `zig-best-practices` performance/security refs + ryk fail-closed rules from `AGENTS.md`. |
 | **Review — thermo (T3)** | `thermo-nuclear-code-quality-review` (+ Zig packs above for Zig diffs). |
 
 Non-Zig / mixed:
@@ -219,7 +219,7 @@ First read these skills (in order):
   - <absolute path>/SKILL.md
   - ...
 Scope: task diff for <summary>; paths: <list>.
-Orca constraints: fail-closed shell evaluator errors; Zig 0.16 via ./scripts/zig; narrowest gate; no cargo from zig build.
+ryk constraints: fail-closed shell evaluator errors; Zig 0.16 via ./scripts/zig; narrowest gate; no cargo from zig build.
 Return: ## Lane: <name> with Blocking / Non-blocking / Verdict (PASS|FAIL).
 ```
 

@@ -2,7 +2,7 @@
 # Adversarial OS FS sandbox e2e + evidence generator (P0-I-06 / M-11 / M-12 / F-1 / F-5).
 #
 # Primary proofs use the production apply path unit tests (real FS deny canaries,
-# neighbor RW, control-root non-writable). Full `orca run` shell evaluation uses
+# neighbor RW, control-root non-writable). Full `ryk run` shell evaluation uses
 # in-process Zig shell_engine; when packaged attach is unavailable this script still
 # records proofs from the Zig test surface.
 #
@@ -13,9 +13,9 @@
 #   Isolated include_tmp=false canaries are support-only — never alone paint TEST-DENY
 #   on Linux or authorize unit dual-proof attach (Linux requires production-defaults
 #   title; macOS keeps isolated until a production-defaults canary exists).
-#   Packaged primary (CI --require-attach on linux/darwin): `orca run --os-sandbox on`
+#   Packaged primary (CI --require-attach on linux/darwin): `ryk run --os-sandbox on`
 #   banner active + recoverable 64-hex profile_hash from audit .decision.reason →
-#   attach_detail=orca_run_os_sandbox_on_active. Unit greps never primary under
+#   attach_detail=ryk_run_os_sandbox_on_active. Unit greps never primary under
 #   --require-attach (require packaged detail + 64-hex hash).
 #   FS-deny-only (no handshake) → TEST-DENY + neighbor only (not attach).
 #   Banner alone never sets TEST-DENY. Handshake/prepare greps → CTRL-PREPARE only.
@@ -24,13 +24,13 @@
 #
 # Usage:
 #   ./scripts/os-sandbox-adversarial-e2e.sh [--case CASE_ID] [--binary PATH] [--out DIR] [--require-attach]
-#   ORCA_E2E_SELFTEST=1 ./scripts/os-sandbox-adversarial-e2e.sh
+#   RYK_E2E_SELFTEST=1 ./scripts/os-sandbox-adversarial-e2e.sh
 #     Fixture-driven classify / profile_hash / require-attach checks (no test-fast).
 #
 # Exit 0 when full attach is proven, or partial when platform-skip / no backend
 # expected. Exit 1 on suite failure, contradictory attach claims, (on
 # linux/darwin) green suite without dual attach proof when deny did not SKIP,
-# or when --require-attach is set without packaged orca_run + 64-hex profile_hash.
+# or when --require-attach is set without packaged ryk_run + 64-hex profile_hash.
 
 set -euo pipefail
 
@@ -83,8 +83,8 @@ reset_classify_state() {
 # Production-defaults real FS deny canary (Linux title below; macOS when present)
 # is authoritative for TEST-DENY + unit dual-proof attach. Isolated
 # include_tmp=false canaries are support-only (neighbor/backend hints). Packaged
-# `orca run --os-sandbox on` + profile_hash is primary CTRL-ATTACH under
-# --require-attach (orca_run_os_sandbox_on_active). Unit dual-proof greps stitch
+# `ryk run --os-sandbox on` + profile_hash is primary CTRL-ATTACH under
+# --require-attach (ryk_run_os_sandbox_on_active). Unit dual-proof greps stitch
 # separate children (deny canary vs forkApply handshake) — stronger than isolated
 # alone but not a single-child integrated proof (other agents may add that test).
 classify_from_test_log() {
@@ -269,15 +269,15 @@ validate_evidence_control_rules() {
   fi
   if [[ "$attach_ok" == true ]]; then
     case "$attach_detail" in
-      zig_real_fs_deny_canary_and_handshake|orca_run_os_sandbox_on_active) ;;
+      zig_real_fs_deny_canary_and_handshake|ryk_run_os_sandbox_on_active) ;;
       *)
         echo "FAIL: CTRL-ATTACH detail not allowlisted: ${attach_detail}" >&2
         return 1
         ;;
     esac
   fi
-  if [[ "$attach_ok" == true && "$attach_detail" == "orca_run_os_sandbox_on_active" && ${#phash} -ne 64 ]]; then
-    echo "FAIL: orca_run attach requires 64-hex profile_hash (evidence.zig MissingProfileHash)" >&2
+  if [[ "$attach_ok" == true && "$attach_detail" == "ryk_run_os_sandbox_on_active" && ${#phash} -ne 64 ]]; then
+    echo "FAIL: ryk_run attach requires 64-hex profile_hash (evidence.zig MissingProfileHash)" >&2
     return 1
   fi
   return 0
@@ -285,7 +285,7 @@ validate_evidence_control_rules() {
 
 # --require-attach gate (CI matrix).
 # Args: <require> <ctrl_attach_ok> <attach_detail> [profile_hash] [os_name]
-# On linux/darwin: primary attach must be packaged orca_run + 64-hex profile_hash.
+# On linux/darwin: primary attach must be packaged ryk_run + 64-hex profile_hash.
 # Unit dual-proof greps are support evidence only under --require-attach.
 require_attach_gate() {
   local require="$1"
@@ -301,8 +301,8 @@ require_attach_gate() {
     return 1
   fi
   if [[ "$os_name" == "linux" || "$os_name" == "darwin" ]]; then
-    if [[ "$detail" != "orca_run_os_sandbox_on_active" ]]; then
-      echo "FAIL: --require-attach on ${os_name} requires packaged orca_run attach + profile_hash (detail=${detail}); unit dual-proof is support only" >&2
+    if [[ "$detail" != "ryk_run_os_sandbox_on_active" ]]; then
+      echo "FAIL: --require-attach on ${os_name} requires packaged ryk_run attach + profile_hash (detail=${detail}); unit dual-proof is support only" >&2
       return 1
     fi
     if [[ ${#phash} -ne 64 ]]; then
@@ -313,12 +313,12 @@ require_attach_gate() {
   return 0
 }
 
-# ORCA_E2E_SELFTEST=1: fixture-driven Z-1 / require-attach checks (no test-fast).
+# RYK_E2E_SELFTEST=1: fixture-driven Z-1 / require-attach checks (no test-fast).
 run_e2e_selftest() {
   local fails=0
   local f
 
-  echo "ORCA_E2E_SELFTEST: classifying fixtures under $FIXTURE_DIR"
+  echo "RYK_E2E_SELFTEST: classifying fixtures under $FIXTURE_DIR"
 
   f="$FIXTURE_DIR/linux-macos-skip-only.log"
   if [[ ! -f "$f" ]]; then
@@ -466,13 +466,13 @@ run_e2e_selftest() {
 
   # M-4: packaged attach detail + 64-hex hash passes --require-attach on linux.
   local pack_hash="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  if ! require_attach_gate true true "orca_run_os_sandbox_on_active" "$pack_hash" "linux"; then
-    echo "FAIL fixture packaged-attach: --require-attach should pass for orca_run + hash" >&2
+  if ! require_attach_gate true true "ryk_run_os_sandbox_on_active" "$pack_hash" "linux"; then
+    echo "FAIL fixture packaged-attach: --require-attach should pass for ryk_run + hash" >&2
     fails=$((fails + 1))
   else
-    echo "OK fixture packaged-attach: --require-attach passes for orca_run + 64-hex hash"
+    echo "OK fixture packaged-attach: --require-attach passes for ryk_run + 64-hex hash"
   fi
-  if require_attach_gate true true "orca_run_os_sandbox_on_active" "" "linux" 2>/dev/null; then
+  if require_attach_gate true true "ryk_run_os_sandbox_on_active" "" "linux" 2>/dev/null; then
     echo "FAIL fixture packaged-attach-no-hash: --require-attach must fail without hash" >&2
     fails=$((fails + 1))
   else
@@ -486,17 +486,17 @@ run_e2e_selftest() {
   else
     echo "OK validate: unit dual-proof passes evidence control rules"
   fi
-  if validate_evidence_control_rules true "orca_run_os_sandbox_on_active" true "" 2>/dev/null; then
-    echo "FAIL validate: orca_run without hash must fail" >&2
+  if validate_evidence_control_rules true "ryk_run_os_sandbox_on_active" true "" 2>/dev/null; then
+    echo "FAIL validate: ryk_run without hash must fail" >&2
     fails=$((fails + 1))
   else
-    echo "OK validate: orca_run without hash fails (MissingProfileHash)"
+    echo "OK validate: ryk_run without hash fails (MissingProfileHash)"
   fi
-  if ! validate_evidence_control_rules true "orca_run_os_sandbox_on_active" true "$pack_hash"; then
-    echo "FAIL validate: orca_run + hash should pass" >&2
+  if ! validate_evidence_control_rules true "ryk_run_os_sandbox_on_active" true "$pack_hash"; then
+    echo "FAIL validate: ryk_run + hash should pass" >&2
     fails=$((fails + 1))
   else
-    echo "OK validate: orca_run + 64-hex hash passes"
+    echo "OK validate: ryk_run + 64-hex hash passes"
   fi
   if validate_evidence_control_rules true "zig_real_fs_deny_canary_and_handshake" false "" 2>/dev/null; then
     echo "FAIL validate: attach without TEST-DENY must fail" >&2
@@ -583,25 +583,25 @@ run_e2e_selftest() {
   fi
 
   if [[ $fails -ne 0 ]]; then
-    echo "ORCA_E2E_SELFTEST: FAILED ($fails assertion(s))" >&2
+    echo "RYK_E2E_SELFTEST: FAILED ($fails assertion(s))" >&2
     return 1
   fi
-  echo "ORCA_E2E_SELFTEST: PASS"
+  echo "RYK_E2E_SELFTEST: PASS"
   return 0
 }
 
-if [[ "${ORCA_E2E_SELFTEST:-}" == "1" ]]; then
+if [[ "${RYK_E2E_SELFTEST:-}" == "1" ]]; then
   run_e2e_selftest
   exit $?
 fi
 
 if [[ -z "$BINARY" ]]; then
-  if [[ -x ./zig-out/bin/orca ]]; then
-    BINARY=./zig-out/bin/orca
+  if [[ -x ./zig-out/bin/ryk ]]; then
+    BINARY=./zig-out/bin/ryk
   else
-    echo "building orca..."
+    echo "building ryk..."
     ./scripts/zig build
-    BINARY=./zig-out/bin/orca
+    BINARY=./zig-out/bin/ryk
   fi
 fi
 
@@ -660,7 +660,7 @@ if ! grep -qE 'parent apply seam never claims active \(probe/prepare only\)\.\.\
   fi
 fi
 
-# --- Optional: orca binary smoke (does not require daemon allow) ----
+# --- Optional: ryk binary smoke (does not require daemon allow) ----
 set +e
 "$BINARY" --version >/dev/null 2>&1
 BIN_RC=$?
@@ -669,7 +669,7 @@ if [[ $BIN_RC -eq 0 ]]; then
   ctrl_baseline_ok=true
 fi
 
-# --- Packaged `orca run --os-sandbox on` attach (primary under --require-attach) ---
+# --- Packaged `ryk run --os-sandbox on` attach (primary under --require-attach) ---
 # Prefer production binary attach for CTRL-ATTACH when banner active + profile_hash.
 # Unit greps remain TEST-DENY / neighbor / handshake support only (never set TEST-DENY
 # from the banner alone — M-12). Under --require-attach, packaged active without a
@@ -678,8 +678,8 @@ profile_hash=""
 packaged_banner_active=false
 packaged_hash_missing=false
 if [[ $BIN_RC -eq 0 ]]; then
-  PACK_WS="$(mktemp -d "${TMPDIR:-/tmp}/orca-e2e-attach.XXXXXX")"
-  mkdir -p "$PACK_WS/.orca"
+  PACK_WS="$(mktemp -d "${TMPDIR:-/tmp}/ryk-e2e-attach.XXXXXX")"
+  mkdir -p "$PACK_WS/.ryk"
   set +e
   PACK_OUT="$(mktemp)"
   # Use /usr/bin/true (or /bin/true) — a non-shell absolute path — so this
@@ -692,16 +692,16 @@ if [[ $BIN_RC -eq 0 ]]; then
     if [[ $PACK_RC -eq 0 ]] && grep -q 'OS sandbox: active' "$PACK_OUT"; then
       packaged_banner_active=true
       # Prefer audit events for profile_hash (.decision.reason — M-1).
-      if [[ -f "$PACK_WS/.orca/last" ]]; then
-        SID="$(tr -d '[:space:]' <"$PACK_WS/.orca/last" || true)"
-        EV="$PACK_WS/.orca/sessions/${SID}/events.jsonl"
+      if [[ -f "$PACK_WS/.ryk/last" ]]; then
+        SID="$(tr -d '[:space:]' <"$PACK_WS/.ryk/last" || true)"
+        EV="$PACK_WS/.ryk/sessions/${SID}/events.jsonl"
         if [[ -f "$EV" ]]; then
           profile_hash="$(extract_profile_hash_from_events "$EV")"
         fi
       fi
       if [[ ${#profile_hash} -eq 64 ]]; then
         ctrl_attach_ok=true
-        attach_detail="orca_run_os_sandbox_on_active"
+        attach_detail="ryk_run_os_sandbox_on_active"
         # M-12: never invent TEST-DENY from banner; unit greps must have set it.
       else
         packaged_hash_missing=true
@@ -732,11 +732,11 @@ if [[ "$ctrl_attach_ok" == true && "$test_deny_ok" != true ]]; then
 fi
 
 MANIFEST="$OUT_DIR/${CASE_ID}-${OS_NAME}-${ARCH_NAME}.json"
-# profile_hash: set when packaged orca run attach greened with audit hash.
+# profile_hash: set when packaged ryk run attach greened with audit hash.
 # Unit dual-proof path may leave it empty (allowlisted for zig_real_fs_deny_canary_and_handshake only).
-if [[ "$attach_detail" == "orca_run_os_sandbox_on_active" ]]; then
-  evidence_command='orca run --os-sandbox on -- /usr/bin/true (+ test-fast dual-proof support)'
-  canary_fingerprint="packaged:orca_run_os_sandbox_on_active"
+if [[ "$attach_detail" == "ryk_run_os_sandbox_on_active" ]]; then
+  evidence_command='ryk run --os-sandbox on -- /usr/bin/true (+ test-fast dual-proof support)'
+  canary_fingerprint="packaged:ryk_run_os_sandbox_on_active"
 else
   evidence_command='./scripts/zig build test-fast (sandbox apply real-FS-deny proofs only for CTRL-ATTACH)'
   canary_fingerprint="zig-unit:real-fs-deny"
@@ -844,7 +844,7 @@ if [[ "$ctrl_attach_ok" == true ]]; then
     echo "FAIL: CTRL-ATTACH claimed (${attach_detail}) but dual proof incomplete (deny=${test_deny_ok} neighbor=${ctrl_neighbor_ok} handshake=${handshake_ok})" >&2
     exit 1
   fi
-  # M-4 / CI: --require-attach needs packaged orca_run + hash on linux/darwin.
+  # M-4 / CI: --require-attach needs packaged ryk_run + hash on linux/darwin.
   require_attach_gate "$REQUIRE_ATTACH" "$ctrl_attach_ok" "$attach_detail" "$profile_hash" "$OS_NAME" || exit 1
   echo "PASS: sandbox proofs green (attach=${attach_detail})"
   exit 0

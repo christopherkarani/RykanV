@@ -12,14 +12,12 @@ const packageRoot = path.resolve(__dirname, "..");
 const packageJson = require(path.join(packageRoot, "package.json"));
 const binDir = path.join(packageRoot, "vendor");
 const resourceDir = path.join(binDir, "resources");
-const primaryName = process.platform === "win32" ? "ryk.exe" : "ryk";
-const aliasName = process.platform === "win32" ? "orca.exe" : "orca";
-const installedBinary = path.join(binDir, primaryName);
-const installedAlias = path.join(binDir, aliasName);
+const binaryName = process.platform === "win32" ? "ryk.exe" : "ryk";
+const installedBinary = path.join(binDir, binaryName);
 const maxDownloadBytes = 512 * 1024 * 1024;
 
 function metaBlock() {
-  return packageJson.ryk || packageJson.orca || {};
+  return packageJson.ryk || {};
 }
 
 function platformName() {
@@ -43,7 +41,6 @@ function sha256(filePath) {
 
 function artifactName(platform, arch) {
   const ext = platform === "windows" ? "zip" : "tar.gz";
-  // Primary release artifact is ryk-v*; dual-publish also ships orca-v*.
   return `ryk-v${packageJson.version}-${platform}-${arch}.${ext}`;
 }
 
@@ -122,42 +119,20 @@ function extractArchive(archive, destination, platform) {
 }
 
 function installReleasePayload(extractDir, platform, arch) {
-  const candidates = [
-    path.join(extractDir, `ryk-v${packageJson.version}-${platform}-${arch}`),
-    path.join(extractDir, `orca-v${packageJson.version}-${platform}-${arch}`),
-  ];
-  let top = candidates.find((p) => fs.existsSync(p));
-  if (!top) {
-    // Flat extract fallback: first directory under extractDir
-    const entries = fs.readdirSync(extractDir).map((n) => path.join(extractDir, n));
-    top = entries.find((p) => fs.statSync(p).isDirectory());
-  }
-  if (!top) {
+  const top = path.join(extractDir, `ryk-v${packageJson.version}-${platform}-${arch}`);
+  if (!fs.existsSync(top) || !fs.statSync(top).isDirectory()) {
     throw new Error(`archive did not contain expected release root for ${platform}-${arch}`);
   }
-  const sourcePrimary = path.join(top, "bin", primaryName);
-  const sourceAlias = path.join(top, "bin", aliasName);
-  const sourceLegacy = path.join(top, "bin", process.platform === "win32" ? "orca.exe" : "orca");
-  let source = sourcePrimary;
+  const source = path.join(top, "bin", binaryName);
   if (!fs.existsSync(source)) {
-    source = fs.existsSync(sourceAlias) ? sourceAlias : sourceLegacy;
-  }
-  if (!fs.existsSync(source)) {
-    throw new Error(`archive did not contain expected binary: ${sourcePrimary}`);
+    throw new Error(`archive did not contain expected binary: ${source}`);
   }
   fs.rmSync(binDir, { recursive: true, force: true });
   fs.mkdirSync(binDir, { recursive: true });
   fs.copyFileSync(source, installedBinary);
   if (platform !== "windows") fs.chmodSync(installedBinary, 0o755);
-  // Always materialize orca compat alias next to ryk.
-  if (fs.existsSync(sourceAlias) && sourceAlias !== source) {
-    fs.copyFileSync(sourceAlias, installedAlias);
-  } else {
-    fs.copyFileSync(installedBinary, installedAlias);
-  }
-  if (platform !== "windows") fs.chmodSync(installedAlias, 0o755);
   fs.mkdirSync(resourceDir, { recursive: true });
-  for (const dir of ["docs", "examples", "fixtures", "integrations", "orca-dashboard-ui", "policies", "schemas"]) {
+  for (const dir of ["docs", "examples", "fixtures", "integrations", "ryk-dashboard-ui", "policies", "schemas"]) {
     const sourceDir = path.join(top, dir);
     if (fs.existsSync(sourceDir)) {
       fs.cpSync(sourceDir, path.join(resourceDir, dir), { recursive: true });
@@ -182,17 +157,11 @@ async function install() {
   const name = artifactName(platform, arch);
   const baseUrl = meta.artifactBaseUrl;
   const url = `${baseUrl}/${name}`;
-  const legacyUrl = `${baseUrl}/orca-v${packageJson.version}-${platform}-${arch}.${platform === "windows" ? "zip" : "tar.gz"}`;
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ryk-npm-"));
   try {
     const archive = path.join(tmpRoot, name);
     const extractDir = path.join(tmpRoot, "extract");
-    try {
-      await download(url, archive);
-    } catch (err) {
-      // Dual-publish fallback for one major.
-      await download(legacyUrl, archive);
-    }
+    await download(url, archive);
     const actual = sha256(archive);
     if (actual !== expected) {
       throw new Error(`checksum mismatch for ${name}: expected ${expected}, got ${actual}`);
@@ -215,24 +184,16 @@ if (process.argv.includes("--install")) {
   return;
 }
 
-// When invoked as `orca` npm bin, prefer alias binary if present.
-const invoked = path.basename(process.argv[1] || "");
-const runBinary =
-  (invoked === "orca" || invoked === "orca.js") && fs.existsSync(installedAlias)
-    ? installedAlias
-    : installedBinary;
-
-if (!fs.existsSync(runBinary)) {
+if (!fs.existsSync(installedBinary)) {
   console.error("ryk binary is not installed. Reinstall after release automation replaces checksum placeholders.");
   process.exit(1);
 }
 
 const env = { ...process.env };
 if (fs.existsSync(resourceDir)) {
-  env.ORCA_RESOURCE_ROOT = resourceDir;
   env.RYK_RESOURCE_ROOT = resourceDir;
 }
-const result = childProcess.spawnSync(runBinary, process.argv.slice(2), { stdio: "inherit", env });
+const result = childProcess.spawnSync(installedBinary, process.argv.slice(2), { stdio: "inherit", env });
 if (result.error) {
   console.error(result.error.message);
   process.exit(1);

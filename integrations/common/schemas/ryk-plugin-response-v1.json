@@ -1,0 +1,204 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ryk Plugin Response v1",
+  "description": "Response schema for ryk plugin interactions. Returned by doctor, manifest, install, and MCP tool calls.",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string",
+      "enum": ["v1"],
+      "description": "Schema version."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ok", "missing", "error", "deferred", "limited"],
+      "description": "Overall response status."
+    },
+    "request_type": {
+      "type": "string",
+      "enum": [
+        "plugin_doctor",
+        "plugin_manifest",
+        "plugin_install",
+        "mcp_tool_call",
+        "policy_check",
+        "policy_explain",
+        "replay_summary",
+        "capabilities"
+      ],
+      "description": "Echo of the request type."
+    },
+    "ryk_version": {
+      "type": "string",
+      "description": "ryk version."
+    },
+    "ryk_binary_path": {
+      "type": ["string", "null"],
+      "description": "Path to the ryk binary, if detectable."
+    },
+    "cwd": {
+      "type": "string",
+      "description": "Current working directory used for the plugin command."
+    },
+    "workspace_root": {
+      "type": "string",
+      "description": "Detected workspace root."
+    },
+    "policy": {
+      "type": "object",
+      "properties": {
+        "present": { "type": "boolean" },
+        "valid": { "type": "boolean" }
+      }
+    },
+    "plugin_directories": {
+      "type": "object",
+      "properties": {
+        "codex": { "type": "boolean" },
+        "claude": { "type": "boolean" },
+        "opencode": { "type": "boolean" },
+        "openclaw": { "type": "boolean" },
+        "hermes": { "type": "boolean" },
+        "common": { "type": "boolean" }
+      }
+    },
+    "host_binaries": {
+      "type": "object",
+      "properties": {
+        "codex": { "type": "boolean" },
+        "claude": { "type": "boolean" },
+        "opencode": { "type": "boolean" },
+        "openclaw": { "type": "boolean" },
+        "hermes": { "type": "boolean" }
+      }
+    },
+    "audit_replay_available": {
+      "type": "boolean",
+      "description": "Whether audit replay support is available."
+    },
+    "mcp_support_status": {
+      "type": "string",
+      "description": "Detected MCP support status."
+    },
+    "opencode_paths": {
+      "type": "object",
+      "description": "OpenCode integration paths surfaced by plugin doctor.",
+      "additionalProperties": true
+    },
+    "openclaw_paths": {
+      "type": "object",
+      "description": "OpenClaw integration paths surfaced by plugin doctor.",
+      "additionalProperties": true
+    },
+    "hermes_paths": {
+      "type": "object",
+      "description": "Hermes integration paths surfaced by plugin doctor.",
+      "additionalProperties": true
+    },
+    "marketplace": {
+      "type": "object",
+      "description": "Plugin marketplace metadata surfaced by plugin doctor.",
+      "additionalProperties": true
+    },
+    "platform_summary": {
+      "type": "string",
+      "description": "Host platform summary surfaced by plugin doctor."
+    },
+    "target": {
+      "type": "string",
+      "description": "Plugin target for manifest and install responses."
+    },
+    "codex": {
+      "type": "object",
+      "description": "Codex manifest response payload.",
+      "additionalProperties": true
+    },
+    "claude": {
+      "type": "object",
+      "description": "Claude manifest response payload.",
+      "additionalProperties": true
+    },
+    "opencode": {
+      "type": "object",
+      "description": "OpenCode manifest response payload.",
+      "additionalProperties": true
+    },
+    "openclaw": {
+      "type": "object",
+      "description": "OpenClaw manifest response payload.",
+      "additionalProperties": true
+    },
+    "hermes": {
+      "type": "object",
+      "description": "Hermes manifest response payload.",
+      "additionalProperties": true
+    },
+    "manifests": {
+      "type": "object",
+      "description": "Plugin manifest status, present for manifest requests.",
+      "properties": {
+        "codex": {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string" },
+            "status": { "type": "string", "enum": ["exists", "missing"] }
+          }
+        },
+        "claude": {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string" },
+            "status": { "type": "string", "enum": ["exists", "missing"] }
+          }
+        },
+        "opencode": {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string" },
+            "status": { "type": "string", "enum": ["exists", "missing"] }
+          }
+        },
+        "openclaw": {
+          "type": "object",
+          "properties": {
+            "manifest_path": { "type": "string" },
+            "manifest_status": { "type": "string", "enum": ["exists", "missing"] }
+          }
+        },
+        "hermes": {
+          "type": "object",
+          "properties": {
+            "manifest_path": { "type": "string" },
+            "manifest_status": { "type": "string", "enum": ["exists", "missing"] },
+            "source_path": { "type": "string" },
+            "source_status": { "type": "string", "enum": ["exists", "missing"] }
+          }
+        }
+      }
+    },
+    "install": {
+      "type": "object",
+      "description": "Install preview, present for install requests.",
+      "properties": {
+        "target": { "type": "string" },
+        "mode": { "type": "string", "enum": ["dry-run", "install"] },
+        "plugin_directory": { "type": "string" },
+        "plugin_directory_exists": { "type": "boolean" },
+        "scope": { "type": "string", "enum": ["project", "global"] },
+        "status": { "type": "string", "enum": ["performed", "deferred", "failed", "already_up_to_date"] },
+        "installed_path": { "type": "string" },
+        "next_step": { "type": "string" }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Non-fatal warnings about unsupported or partial features."
+    },
+    "message": {
+      "type": "string",
+      "description": "Human-readable status message."
+    }
+  },
+  "additionalProperties": false
+}

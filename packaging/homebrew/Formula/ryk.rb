@@ -26,18 +26,12 @@ class Ryk < Formula
 
   def install
     bin.install "bin/ryk"
-    # Compat alias for one major (Phase 5a dual-name).
-    if (buildpath/"bin/orca").exist?
-      bin.install "bin/orca"
-    else
-      bin.install_symlink "ryk" => "orca"
-    end
-    (share/"orca/current").install "orca-dashboard-ui"
-    (share/"orca/current").install "integrations"
-    (share/"orca/current").install "fixtures"
-    (share/"orca/current").install "schemas"
-    (share/"orca/current").install "policies"
-    (share/"orca/current").install "orca-pi"
+    (share/"ryk/current").install "ryk-dashboard-ui"
+    (share/"ryk/current").install "integrations"
+    (share/"ryk/current").install "fixtures"
+    (share/"ryk/current").install "schemas"
+    (share/"ryk/current").install "policies"
+    (share/"ryk/current").install "ryk-pi"
   end
 
   def post_install
@@ -51,12 +45,11 @@ class Ryk < Formula
       .codex/bin
     ].map { |path| File.join(Dir.home, path) }
     onboard_env = {
-      "RYK_RESOURCE_ROOT" => (share/"orca/current").to_s,
-      "ORCA_RESOURCE_ROOT" => (share/"orca/current").to_s,
+      "RYK_RESOURCE_ROOT" => (share/"ryk/current").to_s,
       "PATH" => ([bin.to_s] + user_bins + [ENV.fetch("PATH", "")]).join(File::PATH_SEPARATOR),
     }
     success = Dir.chdir(Dir.home) do
-      system onboard_env, "#{bin}/ryk", "start", "--auto"
+      system onboard_env, "#{bin}/ryk", "doctor", "--fix", "--from-install"
     end
     odie "ryk was installed, but protection setup failed; resolve the reported host error and reinstall ryk" unless success
   end
@@ -73,7 +66,6 @@ class Ryk < Formula
 
   test do
     assert_match version.to_s, shell_output("#{bin}/ryk --version")
-    assert_match version.to_s, shell_output("#{bin}/orca --version")
     system "#{bin}/ryk", "doctor"
     system "#{bin}/ryk", "packs", "--help"
     system "#{bin}/ryk", "plugin", "doctor", "hermes", "--json"

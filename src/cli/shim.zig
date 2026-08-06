@@ -1,9 +1,9 @@
 const std = @import("std");
 
-const core = @import("orca_core").core;
-const core_api = @import("orca_core").api;
+const core = @import("ryk_core").core;
+const core_api = @import("ryk_core").api;
 const intercept = @import("../intercept/mod.zig");
-const policy = @import("orca_core").policy;
+const policy = @import("ryk_core").policy;
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
 const shell_eval = @import("shell_eval.zig");
@@ -36,27 +36,27 @@ fn exec(io: std.Io, environ_map: *const std.process.Environ.Map, command_argv: [
 }
 
 fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const []const u8, env_map: *const std.process.Environ.Map, stderr: anytype, shell_evaluator: ?shell_eval.ShellCommandEvaluatorFn) !u8 {
-    const session_id = env_map.get("ORCA_SESSION_ID") orelse {
-        try stderr.writeAll("ryk shim exec: missing ORCA_SESSION_ID; shims only work inside a ryk session.\n");
+    const session_id = env_map.get("RYK_SESSION_ID") orelse {
+        try stderr.writeAll("ryk shim exec: missing RYK_SESSION_ID; shims only work inside a ryk session.\n");
         return exit_codes.general;
     };
-    // F27: reject path-traversal / empty session ids before any path join under .orca/sessions/.
+    // F27: reject path-traversal / empty session ids before any path join under .ryk/sessions/.
     core.session.validateSessionIdText(session_id) catch {
-        try stderr.writeAll("ryk shim exec: invalid ORCA_SESSION_ID; refusing path traversal into session control plane.\n");
+        try stderr.writeAll("ryk shim exec: invalid RYK_SESSION_ID; refusing path traversal into session control plane.\n");
         return exit_codes.general;
     };
-    const shim_dir = env_map.get("ORCA_SHIM_DIR") orelse {
-        try stderr.writeAll("ryk shim exec: missing ORCA_SHIM_DIR; refusing unsafe delegation.\n");
+    const shim_dir = env_map.get("RYK_SHIM_DIR") orelse {
+        try stderr.writeAll("ryk shim exec: missing RYK_SHIM_DIR; refusing unsafe delegation.\n");
         return exit_codes.general;
     };
     if (shim_dir.len == 0 or !std.fs.path.isAbsolute(shim_dir)) {
-        try stderr.writeAll("ryk shim exec: ORCA_SHIM_DIR must be an absolute path.\n");
+        try stderr.writeAll("ryk shim exec: RYK_SHIM_DIR must be an absolute path.\n");
         return exit_codes.general;
     }
-    // F36: derive workspace from parent-installed shim_dir, not child-forgable ORCA_WORKSPACE_ROOT.
+    // F36: derive workspace from parent-installed shim_dir, not child-forgable RYK_WORKSPACE_ROOT.
     const workspace_root = resolveTrustedWorkspaceRoot(allocator, shim_dir, session_id, env_map) catch |err| switch (err) {
         error.WorkspaceRootMismatch, error.InvalidShimDirLayout => {
-            try stderr.writeAll("ryk shim exec: ORCA_WORKSPACE_ROOT does not match parent shim layout; refusing rebind.\n");
+            try stderr.writeAll("ryk shim exec: RYK_WORKSPACE_ROOT does not match parent shim layout; refusing rebind.\n");
             return exit_codes.general;
         },
         else => return err,
@@ -73,7 +73,7 @@ fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const [
         error.UntrustedPolicyPath => {
             const decision: core.decision.Decision = .{
                 .result = .deny,
-                .reason = "untrusted ORCA_POLICY_PATH; refusing child-controlled policy override",
+                .reason = "untrusted RYK_POLICY_PATH; refusing child-controlled policy override",
                 .risk_score = 90,
                 .ci_may_proceed = false,
             };
@@ -84,7 +84,7 @@ fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const [
                 try appendCommandEvent(io, writer, session_id, .command_attempt, display, null);
                 try appendCommandEvent(io, writer, session_id, .command_denied, display, decision);
             }
-            try stderr.writeAll("ryk shim exec: untrusted ORCA_POLICY_PATH; refusing child-controlled policy override.\n");
+            try stderr.writeAll("ryk shim exec: untrusted RYK_POLICY_PATH; refusing child-controlled policy override.\n");
             return exit_codes.denial;
         },
         else => return err,
@@ -114,7 +114,7 @@ fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const [
 
     var final_decision = command_decision.decision;
     if (command_decision.decision.result != .allow and command_decision.decision.result != .observe) {
-        // F26/F12: bare ORCA_APPROVED_COMMAND_ONCE is child-forgeable. Durable parent
+        // F26/F12: bare RYK_APPROVED_COMMAND_ONCE is child-forgeable. Durable parent
         // `user_approval` with cmd-hash (or legacy full display) is required.
         // Once-scoped approvals also need the once-env token present, then consume it
         // so a second PATH re-entry re-denies (F213).
@@ -208,25 +208,25 @@ fn execWithEnv(io: std.Io, allocator: std.mem.Allocator, command_argv: []const [
 }
 
 /// True when audit open failed because the sandboxed process cannot write the
-/// control root (`workspace/.orca`) — intentional Seatbelt residual, not a
+/// control root (`workspace/.ryk`) — intentional Seatbelt residual, not a
 /// programming error. Do not kill the shim solely for this.
 fn isControlWriteDenyAuditError(err: anyerror) bool {
     return err == error.PermissionDenied or err == error.AccessDenied;
 }
 
 /// Parent sets this when OS attach is planned (control write-deny residual known).
-/// Shims skip opening `.orca/.../events.jsonl` and stay silent — parent owns the
+/// Shims skip opening `.ryk/.../events.jsonl` and stay silent — parent owns the
 /// single `audit=degraded` banner (E0 / RT-05). Values: `degraded` | `skip`.
 /// **Child-forgable env alone is not trusted** — session file must attest (F36).
-pub const shim_audit_mode_env = "ORCA_SHIM_AUDIT_MODE";
+pub const shim_audit_mode_env = "RYK_SHIM_AUDIT_MODE";
 pub const session_audit_mode_filename = "shim_audit_mode";
 
 fn sessionAuditModePath(allocator: std.mem.Allocator, workspace_root: []const u8, session_id: []const u8) ![]u8 {
-    return try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "sessions", session_id, session_audit_mode_filename });
+    return try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "sessions", session_id, session_audit_mode_filename });
 }
 
 /// Parent `ryk run` writes this before PATH shims run so agents cannot silence
-/// in-shim audit by exporting `ORCA_SHIM_AUDIT_MODE=degraded` alone.
+/// in-shim audit by exporting `RYK_SHIM_AUDIT_MODE=degraded` alone.
 pub fn writeSessionShimAuditMode(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -236,7 +236,7 @@ pub fn writeSessionShimAuditMode(
 ) !void {
     const path = try sessionAuditModePath(allocator, workspace_root, session_id);
     defer allocator.free(path);
-    const sessions_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "sessions", session_id });
+    const sessions_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "sessions", session_id });
     defer allocator.free(sessions_dir);
     try std.Io.Dir.cwd().createDirPath(io, sessions_dir);
     const file = try std.Io.Dir.cwd().createFile(io, path, .{});
@@ -274,7 +274,7 @@ fn shimAuditModeIsDegraded(
 ) bool {
     _ = env_map;
     // F36/F207: session file is the only parent attestation. Env alone is hostile
-    // (child can set ORCA_SHIM_AUDIT_MODE). Empty session_id is rejected at entry.
+    // (child can set RYK_SHIM_AUDIT_MODE). Empty session_id is rejected at entry.
     const session = readSessionShimAuditMode(io, allocator, workspace_root, session_id) catch null;
     return session != null;
 }
@@ -282,13 +282,13 @@ fn shimAuditModeIsDegraded(
 /// Best-effort session audit open for in-sandbox shims.
 /// - When parent **recorded** audit mode degraded|skip (session file): skip open,
 ///   no stderr (≤1 degraded line is the parent banner; never N× per shimmed cmd).
-/// - Child-only `ORCA_SHIM_AUDIT_MODE` is ignored when a session id is present.
+/// - Child-only `RYK_SHIM_AUDIT_MODE` is ignored when a session id is present.
 /// - On control write-deny residuals without parent flag: warn on stderr and
 ///   return null (allow continues; deny still denies). Residual spam path when
 ///   parent did not mark attach.
 /// - On other open failures: message printed; returns `error.ShimAuditOpenFailed`
 ///   so callers map to general exit (not silent swallow of OOM/corruption).
-/// Do **not** “fix” by making `.orca` agent-writable.
+/// Do **not** “fix” by making `.ryk` agent-writable.
 fn openShimAuditBestEffort(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -328,7 +328,7 @@ fn parseOptions(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: a
 }
 
 fn loadPolicyForShim(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8, session_id: []const u8, env_map: *const std.process.Environ.Map) !policy.schema.LoadedPolicy {
-    if (env_map.get("ORCA_POLICY_PATH")) |path| {
+    if (env_map.get("RYK_POLICY_PATH")) |path| {
         if (!try policyPathRecordedForSession(io, allocator, workspace_root, session_id, path)) return error.UntrustedPolicyPath;
         return loadRecordedPolicySource(io, allocator, path, workspace_root);
     }
@@ -352,18 +352,18 @@ fn loadRecordedPolicySource(io: std.Io, allocator: std.mem.Allocator, source: []
 }
 
 /// Session-recorded mode file written by `ryk run` before shims are active.
-/// Child processes can rewrite env; they must not rewrite enforcement mode via `ORCA_MODE`.
+/// Child processes can rewrite env; they must not rewrite enforcement mode via `RYK_MODE`.
 pub const session_mode_filename = "shim_mode";
 
 fn sessionModePath(allocator: std.mem.Allocator, workspace_root: []const u8, session_id: []const u8) ![]u8 {
-    return try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "sessions", session_id, session_mode_filename });
+    return try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "sessions", session_id, session_mode_filename });
 }
 
 /// Persist the parent session's effective mode so shim callbacks cannot soften via env.
 pub fn writeSessionShimMode(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8, session_id: []const u8, mode: policy.schema.Mode) !void {
     const path = try sessionModePath(allocator, workspace_root, session_id);
     defer allocator.free(path);
-    const sessions_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "sessions", session_id });
+    const sessions_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "sessions", session_id });
     defer allocator.free(sessions_dir);
     try std.Io.Dir.cwd().createDirPath(io, sessions_dir);
     const file = try std.Io.Dir.cwd().createFile(io, path, .{});
@@ -405,14 +405,14 @@ fn shimMode(
     env_map: *const std.process.Environ.Map,
 ) !policy.schema.Mode {
     // Parent `ryk run` writes shim_mode before PATH shims are active. Prefer it
-    // over ORCA_MODE so agents cannot ORCA_MODE=observe their way past strict.
+    // over RYK_MODE so agents cannot RYK_MODE=observe their way past strict.
     if (try readSessionShimMode(io, allocator, workspace_root, session_id)) |recorded| {
         return recorded;
     }
 
     // Legacy / tests without a recorded mode: env may only raise strictness.
     const policy_mode = selected.mode;
-    if (env_map.get("ORCA_MODE")) |mode_text| {
+    if (env_map.get("RYK_MODE")) |mode_text| {
         if (policy.schema.Mode.parse(mode_text)) |env_mode| {
             return moreRestrictiveMode(policy_mode, env_mode);
         }
@@ -426,16 +426,16 @@ const ApprovalMatch = struct {
     once_only: bool = false,
 };
 
-/// Derive trusted workspace from parent-installed ORCA_SHIM_DIR layout:
-/// `{workspace}/.orca/sessions/{session_id}/shims`. Child rebinding of
-/// ORCA_WORKSPACE_ROOT alone cannot move the control plane (F36).
+/// Derive trusted workspace from parent-installed RYK_SHIM_DIR layout:
+/// `{workspace}/.ryk/sessions/{session_id}/shims`. Child rebinding of
+/// RYK_WORKSPACE_ROOT alone cannot move the control plane (F36).
 fn resolveTrustedWorkspaceRoot(
     allocator: std.mem.Allocator,
     shim_dir: []const u8,
     session_id: []const u8,
     env_map: *const std.process.Environ.Map,
 ) ![]u8 {
-    const suffix = try std.fmt.allocPrint(allocator, "{c}.orca{c}sessions{c}{s}{c}shims", .{
+    const suffix = try std.fmt.allocPrint(allocator, "{c}.ryk{c}sessions{c}{s}{c}shims", .{
         std.fs.path.sep,
         std.fs.path.sep,
         std.fs.path.sep,
@@ -449,7 +449,7 @@ fn resolveTrustedWorkspaceRoot(
     const derived = shim_dir[0 .. shim_dir.len - suffix.len];
     if (derived.len == 0 or !std.fs.path.isAbsolute(derived)) return error.InvalidShimDirLayout;
 
-    if (env_map.get("ORCA_WORKSPACE_ROOT")) |claimed| {
+    if (env_map.get("RYK_WORKSPACE_ROOT")) |claimed| {
         if (claimed.len == 0 or !std.fs.path.isAbsolute(claimed)) return error.WorkspaceRootMismatch;
         // Exact match preferred; also accept trailing-slash-normalized equality.
         const claimed_trim = std.mem.trimEnd(u8, claimed, "/");
@@ -460,7 +460,7 @@ fn resolveTrustedWorkspaceRoot(
 }
 
 fn approvalRecordedForCommand(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8, session_id: []const u8, command_display: []const u8) !ApprovalMatch {
-    const events_rel = try std.fs.path.join(allocator, &.{ ".orca", "sessions", session_id, "events.jsonl" });
+    const events_rel = try std.fs.path.join(allocator, &.{ ".ryk", "sessions", session_id, "events.jsonl" });
     defer allocator.free(events_rel);
     var workspace_dir = std.Io.Dir.openDirAbsolute(io, workspace_root, .{}) catch return .{};
     defer workspace_dir.close(io);
@@ -503,7 +503,7 @@ fn approvalRecordedForCommand(io: std.Io, allocator: std.mem.Allocator, workspac
 }
 
 fn policyPathRecordedForSession(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8, session_id: []const u8, policy_source: []const u8) !bool {
-    const events_rel = try std.fs.path.join(allocator, &.{ ".orca", "sessions", session_id, "events.jsonl" });
+    const events_rel = try std.fs.path.join(allocator, &.{ ".ryk", "sessions", session_id, "events.jsonl" });
     defer allocator.free(events_rel);
     var workspace_dir = std.Io.Dir.openDirAbsolute(io, workspace_root, .{}) catch return false;
     defer workspace_dir.close(io);
@@ -538,7 +538,7 @@ fn appendCommandEvent(io: std.Io, writer: *core_api.AuditWriter, session_id_text
         .event_id = try core.event.generateEventId(ts),
         .timestamp = ts,
         .event_type = event_type,
-        .actor = .{ .kind = .orca, .display = "ryk-shim" },
+        .actor = .{ .kind = .ryk, .display = "ryk-shim" },
         .target = .{ .kind = .command, .value = display },
         .decision = decision,
     };
@@ -609,7 +609,7 @@ test "shim callback preserves parent approval for ask-class command" {
     try writeTestWorkspacePolicy(tmp.dir);
     // Strict + ask so npm install requires a recorded parent approval.
     {
-        const policy_file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const policy_file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer policy_file.close(std.testing.io);
         try policy_file.writeStreamingAll(std.testing.io,
             \\version: 1
@@ -628,7 +628,7 @@ test "shim callback preserves parent approval for ask-class command" {
     defer std.testing.allocator.free(real_dir);
     const session_id = try prepareShimSession(std.testing.allocator, root);
     defer std.testing.allocator.free(session_id);
-    const shim_rel = try std.fmt.allocPrint(std.testing.allocator, ".orca/sessions/{s}/shims", .{session_id});
+    const shim_rel = try std.fmt.allocPrint(std.testing.allocator, ".ryk/sessions/{s}/shims", .{session_id});
     defer std.testing.allocator.free(shim_rel);
     try tmp.dir.createDirPath(std.testing.io, shim_rel);
     const shim_dir = try testRealPath(std.testing.allocator, tmp.dir, shim_rel);
@@ -639,10 +639,10 @@ test "shim callback preserves parent approval for ask-class command" {
     const path_value = try std.fmt.allocPrint(std.testing.allocator, "{s}:{s}", .{ shim_dir, real_dir });
     defer std.testing.allocator.free(path_value);
     try env_map.put("PATH", path_value);
-    try env_map.put("ORCA_SESSION_ID", session_id);
-    try env_map.put("ORCA_WORKSPACE_ROOT", root);
-    try env_map.put("ORCA_SHIM_DIR", shim_dir);
-    try env_map.put("ORCA_MODE", "ask");
+    try env_map.put("RYK_SESSION_ID", session_id);
+    try env_map.put("RYK_WORKSPACE_ROOT", root);
+    try env_map.put("RYK_SHIM_DIR", shim_dir);
+    try env_map.put("RYK_MODE", "ask");
     const display = try intercept.commands.displayArgvAlloc(std.testing.allocator, &.{ "npm", "install" });
     defer std.testing.allocator.free(display);
     try recordShimApproval(std.testing.allocator, root, session_id, display);
@@ -689,7 +689,7 @@ test "shim callback rejects forged approval hash from child environment" {
     try std.testing.expect(std.mem.indexOf(u8, events, "\"type\":\"command_denied\"") != null);
 }
 
-test "shim rejects forged ORCA_APPROVED_COMMAND_ONCE without durable user_approval" {
+test "shim rejects forged RYK_APPROVED_COMMAND_ONCE without durable user_approval" {
     // F26: bare once-hash is forgeable; only events.jsonl user_approval allows.
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     var fx = try prepareShimExecFixture(.{ .mode = "strict", .real_bin = "git" });
@@ -723,12 +723,12 @@ test "shim rejects forged ORCA_APPROVED_COMMAND_ONCE without durable user_approv
     try std.testing.expect(std.mem.indexOf(u8, events, "\"type\":\"command_allowed\"") == null);
 }
 
-test "shim rejects path-traversal ORCA_SESSION_ID" {
+test "shim rejects path-traversal RYK_SESSION_ID" {
     // F27: ../../ must not plant shim_mode outside sessions/.
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     var fx = try prepareShimExecFixture(.{ .mode = "strict", .real_bin = "true", .shim_bin = "true" });
     defer fx.deinit();
-    try fx.env_map.put("ORCA_SESSION_ID", "../../evil");
+    try fx.env_map.put("RYK_SESSION_ID", "../../evil");
 
     var stderr_buf: [1024]u8 = undefined;
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
@@ -741,15 +741,15 @@ test "shim rejects path-traversal ORCA_SESSION_ID" {
         shell_eval.mockDaemonAllowEvaluator,
     );
     try std.testing.expectEqual(exit_codes.general, code);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "invalid ORCA_SESSION_ID") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "invalid RYK_SESSION_ID") != null);
 }
 
-test "shim rejects forged ORCA_WORKSPACE_ROOT rebind" {
+test "shim rejects forged RYK_WORKSPACE_ROOT rebind" {
     // F36: child cannot point attestation at /tmp while keeping parent shim_dir.
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     var fx = try prepareShimExecFixture(.{ .mode = "strict", .real_bin = "true", .shim_bin = "true" });
     defer fx.deinit();
-    try fx.env_map.put("ORCA_WORKSPACE_ROOT", "/tmp/forged-orca-workspace");
+    try fx.env_map.put("RYK_WORKSPACE_ROOT", "/tmp/forged-ryk-workspace");
 
     var stderr_buf: [1024]u8 = undefined;
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
@@ -823,7 +823,7 @@ test "shim callback rejects forged policy path from child environment" {
     defer std.testing.allocator.free(policy_path);
     const session_id = try prepareShimSession(std.testing.allocator, root);
     defer std.testing.allocator.free(session_id);
-    const shim_rel = try std.fmt.allocPrint(std.testing.allocator, ".orca/sessions/{s}/shims", .{session_id});
+    const shim_rel = try std.fmt.allocPrint(std.testing.allocator, ".ryk/sessions/{s}/shims", .{session_id});
     defer std.testing.allocator.free(shim_rel);
     try tmp.dir.createDirPath(std.testing.io, shim_rel);
     const shim_dir = try testRealPath(std.testing.allocator, tmp.dir, shim_rel);
@@ -834,11 +834,11 @@ test "shim callback rejects forged policy path from child environment" {
     const path_value = try std.fmt.allocPrint(std.testing.allocator, "{s}:{s}", .{ shim_dir, real_dir });
     defer std.testing.allocator.free(path_value);
     try env_map.put("PATH", path_value);
-    try env_map.put("ORCA_SESSION_ID", session_id);
-    try env_map.put("ORCA_WORKSPACE_ROOT", root);
-    try env_map.put("ORCA_SHIM_DIR", shim_dir);
-    try env_map.put("ORCA_MODE", "strict");
-    try env_map.put("ORCA_POLICY_PATH", policy_path);
+    try env_map.put("RYK_SESSION_ID", session_id);
+    try env_map.put("RYK_WORKSPACE_ROOT", root);
+    try env_map.put("RYK_SHIM_DIR", shim_dir);
+    try env_map.put("RYK_MODE", "strict");
+    try env_map.put("RYK_POLICY_PATH", policy_path);
 
     var stderr_buf: [1024]u8 = undefined;
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
@@ -871,7 +871,7 @@ test "shim callback accepts recorded builtin policy source" {
     try std.testing.expectEqual(exit_codes.success, code);
 }
 
-test "shim ignores child ORCA_MODE softening when session mode is strict" {
+test "shim ignores child RYK_MODE softening when session mode is strict" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     var fx = try prepareShimExecFixture(.{
         .mode = "strict",
@@ -882,7 +882,7 @@ test "shim ignores child ORCA_MODE softening when session mode is strict" {
     defer fx.deinit();
 
     // Child tries to soften enforcement — session shim_mode must win.
-    try fx.env_map.put("ORCA_MODE", "observe");
+    try fx.env_map.put("RYK_MODE", "observe");
 
     var stderr_buf: [2048]u8 = undefined;
     var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
@@ -917,7 +917,7 @@ test "shim allow continues when audit open is control write-deny" {
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "failed to open audit log") == null);
 }
 
-test "shim allow is silent when parent set ORCA_SHIM_AUDIT_MODE=degraded" {
+test "shim allow is silent when parent set RYK_SHIM_AUDIT_MODE=degraded" {
     // E0: parent marks known-dead in-shim audit → no per-command stderr spam.
     // Parent must record session shim_audit_mode (env alone is child-forgable).
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
@@ -939,7 +939,7 @@ test "shim allow is silent when parent set ORCA_SHIM_AUDIT_MODE=degraded" {
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "control write-deny") == null);
 }
 
-test "shim ignores child-only ORCA_SHIM_AUDIT_MODE without session file" {
+test "shim ignores child-only RYK_SHIM_AUDIT_MODE without session file" {
     // F36: agent export of degraded must not silence audit open failures.
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     var fx = try prepareShimExecFixture(.{
@@ -959,7 +959,7 @@ test "shim ignores child-only ORCA_SHIM_AUDIT_MODE without session file" {
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "control write-deny") != null);
 }
 
-test "shim deny still denies when ORCA_SHIM_AUDIT_MODE=degraded" {
+test "shim deny still denies when RYK_SHIM_AUDIT_MODE=degraded" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     var fx = try prepareShimExecFixture(.{
         .mode = "strict",
@@ -1140,11 +1140,11 @@ fn prepareShimExecFixture(opts: ShimFixtureOpts) !ShimTestEnv {
     defer std.testing.allocator.free(real_path);
     try writeTestScript(tmp.dir, real_path, opts.real_script_body);
 
-    // Session first so ORCA_SHIM_DIR matches production layout under sessions/.
+    // Session first so RYK_SHIM_DIR matches production layout under sessions/.
     const session_id = try prepareShimSession(std.testing.allocator, root);
     errdefer std.testing.allocator.free(session_id);
 
-    const shim_rel = try std.fmt.allocPrint(std.testing.allocator, ".orca/sessions/{s}/shims", .{session_id});
+    const shim_rel = try std.fmt.allocPrint(std.testing.allocator, ".ryk/sessions/{s}/shims", .{session_id});
     defer std.testing.allocator.free(shim_rel);
     try tmp.dir.createDirPath(std.testing.io, shim_rel);
 
@@ -1172,12 +1172,12 @@ fn prepareShimExecFixture(opts: ShimFixtureOpts) !ShimTestEnv {
     const path_value = try std.fmt.allocPrint(std.testing.allocator, "{s}:{s}", .{ shim_dir, real_dir });
     errdefer std.testing.allocator.free(path_value);
     try env_map.put("PATH", path_value);
-    try env_map.put("ORCA_SESSION_ID", session_id);
-    try env_map.put("ORCA_WORKSPACE_ROOT", root);
-    try env_map.put("ORCA_SHIM_DIR", shim_dir);
-    try env_map.put("ORCA_MODE", opts.mode);
+    try env_map.put("RYK_SESSION_ID", session_id);
+    try env_map.put("RYK_WORKSPACE_ROOT", root);
+    try env_map.put("RYK_SHIM_DIR", shim_dir);
+    try env_map.put("RYK_MODE", opts.mode);
     if (opts.policy_path) |policy_path| {
-        try env_map.put("ORCA_POLICY_PATH", policy_path);
+        try env_map.put("RYK_POLICY_PATH", policy_path);
     }
 
     return .{
@@ -1198,8 +1198,8 @@ fn testRealPath(allocator: std.mem.Allocator, dir: std.Io.Dir, subpath: []const 
 }
 
 fn writeTestWorkspacePolicy(dir: std.Io.Dir) !void {
-    try dir.createDirPath(std.testing.io, ".orca");
-    const file = try dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+    try dir.createDirPath(std.testing.io, ".ryk");
+    const file = try dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
     defer file.close(std.testing.io);
     try file.writeStreamingAll(std.testing.io,
         \\version: 1
@@ -1258,14 +1258,14 @@ fn recordShimPolicyLoaded(allocator: std.mem.Allocator, root: []const u8, sessio
         .event_id = try core.event.generateEventId(ts),
         .timestamp = ts,
         .event_type = .policy_loaded,
-        .actor = .{ .kind = .orca, .display = "ryk" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .file_path, .value = policy_source },
     };
     try core_api.appendAuditEvent(&writer, ev);
 }
 
 fn readSessionEvents(allocator: std.mem.Allocator, root: []const u8, session_id: []const u8) ![]u8 {
-    const events_path = try std.fs.path.join(allocator, &.{ root, ".orca", "sessions", session_id, "events.jsonl" });
+    const events_path = try std.fs.path.join(allocator, &.{ root, ".ryk", "sessions", session_id, "events.jsonl" });
     defer allocator.free(events_path);
     return try std.Io.Dir.cwd().readFileAlloc(std.testing.io, events_path, allocator, .limited(64 * 1024));
 }
@@ -1273,7 +1273,7 @@ fn readSessionEvents(allocator: std.mem.Allocator, root: []const u8, session_id:
 /// Drop write bits on the session events file so openExisting (O_RDWR) fails with
 /// AccessDenied/PermissionDenied — same residual class as Seatbelt control write-deny.
 fn makeSessionAuditNotWritable(root: []const u8, session_id: []const u8) !void {
-    const events_path = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", "sessions", session_id, "events.jsonl" });
+    const events_path = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", "sessions", session_id, "events.jsonl" });
     defer std.testing.allocator.free(events_path);
     try std.Io.Dir.cwd().setFilePermissions(
         std.testing.io,

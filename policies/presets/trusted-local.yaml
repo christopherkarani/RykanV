@@ -1,4 +1,4 @@
-# Orca preset: trusted-local
+# ryk preset: trusted-local
 # Less restrictive local preset for trusted repositories. Secret redaction, staged writes, and deny rules remain enabled.
 # Use strict-local for untrusted tasks.
 version: 1
@@ -45,7 +45,7 @@ files:
       - "./**"
     deny:
       - "./.git/**"
-      - "./.orca/**"
+      - "./.ryk/**"
     mode: staged
 
 commands:

@@ -4,7 +4,7 @@
 $ErrorActionPreference = "Stop"
 $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
 $REPO_ROOT = Resolve-Path (Join-Path $SCRIPT_DIR "..")
-$ORCA_BIN = Join-Path $REPO_ROOT "zig-out\bin\orca.exe"
+$RYK_BIN = Join-Path $REPO_ROOT "zig-out\bin\ryk.exe"
 $EDGE_BIN = Join-Path $REPO_ROOT "zig-out\bin\edge.exe"
 
 $ERRORS = 0
@@ -44,13 +44,13 @@ try {
     # 3. CLI smoke tests
     Log-Info "Running CLI smoke tests..."
 
-    if (Test-Path $ORCA_BIN) {
-        try { $null = & $ORCA_BIN --help 2>$null; Log-Pass "orca --help" } catch { Log-Fail "orca --help" }
-        try { $null = & $ORCA_BIN version 2>$null; Log-Pass "orca version" } catch { Log-Fail "orca version" }
-        try { $null = & $ORCA_BIN doctor 2>$null; Log-Pass "orca doctor" } catch { Log-Fail "orca doctor" }
-        try { $null = & $ORCA_BIN redteam --ci 2>$null; Log-Pass "orca redteam --ci" } catch { Log-Fail "orca redteam --ci" }
+    if (Test-Path $RYK_BIN) {
+        try { $null = & $RYK_BIN --help 2>$null; Log-Pass "ryk --help" } catch { Log-Fail "ryk --help" }
+        try { $null = & $RYK_BIN version 2>$null; Log-Pass "ryk version" } catch { Log-Fail "ryk version" }
+        try { $null = & $RYK_BIN doctor 2>$null; Log-Pass "ryk doctor" } catch { Log-Fail "ryk doctor" }
+        try { $null = & $RYK_BIN redteam --ci 2>$null; Log-Pass "ryk redteam --ci" } catch { Log-Fail "ryk redteam --ci" }
     } else {
-        Log-Fail "orca binary not found at $ORCA_BIN"
+        Log-Fail "ryk binary not found at $RYK_BIN"
     }
     Write-Host ""
 

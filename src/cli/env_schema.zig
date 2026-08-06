@@ -24,7 +24,7 @@ pub fn command(
         return exit_codes.general;
     };
     var schema = maybe_schema orelse {
-        try stderr.writeAll("ryk env schema: .orca/env.schema.yaml not found\n");
+        try stderr.writeAll("ryk env schema: .ryk/env.schema.yaml not found\n");
         return exit_codes.general;
     };
     defer schema.deinit();

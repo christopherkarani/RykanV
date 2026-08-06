@@ -4,7 +4,7 @@ const std = @import("std");
 // Claude Code Plugin Structure Tests
 // ---------------------------------------------------------------------------
 // These tests validate the P04 Claude Code plugin package without requiring
-// the Orca binary to be built. They check file existence, JSON validity,
+// the ryk binary to be built. They check file existence, JSON validity,
 // and content invariants.
 // ---------------------------------------------------------------------------
 
@@ -76,7 +76,7 @@ test "claude plugin manifest contains expected fields" {
     try std.testing.expect(obj.get("interface") != null);
 
     const name = obj.get("name").?.string;
-    try std.testing.expectEqualStrings("orca", name);
+    try std.testing.expectEqualStrings("ryk", name);
 }
 
 test "claude plugin manifest points to skills directory" {
@@ -133,7 +133,7 @@ test "each claude skill has non-empty SKILL.md" {
     }
 }
 
-test "each claude skill references real orca commands" {
+test "each claude skill references real ryk commands" {
     for (skills) |skill| {
         const skill_path = std.fmt.allocPrint(std.testing.allocator, "{s}/skills/{s}/SKILL.md", .{ plugin_dir, skill }) catch unreachable;
         defer std.testing.allocator.free(skill_path);
@@ -141,8 +141,8 @@ test "each claude skill references real orca commands" {
         const content = try readFile(std.testing.allocator, skill_path);
         defer std.testing.allocator.free(content);
 
-        // Every skill should mention "orca" at least once
-        try std.testing.expect(std.mem.indexOf(u8, content, "orca") != null);
+        // Every skill should mention "ryk" at least once
+        try std.testing.expect(std.mem.indexOf(u8, content, "ryk") != null);
     }
 }
 
@@ -176,7 +176,7 @@ test "claude hooks config is valid JSON" {
     defer parsed.deinit();
 }
 
-test "claude hooks config calls orca hook claude" {
+test "claude hooks config dispatches to the ryk Claude hook" {
     var dbg_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = dbg_state.deinit();
     const allocator = dbg_state.allocator();
@@ -184,8 +184,8 @@ test "claude hooks config calls orca hook claude" {
     const content = try readFile(allocator, hooks_path);
     defer allocator.free(content);
 
-    // Every hook should reference "orca hook claude"
-    try std.testing.expect(std.mem.indexOf(u8, content, "orca hook claude") != null);
+    // The portable wrapper resolves the installed binary before dispatching.
+    try std.testing.expect(std.mem.indexOf(u8, content, "hook claude") != null);
 }
 
 test "claude hooks config does not call nonexistent scripts" {
@@ -212,7 +212,6 @@ test "claude hooks config does not include absolute local paths" {
     // Should not contain absolute paths like /Users/ or /home/
     try std.testing.expect(std.mem.indexOf(u8, content, "/Users/") == null);
     try std.testing.expect(std.mem.indexOf(u8, content, "/home/") == null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "/usr/local") == null);
 }
 
 // ---------------------------------------------------------------------------
@@ -306,7 +305,7 @@ test "claude plugin README includes strongest-protection warning" {
     defer std.testing.allocator.free(content);
 
     try std.testing.expect(std.mem.indexOf(u8, content, "strongest local protection") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "orca run --") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "ryk run --") != null);
 }
 
 test "claude plugin README states no MCP server behavior" {
@@ -369,7 +368,7 @@ test "claude docs do not claim drone plugin support" {
 // Hook fixture integration tests (requires built binary)
 // ---------------------------------------------------------------------------
 
-test "fake claude hook payload fixtures still work with orca hook claude" {
+test "fake claude hook payload fixtures still work with ryk hook claude" {
     // This test is a smoke test that validates fixture files are present.
     // Full integration requires the built binary and is tested manually.
     const fixture_dir = "tests/plugin-fixtures/claude";

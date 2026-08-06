@@ -27,12 +27,12 @@ jobs:
       - name: Version JSON
         shell: bash
         run: |
-          ./zig-out/bin/orca version --json
+          ./zig-out/bin/ryk version --json
       - name: Check Windows target from Unix runners
         if: runner.os != 'Windows'
         run: ./scripts/zig build check-windows
       - name: Check release artifact naming references
         shell: bash
         run: |
-          grep -R "orca-v.*linux-amd64" scripts packaging .github/workflows
+          grep -R "ryk-v.*linux-amd64" scripts packaging .github/workflows
           grep -R "checksums.txt" scripts packaging .github/workflows

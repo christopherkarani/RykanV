@@ -1,8 +1,9 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
-const network = @import("orca_core").policy.network_eval;
-const core = @import("orca_core").core;
-const schema = @import("orca_core").policy.schema;
+const network = @import("ryk_core").policy.network_eval;
+const core = @import("ryk_core").core;
+const schema = @import("ryk_core").policy.schema;
 
 pub const AuditEvent = struct {
     event_type: core.event.EventType,
@@ -46,6 +47,7 @@ pub const Runtime = struct {
     /// Call after sandboxed agent fork so Seatbelt `sandbox_init` is not
     /// raced with a multi-threaded parent (M-5).
     pub fn startServing(self: *Runtime) !void {
+        if (comptime builtin.os.tag == .windows) return error.ProxyUnsupportedOnWindows;
         if (self.state.serving.swap(true, .acq_rel)) return;
         self.state.thread = try std.Thread.spawn(.{}, serverLoop, .{self.state});
         self.state.thread_started = true;
@@ -564,7 +566,7 @@ fn tunnelConnect(
     }
     var client_buf: [256]u8 = undefined;
     var client_writer = client.writer(io, &client_buf);
-    try client_writer.interface.writeAll("HTTP/1.1 200 Connection Established\r\nProxy-Agent: Orca\r\n\r\n");
+    try client_writer.interface.writeAll("HTTP/1.1 200 Connection Established\r\nProxy-Agent: ryk\r\n\r\n");
     try client_writer.interface.flush();
     try tunnel(io, client, upstream, &state.stop);
 }
@@ -754,7 +756,7 @@ test "proxy scheme-less request-target Host pivot is rejected" {
 test "proxy forwards delayed HTTP request bodies and records request audit events" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
 
-    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
+    var loaded = try @import("ryk_core").policy.load.parseFromSlice(std.testing.allocator,
         \\version: 1
         \\mode: observe
         \\network:
@@ -803,8 +805,8 @@ test "proxy forwards delayed HTTP request bodies and records request audit event
     const events = try runtime.snapshotAuditEvents(std.testing.allocator);
     defer runtime.freeAuditEvents(std.testing.allocator, events);
     try std.testing.expect(events.len >= 2);
-    try std.testing.expectEqual(@import("orca_core").core.event.EventType.network_connect_attempt, events[0].event_type);
-    try std.testing.expectEqual(@import("orca_core").core.event.EventType.network_connect_allowed, events[1].event_type);
+    try std.testing.expectEqual(@import("ryk_core").core.event.EventType.network_connect_attempt, events[0].event_type);
+    try std.testing.expectEqual(@import("ryk_core").core.event.EventType.network_connect_allowed, events[1].event_type);
     try std.testing.expect(std.mem.indexOf(u8, events[0].target, "127.0.0.1") != null);
 }
 
@@ -827,7 +829,7 @@ test "proxy denies controlled HTTP endpoint before upstream connect" {
         \\    - "127.0.0.1:{d}"
     , .{upstream_port});
     defer std.testing.allocator.free(policy_text);
-    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator, policy_text, "proxy-http-deny.yaml");
+    var loaded = try @import("ryk_core").policy.load.parseFromSlice(std.testing.allocator, policy_text, "proxy-http-deny.yaml");
     defer loaded.deinit();
 
     var upstream_state: TestDenyServerState = .{ .server = &upstream, .io = io };
@@ -862,9 +864,9 @@ test "proxy denies controlled HTTP endpoint before upstream connect" {
     const events = try runtime.snapshotAuditEvents(std.testing.allocator);
     defer runtime.freeAuditEvents(std.testing.allocator, events);
     try std.testing.expectEqual(@as(usize, 2), events.len);
-    try std.testing.expectEqual(@import("orca_core").core.event.EventType.network_connect_attempt, events[0].event_type);
-    try std.testing.expectEqual(@import("orca_core").core.event.EventType.network_connect_denied, events[1].event_type);
-    try std.testing.expectEqual(@import("orca_core").core.decision.DecisionResult.deny, events[1].result.?);
+    try std.testing.expectEqual(@import("ryk_core").core.event.EventType.network_connect_attempt, events[0].event_type);
+    try std.testing.expectEqual(@import("ryk_core").core.event.EventType.network_connect_denied, events[1].event_type);
+    try std.testing.expectEqual(@import("ryk_core").core.decision.DecisionResult.deny, events[1].result.?);
     try std.testing.expect(std.mem.indexOf(u8, events[1].reason.?, "explicit network deny") != null);
     try std.testing.expect(!upstream_state.accepted.load(.acquire));
 }
@@ -896,7 +898,7 @@ test "proxy applies HTTP method and path policy while CONNECT remains host-port 
         \\    unmatched: allow
     , .{upstream_port});
     defer std.testing.allocator.free(policy_text);
-    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator, policy_text, "proxy-service-deny.yaml");
+    var loaded = try @import("ryk_core").policy.load.parseFromSlice(std.testing.allocator, policy_text, "proxy-service-deny.yaml");
     defer loaded.deinit();
 
     var runtime = try start(std.testing.allocator, &loaded, .strict);
@@ -928,7 +930,7 @@ test "proxy applies HTTP method and path policy while CONNECT remains host-port 
     const events = try runtime.snapshotAuditEvents(std.testing.allocator);
     defer runtime.freeAuditEvents(std.testing.allocator, events);
     try std.testing.expect(events.len >= 2);
-    try std.testing.expectEqual(@import("orca_core").core.event.EventType.network_connect_denied, events[1].event_type);
+    try std.testing.expectEqual(@import("ryk_core").core.event.EventType.network_connect_denied, events[1].event_type);
     try std.testing.expect(std.mem.indexOf(u8, events[1].reason.?, "service path deny") != null);
 
     var connect_target_buf: [32]u8 = undefined;
@@ -938,7 +940,7 @@ test "proxy applies HTTP method and path policy while CONNECT remains host-port 
         .method = null,
     });
     defer connect_decision.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@import("orca_core").core.decision.DecisionResult.allow, connect_decision.decision.result);
+    try std.testing.expectEqual(@import("ryk_core").core.decision.DecisionResult.allow, connect_decision.decision.result);
     try std.testing.expectEqualStrings("services.local_test.unmatched", connect_decision.decision.rule_id.?);
 }
 
@@ -966,7 +968,7 @@ test "proxy allowed absolute URL does not connect to mismatched Host target" {
     const allowed_thread = try std.Thread.spawn(.{}, testHttpServer, .{&allowed_state});
     defer allowed_thread.join();
 
-    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
+    var loaded = try @import("ryk_core").policy.load.parseFromSlice(std.testing.allocator,
         \\version: 1
         \\mode: observe
         \\network:
@@ -1010,7 +1012,7 @@ test "proxy deinit reclaims state only after connection workers drain" {
     // waitForIdle, and deinit under the testing allocator (leak check).
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
 
-    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
+    var loaded = try @import("ryk_core").policy.load.parseFromSlice(std.testing.allocator,
         \\version: 1
         \\mode: observe
         \\network:
@@ -1063,7 +1065,7 @@ test "proxy deinit blocks until workers drain instead of abandoning state" {
     // without requiring the test client to peer-close first.
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
 
-    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
+    var loaded = try @import("ryk_core").policy.load.parseFromSlice(std.testing.allocator,
         \\version: 1
         \\mode: observe
         \\network:
@@ -1158,7 +1160,7 @@ test "proxy scheme-less allowed target does not connect to mismatched Host" {
     const allowed_thread = try std.Thread.spawn(.{}, testHttpServer, .{&allowed_state});
     defer allowed_thread.join();
 
-    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
+    var loaded = try @import("ryk_core").policy.load.parseFromSlice(std.testing.allocator,
         \\version: 1
         \\mode: observe
         \\network:
@@ -1228,7 +1230,7 @@ test "proxy does not tunnel a second HTTP request after an allowed first request
         \\    unmatched: allow
     , .{upstream_port});
     defer std.testing.allocator.free(policy_text);
-    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator, policy_text, "proxy-pipelining.yaml");
+    var loaded = try @import("ryk_core").policy.load.parseFromSlice(std.testing.allocator, policy_text, "proxy-pipelining.yaml");
     defer loaded.deinit();
 
     var runtime = try start(std.testing.allocator, &loaded, .strict);
@@ -1462,7 +1464,7 @@ test "proxy CONNECT allowlisted hostname returns 200 Connection Established" {
     }.run, .{ &upstream, thread_io });
     defer accept_thread.join();
 
-    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
+    var loaded = try @import("ryk_core").policy.load.parseFromSlice(std.testing.allocator,
         \\version: 1
         \\mode: observe
         \\network:
@@ -1501,7 +1503,7 @@ test "proxy CONNECT allowlisted hostname returns 200 Connection Established" {
     const events = try runtime.snapshotAuditEvents(std.testing.allocator);
     defer runtime.freeAuditEvents(std.testing.allocator, events);
     try std.testing.expect(events.len >= 2);
-    try std.testing.expectEqual(@import("orca_core").core.event.EventType.network_connect_allowed, events[1].event_type);
+    try std.testing.expectEqual(@import("ryk_core").core.event.EventType.network_connect_allowed, events[1].event_type);
 }
 
 test "proxy tunnel survives mid-stream quiet gap of 5s (CONNECT shares fn tunnel)" {
@@ -1536,7 +1538,7 @@ test "proxy tunnel survives mid-stream quiet gap of 5s (CONNECT shares fn tunnel
     const upstream_thread = try std.Thread.spawn(.{}, UpstreamState.run, .{&upstream_state});
     defer upstream_thread.join();
 
-    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
+    var loaded = try @import("ryk_core").policy.load.parseFromSlice(std.testing.allocator,
         \\version: 1
         \\mode: observe
         \\network:
@@ -1633,7 +1635,7 @@ test "proxy deinit reclaims quiet open tunnel within bound" {
     const upstream_thread = try std.Thread.spawn(.{}, QuietUpstream.run, .{&quiet});
     defer upstream_thread.join();
 
-    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
+    var loaded = try @import("ryk_core").policy.load.parseFromSlice(std.testing.allocator,
         \\version: 1
         \\mode: observe
         \\network:
@@ -1719,7 +1721,7 @@ test "proxy F-audit records exfil on allow for sink host and cleartext secret qu
     // cleartext absolute-form secret query fires; plain CONNECT non-sink does not.
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
 
-    var loaded = try @import("orca_core").policy.load.parseFromSlice(std.testing.allocator,
+    var loaded = try @import("ryk_core").policy.load.parseFromSlice(std.testing.allocator,
         \\version: 1
         \\mode: observe
         \\network:

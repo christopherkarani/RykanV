@@ -1,4 +1,4 @@
-/// Orca CLI design system and rich-output rendering (`tui`).
+/// ryk CLI design system and rich-output rendering (`tui`).
 ///
 /// - `theme` — palette, color-capability detection, semantic tokens.
 /// - `render` — linear rich-output primitives (panel, table, badge, meter, …).

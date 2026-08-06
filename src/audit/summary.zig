@@ -400,7 +400,7 @@ test "summary json records final hash and bounded command metadata" {
         .ended_at = ts,
         .command = "echo",
         .args = &.{"hello"},
-        .workspace_root = "/tmp/orca",
+        .workspace_root = "/tmp/ryk",
         .mode = .observe,
         .platform = core.platform.detectOs(),
     };
@@ -424,7 +424,7 @@ test "summary redacts synthetic secret command metadata" {
         .ended_at = ts,
         .command = "echo",
         .args = &.{"fake_secret_value"},
-        .workspace_root = "/tmp/orca",
+        .workspace_root = "/tmp/ryk",
         .mode = .observe,
         .platform = core.platform.detectOs(),
     };
@@ -448,7 +448,7 @@ test "summary markdown is product neutral unless caller provides label" {
         .ended_at = ts,
         .command = "echo",
         .args = &.{"hello"},
-        .workspace_root = "/tmp/orca",
+        .workspace_root = "/tmp/ryk",
         .mode = .observe,
         .platform = core.platform.detectOs(),
     };
@@ -460,13 +460,13 @@ test "summary markdown is product neutral unless caller provides label" {
         .event_count = 3,
         .final_event_hash = "abc",
     });
-    const orca_heading_text = "Orca" ++ " Session";
-    try std.testing.expect(std.mem.indexOf(u8, generic.items, orca_heading_text) == null);
+    const labeled_heading_text = "ryk" ++ " Session";
+    try std.testing.expect(std.mem.indexOf(u8, generic.items, labeled_heading_text) == null);
     try std.testing.expect(std.mem.indexOf(u8, generic.items, "# Session ") != null);
 
-    var orca: std.ArrayList(u8) = .empty;
-    defer orca.deinit(std.testing.allocator);
-    try writeMarkdown(orca.writer(std.testing.allocator), .{
+    var labeled: std.ArrayList(u8) = .empty;
+    defer labeled.deinit(std.testing.allocator);
+    try writeMarkdown(labeled.writer(std.testing.allocator), .{
         .session = session,
         .status = .{ .exited = 0 },
         .event_count = 3,
@@ -474,8 +474,8 @@ test "summary markdown is product neutral unless caller provides label" {
         // Literal (not cli/brand.zig): this file is also owned by core_engine module.
         .product_label = "ryk",
     });
-    const orca_heading_prefix = "# " ++ "Orca" ++ " Session ";
-    try std.testing.expect(std.mem.indexOf(u8, orca.items, orca_heading_prefix) != null);
+    const labeled_heading_prefix = "# " ++ "ryk" ++ " Session ";
+    try std.testing.expect(std.mem.indexOf(u8, labeled.items, labeled_heading_prefix) != null);
 }
 
 test "update final hash rejects tampered summary before rewriting" {
@@ -484,7 +484,7 @@ test "update final hash rejects tampered summary before rewriting" {
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
 
-    const session_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", "sessions", "summary-tamper" });
+    const session_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", "sessions", "summary-tamper" });
     defer std.testing.allocator.free(session_dir);
     try std.Io.Dir.cwd().makePath(std.testing.io, session_dir);
 

@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const core_api = @import("orca_core").api;
-const policy_mod = @import("orca_core").policy;
+const core_api = @import("ryk_core").api;
+const policy_mod = @import("ryk_core").policy;
 const redteam = @import("redteam/mod.zig");
 
 const focused_fixture_id = "shell-curl-pipe-sh";
@@ -55,23 +55,23 @@ pub fn runWithOptions(io: std.Io, allocator: std.mem.Allocator, workspace_root: 
     var result = Result{ .allocator = allocator };
     errdefer result.deinit();
 
-    const policy_path = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "policy.yaml" });
+    const policy_path = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "policy.yaml" });
     defer allocator.free(policy_path);
     var maybe_policy: ?policy_mod.schema.Policy = null;
     defer if (maybe_policy) |*policy| policy.deinit();
 
     if (std.Io.Dir.cwd().access(io, policy_path, .{})) |_| {
         const loaded = policy_mod.load.loadFile(io, allocator, policy_path) catch |err| {
-            const message = try std.fmt.allocPrint(allocator, ".orca/policy.yaml exists but is invalid: {s}", .{@errorName(err)});
+            const message = try std.fmt.allocPrint(allocator, ".ryk/policy.yaml exists but is invalid: {s}", .{@errorName(err)});
             defer allocator.free(message);
             try result.add("policy", .fail, message);
             return result;
         };
         try core_api.validatePolicy(@ptrCast(&loaded));
-        try result.add("policy", .pass, ".orca/policy.yaml exists and validates");
+        try result.add("policy", .pass, ".ryk/policy.yaml exists and validates");
         maybe_policy = loaded;
     } else |_| {
-        try result.add("policy", .fail, "Missing .orca/policy.yaml. Run: ryk init --preset team-ci");
+        try result.add("policy", .fail, "Missing .ryk/policy.yaml. Run: ryk init --preset team-ci");
         return result;
     }
 
@@ -111,7 +111,7 @@ fn discoverFocusedFixture(io: std.Io, allocator: std.mem.Allocator, workspace_ro
         const env_util = @import("env_util.zig");
         var env_map = env_util.createProcessMap(allocator) catch return error.ResourceNotFound;
         defer env_map.deinit();
-        if (try env_util.getOwned(&env_map, allocator, "ORCA_RESOURCE_ROOT")) |env_root| {
+        if (try env_util.getOwned(&env_map, allocator, "RYK_RESOURCE_ROOT")) |env_root| {
             defer allocator.free(env_root);
             try appendExistingFixturesRoot(io, allocator, &roots, env_root);
         }
@@ -201,11 +201,11 @@ pub fn writeJson(writer: anytype, result: Result) !void {
     for (result.checks.items, 0..) |check, index| {
         if (index > 0) try writer.writeByte(',');
         try writer.writeAll("{\"name\":");
-        try @import("orca_core").core.util.writeJsonString(writer, check.name);
+        try @import("ryk_core").core.util.writeJsonString(writer, check.name);
         try writer.writeAll(",\"status\":");
-        try @import("orca_core").core.util.writeJsonString(writer, statusText(check.status));
+        try @import("ryk_core").core.util.writeJsonString(writer, statusText(check.status));
         try writer.writeAll(",\"message\":");
-        try @import("orca_core").core.util.writeJsonString(writer, check.message);
+        try @import("ryk_core").core.util.writeJsonString(writer, check.message);
         try writer.writeByte('}');
     }
     try writer.writeAll("]}\n");
@@ -234,10 +234,10 @@ test "ci check resolves focused redteam fixtures from resource root" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.createDirPath(std.testing.io, "workspace/.orca");
+    try tmp.dir.createDirPath(std.testing.io, "workspace/.ryk");
     try tmp.dir.createDirPath(std.testing.io, "resources/fixtures/shell-abuse/curl-pipe-sh");
     try tmp.dir.writeFile(std.testing.io, .{
-        .sub_path = "workspace/.orca/policy.yaml",
+        .sub_path = "workspace/.ryk/policy.yaml",
         .data = policy_mod.presets.agentPresetText(.team_ci),
     });
     try tmp.dir.writeFile(std.testing.io, .{
@@ -278,11 +278,11 @@ test "ci check does not accept weak workspace fixture shadowing packaged fixture
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.createDirPath(std.testing.io, "workspace/.orca");
+    try tmp.dir.createDirPath(std.testing.io, "workspace/.ryk");
     try tmp.dir.createDirPath(std.testing.io, "workspace/fixtures/shell-abuse/curl-pipe-sh");
     try tmp.dir.createDirPath(std.testing.io, "resources/fixtures/shell-abuse/curl-pipe-sh");
     try tmp.dir.writeFile(std.testing.io, .{
-        .sub_path = "workspace/.orca/policy.yaml",
+        .sub_path = "workspace/.ryk/policy.yaml",
         .data = policy_mod.presets.agentPresetText(.team_ci),
     });
     try tmp.dir.writeFile(std.testing.io, .{

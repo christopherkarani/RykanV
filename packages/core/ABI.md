@@ -1,4 +1,4 @@
-# Orca Core C ABI
+# ryk Core C ABI
 
 Status: experimental. This ABI is not stable v1.
 
@@ -13,13 +13,13 @@ Only `version` and `redact` provide useful skeleton behavior in Phase 24. Policy
 
 ## Ownership
 
-Callers own all input and output buffers. Orca Core does not allocate memory for the caller and never frees caller memory.
+Callers own all input and output buffers. ryk Core does not allocate memory for the caller and never frees caller memory.
 
 Inputs are pointer-plus-length byte slices. Outputs are written into caller-provided buffers and report the number of bytes written through an output parameter.
 
 ## Limits
 
-String inputs must be UTF-8 where the underlying Core API requires UTF-8. Event-field-sized inputs must not exceed Orca Core runtime limits.
+String inputs must be UTF-8 where the underlying Core API requires UTF-8. Event-field-sized inputs must not exceed ryk Core runtime limits.
 
 ## Return Codes
 

@@ -46,10 +46,10 @@ fn childExecNc(port_text: [*:0]const u8) noreturn {
 }
 
 // CTRL template: unsandboxed canary readable; sandboxed child denies outside grant,
-// allows workspace neighbor read/write, and denies control-root write (.orca + .git).
+// allows workspace neighbor read/write, and denies control-root write (.ryk + .git).
 // Uses prepare SBPL + applyInChild.
 // Exit codes from child: 0=ok, 2=apply fail, 3=outside readable (leak), 4=ws read fail,
-// 5=ws write fail, 6=.orca control writable (leak), 7=.git control writable (leak).
+// 5=ws write fail, 6=.ryk control writable (leak), 7=.git control writable (leak).
 test "real FS deny: outside canary denied; workspace readable and writable" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
     if (!sandboxInitAvailable()) return error.SkipZigTest;
@@ -65,8 +65,8 @@ test "real FS deny: outside canary denied; workspace readable and writable" {
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
     // Control roots must exist under the workspace before apply so write probes
-    // target real paths (profile always carves {workspace}/.orca and .git).
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    // target real paths (profile always carves {workspace}/.ryk and .git).
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     try ws_tmp.dir.createDirPath(io, ".git");
     // realPath so Seatbelt grants match kernel paths (/private/var vs /var).
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
@@ -99,7 +99,7 @@ test "real FS deny: outside canary denied; workspace readable and writable" {
     const write_probe_z = try allocator.dupeZ(u8, write_probe_path);
     defer allocator.free(write_probe_z);
 
-    const control_write_path = try std.fs.path.join(allocator, &.{ ws_root, ".orca", "policy.yaml" });
+    const control_write_path = try std.fs.path.join(allocator, &.{ ws_root, ".ryk", "policy.yaml" });
     defer allocator.free(control_write_path);
     const control_write_z = try allocator.dupeZ(u8, control_write_path);
     defer allocator.free(control_write_z);
@@ -131,7 +131,7 @@ test "real FS deny: outside canary denied; workspace readable and writable" {
     // Outside path must not sit under the workspace grant.
     try std.testing.expect(!compiled.isAgentWritable(canary_path));
     try std.testing.expect(compiled.isAgentWritable(neighbor_path));
-    // Control paths under workspace must not be agent-writable (.orca + .git).
+    // Control paths under workspace must not be agent-writable (.ryk + .git).
     try std.testing.expect(!compiled.isAgentWritable(control_write_path));
     try std.testing.expect(!compiled.isAgentWritable(git_control_write_path));
 
@@ -178,10 +178,10 @@ test "real FS deny: outside canary denied; workspace readable and writable" {
         );
         if (cfd >= 0) {
             _ = std.c.close(cfd);
-            std.c._exit(6); // .orca control write leak
+            std.c._exit(6); // .ryk control write leak
         }
 
-        // Phase 2: workspace .git is a default control root — same write-deny class as .orca.
+        // Phase 2: workspace .git is a default control root — same write-deny class as .ryk.
         const gfd = std.c.open(
             git_control_write_z.ptr,
             .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true },
@@ -245,7 +245,7 @@ test "real network route forcing: proxy port allowed and neighboring loopback po
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
 
@@ -307,7 +307,7 @@ fn tryHomeFirmlinkScratchBase(allocator: std.mem.Allocator, io: anytype) ?[]u8 {
     std.Io.Dir.cwd().access(io, caches, .{}) catch return null;
 
     const seq = data_scratch_seq.fetchAdd(1, .monotonic);
-    const scratch = std.fmt.allocPrint(allocator, "{s}/orca-sb-data-{d}-{d}", .{
+    const scratch = std.fmt.allocPrint(allocator, "{s}/ryk-sb-data-{d}-{d}", .{
         caches,
         std.c.getpid(),
         seq,
@@ -503,7 +503,7 @@ test "real FS deny: workspace symlink to outside is not readable" {
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     try ws_tmp.dir.writeFile(io, .{ .sub_path = "neighbor.txt", .data = "NEIGHBOR" });
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
@@ -610,7 +610,7 @@ test "hardened profile: shell fork+exec works under attach" {
     const allocator = std.testing.allocator;
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(std.testing.io, ".orca");
+    try ws_tmp.dir.createDirPath(std.testing.io, ".ryk");
     const ws_root = try ws_tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(ws_root);
 
@@ -659,7 +659,7 @@ test "strict route-force: outbound proxy allowed; bind/listen denied" {
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
 
@@ -728,7 +728,7 @@ test "hardened profile: open /private/var denied; compatible allows" {
     const allocator = std.testing.allocator;
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(std.testing.io, ".orca");
+    try ws_tmp.dir.createDirPath(std.testing.io, ".ryk");
     const ws_root = try ws_tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(ws_root);
 
@@ -820,7 +820,7 @@ test "real FS deny: workspace .env secret forms denied under protect; templates 
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     try ws_tmp.dir.createDirPath(io, "nested");
 
     var synth = try canary.generate(allocator);
@@ -1072,7 +1072,7 @@ test "real FS deny: hardlink alias of workspace .env denied under protect" {
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
 
     var synth = try canary.generate(allocator);
     defer synth.deinit();
@@ -1176,7 +1176,7 @@ test "real FS: host config RW grant allows .claude and still denies .ssh" {
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     try ws_tmp.dir.writeFile(io, .{ .sub_path = "neighbor.txt", .data = "WS_OK" });
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
@@ -1290,7 +1290,7 @@ test "real FS: host config authority write denied; sibling session file still wr
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
 
@@ -1392,7 +1392,7 @@ test "real FS: F-03 host-config hardlink into workspace denied; workspace-only l
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     try ws_tmp.dir.createDirPath(io, ".git");
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
@@ -1502,7 +1502,7 @@ test "real FS: path-walk lstat of grant ancestors succeeds; outside still denied
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     try ws_tmp.dir.createDirPath(io, "nested/deep");
     try ws_tmp.dir.writeFile(io, .{ .sub_path = "nested/deep/file.txt", .data = "WS_OK" });
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
@@ -1632,7 +1632,7 @@ test "real FS: Users path-walk + codex npm install realpath chain" {
         } else |_| {
             allocator.free(candidate);
         }
-        const planted = try std.fs.path.join(allocator, &.{ home, ".orca-tmp-pathwalk-probe" });
+        const planted = try std.fs.path.join(allocator, &.{ home, ".ryk-tmp-pathwalk-probe" });
         std.Io.Dir.cwd().createDirPath(io, planted) catch {
             allocator.free(planted);
             return error.SkipZigTest;

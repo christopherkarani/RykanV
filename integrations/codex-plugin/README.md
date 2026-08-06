@@ -11,7 +11,7 @@ The plugin is a thin integration layer. The ryk CLI remains the source of truth 
 ## Prerequisites
 
 - ryk CLI built and available in PATH (or use `./zig-out/bin/ryk` from the repo)
-- Zig 0.15.2 to build ryk from source
+- Zig 0.16.0 to build ryk from source
 - Codex host binary installed
 
 ## Install from local path
@@ -50,12 +50,11 @@ Expected output sections:
 
 | Skill | Purpose |
 |-------|---------|
-| `orca-doctor` | Check ryk installation, policy, and plugin readiness |
-| `orca-init` | Create or repair an ryk policy for the current repo |
-| `orca-release` | Cut, verify, and publish an ryk release locally |
-| `orca-protect` | Explain how to run Codex under ryk protection |
-| `orca-redteam` | Run deterministic red-team fixtures |
-| `orca-replay` | Show and explain the latest ryk session replay |
+| `ryk-doctor` | Check ryk installation, policy, and plugin readiness |
+| `ryk-init` | Create or repair an ryk policy for the current repo |
+| `ryk-protect` | Explain how to run Codex under ryk protection |
+| `ryk-redteam` | Run deterministic red-team fixtures |
+| `ryk-replay` | Show and explain the latest ryk session replay |
 
 ## Hooks included
 

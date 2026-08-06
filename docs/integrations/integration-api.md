@@ -1,32 +1,32 @@
 # Integration API
 
-> Scope: P01, local integration contract for `orca decide` and `orca hook`
+> Scope: P01, local integration contract for `ryk decide` and `ryk hook`
 > Version: 1.0.0
 
 ## Overview
 
-Orca exposes two local integration commands for agent hosts and wrappers:
+ryk exposes two local integration commands for agent hosts and wrappers:
 
-- `orca decide`, a direct policy evaluation API
-- `orca hook`, a host hook adapter for Codex and Claude Code events
+- `ryk decide`, a direct policy evaluation API
+- `ryk hook`, a host hook adapter for Codex and Claude Code events
 
-Both commands are local only. They read `.orca/policy.yaml`, apply policy, and return structured JSON. They do not provide sandboxing by themselves. The strongest protection remains `orca run -- <command>`.
+Both commands are local only. They read `.ryk/policy.yaml`, apply policy, and return structured JSON. They do not provide sandboxing by themselves. The strongest protection remains `ryk run -- <command>`.
 
-## `orca decide`
+## `ryk decide`
 
-`orca decide` evaluates a single request against policy and returns a JSON decision.
+`ryk decide` evaluates a single request against policy and returns a JSON decision.
 
 ### Usage
 
 ```sh
-orca decide command --json '{"command":"<cmd>"}'
-orca decide file    --json '{"path":"<p>","operation":"read|write"}'
-orca decide prompt  --json '{"text":"<text>"}'
-orca decide tool    --json '{"name":"<name>"}'
+ryk decide command --json '{"command":"<cmd>"}'
+ryk decide file    --json '{"path":"<p>","operation":"read|write"}'
+ryk decide prompt  --json '{"text":"<text>"}'
+ryk decide tool    --json '{"name":"<name>"}'
 
-orca decide <kind> --stdin
-orca decide <kind> --json <payload> [--ci]
-orca decide <kind> --stdin [--ci]
+ryk decide <kind> --stdin
+ryk decide <kind> --json <payload> [--ci]
+ryk decide <kind> --stdin [--ci]
 ```
 
 Kinds:
@@ -44,7 +44,7 @@ Options:
 
 ### Evaluation rules
 
-- The command loads `.orca/policy.yaml`.
+- The command loads `.ryk/policy.yaml`.
 - `command` checks against policy command allow and deny rules.
 - `file` checks file access rules using the supplied `operation`.
 - `prompt` checks text for policy relevant content and redaction triggers.
@@ -69,7 +69,7 @@ Failures before a decision is emitted:
 | `1` | General error (evaluation, parse, or internal failure) |
 | `2` | Usage error |
 
-Other Orca CLI commands also use `4` (`unsupported`), `5` (`child_failure`), and `6` (`redteam_failure`). Those codes are not returned for policy decisions above.
+Other ryk CLI commands also use `4` (`unsupported`), `5` (`child_failure`), and `6` (`redteam_failure`). Those codes are not returned for policy decisions above.
 
 In `--ci` mode, `ask` is converted to `block` and exits with `3`.
 
@@ -78,55 +78,55 @@ In `--ci` mode, `ask` is converted to `block` and exits with `3`.
 Allow a command:
 
 ```sh
-orca decide command --json '{"command":"git status"}'
+ryk decide command --json '{"command":"git status"}'
 ```
 
 Check a file write:
 
 ```sh
-orca decide file --json '{"path":"src/main.zig","operation":"write"}'
+ryk decide file --json '{"path":"src/main.zig","operation":"write"}'
 ```
 
 Check a prompt:
 
 ```sh
-orca decide prompt --json '{"text":"Do not include secrets in the response."}'
+ryk decide prompt --json '{"text":"Do not include secrets in the response."}'
 ```
 
 Check a tool name from stdin:
 
 ```sh
-printf '{"name":"edit"}' | orca decide tool --stdin
+printf '{"name":"edit"}' | ryk decide tool --stdin
 ```
 
 CI mode example:
 
 ```sh
-orca decide command --json '{"command":"git push --force"}' --ci
+ryk decide command --json '{"command":"git push --force"}' --ci
 ```
 
 In CI mode, any `ask` result becomes a deny path.
 
-## `orca hook`
+## `ryk hook`
 
-`orca hook` adapts host events to Orca policy decisions.
+`ryk hook` adapts host events to ryk policy decisions.
 
 ### Usage
 
 ```sh
-orca hook codex SessionStart
-orca hook codex UserPromptSubmit
-orca hook codex PreToolUse
-orca hook codex PermissionRequest
-orca hook codex PostToolUse
-orca hook codex Stop
+ryk hook codex SessionStart
+ryk hook codex UserPromptSubmit
+ryk hook codex PreToolUse
+ryk hook codex PermissionRequest
+ryk hook codex PostToolUse
+ryk hook codex Stop
 
-orca hook claude SessionStart
-orca hook claude UserPromptSubmit
-orca hook claude PreToolUse
-orca hook claude PermissionRequest
-orca hook claude PostToolUse
-orca hook claude SessionEnd
+ryk hook claude SessionStart
+ryk hook claude UserPromptSubmit
+ryk hook claude PreToolUse
+ryk hook claude PermissionRequest
+ryk hook claude PostToolUse
+ryk hook claude SessionEnd
 ```
 
 ### Hosts
@@ -169,9 +169,9 @@ Hooks always read a JSON request from stdin.
 
 #### Decision routing
 
-If the payload has `command`, Orca evaluates it as a command.
+If the payload has `command`, ryk evaluates it as a command.
 
-If the tool name matches a file tool and the payload has `path`, Orca evaluates it as a file write:
+If the tool name matches a file tool and the payload has `path`, ryk evaluates it as a file write:
 
 - `edit`
 - `write`
@@ -181,7 +181,7 @@ If the tool name matches a file tool and the payload has `path`, Orca evaluates 
 - `create_file`
 - `write_file`
 
-Otherwise, Orca treats the event as an MCP or tool request. In strict mode, that defaults to deny when policy does not allow it.
+Otherwise, ryk treats the event as an MCP or tool request. In strict mode, that defaults to deny when policy does not allow it.
 
 ### Response schema
 
@@ -197,13 +197,13 @@ Responses are written to stdout.
   "rule": "matched rule id or null",
   "message": "human-readable message",
   "redactions": [{"field":"...","reason":"..."}],
-  "host_limitations": ["Hook enforcement is additive; does not replace orca run supervision."]
+  "host_limitations": ["Hook enforcement is additive; does not replace ryk run supervision."]
 }
 ```
 
 ### Decision mapping
 
-| Orca decision | Hook response |
+| ryk decision | Hook response |
 |---|---|
 | `allow` | `allow` |
 | `deny` | `block` |
@@ -218,25 +218,25 @@ Responses are written to stdout.
 Session start:
 
 ```sh
-printf '{"version":1,"host":"codex","event":"SessionStart","payload":{}}' | orca hook codex SessionStart
+printf '{"version":1,"host":"codex","event":"SessionStart","payload":{}}' | ryk hook codex SessionStart
 ```
 
 Prompt submit with a secret:
 
 ```sh
-printf '{"version":1,"host":"claude","event":"UserPromptSubmit","payload":{"text":"my token is abc123"}}' | orca hook claude UserPromptSubmit
+printf '{"version":1,"host":"claude","event":"UserPromptSubmit","payload":{"text":"my token is abc123"}}' | ryk hook claude UserPromptSubmit
 ```
 
 Tool request:
 
 ```sh
-printf '{"version":1,"host":"codex","event":"PreToolUse","payload":{"name":"edit","path":"README.md"}}' | orca hook codex PreToolUse
+printf '{"version":1,"host":"codex","event":"PreToolUse","payload":{"name":"edit","path":"README.md"}}' | ryk hook codex PreToolUse
 ```
 
 CI mode:
 
 ```sh
-printf '{"version":1,"host":"claude","event":"PermissionRequest","payload":{"command":"git push --force"}}' | orca hook claude PermissionRequest --ci
+printf '{"version":1,"host":"claude","event":"PermissionRequest","payload":{"command":"git push --force"}}' | ryk hook claude PermissionRequest --ci
 ```
 
 ## JSON Schemas Reference
@@ -348,8 +348,8 @@ The schemas below are the integration contract reference. They are intentionally
 
 CI mode is fail closed for asks.
 
-- In `orca decide`, `ask` becomes a non interactive deny path.
-- In `orca hook`, `ask` becomes `block`.
+- In `ryk decide`, `ask` becomes a non interactive deny path.
+- In `ryk hook`, `ask` becomes `block`.
 - `warn` still returns warning output, but it does not become allow.
 - CI mode does not add new policy rules. It only changes the fallback behavior for undecided actions.
 
@@ -361,11 +361,11 @@ Common failures include:
 - invalid `kind`, `host`, or `event`
 - unsupported payload shapes
 - payloads over 256 KiB
-- missing `.orca/policy.yaml`
+- missing `.ryk/policy.yaml`
 - policy parse failures
 - internal evaluation errors
 
-`orca decide` uses the exit codes above so shell scripts and CI can gate on `$?` without parsing JSON. `orca hook` writes JSON to stdout and returns exit `0` for successful evaluation (including `block`, `ask`, and `warn`); hosts must read the JSON `decision` field. Hook returns non-zero only for usage, parse, or internal failures.
+`ryk decide` uses the exit codes above so shell scripts and CI can gate on `$?` without parsing JSON. `ryk hook` writes JSON to stdout and returns exit `0` for successful evaluation (including `block`, `ask`, and `warn`); hosts must read the JSON `decision` field. Hook returns non-zero only for usage, parse, or internal failures.
 
 When possible, error responses should be explicit about the failed stage, but they should not print secrets or raw payloads.
 
@@ -376,5 +376,5 @@ When possible, error responses should be explicit about the failed stage, but th
 - They cannot enforce actions the host never reports.
 - File tool matching is based on known tool names and path presence.
 - Network and MCP requests are only as visible as the host event stream makes them.
-- Host hook enforcement is additive. It does not replace `orca run` supervision.
+- Host hook enforcement is additive. It does not replace `ryk run` supervision.
 - `observe`, `context_only`, and similar non blocking responses are informational. A host may still choose its own final behavior.

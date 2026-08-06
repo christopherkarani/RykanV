@@ -29,7 +29,7 @@ pub fn shellUnavailableReason(err: anyerror) []const u8 {
         error.MissingHandshake => "daemon unavailable: missing protocol handshake",
         error.HandshakeMalformed => "daemon unavailable: malformed protocol handshake",
         error.ProtocolMismatch => "daemon unavailable: incompatible daemon protocol",
-        error.RustShellEvalRemoved => "ORCA_SHELL_EVAL=rust is no longer supported; Zig shell_engine is the sole Evaluate authority",
+        error.RustShellEvalRemoved => "RYK_SHELL_EVAL=rust is no longer supported; Zig shell_engine is the sole Evaluate authority",
         error.OutOfMemory => "daemon unavailable: out of memory",
         else => "daemon unavailable: unexpected error",
     };

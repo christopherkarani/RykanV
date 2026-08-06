@@ -1,6 +1,6 @@
 //! Secret material classification and secret-access command detection.
 const std = @import("std");
-const redact_bridge = @import("orca_core").audit.redact_bridge;
+const redact_bridge = @import("ryk_core").audit.redact_bridge;
 const types = @import("types.zig");
 
 /// Paths / patterns that indicate a command is *accessing* secret material.

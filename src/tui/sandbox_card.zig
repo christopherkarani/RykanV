@@ -40,7 +40,7 @@ pub const hold_ns: u64 = 2 * std.time.ns_per_s;
 /// Pure decision: should we pause after rendering the shield card?
 ///
 /// Hold only for dramatic postures on a real interactive terminal. Skip tests,
-/// pipes, `TERM=dumb`, and when `hold_disabled` (e.g. `ORCA_SHIELD_HOLD=0`).
+/// pipes, `TERM=dumb`, and when `hold_disabled` (e.g. `RYK_SHIELD_HOLD=0`).
 pub fn shouldHold(posture: PostureKind, is_tty: bool, term_dumb: bool, hold_disabled: bool) bool {
     if (hold_disabled) return false;
     if (!is_tty or term_dumb) return false;
