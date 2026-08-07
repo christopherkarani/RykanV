@@ -491,9 +491,7 @@ async function fireToolCall(
 ) {
 	const payload =
 		input ??
-		(toolName === "bash"
-			? { command }
-			: { path: command, content: "x" });
+		(toolName === "bash" ? { command } : { path: command, content: "x" });
 	return handler({ toolName, input: payload }, ctx);
 }
 
@@ -598,7 +596,10 @@ test("custom/MCP-shaped tools are name-gated via orca decide tool", async () => 
 	assert.equal(isProtectedPiTool("mcp_custom_tool"), false);
 	assert.equal(isProtectedPiTool("read"), true);
 	assert.equal(isProtectedPiTool("write"), true);
-	assert.match(piCoverageLabel(), /bash \+ write \+ edit \+ read policy-protected/);
+	assert.match(
+		piCoverageLabel(),
+		/bash \+ write \+ edit \+ read policy-protected/,
+	);
 	assert.match(piCoverageLabel(), /grep \+ find \+ ls approval-gated/);
 	assert.match(piCoverageLabel(), /decide tool/);
 	assert.match(piCoverageLabel(), /passthrough/);
@@ -1109,7 +1110,9 @@ test("once-bypass records an audit event", async () => {
 	const encodedSecret = "dG9rZW49c3ludGhldGljLW9ubHktc2VjcmV0";
 	const { ctx, notifications } = makeCtx({
 		cwd: `/tmp/${syntheticSecret}/${encodedSecret}`,
-		sessionManager: { getSessionId: () => `session-${syntheticSecret}-${encodedSecret}` },
+		sessionManager: {
+			getSessionId: () => `session-${syntheticSecret}-${encodedSecret}`,
+		},
 	});
 	(ctx.ui as any).select = async () => "Allow once";
 
@@ -1218,7 +1221,11 @@ test("isSubagentSession and shouldAutoDenyPolicyAsk helpers", () => {
 });
 
 test("buildAutoDenyCopy locks Why/Next product voice", () => {
-	const sub = buildAutoDenyCopy("subagent", "needs approval for write", "write");
+	const sub = buildAutoDenyCopy(
+		"subagent",
+		"needs approval for write",
+		"write",
+	);
 	assert.equal(sub.title, DISPLAY_BRAND);
 	assert.match(sub.summary, new RegExp(PRODUCT_NAME));
 	assert.match(sub.summary, /can't prompt \(subagent\)/);
@@ -1227,12 +1234,9 @@ test("buildAutoDenyCopy locks Why/Next product voice", () => {
 	assert.equal(sub.rule, "rykanv:ask-no-ui");
 	assert.match(sub.reason, /auto-denied \(subagent\)/);
 
-	const non = buildAutoDenyCopy(
-		"non-interactive",
-		"needs approval",
-		"bash",
-		{ rule: "rykanv:parent-ask-timeout" },
-	);
+	const non = buildAutoDenyCopy("non-interactive", "needs approval", "bash", {
+		rule: "rykanv:parent-ask-timeout",
+	});
 	assert.match(non.summary, /non-interactive/);
 	assert.match(non.nextStep, /interactive Pi/);
 	assert.equal(non.rule, "rykanv:parent-ask-timeout");
@@ -1610,13 +1614,10 @@ test("parent main session answers pending child ask via select", async () => {
 		selections.push("Block");
 
 		// Fire any tool call so parent poll drains pending asks.
-		await fireToolCall(
-			handlers.get("tool_call")![0],
-			ctx,
-			"",
-			"write",
-			{ path: "ok.ts", content: "y" },
-		);
+		await fireToolCall(handlers.get("tool_call")![0], ctx, "", "write", {
+			path: "ok.ts",
+			content: "y",
+		});
 
 		const resPath = resolve(dir, "res-req-test-1.json");
 		const res = JSON.parse(readFileSync(resPath, "utf8")) as {
@@ -1785,7 +1786,10 @@ test("read tool unavailable path fails closed in noninteractive mode", async () 
 		{ path: "README.md" },
 	);
 	assert.equal(result?.block, true);
-	assert.match(result?.reason ?? "", /ryk is unavailable|could not evaluate this read|spawn_failed/i);
+	assert.match(
+		result?.reason ?? "",
+		/ryk is unavailable|could not evaluate this read|spawn_failed/i,
+	);
 });
 
 test("session bypass skips write and read evaluation", async () => {
@@ -1829,7 +1833,10 @@ test("buildDecideFilePayload, resolveToolPath, extractDecideFilePath", () => {
 	});
 	const { ctx } = makeCtx({ cwd: "/workspace" });
 	assert.equal(resolveToolPath("/abs/file", ctx), "/abs/file");
-	assert.equal(resolveToolPath("/workspace/src/../.env", ctx), "/workspace/.env");
+	assert.equal(
+		resolveToolPath("/workspace/src/../.env", ctx),
+		"/workspace/.env",
+	);
 	assert.equal(
 		resolveToolPath("rel.txt", { cwd: process.cwd() }),
 		resolve(process.cwd(), "rel.txt"),
@@ -1842,10 +1849,13 @@ test("buildDecideFilePayload, resolveToolPath, extractDecideFilePath", () => {
 		path: ".",
 		required: false,
 	});
-	assert.deepEqual(extractDecideFilePath("find", { pattern: "*", path: "src" }), {
-		path: "src",
-		required: false,
-	});
+	assert.deepEqual(
+		extractDecideFilePath("find", { pattern: "*", path: "src" }),
+		{
+			path: "src",
+			required: false,
+		},
+	);
 	assert.deepEqual(extractDecideFilePath("ls", {}), {
 		path: ".",
 		required: false,
@@ -1887,7 +1897,9 @@ test("bash dangerous command with Orca deny returns block", async () => {
 	assert.equal(messages[0].message.display, true);
 	assert.deepEqual(messages[0].options, { triggerTurn: false });
 	assert.equal(
-		widgets.some((entry) => entry.key === "rykanv-block" && entry.value !== undefined),
+		widgets.some(
+			(entry) => entry.key === "rykanv-block" && entry.value !== undefined,
+		),
 		false,
 		"expected deny output to avoid the docked widget surface",
 	);
@@ -1900,12 +1912,11 @@ test("bash dangerous command with Orca deny returns block", async () => {
 	);
 	assert.match(inlineDecision, /destructive filesystem command/);
 	assert.match(inlineDecision, /Why: destructive filesystem command/);
-	assert.match(
-		inlineDecision,
-		/Meta:.*core\.filesystem:destructive-rm/,
-	);
+	assert.match(inlineDecision, /Meta:.*core\.filesystem:destructive-rm/);
 	assert.ok(
-		inlineDecision.split("\n").every((line) => line.length >= 40 && line.length <= 80),
+		inlineDecision
+			.split("\n")
+			.every((line) => line.length >= 40 && line.length <= 80),
 		"expected a compact, aligned decision card",
 	);
 });
@@ -1965,7 +1976,10 @@ test("Orca error in non-interactive mode blocks", async () => {
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(result.block, true);
-	assert.match(result.reason, /\/ryk-doctor|Fail-closed|malformed|unavailable|error/i);
+	assert.match(
+		result.reason,
+		/\/ryk-doctor|Fail-closed|malformed|unavailable|error/i,
+	);
 });
 
 test("Orca error in interactive mode waits for the user's decision", async () => {
@@ -2020,7 +2034,10 @@ test("auto mode blocks print sessions even when hasUI is true", async () => {
 
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(result.block, true);
-	assert.match(result.reason, /\/ryk-doctor|Fail-closed|malformed|unavailable|error/i);
+	assert.match(
+		result.reason,
+		/\/ryk-doctor|Fail-closed|malformed|unavailable|error/i,
+	);
 });
 
 test("strict mode blocks", async () => {
@@ -2047,7 +2064,10 @@ test("allow-with-warning allows only spawn_failed unavailability", async () => {
 	const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 	assert.equal(result, undefined);
 	assert.equal(notifications.at(-1)?.type, "warning");
-	assert.match(notifications.at(-1)?.message ?? "", /allowing bash with warning/i);
+	assert.match(
+		notifications.at(-1)?.message ?? "",
+		/allowing bash with warning/i,
+	);
 });
 
 test("allow-with-warning still fail-closes on protocol decision error", async () => {
@@ -2170,7 +2190,11 @@ test("subagent protocol failure parent-forwards instead of silent local brick", 
 
 		const result = await fireToolCall(handlers.get("tool_call")![0], ctx);
 		assert.equal(result, undefined, "parent run_once should allow through");
-		assert.equal(sawProtocolAsk, true, "expected [protocol] parent-forward ask");
+		assert.equal(
+			sawProtocolAsk,
+			true,
+			"expected [protocol] parent-forward ask",
+		);
 		const onceAudit = messages.find(
 			(m) =>
 				(m.message.details as { event?: string } | undefined)?.event ===
@@ -2245,10 +2269,7 @@ test("session bypass allows subsequent bash calls during same session", async ()
 test("session bypass does not leak across Pi session ids", async () => {
 	const { pi, handlers } = makePi();
 	const err = { code: 3 as number, stdout: errorJson() };
-	const { spawn, calls } = makeSpawn([
-		err,
-		{ code: 0, stdout: allowJson() },
-	]);
+	const { spawn, calls } = makeSpawn([err, { code: 0, stdout: allowJson() }]);
 	installOrcaExtension(pi, { spawn, orcaBin: "orca" });
 	const firstSession = makeCtx();
 	const secondSession = makeCtx({
@@ -2291,7 +2312,10 @@ test("/orca-doctor handles Orca present", async () => {
 	assert.equal(notifications.at(-1)?.type, "info");
 	assert.match(notifications.at(-1)!.message, /ok/);
 	assert.match(notifications.at(-1)!.message, /Coverage:/);
-	assert.match(notifications.at(-1)!.message, /bash \+ write \+ edit \+ read policy-protected/);
+	assert.match(
+		notifications.at(-1)!.message,
+		/bash \+ write \+ edit \+ read policy-protected/,
+	);
 });
 
 test("/orca-doctor handles Orca missing", async () => {
@@ -2402,7 +2426,10 @@ test("/orca-mode changes mode", async () => {
 
 	await commands.get("orca-mode")!.handler("", ctx);
 	assert.match(notifications.at(-1)!.message, /ryk Pi mode: strict/);
-	assert.match(notifications.at(-1)!.message, /bash \+ write \+ edit \+ read policy-protected/);
+	assert.match(
+		notifications.at(-1)!.message,
+		/bash \+ write \+ edit \+ read policy-protected/,
+	);
 });
 
 test("no shell interpolation is used when invoking Orca", async () => {
@@ -2441,10 +2468,7 @@ test("runOrcaEvaluate maps decision ask exit 0 to kind ask", async () => {
 	assert.equal(decision.kind, "ask");
 	if (decision.kind === "ask") {
 		assert.match(decision.reason, /requires approval/i);
-		assert.equal(
-			(decision.response as { decision?: string }).decision,
-			"ask",
-		);
+		assert.equal((decision.response as { decision?: string }).decision, "ask");
 	}
 });
 

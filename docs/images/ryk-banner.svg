@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 420" role="img" aria-labelledby="title desc">
+  <title id="title">ryk, guardrails for coding agents</title>
+  <desc id="desc">A dark technical banner with the ryk name, supported coding agent hosts, policy, approvals, and audit.</desc>
+  <rect width="1600" height="420" rx="24" fill="#0b1220"/>
+  <path d="M0 88H1600M0 176H1600M0 264H1600M0 352H1600M160 0V420M320 0V420M480 0V420M1120 0V420M1280 0V420M1440 0V420" stroke="#17243a" stroke-width="2"/>
+  <path d="M0 0L440 420M280 0L720 420M880 0L1320 420M1160 0L1600 420" stroke="#122039" stroke-width="3"/>
+  <rect x="92" y="76" width="8" height="268" rx="4" fill="#65e6c1"/>
+  <text x="142" y="166" fill="#f4f7fb" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="116" font-weight="800" letter-spacing="8">ryk</text>
+  <text x="151" y="222" fill="#65e6c1" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="24" font-weight="700" letter-spacing="7">GUARDRAILS FOR CODING AGENTS</text>
+  <text x="151" y="274" fill="#aab8cb" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="22">Pi · Hermes · OpenCode · Codex · Claude</text>
+  <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-weight="700" font-size="18">
+    <rect x="918" y="104" width="190" height="74" rx="12" fill="#12233a" stroke="#2b4567"/>
+    <text x="1013" y="135" text-anchor="middle" fill="#65e6c1">POLICY</text>
+    <text x="1013" y="160" text-anchor="middle" fill="#d9e5f2" font-size="15" font-weight="500">local rules</text>
+    <rect x="1138" y="104" width="190" height="74" rx="12" fill="#12233a" stroke="#2b4567"/>
+    <text x="1233" y="135" text-anchor="middle" fill="#65e6c1">APPROVALS</text>
+    <text x="1233" y="160" text-anchor="middle" fill="#d9e5f2" font-size="15" font-weight="500">allow · ask · deny</text>
+    <rect x="1358" y="104" width="150" height="74" rx="12" fill="#12233a" stroke="#2b4567"/>
+    <text x="1433" y="135" text-anchor="middle" fill="#65e6c1">AUDIT</text>
+    <text x="1433" y="160" text-anchor="middle" fill="#d9e5f2" font-size="15" font-weight="500">local evidence</text>
+  </g>
+  <path d="M918 230H1508M918 230L1012 322M1110 230L1204 322M1302 230L1396 322" stroke="#65e6c1" stroke-width="3" fill="none"/>
+  <circle cx="918" cy="230" r="6" fill="#65e6c1"/>
+  <circle cx="1508" cy="230" r="6" fill="#65e6c1"/>
+  <text x="918" y="290" fill="#91a5bc" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="18">commands</text>
+  <text x="1110" y="290" fill="#91a5bc" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="18">files</text>
+  <text x="1302" y="290" fill="#91a5bc" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="18">network</text>
+  <text x="142" y="366" fill="#6f8299" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="16" letter-spacing="2">A LOCAL DECISION PATH FOR EVERY SESSION</text>
+</svg>

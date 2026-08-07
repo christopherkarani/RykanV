@@ -1155,4 +1155,3 @@ test "uninstall refuses to rewrite a symlinked shell profile" {
     defer std.testing.allocator.free(content);
     try std.testing.expect(std.mem.indexOf(u8, content, "Added by ryk") != null);
 }
-
