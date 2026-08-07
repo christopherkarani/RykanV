@@ -25,7 +25,7 @@
 
 Run coding agents with guardrails.
 
-ryk is a local control layer for the agents engineers already use. Launch Pi, Hermes, OpenCode, Codex, or Claude through `ryk <agent>`. The agent keeps its normal terminal and tool workflow while ryk evaluates commands, files, environment and secrets, network requests, MCP actions, and other effects against policy.
+ryk is a local control layer for the coding agents engineers already use. Launch Pi, Hermes, OpenCode, Codex, Claude, OpenClaw, or Grok through `ryk <agent>`. Cursor is included in the supported host matrix with its `beforeShellExecution` surface and dedicated `cursor-agent` policy preset. The agent keeps its normal terminal and tool workflow while ryk evaluates commands, files, environment and secrets, network requests, MCP actions, and other effects against policy.
 
 The result is a clear path from agent to action: allow, ask, deny, or observe. Sessions leave a local audit trail that you can inspect with `ryk dashboard` or `ryk replay`.
 
@@ -35,7 +35,7 @@ If you run coding agents in real repositories, [star the project](https://github
 
 | | |
 | --- | --- |
-| `ryk <agent>` | One guarded launch path for Pi, Hermes, OpenCode, Codex, Claude, OpenClaw, and Grok. |
+| Host coverage | Guarded launch aliases for Pi, Hermes, OpenCode, Codex, Claude, OpenClaw, and Grok, plus Cursor host discovery and policy setup. |
 | 86 built-in safety packs | Command patterns for common destructive and sensitive operations, with focused packs you can enable per project. |
 | `allow`, `ask`, `deny`, `observe` | Policy decisions that are visible to the host and recorded for review. |
 | Local dashboard and replay | Inspect sessions, policy decisions, and evidence without sending the session to a hosted service. |
@@ -57,14 +57,17 @@ Use the host name after `ryk`:
 ryk pi
 ```
 
-The same guarded launch path is available for the other main hosts:
+Launch aliases for the main hosts:
 
 ```sh
 ryk hermes
 ryk opencode
 ryk codex
 ryk claude
+ryk grok
 ```
+
+Cursor is included through its native `beforeShellExecution` hook surface and the dedicated `cursor-agent` policy preset. It is discovered during onboarding instead of using a direct launch alias.
 
 Check the local posture when you need it:
 
@@ -76,9 +79,9 @@ The aliases set agent-primary defaults for network mediation, OS route enforceme
 
 ### Supported hosts
 
-These integrations ship with ryk. The hook name shows where the host connects to the policy path.
+The host matrix covers eight supported hosts. Direct launch aliases are shown for process-based hosts. Hook-based hosts connect through their native entry point.
 
-| Host | Launch | Integration point |
+| Host | Entry point | Integration point |
 | --- | --- | --- |
 | Pi | `ryk pi` | Extension-managed |
 | Hermes | `ryk hermes` | `pre_tool_call` |
@@ -87,8 +90,9 @@ These integrations ship with ryk. The hook name shows where the host connects to
 | Claude Code | `ryk claude` | `PreToolUse` |
 | OpenClaw | `ryk openclaw` | `tool.before` |
 | Grok | `ryk grok` | `PreToolUse` |
+| Cursor | Host discovery + `cursor-agent` preset | `beforeShellExecution` |
 
-Onboarding also detects Cursor for host discovery. The launch aliases above are the supported guarded entry points.
+Grok has a direct launch alias. Cursor is part of onboarding discovery and policy setup through its native shell-hook surface.
 
 ## How policy works
 
