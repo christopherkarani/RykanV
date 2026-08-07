@@ -27,9 +27,34 @@ Local guardrails for coding agents.
 
 ryk runs the agents you already use with local checks for commands, files, secrets, network requests, MCP actions, and other effects. It returns an explicit `allow`, `ask`, `deny`, or `observe` decision and keeps session evidence on your machine.
 
-There is no hosted enforcement service. The CLI is a single Zig binary, and the same policy path serves the launch aliases, host integrations, shell evaluator, dashboard, and replay tools.
-
 If ryk is useful in your workflow, [star the repository](https://github.com/christopherkarani/ryk). It helps other engineers find the project.
+
+## Install
+
+```sh
+curl -fsSL https://rykanv.com/install | sh
+```
+
+## Start an agent
+
+`ryk <agent>` launches the host through a protected child session. Ryk attaches the OS filesystem sandbox by default: Seatbelt on macOS and Landlock on Linux.
+
+```sh
+ryk <agent>
+```
+
+
+Run scan on your repo to check for when agent has run destructive commands, you would be surprised!:
+
+```sh
+ryk scan
+```
+
+The installer prints the shell activation line for your platform. After `ryk` is on your `PATH`, check the local posture:
+
+```sh
+ryk doctor
+```
 
 ## What you get
 
@@ -44,37 +69,7 @@ If ryk is useful in your workflow, [star the repository](https://github.com/chri
 | Local evidence | A dashboard and replay commands for sessions, decisions, and audit records. |
 | One local binary | The Zig CLI owns launch, evaluation, policy checks, host adapters, and diagnostics. |
 
-## Install
 
-```sh
-curl -fsSL https://rykanv.com/install | sh
-```
-
-The installer prints the shell activation line for your platform. After `ryk` is on your `PATH`, check the local posture:
-
-```sh
-ryk doctor
-```
-
-For a new checkout, run `ryk start` once to create the local policy and wire the host integrations it finds.
-
-## Start an agent
-
-`ryk <agent>` launches the host through a protected child session. On supported platforms, Ryk attaches the OS filesystem sandbox by default: Seatbelt on macOS and Landlock on Linux. The launch banner reports when the platform cannot attach it.
-
-```sh
-ryk <agent>
-```
-
-Review recent agent sessions after a run:
-
-```sh
-ryk scan
-```
-
-`ryk scan` reads known host session stores and flags risky shell or tool actions and secret access. It checks the last 30 days by default, never prints raw secrets, and does not crawl `$HOME`.
-
-Cursor is discovered during onboarding. Its `beforeShellExecution` hook uses the `cursor-agent` policy preset; it does not have a direct `ryk cursor` launch alias.
 
 ### Supported hosts
 
@@ -89,7 +84,7 @@ Cursor is discovered during onboarding. Its `beforeShellExecution` hook uses the
 | Grok | `ryk grok` | `PreToolUse` |
 | Cursor | Host discovery and `cursor-agent` preset | `beforeShellExecution` |
 
-The protection grade depends on the host surface and the platform. See the [compatibility matrix](docs/compatibility.md) before treating a hook, wrapper, proxy, or OS attach as equivalent.
+
 
 ## How policy works
 
@@ -133,7 +128,7 @@ ryk packs enable containers.docker database.postgresql
 ryk packs disable containers.docker
 ```
 
-In a Git workspace, project pack choices are stored in `.ryk.toml`. Use `ryk packs --json` for scripts and diagnostics.
+In a Git workspace, project pack choices are stored in `.ryk.toml`. Use `ryk packs` for scripts and diagnostics.
 
 Test or explain a command without running it:
 
