@@ -96,7 +96,7 @@ $sbom = [ordered]@{
     version = $Version
     generator = "scripts/build-release.ps1"
     status = "hook-only"
-    note = "Phase 19 provides an SBOM hook. Replace this placeholder with CycloneDX/SPDX output in the release environment if an SBOM tool is available."
+    note = "This release includes a hook-only inventory. Replace it with CycloneDX or SPDX output in the release environment when an SBOM tool is available."
     components = @(
         [ordered]@{
             name = "ryk"

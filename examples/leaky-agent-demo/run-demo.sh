@@ -6,8 +6,13 @@ REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 RYK_BIN="$REPO_ROOT/zig-out/bin/ryk"
 
 if [ ! -x "$RYK_BIN" ]; then
-  echo "missing ryk binary at $RYK_BIN; run 'zig build' from the repository root" >&2
+  echo "missing ryk binary at $RYK_BIN; run './scripts/zig build' from the repository root" >&2
   exit 1
+fi
+
+PYTHON_BIN="$(command -v python3)"
+if [ -x /usr/bin/python3 ]; then
+  PYTHON_BIN=/usr/bin/python3
 fi
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/ryk-leaky-demo.XXXXXX")
@@ -37,7 +42,7 @@ echo "workspace: $WORKDIR"
 (
   cd "$WORKDIR"
   RYK_DEMO_WORKSPACE="$WORKDIR" "$RYK_BIN" policy check policy.yaml
-  RYK_DEMO_WORKSPACE="$WORKDIR" "$RYK_BIN" run --policy policy.yaml --mode strict -- python3 fake-agent/agent.py
+  RYK_DEMO_WORKSPACE="$WORKDIR" "$RYK_BIN" run --policy policy.yaml --mode strict -- "$PYTHON_BIN" fake-agent/agent.py
   set +e
   RYK_DEMO_WORKSPACE="$WORKDIR" "$RYK_BIN" run --policy policy.yaml --mode strict -- sh -c "cat .env"
   read_status=$?

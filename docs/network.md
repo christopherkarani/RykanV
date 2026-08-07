@@ -18,7 +18,7 @@ ryk includes a network decision engine and wrapper/proxy-mediated hooks.
 ./zig-out/bin/ryk run --network allowlist --allow-network api.github.com -- <custom-command>
 ```
 
-## Agent host defaults (Phase 1 honesty)
+## Agent host defaults
 
 Host aliases (`ryk pi`, `ryk claude`, `ryk codex`, `ryk opencode`, `ryk openclaw`, `ryk hermes`) default to **mediated** network:
 

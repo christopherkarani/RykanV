@@ -9,7 +9,7 @@ VERSION="$(tr -d '[:space:]' < "${REPO_ROOT}/VERSION")"
 
 if [[ ! -x "${RYK_BIN}" ]]; then
   echo "install-dx-smoke: building ryk binary first..." >&2
-  (cd "${REPO_ROOT}" && zig build)
+  (cd "${REPO_ROOT}" && ./scripts/zig build)
 fi
 
 assert_json_field() {

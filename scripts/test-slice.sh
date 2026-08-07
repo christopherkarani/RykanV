@@ -14,7 +14,7 @@
 #   ./scripts/test-slice.sh lib --filter Spinner
 #   ./scripts/test-slice.sh sandbox --compile-only
 #
-# See Agents.md → Verification gates.
+# See CONTRIBUTING.md for the repository verification gates.
 
 set -euo pipefail
 
@@ -31,13 +31,13 @@ usage() {
 usage: ./scripts/test-slice.sh SLICE [--filter SUBSTR] [--compile-only]
 
 Slices:
-  sandbox     zig build test-sandbox      (src/sandbox only)
-  policy      zig build test-policy       (ryk_core policy)
-  intercept   zig build test-intercept    (src/intercept only)
-  lib         zig build test-lib          (full monopath — slow)
-  core        zig build test-core
-  core-contract  zig build test-core-contract
-  fast        zig build test-fast         (lib + core chain — slow)
+  sandbox     ./scripts/zig build test-sandbox      (src/sandbox only)
+  policy      ./scripts/zig build test-policy       (ryk_core policy)
+  intercept   ./scripts/zig build test-intercept    (src/intercept only)
+  lib         ./scripts/zig build test-lib          (full monopath, slow)
+  core        ./scripts/zig build test-core
+  core-contract  ./scripts/zig build test-core-contract
+  fast        ./scripts/zig build test-fast         (lib + core chain, slow)
 
 Options:
   --filter SUBSTR   -Dtest-filter=SUBSTR (compile-time name substring)

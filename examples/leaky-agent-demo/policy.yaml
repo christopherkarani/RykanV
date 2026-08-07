@@ -42,6 +42,7 @@ files:
 commands:
   default: deny
   allow:
+    - "/usr/bin/python3 fake-agent/agent.py"
     - "python3 fake-agent/agent.py"
     - "python fake-agent/agent.py"
     - "pwd"

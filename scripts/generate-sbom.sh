@@ -11,7 +11,7 @@ OUTPUT="${ARTIFACT_DIR}/sbom.json"
 # SBOM inventory is emitted alongside checksum-verified release artifacts.
 mkdir -p "$ARTIFACT_DIR"
 
-# The release inventory is for the canonical ryk core only (edge runtime removed).
+# The release inventory covers the canonical ryk CLI and core library.
 sbom_name="ryk-core"
 sbom_format="ryk-core-release-inventory"
 components='[
@@ -41,7 +41,7 @@ cat > "$OUTPUT" <<EOF
   "version": "$VERSION",
   "generator": "scripts/generate-sbom.sh",
   "status": "hook-only",
-  "note": "This is a deterministic Phase 41 dependency, target, and runtime asset inventory. Replace with CycloneDX/SPDX output in release environments when an SBOM tool is available; do not claim a complete third-party SBOM from this hook-only file.",
+  "note": "This is a deterministic dependency, target, and runtime asset inventory. Replace it with CycloneDX or SPDX output in release environments when an SBOM tool is available; do not claim a complete third-party SBOM from this hook-only file.",
   "components": $components,
   "build_targets": $build_targets,
   "runtime_assets": $runtime_assets,

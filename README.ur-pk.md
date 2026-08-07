@@ -70,7 +70,7 @@ Explicit deny کو ترجیح حاصل ہے۔ Safety packs commands اور effec
 
 ```sh
 ryk policy check --preset ask
-ryk policy packs
+ryk packs
 ryk test "git status"
 ryk explain "rm -rf /"
 ```
@@ -88,7 +88,7 @@ ryk packs enable containers.docker database.postgresql
 ryk packs disable containers.docker
 ```
 
-Git workspace میں project selections `.orca.toml` میں محفوظ ہوتی ہیں۔ Automation اور diagnostics کے لیے `ryk packs --json` استعمال کریں۔
+Git workspace میں project selections `.ryk.toml` میں محفوظ ہوتی ہیں۔ Automation اور diagnostics کے لیے `ryk packs --json` استعمال کریں۔
 
 ## Architecture
 

@@ -66,7 +66,6 @@ test "schema registry exposes stable Core descriptors only" {
     try std.testing.expect(lookup(.policy) != null);
     try std.testing.expect(lookup(.event) != null);
     try std.testing.expect(lookupId("mcp-manifest-v1") != null);
-    try std.testing.expect(lookupId("edge-event-placeholder-v1") == null);
     try std.testing.expect(lookupId("missing") == null);
 }
 

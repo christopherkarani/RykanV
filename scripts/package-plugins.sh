@@ -41,7 +41,6 @@ if [ -d "${CODEX_PLUGIN_DIR}" ]; then
     README.md \
     -x "*.DS_Store" \
     -x "*.mcp.json" \
-    -x "*drone*" \
     -x "*build*" \
     -x "*tmp*" \
     -x "*secret*")
@@ -64,7 +63,6 @@ if [ -d "${CLAUDE_PLUGIN_DIR}" ]; then
     README.md \
     -x "*.DS_Store" \
     -x "*.mcp.json" \
-    -x "*drone*" \
     -x "*build*" \
     -x "*tmp*" \
     -x "*secret*")
@@ -91,7 +89,6 @@ if [ -d "${OPENCODE_PLUGIN_DIR}" ]; then
     examples/ \
     -x "*.DS_Store" \
     -x "*.mcp.json" \
-    -x "*drone*" \
     -x "*build*" \
     -x "*tmp*" \
     -x "*secret*")
@@ -111,7 +108,6 @@ if [ -d "${MARKETPLACE_DIR}" ]; then
     README.md \
     -x "*.DS_Store" \
     -x "*.mcp.json" \
-    -x "*drone*" \
     -x "*build*" \
     -x "*tmp*" \
     -x "*secret*")

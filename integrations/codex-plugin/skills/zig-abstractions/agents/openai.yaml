@@ -1,4 +1,0 @@
-interface:
-  display_name: "Zig Abstractions"
-  short_description: "Pragmatic comptime and API design in Zig"
-  default_prompt: "Use $zig-abstractions to simplify and review this Zig API design."

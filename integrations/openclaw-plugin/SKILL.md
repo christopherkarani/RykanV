@@ -64,4 +64,3 @@ Dangerous command (`rm -rf *`):
 - Replacing the ryk CLI (the CLI is the source of truth)
 - Telemetry collection (no telemetry is collected)
 - MCP server behavior (not included)
-- Drone-specific features (not included)

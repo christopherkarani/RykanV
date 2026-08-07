@@ -10,7 +10,7 @@
 # Explicit modes always run that gate. Auto mode uses path heuristics.
 # Domain slices: prefer test-slice.sh for -Dtest-filter; agent-gate picks the slice.
 # src/shell_engine/** → L0.5 ./scripts/zig build test-shell-engine
-# See Agents.md → "Verification gates".
+# See CONTRIBUTING.md for the repository verification gates.
 
 set -euo pipefail
 
@@ -31,7 +31,7 @@ Modes:
   compile       ./scripts/test-fast.sh compile
   units         ./scripts/test-fast.sh units
   full          ./scripts/test-fast.sh full
-  core          zig build test-core + test-core-contract
+  core          ./scripts/zig build test-core + test-core-contract
   sandbox       ./scripts/test-slice.sh sandbox
   policy        ./scripts/test-slice.sh policy
   intercept     ./scripts/test-slice.sh intercept

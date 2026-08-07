@@ -14,7 +14,7 @@ cd "${REPO_ROOT}"
 echo "[verify-pre-merge] Fast gate"
 ./scripts/test-fast.sh
 
-echo "[verify-pre-merge] Full test suite (plugin/phase/setup/fuzz)"
+echo "[verify-pre-merge] Full test suite (plugins/setup/fuzz)"
 ./scripts/zig build test
 
 echo "[verify-pre-merge] First-user install and uninstall regressions"

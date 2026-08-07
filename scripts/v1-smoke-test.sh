@@ -6,7 +6,7 @@ ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 RYK_BIN="$ROOT/zig-out/bin/ryk"
 
 cd "$ROOT"
-zig build
+./scripts/zig build
 
 if [ ! -x "$RYK_BIN" ]; then
   printf 'v1 smoke: missing binary at %s\n' "$RYK_BIN" >&2
