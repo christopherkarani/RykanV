@@ -36,6 +36,9 @@ If ryk is useful in your workflow, [star the repository](https://github.com/chri
 | | |
 | --- | --- |
 | Host integrations | Launch aliases for Pi, Hermes, OpenCode, Codex, Claude Code, OpenClaw, and Grok. Cursor is supported through host discovery and its shell hook. |
+| OS sandboxing | Automatic OS filesystem sandboxing with Seatbelt on macOS and Landlock on Linux when available. |
+| Secret redaction | Secret-like values are redacted before audit and replay data is written. |
+| MCP protection | MCP tool calls are classified locally, and supported stdio servers run through ryk's protected proxy. |
 | 86 safety packs | Built-in command patterns for destructive and sensitive operations, with project-level opt-in packs. |
 | Policy decisions | `allow`, `ask`, `deny`, and `observe` decisions for local actions. |
 | Local evidence | A dashboard and replay commands for sessions, decisions, and audit records. |
