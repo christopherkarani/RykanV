@@ -54,23 +54,17 @@
     </g>
   </g>
 
-  <g fill="none" stroke="#ededed" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M276 140H326V240H370"/>
-    <path d="M276 216H344V276H370"/>
-    <path d="M276 292H370"/>
-    <path d="M276 368H344V336H370"/>
-    <path d="M276 444H326V372H370"/>
+  <g fill="none" stroke="#a1a1aa" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M276 140H330M276 216H330M276 292H330M276 368H330M276 444H330"/>
+    <path d="M330 140V444M330 318H370"/>
     <path d="M590 318H680"/>
     <path d="M900 318H990"/>
     <path d="M1210 318H1300"/>
   </g>
 
   <g fill="#ededed">
-    <circle cx="370" cy="240" r="6"/>
-    <circle cx="370" cy="276" r="6"/>
-    <circle cx="370" cy="292" r="6"/>
-    <circle cx="370" cy="336" r="6"/>
-    <circle cx="370" cy="372" r="6"/>
+    <circle cx="330" cy="318" r="6"/>
+    <circle cx="370" cy="318" r="6"/>
     <circle cx="680" cy="318" r="6"/>
     <circle cx="990" cy="318" r="6"/>
     <circle cx="1300" cy="318" r="6"/>
