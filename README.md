@@ -53,26 +53,23 @@ The installer prints the shell activation line for your platform. After `ryk` is
 ryk doctor
 ```
 
+For a new checkout, run `ryk start` once to create the local policy and wire the host integrations it finds.
+
 ## Start an agent
 
-For a new checkout, `ryk start` creates the local policy and wires the host integrations it finds. Then launch an agent with its ryk alias:
+`ryk <agent>` launches the host through a protected child session. On supported platforms, Ryk attaches the OS filesystem sandbox by default: Seatbelt on macOS and Landlock on Linux. The launch banner reports when the platform cannot attach it.
 
 ```sh
-ryk start
-ryk claude
+ryk <agent>
 ```
 
-The available process aliases are:
+Review recent agent sessions after a run:
 
 ```sh
-ryk pi
-ryk hermes
-ryk opencode
-ryk codex
-ryk claude
-ryk openclaw
-ryk grok
+ryk scan
 ```
+
+`ryk scan` reads known host session stores and flags risky shell or tool actions and secret access. It checks the last 30 days by default, never prints raw secrets, and does not crawl `$HOME`.
 
 Cursor is discovered during onboarding. Its `beforeShellExecution` hook uses the `cursor-agent` policy preset; it does not have a direct `ryk cursor` launch alias.
 
