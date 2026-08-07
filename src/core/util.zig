@@ -34,8 +34,8 @@ pub fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {
 }
 
 pub fn dupBoundedUtf8(allocator: std.mem.Allocator, input: []const u8, max_len: usize) ![]u8 {
-    if (input.len > max_len) return errors.OrcaError.InputTooLarge;
-    if (!std.unicode.utf8ValidateSlice(input)) return errors.OrcaError.InvalidUtf8;
+    if (input.len > max_len) return errors.RykError.InputTooLarge;
+    if (!std.unicode.utf8ValidateSlice(input)) return errors.RykError.InvalidUtf8;
     return allocator.dupe(u8, input);
 }
 
@@ -87,9 +87,9 @@ test "hex and random suffix helpers produce lowercase hex" {
 
 test "bounded utf8 duplication rejects oversized or invalid input" {
     const allocator = std.testing.allocator;
-    const copied = try dupBoundedUtf8(allocator, "Orca", 16);
+    const copied = try dupBoundedUtf8(allocator, "ryk", 16);
     defer allocator.free(copied);
-    try std.testing.expectEqualStrings("Orca", copied);
+    try std.testing.expectEqualStrings("ryk", copied);
     try std.testing.expectError(error.InputTooLarge, dupBoundedUtf8(allocator, "too long", 3));
     try std.testing.expectError(error.InvalidUtf8, dupBoundedUtf8(allocator, &.{0xff}, 3));
 }

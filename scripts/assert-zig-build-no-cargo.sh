@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/orca-no-cargo.XXXXXX")"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ryk-no-cargo.XXXXXX")"
 cleanup() {
   rm -rf "${TMP_DIR}"
 }

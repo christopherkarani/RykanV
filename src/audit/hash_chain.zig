@@ -174,7 +174,7 @@ test "event serialization is deterministic and excludes event_hash from hash inp
         .event_id = eid,
         .timestamp = ts,
         .event_type = .process_launch,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .command, .value = "echo hello" },
     };
 
@@ -201,7 +201,7 @@ test "redaction labels are redacted at the audit serialization boundary" {
         .event_id = eid,
         .timestamp = ts,
         .event_type = .secret_redacted,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .command, .value = "echo ok" },
         .redactions = .{ .count = 1, .labels = &labels },
     };
@@ -226,7 +226,7 @@ test "sandbox_posture serializes posture hash and fs_scope without full profile"
         .event_id = eid,
         .timestamp = ts,
         .event_type = .sandbox_posture,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .session, .value = "os_filesystem_sandbox" },
         .decision = .{
             .result = .observe,

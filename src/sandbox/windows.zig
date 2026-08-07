@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const backend = @import("backend.zig");
-const platform = @import("orca_core").platform;
+const platform = @import("ryk_core").platform;
 
 pub const implemented = true;
 
@@ -25,9 +25,9 @@ const protected_windows_path_rule: ProtectedPathMatch = .{
 pub fn detect() backend.ReportSet {
     var reports = backend.baseReports(.windows);
     backend.setReport(&reports, .process_supervision, .partial, "Windows direct-child cleanup is available; Job Object process-tree cleanup is not installed in this backend");
-    backend.setReport(&reports, .shell_wrapping, .wrapper_only, "cmd.exe, powershell.exe, and pwsh.exe are guarded when resolved through Orca PATH shims");
-    backend.setReport(&reports, .path_shims, .wrapper_only, "Orca prepends session .cmd shims to PATH for wrapper-mediated command checks");
-    backend.setReport(&reports, .network_observe, .observe_only, "network policy decisions are audited for Orca-mediated actions");
+    backend.setReport(&reports, .shell_wrapping, .wrapper_only, "cmd.exe, powershell.exe, and pwsh.exe are guarded when resolved through ryk PATH shims");
+    backend.setReport(&reports, .path_shims, .wrapper_only, "ryk prepends session .cmd shims to PATH for wrapper-mediated command checks");
+    backend.setReport(&reports, .network_observe, .observe_only, "network policy decisions are audited for ryk-mediated actions");
     backend.setReport(&reports, .network_enforce, .unavailable, "transparent Windows network enforcement is not installed; only wrapper/proxy-mediated hooks are available");
     backend.setReport(&reports, .user_namespaces, .unsupported, "Linux user namespaces are not a Windows feature");
     backend.setReport(&reports, .mount_namespaces, .unsupported, "Linux mount namespaces are not a Windows feature");

@@ -1,36 +1,34 @@
 #!/usr/bin/env sh
 set -eu
 
-# ryk installer (macOS / Linux) — Phase 5a brand cut; orca is a PATH compat alias.
+# ryk installer (macOS / Linux) — canonical Rykan V install path.
 #
 # Documented one-liner:
 #   curl -fsSL https://rykanv.com/install | sh
 # Fallback (same script, GitHub raw):
 #   curl -fsSL https://raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh | sh
 #
-# Environment (prefer RYK_*; fall back ORCA_* for one major):
-#   RYK_VERSION / ORCA_VERSION         Pin release version (default: latest / local VERSION / 1.2.9)
-#   RYK_INSTALL_DIR / ORCA_INSTALL_DIR Binary install dir (default: ~/.local/bin)
-#   RYK_SHARE_DIR / ORCA_SHARE_DIR     Runtime share root (default: ~/.local/share/orca — kept in 5a)
-#   RYK_BASE_URL / ORCA_BASE_URL       Override release base URL
-#   RYK_ARTIFACT_DIR / ORCA_ARTIFACT_DIR Offline install from a local dist/ folder
-#   RYK_INSTALL_FORCE / ORCA_INSTALL_FORCE=1 Allow overwriting a non-product file at the destination
-#   RYK_INSTALL_QUIET / ORCA_INSTALL_QUIET=1 Suppress non-error UI (still installs; prints activation line)
-#   RYK_INSTALL_SKIP_ONBOARD / ORCA_INSTALL_SKIP_ONBOARD=1  Skip post-install ensure
+# Environment (RYK_* only (hard-cut)):
+#   RYK_VERSION         Pin release version (default: latest / local VERSION / 1.2.9)
+#   RYK_INSTALL_DIR Binary install dir (default: ~/.local/bin)
+#   RYK_SHARE_DIR     Runtime share root (default: ~/.local/share/ryk — kept in 5a)
+#   RYK_BASE_URL       Override release base URL
+#   RYK_ARTIFACT_DIR Offline install from a local dist/ folder
+#   RYK_INSTALL_FORCE=1 Allow overwriting a non-product file at the destination
+#   RYK_INSTALL_QUIET=1 Suppress non-error UI (still installs; prints activation line)
+#   RYK_INSTALL_SKIP_ONBOARD=1  Skip post-install ensure
 #   NO_COLOR             Disable ANSI color even on a TTY
 #
 # Ensure door (release/install contract):
-# - Prefer W1: `doctor --fix --from-install` when the installed CLI supports it.
-# - Pre-W1 binaries (e.g. tagged v1.2.9 without --fix) fall back to
-#   `start --auto --skip-verify` (soft-success parity with doctor --fix).
-# - install.sh on main / the public curl door can lead the release binary; never
-#   hard-fail solely because the ensure flag set is newer than the artifact.
+# - The hard-cut release contract requires `doctor --fix --from-install`.
+# - An artifact whose CLI does not advertise that door is rejected instead of
+#   being silently onboarded through a removed or weaker command.
 #
 # Robust VERSION resolution (piped-safe):
 # - File execution (dev, local checkout): read ../VERSION when present.
 # - Piped public install (curl | sh): $0 is not a regular file, so we skip the
-#   local read and fall through to the GitHub API (or ORCA_VERSION / 1.2.9).
-# - ORCA_VERSION always wins. Hardcoded value is only the final safety net.
+#   local read and fall through to the GitHub API (or RYK_VERSION / 1.2.9).
+# - RYK_VERSION always wins. Hardcoded value is only the final safety net.
 
 SCRIPT_DIR=""
 if [ -f "$0" ] 2>/dev/null; then
@@ -42,7 +40,7 @@ fi
 # Glyphs align with src/tui/render.zig (active/done use success green).
 
 QUIET=0
-if [ "${RYK_INSTALL_QUIET:-${ORCA_INSTALL_QUIET:-0}}" = "1" ]; then
+if [ "${RYK_INSTALL_QUIET:-0}" = "1" ]; then
   QUIET=1
 fi
 
@@ -159,7 +157,7 @@ if [ -n "$SCRIPT_DIR" ] && [ -r "${SCRIPT_DIR}/../VERSION" ]; then
 fi
 
 RESOLVED_FROM="fallback 1.2.9"
-if [ -n "${RYK_VERSION:-${ORCA_VERSION:-}}" ]; then
+if [ -n "${RYK_VERSION:-}" ]; then
   RESOLVED_FROM="version environment override"
 elif [ -n "${DEFAULT_VERSION}" ]; then
   RESOLVED_FROM="local VERSION"
@@ -182,17 +180,16 @@ else
   fi
 fi
 
-VERSION="${RYK_VERSION:-${ORCA_VERSION:-${DEFAULT_VERSION:-1.2.9}}}"
-BASE_URL="${RYK_BASE_URL:-${ORCA_BASE_URL:-https://github.com/christopherkarani/rykan/releases/download/v${VERSION}}}"
-INSTALL_DIR="${RYK_INSTALL_DIR:-${ORCA_INSTALL_DIR:-${HOME}/.local/bin}}"
-# Phase 5a: keep existing share layout under share/orca (path migrate is Phase 5b).
-SHARE_DIR="${RYK_SHARE_DIR:-${ORCA_SHARE_DIR:-${HOME}/.local/share/orca}}"
+VERSION="${RYK_VERSION:-${DEFAULT_VERSION:-1.2.9}}"
+BASE_URL="${RYK_BASE_URL:-https://github.com/christopherkarani/rykan/releases/download/v${VERSION}}"
+INSTALL_DIR="${RYK_INSTALL_DIR:-${HOME}/.local/bin}"
+SHARE_DIR="${RYK_SHARE_DIR:-${HOME}/.local/share/ryk}"
 RESOURCE_ROOT="${SHARE_DIR}/${VERSION}"
 CURRENT_LINK="${SHARE_DIR}/current"
-ARTIFACT_DIR="${RYK_ARTIFACT_DIR:-${ORCA_ARTIFACT_DIR:-}}"
+ARTIFACT_DIR="${RYK_ARTIFACT_DIR:-}"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ryk-install.XXXXXX")"
-RUNTIME_DIRS="integrations fixtures schemas policies orca-pi"
-INSTALL_MARKER=".orca-installation"
+RUNTIME_DIRS="integrations fixtures schemas policies ryk-pi"
+INSTALL_MARKER=".ryk-installation"
 
 cleanup() {
   rm -rf "$TMP_DIR"
@@ -200,10 +197,10 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 detect_os() {
-  case "${ORCA_OS_OVERRIDE:-$(uname -s)}" in
+  case "${RYK_OS_OVERRIDE:-$(uname -s)}" in
     Darwin|darwin) printf 'darwin' ;;
     Linux|linux) printf 'linux' ;;
-    *) fail "unsupported operating system: ${ORCA_OS_OVERRIDE:-$(uname -s)}" \
+    *) fail "unsupported operating system: ${RYK_OS_OVERRIDE:-$(uname -s)}" \
          "ryk's curl installer supports macOS and Linux only.
 Windows: use scripts/install.ps1
 Docs:    https://github.com/christopherkarani/rykan/blob/main/docs/install.md" ;;
@@ -211,10 +208,10 @@ Docs:    https://github.com/christopherkarani/rykan/blob/main/docs/install.md" ;
 }
 
 detect_arch() {
-  case "${ORCA_ARCH_OVERRIDE:-$(uname -m)}" in
+  case "${RYK_ARCH_OVERRIDE:-$(uname -m)}" in
     x86_64|amd64) printf 'amd64' ;;
     arm64|aarch64) printf 'arm64' ;;
-    *) fail "unsupported architecture: ${ORCA_ARCH_OVERRIDE:-$(uname -m)}" \
+    *) fail "unsupported architecture: ${RYK_ARCH_OVERRIDE:-$(uname -m)}" \
          "Supported: amd64 (x86_64), arm64 (aarch64)." ;;
   esac
 }
@@ -283,24 +280,24 @@ Refuse to install a corrupted or tampered archive.
   fi
 }
 
-# Exit 0 if candidate looks like the ryk/orca CLI; print semver (may be empty) on stdout.
+# Exit 0 if candidate emits the canonical machine-readable ryk identity; print
+# semver (may be empty) on stdout. Human banners are intentionally not used for
+# product detection because they are presentation and may change.
 probe_existing_product() {
   candidate="$1"
   [ -e "$candidate" ] || return 1
-  out="$("$candidate" version 2>/dev/null)" || out="$("$candidate" --version 2>/dev/null)" || return 1
-  printf '%s\n' "$out" | grep -Eqi '"product"[[:space:]]*:[[:space:]]*"(ryk|orca)"|^(ryk|orca)([[:space:]]|$)|^[0-9]+\.[0-9]+\.[0-9]+' || return 1
-  printf '%s\n' "$out" | sed -n 's/.*\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n1 || true
+  out="$("$candidate" version --json 2>/dev/null)" || return 1
+  printf '%s\n' "$out" | grep -Eqi '"product"[[:space:]]*:[[:space:]]*"ryk"' || return 1
+  printf '%s\n' "$out" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' | head -n1 || true
   return 0
 }
-# Compat name for callers/tests.
-probe_existing_orca() { probe_existing_product "$@"; }
 
 safe_install() {
   source_bin="$1"
   destination="$2"
 
   reject_symlink_components "$destination" "binary destination"
-  if [ -e "$destination" ] && [ "${RYK_INSTALL_FORCE:-${ORCA_INSTALL_FORCE:-0}}" != "1" ]; then
+  if [ -e "$destination" ] && [ "${RYK_INSTALL_FORCE:-0}" != "1" ]; then
     if ! probe_existing_product "$destination" >/dev/null; then
       fail "refusing to overwrite non-ryk file at $destination" \
         "Set RYK_INSTALL_FORCE=1 to replace it, or choose another install dir."
@@ -350,14 +347,14 @@ install_runtime_assets() {
       fail "could not stage runtime directory: $dir"
     }
   done
-  if [ -d "$extract_root/orca-dashboard-ui" ]; then
-    cp -R "$extract_root/orca-dashboard-ui" "$runtime_stage/" || {
+  if [ -d "$extract_root/ryk-dashboard-ui" ]; then
+    cp -R "$extract_root/ryk-dashboard-ui" "$runtime_stage/" || {
       rm -rf "$runtime_stage"
       fail "could not stage dashboard UI assets"
     }
   fi
   {
-    printf 'orca-runtime-v1\n'
+    printf 'ryk-runtime-v1\n'
     printf 'version=%s\n' "$VERSION"
   } > "$runtime_stage/$INSTALL_MARKER"
 
@@ -370,7 +367,7 @@ install_runtime_assets() {
     }
     [ -f "$RESOURCE_ROOT/$INSTALL_MARKER" ] &&
       [ ! -L "$RESOURCE_ROOT/$INSTALL_MARKER" ] &&
-      grep -q '^orca-runtime-v1$' "$RESOURCE_ROOT/$INSTALL_MARKER" 2>/dev/null || {
+      grep -q '^ryk-runtime-v1$' "$RESOURCE_ROOT/$INSTALL_MARKER" 2>/dev/null || {
       rm -rf "$runtime_stage"
       fail "refusing to replace an unmanaged runtime directory: $RESOURCE_ROOT"
     }
@@ -437,7 +434,7 @@ ensure_path_entry() {
   fi
 
   marker="# Added by ryk installer"
-  legacy_marker="# Added by Orca installer"
+  previous_marker="# Added by ryk installer"
   quoted_dir="$(shell_quote "$dir")"
   if [ "$shell_name" = "fish" ]; then
     path_line="fish_add_path -- $quoted_dir"
@@ -447,11 +444,11 @@ ensure_path_entry() {
 
   if [ -f "$rc_file" ] && {
     grep -qF "$marker" "$rc_file" 2>/dev/null ||
-      grep -qF "$legacy_marker" "$rc_file" 2>/dev/null
+      grep -qF "$previous_marker" "$rc_file" 2>/dev/null
   }; then
     tmp="$(mktemp)"
-    awk -v marker="$marker" -v legacy_marker="$legacy_marker" -v new_line="$path_line" '
-      $0 == marker || $0 == legacy_marker { print marker; print new_line; skip=1; next }
+    awk -v marker="$marker" -v previous_marker="$previous_marker" -v new_line="$path_line" '
+      $0 == marker || $0 == previous_marker { print marker; print new_line; skip=1; next }
       skip && (/^export PATH=/ || /^fish_add_path -- /) { next }
       skip && $0 == "" { skip=0 }
       { print }
@@ -468,7 +465,7 @@ ensure_resource_root_entry() {
   shell_name="$(basename "$shell_path")"
   rc_file="$(rc_file_for_shell "$shell_path")"
   marker="# ryk runtime assets"
-  legacy_marker="# Orca runtime assets"
+  previous_marker="# ryk runtime assets"
   quoted_current="$(shell_quote "$CURRENT_LINK")"
   if [ "$shell_name" = "fish" ]; then
     resource_line="set -gx RYK_RESOURCE_ROOT $quoted_current"
@@ -482,12 +479,12 @@ ensure_resource_root_entry() {
 
   if [ -f "$rc_file" ] && {
     grep -qF "$marker" "$rc_file" 2>/dev/null ||
-      grep -qF "$legacy_marker" "$rc_file" 2>/dev/null
+      grep -qF "$previous_marker" "$rc_file" 2>/dev/null
   }; then
     tmp="$(mktemp)"
-    awk -v marker="$marker" -v legacy_marker="$legacy_marker" -v new_line="$resource_line" '
-      $0 == marker || $0 == legacy_marker { print marker; print new_line; skip=1; next }
-      skip && (/^export (RYK|ORCA)_RESOURCE_ROOT=/ || /^set -gx (RYK|ORCA)_RESOURCE_ROOT /) { next }
+    awk -v marker="$marker" -v previous_marker="$previous_marker" -v new_line="$resource_line" '
+      $0 == marker || $0 == previous_marker { print marker; print new_line; skip=1; next }
+      skip && (/^export RYK_RESOURCE_ROOT=/ || /^set -gx RYK_RESOURCE_ROOT /) { next }
       skip && $0 == "" { skip=0 }
       { print }
     ' "$rc_file" > "$tmp"
@@ -530,7 +527,7 @@ print_success() {
 
   if [ "$onboarding_ran" -eq 0 ]; then
     printf '\n'
-    printf '    ryk doctor --fix\n'
+    printf '    ryk doctor --fix --from-install\n'
   fi
 
   if [ "$missing_dashboard" -eq 1 ]; then
@@ -544,20 +541,12 @@ print_success() {
 
 OS="$(detect_os)"
 ARCH="$(detect_arch)"
-# Prefer new ryk-v* artifact; fall back to legacy orca-v* during dual-publish window.
 ARTIFACT="ryk-v${VERSION}-${OS}-${ARCH}.tar.gz"
-LEGACY_ARTIFACT="orca-v${VERSION}-${OS}-${ARCH}.tar.gz"
 DESTINATION="$INSTALL_DIR/ryk"
-LEGACY_DESTINATION="$INSTALL_DIR/orca"
 
 # Empty = fresh install; semver or "installed" = existing CLI at destination.
 PREVIOUS_VERSION=""
 if previous_out="$(probe_existing_product "$DESTINATION")"; then
-  PREVIOUS_VERSION="$previous_out"
-  if [ -z "$PREVIOUS_VERSION" ]; then
-    PREVIOUS_VERSION="installed"
-  fi
-elif previous_out="$(probe_existing_product "$LEGACY_DESTINATION")"; then
   PREVIOUS_VERSION="$previous_out"
   if [ -z "$PREVIOUS_VERSION" ]; then
     PREVIOUS_VERSION="installed"
@@ -577,11 +566,9 @@ step_done "Resolve release" "$resolve_detail"
 if [ -n "$ARTIFACT_DIR" ]; then
   if [ -f "$ARTIFACT_DIR/$ARTIFACT" ]; then
     :
-  elif [ -f "$ARTIFACT_DIR/$LEGACY_ARTIFACT" ]; then
-    ARTIFACT="$LEGACY_ARTIFACT"
   else
-    fail "artifact not found: $ARTIFACT_DIR/$ARTIFACT (or $LEGACY_ARTIFACT)" \
-      "Expected a current or compatibility release archive under RYK_ARTIFACT_DIR."
+    fail "artifact not found: $ARTIFACT_DIR/$ARTIFACT" \
+      "Expected the canonical release archive under RYK_ARTIFACT_DIR."
   fi
   cp "$ARTIFACT_DIR/$ARTIFACT" "$TMP_DIR/$ARTIFACT"
   [ -f "$ARTIFACT_DIR/checksums.txt" ] || fail "checksums.txt not found in $ARTIFACT_DIR" \
@@ -590,12 +577,7 @@ if [ -n "$ARTIFACT_DIR" ]; then
   step_done "Use local artifacts" "$ARTIFACT_DIR"
 else
   step_active "Download archive"
-  if download "$BASE_URL/$ARTIFACT" "$TMP_DIR/$ARTIFACT" 2>/dev/null; then
-    :
-  else
-    ARTIFACT="$LEGACY_ARTIFACT"
-    download "$BASE_URL/$ARTIFACT" "$TMP_DIR/$ARTIFACT"
-  fi
+  download "$BASE_URL/$ARTIFACT" "$TMP_DIR/$ARTIFACT"
   download "$BASE_URL/checksums.txt" "$TMP_DIR/checksums.txt"
   step_done "Download archive" "$ARTIFACT"
 fi
@@ -621,23 +603,13 @@ EXTRACT_ROOT="$(find "$TMP_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 FOUND_BIN=""
 if [ -x "$EXTRACT_ROOT/bin/ryk" ]; then
   FOUND_BIN="$EXTRACT_ROOT/bin/ryk"
-elif [ -x "$EXTRACT_ROOT/bin/orca" ]; then
-  FOUND_BIN="$EXTRACT_ROOT/bin/orca"
-else
-  FOUND_BIN="$(find "$EXTRACT_ROOT" -type f \( -name ryk -o -name orca \) -perm -111 | head -n 1)"
 fi
 [ -n "$FOUND_BIN" ] || fail "artifact did not contain an executable ryk binary" \
   "Unexpected archive layout for ${ARTIFACT}."
 
 safe_install "$FOUND_BIN" "$DESTINATION"
-# Compat alias: same product as ryk for ≥1 major.
-if [ -x "$EXTRACT_ROOT/bin/orca" ]; then
-  safe_install "$EXTRACT_ROOT/bin/orca" "$LEGACY_DESTINATION"
-else
-  safe_install "$FOUND_BIN" "$LEGACY_DESTINATION"
-fi
 install_runtime_assets "$EXTRACT_ROOT"
-step_done "Install binaries + runtime" "ryk + compatibility alias + assets"
+step_done "Install binaries + runtime" "ryk + assets"
 
 ensure_path_entry "$INSTALL_DIR"
 ensure_resource_root_entry "$CURRENT_LINK"
@@ -647,35 +619,28 @@ step_done "Configure shell" "PATH + runtime resource root"
 # Setup is operational, not presentation: run for TTY, non-TTY, and quiet
 # installs. HOME is the global policy/plugin scope; never mutate an arbitrary
 # caller or Homebrew working directory. Trust scope: cd "$HOME" + export
-# RYK_RESOURCE_ROOT/ORCA_RESOURCE_ROOT to the installed share current link.
+# RYK_RESOURCE_ROOT to the installed share current link.
 # Soft host fails exit 0 with partial honesty from the ensure door — install
 # must not claim full-protection completion copy.
 #
-# Release/install contract: prefer doctor --fix --from-install; fall back to
-# start --auto only when the installed binary's doctor help does not advertise
-# --fix (version skew between curl install.sh and an older release artifact).
-# Never fall back when --fix is present but ensure fails for other reasons.
+# Release/install contract: the installed binary must advertise the canonical
+# hard-cut ensure door before the installer invokes it.
 
 # Returns 0 when BIN supports the W1 ensure door (help advertises --fix).
 cli_supports_doctor_fix() {
   _cli_bin="$1"
   _cli_help="$("$_cli_bin" doctor --help 2>&1)" || true
-  printf '%s\n' "$_cli_help" | grep -Eq -- '(^|[[:space:]|/`[,[])--fix([[:space:]|]/],[]|]|$)'
+  printf '%s\n' "$_cli_help" | grep -Eq -- '(^|[^[:alnum:]_-])--fix([^[:alnum:]_-]|$)'
 }
 
-# Run the best available ensure door for the installed binary.
-# Sets ENSURE_MODE to doctor_fix or start_auto_legacy (for receipts/remediation).
+# Run the canonical ensure door for the installed binary.
 run_install_ensure() {
-  if cli_supports_doctor_fix "$DESTINATION"; then
-    ENSURE_MODE=doctor_fix
-    "$DESTINATION" doctor --fix --from-install
-  else
-    # Pre-W1 / pre-doctor --fix release binary (e.g. v1.2.9).
-    # --skip-verify: install soft-success matches doctor --fix (host verify is not a
-    # hard install failure; operators can re-run ensure later).
-    ENSURE_MODE=start_auto_legacy
-    "$DESTINATION" start --auto --skip-verify
+  if ! cli_supports_doctor_fix "$DESTINATION"; then
+    fail "installed ryk binary does not support the required doctor --fix ensure door" \
+      "This installer requires a current Rykan V release. Re-download the installer or set RYK_VERSION to a current release, then retry."
   fi
+  ENSURE_MODE=doctor_fix
+  "$DESTINATION" doctor --fix --from-install
 }
 
 # One-line step receipt from captured ensure output. Install owns the UI —
@@ -712,36 +677,21 @@ summarize_ensure_receipt() {
 
 ONBOARDING_RAN=0
 ENSURE_MODE=doctor_fix
-if [ "${RYK_INSTALL_SKIP_ONBOARD:-${ORCA_INSTALL_SKIP_ONBOARD:-0}}" != "1" ]; then
+if [ "${RYK_INSTALL_SKIP_ONBOARD:-0}" != "1" ]; then
   step_active "Set up protection"
   set +e
   # Always capture ensure: install owns presentation (no second banner / TUI dump).
   (
     cd "$HOME"
-    RYK_RESOURCE_ROOT="$CURRENT_LINK"
-    ORCA_RESOURCE_ROOT="$CURRENT_LINK"
-    export RYK_RESOURCE_ROOT ORCA_RESOURCE_ROOT
+    export RYK_RESOURCE_ROOT="$CURRENT_LINK"
     PATH="$INSTALL_DIR:$PATH"
     export PATH
     # Prefer plain ensure output if the CLI honors NO_COLOR / non-TTY.
     NO_COLOR=1
     export NO_COLOR
-    # Probe + ensure in the same subshell.
-    if cli_supports_doctor_fix "$DESTINATION"; then
-      ENSURE_MODE=doctor_fix
-      "$DESTINATION" doctor --fix --from-install
-    else
-      ENSURE_MODE=start_auto_legacy
-      "$DESTINATION" start --auto --skip-verify
-    fi
+    run_install_ensure
   ) >"$TMP_DIR/.onboarding.out" 2>"$TMP_DIR/.onboarding.err"
   _ob_exit=$?
-  # Parent needs ENSURE_MODE for fail copy; re-probe (help is cheap).
-  if cli_supports_doctor_fix "$DESTINATION"; then
-    ENSURE_MODE=doctor_fix
-  else
-    ENSURE_MODE=start_auto_legacy
-  fi
   set -e
   if [ "$_ob_exit" -ne 0 ]; then
     # Fail path only: short remediation + a few ensure lines (not full TUI).
@@ -754,20 +704,12 @@ if [ "${RYK_INSTALL_SKIP_ONBOARD:-${ORCA_INSTALL_SKIP_ONBOARD:-0}}" != "1" ]; th
         grep -Ei 'error|failed|unknown option|refusing' "$TMP_DIR/.onboarding.out" 2>/dev/null |
         head -4 | sed 's/^/    /' >&2 || true
     fi
-    if [ "$ENSURE_MODE" = "doctor_fix" ]; then
-      # Re-teach install trust scope: HOME cwd + --from-install.
-      fail "ryk protection setup failed (exit ${_ob_exit})" \
-        "The CLI was installed, but protection setup did not finish.
+    # Re-teach install trust scope: HOME cwd + --from-install.
+    fail "ryk protection setup failed (exit ${_ob_exit})" \
+      "The CLI was installed, but protection setup did not finish.
 Re-run from your home directory: ryk doctor --fix --from-install
-(cd \"\$HOME\" first; keep RYK_RESOURCE_ROOT/ORCA_RESOURCE_ROOT on the installed share current link if you set them.)
-Or re-run the installer after resolving the host integration error."
-    else
-      fail "ryk protection setup failed (exit ${_ob_exit})" \
-        "The CLI was installed, but protection setup did not finish.
-Re-run from your home directory: cd \"\$HOME\" && $(shell_quote "$DESTINATION") start --auto --skip-verify
-(keep RYK_RESOURCE_ROOT/ORCA_RESOURCE_ROOT on the installed share current link if you set them.)
-Or upgrade to a release that supports doctor --fix, then re-run the installer."
-    fi
+(cd \"\$HOME\" first; keep RYK_RESOURCE_ROOT on the installed share current link if you set them.)
+Re-run the installer after resolving the host integration error."
   fi
   # Merge stderr into summary scan (some CLIs put status on stderr).
   if [ -s "$TMP_DIR/.onboarding.err" ]; then
@@ -779,7 +721,7 @@ Or upgrade to a release that supports doctor --fix, then re-run the installer."
 fi
 
 MISSING_DASHBOARD=0
-if [ ! -d "$RESOURCE_ROOT/orca-dashboard-ui" ]; then
+if [ ! -d "$RESOURCE_ROOT/ryk-dashboard-ui" ]; then
   MISSING_DASHBOARD=1
 fi
 

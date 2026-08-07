@@ -1,11 +1,11 @@
-# Orca Production-Readiness Fixes
+# ryk Production-Readiness Fixes
 
 Date: 2026-07-12
 Status: Approved design
 
 ## Objective
 
-Fix every confirmed defect from the 2026-07-12 production-readiness audit across the machine-wide dashboard, secret redaction, and human-facing CLI. Preserve Orca's existing local-first architecture, fail-closed behavior, and frozen raw, JSON, hook-protocol, and generated-output contracts.
+Fix every confirmed defect from the 2026-07-12 production-readiness audit across the machine-wide dashboard, secret redaction, and human-facing CLI. Preserve ryk's existing local-first architecture, fail-closed behavior, and frozen raw, JSON, hook-protocol, and generated-output contracts.
 
 Resolve the pre-existing merge conflicts in the OpenClaw and OpenCode plugin lockfiles by matching their package manifests at version `1.2.8`. The existing oversized Codex `PreToolUse` fix in `src/cli/hook.zig` and its regression test must be preserved and integrated with the redaction changes.
 
@@ -60,7 +60,7 @@ Security-sensitive persisted surfaces remain unconditionally redacted. `audit.re
 
 ## CLI UX
 
-- `orca packs --help` is Zig-owned and documents the actual friendly interface; raw daemon output remains untouched for machine modes.
+- `ryk packs --help` is Zig-owned and documents the actual friendly interface; raw daemon output remains untouched for machine modes.
 - `--no-rich` behaves as a global option before or after the command, but is never consumed from child argv after `--` or from opaque generated/protocol payloads.
 - Human layouts derive a bounded width from terminal context and degrade cleanly on narrow terminals.
 - Unicode capability is independent from color capability. Plain/ASCII environments do not emit emoji or box glyphs they cannot safely render.

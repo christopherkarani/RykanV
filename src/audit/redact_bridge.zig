@@ -471,7 +471,7 @@ test "secret value detection covers synthetic examples" {
     try std.testing.expect(classifySecretValue("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmYWtlIn0.c2lnbmF0dXJl") != null);
     try std.testing.expect(classifySecretValue("Aa0Bb1Cc2Dd3Ee4Ff5Gg6Hh7Ii8Jj9Kk") != null);
     try std.testing.expect(classifySecretValue("{\"type\":\"service_account\",\"private_key\":\"FAKE\"}") != null);
-    try std.testing.expect(classifySecretValue("/Users/fake/orca/path/with/mixed/Chars123") == null);
+    try std.testing.expect(classifySecretValue("/Users/fake/ryk/path/with/mixed/Chars123") == null);
 }
 
 test "redaction fingerprints are stable and do not include raw value" {
@@ -515,7 +515,7 @@ test "owned structured redaction preserves benign text and removes secret values
     const cases = [_][]const u8{
         "Authorization: Bearer correct-horse-battery-staple",
         "curl --token=correct-horse-battery-staple /health",
-        "{\"password\":\"correct horse battery staple\",\"name\":\"orca\"}",
+        "{\"password\":\"correct horse battery staple\",\"name\":\"ryk\"}",
         "prefix GhP_abcdefghijklmnopqrstuvwxyz suffix",
     };
     for (cases) |case| {
@@ -525,7 +525,7 @@ test "owned structured redaction preserves benign text and removes secret values
         try std.testing.expect(std.mem.indexOf(u8, redacted, "abcdefghijklmnopqrstuvwxyz") == null);
         try std.testing.expect(std.mem.indexOf(u8, redacted, redacted_value) != null);
     }
-    const benign = "curl --user-agent orca /health";
+    const benign = "curl --user-agent ryk /health";
     const unchanged = try redactAlloc(std.testing.allocator, benign);
     defer std.testing.allocator.free(unchanged);
     try std.testing.expectEqualStrings(benign, unchanged);
@@ -619,10 +619,10 @@ test "owned redaction preserves benign low-entropy base64 candidates" {
 
 test "owned structured redaction handles escaped quotes inside secret JSON values" {
     const sentinel = "correct horse battery staple";
-    const value = "{\"password\":\"prefix \\\"quoted\\\" correct horse battery staple\",\"name\":\"orca\"}";
+    const value = "{\"password\":\"prefix \\\"quoted\\\" correct horse battery staple\",\"name\":\"ryk\"}";
     const redacted = try redactAlloc(std.testing.allocator, value);
     defer std.testing.allocator.free(redacted);
     try std.testing.expect(std.mem.indexOf(u8, redacted, sentinel) == null);
     try std.testing.expect(std.mem.indexOf(u8, redacted, "quoted") == null);
-    try std.testing.expect(std.mem.indexOf(u8, redacted, "\"name\":\"orca\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, redacted, "\"name\":\"ryk\"") != null);
 }

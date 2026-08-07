@@ -5,7 +5,7 @@
 //!
 //! When OS sandbox requires child apply (Landlock / Seatbelt), callers pass a
 //! `custom` spawn hook that uses `sandbox.apply_posix` so the agent is boxed.
-//! The core module must not import sandbox (module boundary: core_engine vs orca).
+//! The core module must not import sandbox (module boundary: core_engine vs ryk).
 //!
 //! prepareChild consumes the scrubbed env_map from applyBeforeExec.
 //! FD scrub is child-side only (see sandbox/fd_scrub.zig / apply_posix.zig).
@@ -48,7 +48,7 @@ pub const CustomSpawnRequest = struct {
     stdio: StdioBehavior,
 };
 
-/// Optional override for agent spawn (U07 OS-FS child apply lives in orca/sandbox).
+/// Optional override for agent spawn (U07 OS-FS child apply lives in ryk/sandbox).
 pub const CustomSpawn = struct {
     context: *anyopaque,
     spawnFn: *const fn (context: *anyopaque, request: CustomSpawnRequest) anyerror!std.process.Child,
@@ -204,10 +204,9 @@ pub const PreparedChild = struct {
     /// Only when: inherit stdio, stdin is a TTY, and the child is a process-group
     /// leader (sandbox `setpgid(0,0)` path). Failures are silent (piped tests).
     fn giveTerminalToAgentProcessGroup(self: *PreparedChild) void {
-        switch (builtin.os.tag) {
-            .linux, .macos, .freebsd, .netbsd, .openbsd, .dragonfly => {},
-            else => return,
-        }
+        if (comptime builtin.os.tag != .linux and builtin.os.tag != .macos and
+            builtin.os.tag != .freebsd and builtin.os.tag != .netbsd and
+            builtin.os.tag != .openbsd and builtin.os.tag != .dragonfly) return;
         if (self.stdio != .inherit) return;
         if (self.terminal_handed_off) return;
         const pgid = self.process_group_id orelse return;
@@ -234,6 +233,9 @@ pub const PreparedChild = struct {
     }
 
     fn reclaimTerminal(self: *PreparedChild) void {
+        if (comptime builtin.os.tag != .linux and builtin.os.tag != .macos and
+            builtin.os.tag != .freebsd and builtin.os.tag != .netbsd and
+            builtin.os.tag != .openbsd and builtin.os.tag != .dragonfly) return;
         if (!self.terminal_handed_off) return;
         const restore = self.saved_fg_pgid;
         self.terminal_handed_off = false;
@@ -353,43 +355,41 @@ fn libcTcsetpgrp(fd: std.posix.fd_t, pgrp: std.posix.pid_t) bool {
 }
 
 fn killProcessGroup(pgid: std.posix.pid_t) void {
-    switch (builtin.os.tag) {
-        .windows, .wasi => return,
-        else => {
-            std.posix.kill(-pgid, std.posix.SIG.KILL) catch {};
-        },
-    }
+    if (comptime builtin.os.tag == .windows or builtin.os.tag == .wasi) return;
+    std.posix.kill(-pgid, std.posix.SIG.KILL) catch {};
 }
 
 fn signalKillPid(pid: ?std.posix.pid_t) void {
+    if (comptime builtin.os.tag == .windows or builtin.os.tag == .wasi) return;
     const p = pid orelse return;
     if (p <= 0) return;
-    switch (builtin.os.tag) {
-        .windows, .wasi => return,
-        else => std.posix.kill(p, std.posix.SIG.KILL) catch {},
-    }
+    std.posix.kill(p, std.posix.SIG.KILL) catch {};
 }
 
 /// Best-effort waitpid with EINTR retry. Idempotent when the child was already
 /// reaped (`ECHILD`). Core-side only — must not import sandbox `killAndReapChild`.
 fn waitpidEintr(pid: std.posix.pid_t) void {
+    if (comptime builtin.os.tag == .windows or builtin.os.tag == .wasi) return;
     if (pid <= 0) return;
-    switch (builtin.os.tag) {
-        .windows, .wasi => return,
-        else => {
-            var status: c_int = 0;
-            while (true) {
-                const rc = std.c.waitpid(pid, &status, 0);
-                if (rc >= 0) break;
-                if (std.posix.errno(@as(isize, rc)) == .INTR) continue;
-                break;
-            }
-        },
+    var status: c_int = 0;
+    while (true) {
+        const rc = std.c.waitpid(pid, &status, 0);
+        if (rc >= 0) break;
+        if (std.posix.errno(@as(isize, rc)) == .INTR) continue;
+        break;
     }
 }
 
 /// Build a `std.process.Child` from a raw POSIX pid (apply_posix fork path).
 pub fn childFromPid(pid: i32) std.process.Child {
+    if (comptime builtin.os.tag == .windows) return .{
+        .id = null,
+        .thread_handle = undefined,
+        .stdin = null,
+        .stdout = null,
+        .stderr = null,
+        .request_resource_usage_statistics = false,
+    };
     return .{
         .id = pid,
         .thread_handle = {},

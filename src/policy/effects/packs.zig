@@ -91,13 +91,13 @@ pub fn userConfigPacksDir(allocator: std.mem.Allocator) !?[]u8 {
     if (std.c.getenv("XDG_CONFIG_HOME")) |xdg_c| {
         const xdg = std.mem.sliceTo(xdg_c, 0);
         if (xdg.len > 0) {
-            return try std.fs.path.join(allocator, &.{ xdg, "orca", "effect-packs" });
+            return try std.fs.path.join(allocator, &.{ xdg, "ryk", "effect-packs" });
         }
     }
     if (std.c.getenv("HOME")) |home_c| {
         const home = std.mem.sliceTo(home_c, 0);
         if (home.len > 0) {
-            return try std.fs.path.join(allocator, &.{ home, ".config", "orca", "effect-packs" });
+            return try std.fs.path.join(allocator, &.{ home, ".config", "ryk", "effect-packs" });
         }
     }
     return null;
@@ -110,7 +110,7 @@ pub const LoadOptions = struct {
     fail_on_access_denied: bool = false,
 };
 
-/// Load packs: user config (lower) then workspace `.orca/effect-packs` (higher / last-wins).
+/// Load packs: user config (lower) then workspace `.ryk/effect-packs` (higher / last-wins).
 /// Within a directory, files load in lexicographic filename order (deterministic tie-break).
 /// Missing directories are OK. Present but invalid files fail closed.
 /// Use for discovery (`tools classify`, `mcp inspect`) where packs are always consulted.
@@ -145,7 +145,7 @@ fn loadPacksWithOptions(
         try appendPacksFromDir(io, allocator, auto, &list, options.fail_on_access_denied);
     }
 
-    const workspace_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "effect-packs" });
+    const workspace_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "effect-packs" });
     defer allocator.free(workspace_dir);
     try appendPacksFromDir(io, allocator, workspace_dir, &list, options.fail_on_access_denied);
 
@@ -760,9 +760,9 @@ test "structural pack keys" {
 test "loadPacksForEnforcement skips when effects inactive" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca/effect-packs");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk/effect-packs");
     {
-        const f = try tmp.dir.createFile(std.testing.io, ".orca/effect-packs/bad.yaml", .{});
+        const f = try tmp.dir.createFile(std.testing.io, ".ryk/effect-packs/bad.yaml", .{});
         defer f.close(std.testing.io);
         try f.writeStreamingAll(std.testing.io,
             \\version: 1
@@ -797,9 +797,9 @@ test "loadPacks missing dir is empty" {
 test "loadPacks valid workspace pack" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca/effect-packs");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk/effect-packs");
     {
-        const f = try tmp.dir.createFile(std.testing.io, ".orca/effect-packs/acme.yaml", .{});
+        const f = try tmp.dir.createFile(std.testing.io, ".ryk/effect-packs/acme.yaml", .{});
         defer f.close(std.testing.io);
         try f.writeStreamingAll(std.testing.io,
             \\version: 1
@@ -825,9 +825,9 @@ test "loadPacks valid workspace pack" {
 test "loadPacks invalid pack fails closed" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca/effect-packs");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk/effect-packs");
     {
-        const f = try tmp.dir.createFile(std.testing.io, ".orca/effect-packs/bad.yaml", .{});
+        const f = try tmp.dir.createFile(std.testing.io, ".ryk/effect-packs/bad.yaml", .{});
         defer f.close(std.testing.io);
         try f.writeStreamingAll(std.testing.io,
             \\version: 1
@@ -904,9 +904,9 @@ test "short pack token requires whole segment" {
 test "same-dir packs load in lexicographic filename order" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca/effect-packs");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk/effect-packs");
     {
-        const a = try tmp.dir.createFile(std.testing.io, ".orca/effect-packs/a-first.yaml", .{});
+        const a = try tmp.dir.createFile(std.testing.io, ".ryk/effect-packs/a-first.yaml", .{});
         defer a.close(std.testing.io);
         try a.writeStreamingAll(std.testing.io,
             \\version: 1
@@ -914,7 +914,7 @@ test "same-dir packs load in lexicographic filename order" {
             \\names:
             \\  custom_send: money.transfer
         );
-        const z = try tmp.dir.createFile(std.testing.io, ".orca/effect-packs/z-last.yaml", .{});
+        const z = try tmp.dir.createFile(std.testing.io, ".ryk/effect-packs/z-last.yaml", .{});
         defer z.close(std.testing.io);
         try z.writeStreamingAll(std.testing.io,
             \\version: 1

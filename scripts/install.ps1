@@ -1,9 +1,9 @@
 param(
     [string]$Version,
-    [string]$BaseUrl = $(if ($env:RYK_BASE_URL) { $env:RYK_BASE_URL } elseif ($env:ORCA_BASE_URL) { $env:ORCA_BASE_URL } else { $null }),
-    [string]$InstallDir = $(if ($env:RYK_INSTALL_DIR) { $env:RYK_INSTALL_DIR } elseif ($env:ORCA_INSTALL_DIR) { $env:ORCA_INSTALL_DIR } else { Join-Path $HOME ".orca\bin" }),
-    [string]$ShareDir = $(if ($env:RYK_SHARE_DIR) { $env:RYK_SHARE_DIR } elseif ($env:ORCA_SHARE_DIR) { $env:ORCA_SHARE_DIR } else { Join-Path $HOME ".orca\share" }),
-    [string]$ArtifactDir = $(if ($env:RYK_ARTIFACT_DIR) { $env:RYK_ARTIFACT_DIR } else { $env:ORCA_ARTIFACT_DIR })
+    [string]$BaseUrl = $(if ($env:RYK_BASE_URL) { $env:RYK_BASE_URL } else { $null }),
+    [string]$InstallDir = $(if ($env:RYK_INSTALL_DIR) { $env:RYK_INSTALL_DIR } else { Join-Path $HOME ".ryk\bin" }),
+    [string]$ShareDir = $(if ($env:RYK_SHARE_DIR) { $env:RYK_SHARE_DIR } else { Join-Path $HOME ".ryk\share" }),
+    [string]$ArtifactDir = $(if ($env:RYK_ARTIFACT_DIR) { $env:RYK_ARTIFACT_DIR } else { $null })
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,14 +12,12 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $Version) {
     if ($env:RYK_VERSION) {
         $Version = $env:RYK_VERSION
-    } elseif ($env:ORCA_VERSION) {
-        $Version = $env:ORCA_VERSION
     } else {
         $defaultVersionPath = Join-Path (Resolve-Path (Join-Path $scriptDir "..")) "VERSION"
         if (Test-Path -LiteralPath $defaultVersionPath) {
             $Version = (Get-Content -LiteralPath $defaultVersionPath -TotalCount 1).Trim()
         } else {
-            $Version = "1.2.0"
+            throw "Version is required when scripts/install.ps1 is not run from a checkout; pass -Version or set RYK_VERSION."
         }
     }
 }
@@ -27,11 +25,11 @@ if (-not $BaseUrl) {
     $BaseUrl = "https://github.com/christopherkarani/rykan/releases/download/v$Version"
 }
 
-$ResourceRoot = if ($env:ORCA_RESOURCE_ROOT) { $env:ORCA_RESOURCE_ROOT } else { Join-Path $ShareDir $Version }
+$ResourceRoot = if ($env:RYK_RESOURCE_ROOT) { $env:RYK_RESOURCE_ROOT } else { Join-Path $ShareDir $Version }
 $CurrentLink = Join-Path $ShareDir "current"
-$RuntimeDirs = @("integrations", "fixtures", "schemas", "policies")
+$RuntimeDirs = @("integrations", "fixtures", "schemas", "policies", "ryk-pi")
 
-$Quiet = ($env:RYK_INSTALL_QUIET -eq "1") -or ($env:ORCA_INSTALL_QUIET -eq "1")
+$Quiet = ($env:RYK_INSTALL_QUIET -eq "1")
 # Errors may still use color when the host supports it; quiet only suppresses non-error UI.
 $HostSupportsColor = -not $env:NO_COLOR -and ($null -ne $Host.UI.RawUI)
 $UseColor = -not $Quiet -and $HostSupportsColor
@@ -84,13 +82,13 @@ function Fail($Message, $Remediation = $null) {
 }
 
 function Detect-OS {
-    if ($env:ORCA_OS_OVERRIDE) { return $env:ORCA_OS_OVERRIDE.ToLowerInvariant() }
+    if ($env:RYK_OS_OVERRIDE) { return $env:RYK_OS_OVERRIDE.ToLowerInvariant() }
     if ($IsWindows -or $env:OS -eq "Windows_NT") { return "windows" }
     Fail "unsupported operating system for install.ps1" "Use scripts/install.sh on macOS/Linux."
 }
 
 function Detect-Arch {
-    $arch = if ($env:ORCA_ARCH_OVERRIDE) { $env:ORCA_ARCH_OVERRIDE } else { [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() }
+    $arch = if ($env:RYK_ARCH_OVERRIDE) { $env:RYK_ARCH_OVERRIDE } else { [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() }
     switch ($arch.ToLowerInvariant()) {
         "x64" { return "amd64" }
         "x86_64" { return "amd64" }
@@ -125,15 +123,17 @@ Refuse to install a corrupted or tampered archive.
     }
 }
 
-# Returns $null when path is missing or not ryk/orca; otherwise @{ Version = <semver or $null> }.
+# Returns $null when path is missing or not ryk; otherwise @{ Version = <semver or $null> }.
+# Product detection uses the stable version --json contract, not the human banner.
 function Get-ExistingProductInfo($Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
     try {
-        $output = & $Path version 2>$null | Out-String
+        $output = & $Path version --json 2>$null | Out-String
     } catch {
         return $null
     }
-    if (-not ($output -match '"product"\s*:\s*"(ryk|orca)"|^(ryk|orca)(-daemon)?(\s|$)|^\d+\.\d+\.\d+')) {
+    if ($LASTEXITCODE -ne 0) { return $null }
+    if (-not ($output -match '"product"\s*:\s*"ryk"')) {
         return $null
     }
     $version = $null
@@ -156,11 +156,10 @@ function Install-RuntimeAssets($ExtractRoot) {
         Copy-Item -LiteralPath $source -Destination $dest -Recurse -Force
     }
     # Same marker contract as scripts/install.sh so `ryk uninstall` can recognize the runtime.
-    $markerPath = Join-Path $ResourceRoot ".orca-installation"
-    @(
-        "orca-runtime-v1"
-        "version=$Version"
-    ) | Set-Content -LiteralPath $markerPath -Encoding utf8
+    $markerPath = Join-Path $ResourceRoot ".ryk-installation"
+    $markerText = "ryk-runtime-v1`nversion=$Version`n"
+    $utf8NoBom = New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false
+    [System.IO.File]::WriteAllText($markerPath, $markerText, $utf8NoBom)
     New-Item -ItemType Directory -Force -Path $ShareDir | Out-Null
     if (Test-Path -LiteralPath $CurrentLink) {
         Remove-Item -LiteralPath $CurrentLink -Recurse -Force -ErrorAction SilentlyContinue
@@ -173,7 +172,7 @@ function Install-RuntimeAssets($ExtractRoot) {
 
 function Ensure-ResourceRootEntry($TargetRoot) {
     $profilePath = if ($PROFILE) { $PROFILE } else { Join-Path $HOME "Documents\PowerShell\Microsoft.PowerShell_profile.ps1" }
-    $marker = "# ryk runtime assets (ORCA_RESOURCE_ROOT dual-name)"
+    $marker = "# ryk runtime assets"
     $profileDir = Split-Path -Parent $profilePath
     if ($profileDir -and -not (Test-Path -LiteralPath $profileDir)) {
         New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
@@ -186,11 +185,11 @@ function Ensure-ResourceRootEntry($TargetRoot) {
         foreach ($line in $lines) {
             if ($line -eq $marker) {
                 [void]$updated.Add($line)
-                [void]$updated.Add("`$env:ORCA_RESOURCE_ROOT = `"$TargetRoot`"")
+                [void]$updated.Add("`$env:RYK_RESOURCE_ROOT = `"$TargetRoot`"")
                 $skipNextResourceRoot = $true
                 continue
             }
-            if ($skipNextResourceRoot -and $line -match '^\$env:ORCA_RESOURCE_ROOT\s*=') {
+            if ($skipNextResourceRoot -and $line -match '^\$env:RYK_RESOURCE_ROOT\s*=') {
                 continue
             }
             if ($skipNextResourceRoot -and [string]::IsNullOrWhiteSpace($line)) {
@@ -205,8 +204,29 @@ function Ensure-ResourceRootEntry($TargetRoot) {
     @(
         "",
         $marker,
-        "`$env:ORCA_RESOURCE_ROOT = `"$TargetRoot`""
+        "`$env:RYK_RESOURCE_ROOT = `"$TargetRoot`""
     ) | Add-Content -LiteralPath $profilePath
+}
+
+function Invoke-InstallEnsure($Destination) {
+    $oldResourceRoot = $env:RYK_RESOURCE_ROOT
+    $oldPath = $env:PATH
+    $oldNoColor = $env:NO_COLOR
+    try {
+        Push-Location -LiteralPath $HOME
+        $env:RYK_RESOURCE_ROOT = $CurrentLink
+        $env:PATH = "$InstallDir;$oldPath"
+        $env:NO_COLOR = "1"
+        & $Destination doctor --fix --from-install
+        if ($LASTEXITCODE -ne 0) {
+            Fail "ryk protection setup failed (exit code $LASTEXITCODE)" "Re-run from your home directory: ryk doctor --fix --from-install."
+        }
+    } finally {
+        Pop-Location
+        if ($null -eq $oldResourceRoot) { Remove-Item Env:RYK_RESOURCE_ROOT -ErrorAction SilentlyContinue } else { $env:RYK_RESOURCE_ROOT = $oldResourceRoot }
+        if ($null -eq $oldPath) { Remove-Item Env:PATH -ErrorAction SilentlyContinue } else { $env:PATH = $oldPath }
+        if ($null -eq $oldNoColor) { Remove-Item Env:NO_COLOR -ErrorAction SilentlyContinue } else { $env:NO_COLOR = $oldNoColor }
+    }
 }
 
 function Write-SuccessReceipt {
@@ -237,9 +257,7 @@ function Write-SuccessReceipt {
     Write-Host ""
     Write-Ui "  Profile exports were also written for future sessions." DarkGray
     Write-Host ""
-    Write-Ui "  Then" White
-    Write-Host "    ryk doctor"
-    Write-Host "    ryk start          # guided host wiring (default on interactive terminals)"
+    Write-Ui "  Protection setup completed via doctor --fix --from-install." DarkGray
 
     Write-Host ""
     Write-Ui "  Details" DarkGray
@@ -253,17 +271,14 @@ $arch = Detect-Arch
 if ($os -ne "windows") { Fail "unsupported operating system: $os" }
 
 $artifact = "ryk-v$Version-windows-$arch.zip"
-$legacyArtifact = "orca-v$Version-windows-$arch.zip"
 $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "ryk-install-$([System.Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $tempDir | Out-Null
 
 $destination = Join-Path $InstallDir "ryk.exe"
-$legacyDestination = Join-Path $InstallDir "orca.exe"
 
 # Empty = fresh; semver or "installed" = existing CLI at destination.
 $previousVersion = $null
 $existingCli = Get-ExistingProductInfo $destination
-if (-not $existingCli) { $existingCli = Get-ExistingProductInfo $legacyDestination }
 if ($existingCli) {
     $previousVersion = $existingCli.Version
     if (-not $previousVersion) { $previousVersion = "installed" }
@@ -293,14 +308,9 @@ try {
 
     if ($ArtifactDir) {
         $localArtifact = Join-Path $ArtifactDir $artifact
-        if (-not (Test-Path -LiteralPath $localArtifact)) {
-            $localArtifact = Join-Path $ArtifactDir $legacyArtifact
-            $artifact = $legacyArtifact
-            $artifactPath = Join-Path $tempDir $artifact
-        }
         $localChecksums = Join-Path $ArtifactDir "checksums.txt"
         if (-not (Test-Path -LiteralPath $localArtifact)) {
-            Fail "artifact not found: ryk-v* or orca-v* under RYK_ARTIFACT_DIR/ORCA_ARTIFACT_DIR."
+            Fail "artifact not found: $artifact under RYK_ARTIFACT_DIR."
         }
         if (-not (Test-Path -LiteralPath $localChecksums)) {
             Fail "checksums.txt not found in $ArtifactDir" "Place checksums.txt next to the archive for offline install."
@@ -310,13 +320,7 @@ try {
         Write-StepDone "Use local artifacts" $ArtifactDir
     } else {
         Write-StepActive "Download archive"
-        try {
-            Invoke-WebRequest -Uri "$BaseUrl/$artifact" -OutFile $artifactPath
-        } catch {
-            $artifact = $legacyArtifact
-            $artifactPath = Join-Path $tempDir $artifact
-            Invoke-WebRequest -Uri "$BaseUrl/$artifact" -OutFile $artifactPath
-        }
+        Invoke-WebRequest -Uri "$BaseUrl/$artifact" -OutFile $artifactPath
         Invoke-WebRequest -Uri "$BaseUrl/checksums.txt" -OutFile $checksumsPath
         Write-StepDone "Download archive" $artifact
     }
@@ -326,43 +330,33 @@ try {
 
     Write-StepActive "Install binaries + runtime"
     Expand-Archive -LiteralPath $artifactPath -DestinationPath $tempDir -Force
-    $extractRoot = Get-ChildItem -LiteralPath $tempDir -Directory | Where-Object { $_.Name -like "ryk-v*" -or $_.Name -like "orca-v*" } | Select-Object -First 1
+    $extractRoot = Get-ChildItem -LiteralPath $tempDir -Directory | Where-Object { $_.Name -eq "ryk-v$Version-windows-$arch" } | Select-Object -First 1
     if (-not $extractRoot) {
         Fail "artifact did not contain an extracted release root" "Unexpected archive layout for $artifact."
     }
-    $binary = Get-ChildItem -LiteralPath $extractRoot.FullName -Recurse -File -Filter "ryk.exe" | Select-Object -First 1
+    $binaryPath = Join-Path $extractRoot.FullName "bin\ryk.exe"
+    $binary = if (Test-Path -LiteralPath $binaryPath) { Get-Item -LiteralPath $binaryPath } else { $null }
     if (-not $binary) {
-        $binary = Get-ChildItem -LiteralPath $extractRoot.FullName -Recurse -File -Filter "orca.exe" | Select-Object -First 1
-    }
-    if (-not $binary) {
-        Fail "artifact did not contain ryk.exe/orca.exe" "Unexpected archive layout for $artifact."
+        Fail "artifact did not contain bin\ryk.exe" "Unexpected archive layout for $artifact."
     }
 
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    $force = ($env:RYK_INSTALL_FORCE -eq "1") -or ($env:ORCA_INSTALL_FORCE -eq "1")
+    $force = $env:RYK_INSTALL_FORCE -eq "1"
     if ((Test-Path -LiteralPath $destination) -and -not $force) {
         if (-not (Get-ExistingProductInfo $destination)) {
-            Fail "refusing to overwrite non-ryk/orca file at $destination" "Set RYK_INSTALL_FORCE=1 (or ORCA_INSTALL_FORCE) to replace it."
+            Fail "refusing to overwrite non-ryk file at $destination" "Set RYK_INSTALL_FORCE=1 to replace it."
         }
     }
-    if ((Test-Path -LiteralPath $legacyDestination) -and -not $force) {
-        if (-not (Get-ExistingProductInfo $legacyDestination)) {
-            Fail "refusing to overwrite non-ryk/orca file at $legacyDestination" "Set RYK_INSTALL_FORCE=1 (or ORCA_INSTALL_FORCE) to replace it."
-        }
-    }
-
     Copy-Item -LiteralPath $binary.FullName -Destination $destination -Force
-    $aliasSrc = Get-ChildItem -LiteralPath $extractRoot.FullName -Recurse -File -Filter "orca.exe" | Select-Object -First 1
-    if ($aliasSrc) {
-        Copy-Item -LiteralPath $aliasSrc.FullName -Destination $legacyDestination -Force
-    } else {
-        Copy-Item -LiteralPath $binary.FullName -Destination $legacyDestination -Force
-    }
     Install-RuntimeAssets $extractRoot.FullName
-    Write-StepDone "Install binaries + runtime" "ryk.exe + orca.exe alias + assets (CLI-only; shell_engine in-process)"
+    Write-StepDone "Install binaries + runtime" "ryk.exe + assets (CLI-only; shell_engine in-process)"
 
     Ensure-ResourceRootEntry $CurrentLink
-    Write-StepDone "Configure shell" "ORCA_RESOURCE_ROOT (share path unchanged in 5a)"
+    Write-StepDone "Configure shell" "RYK_RESOURCE_ROOT (share path unchanged in 5a)"
+
+    Write-StepActive "Set up protection"
+    Invoke-InstallEnsure $destination
+    Write-StepDone "Set up protection" "doctor --fix --from-install"
 
     Write-SuccessReceipt -PreviousVersion $previousVersion -Destination $destination
 } finally {

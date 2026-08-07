@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const core_api = @import("orca_core").api;
-const orca_policy = @import("orca_core").policy;
+const core_api = @import("ryk_core").api;
+const policy_mod = @import("ryk_core").policy;
 
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
@@ -16,7 +16,7 @@ const env_util = @import("../env_util.zig");
 const tui = @import("../tui/mod.zig");
 /// Re-export: run adapters for host_keys; regenerate managed store under workspace_root.
 /// Body lives in `policy.network_discovered` (DIS-1 / DIS-7).
-pub const refreshManagedDiscovery = orca_policy.network_discovered.refreshManagedDiscovery;
+pub const refreshManagedDiscovery = policy_mod.network_discovered.refreshManagedDiscovery;
 
 pub fn command(io: std.Io, cwd: std.Io.Dir, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     for (argv) |arg| {
@@ -95,7 +95,7 @@ pub fn runStart(
     if (policy_existed) {
         try stdout.writeAll("Policy already exists — leaving it unchanged.\n");
     } else {
-        try stdout.writeAll("Creating .orca/policy.yaml...\n");
+        try stdout.writeAll("Creating .ryk/policy.yaml...\n");
     }
     var ensure_outcome = try ensure.runEnsure(io, allocator, cwd, .{
         .from_install = false,
@@ -128,7 +128,7 @@ pub fn runStart(
         // Host honesty comes from multi-select install + verify below, not empty wire results.
     }
 
-    // Additive pack enablement from preset (project .orca.toml when in git repo).
+    // Additive pack enablement from preset (project .ryk.toml when in git repo).
     var packs_ok = true;
     var packs_result = pack_state.ensurePresetPacksByName(io, allocator, workspace_root, flags.preset) catch blk: {
         packs_ok = false;
@@ -150,7 +150,7 @@ pub fn runStart(
     var daemon_check: onboarding.DaemonCheck = undefined;
     if (protection.needsCommandGuard()) {
         // CLI-only product: shell mediation is in-process Zig shell_engine.
-        // Do not require the removed orca-daemon binary for start/onboarding.
+        // Do not require the removed ryk-daemon binary for start/onboarding.
         daemon_check = .{
             .status = .compatible,
             .detail = "in-process Zig shell_engine",
@@ -269,7 +269,7 @@ fn resolveProtectionMode(flags: onboarding.StartFlags) onboarding.ProtectionMode
 /// Modes that ask or enforce on risk. observe/trusted soften and must not claim Ask protection.
 /// Matches status `policyModeIsMediating` vocabulary (ask/strict/ci/redteam).
 fn policyModeIsAskEquivalent(mode: []const u8) bool {
-    const parsed = orca_policy.schema.Mode.parse(mode) orelse return false;
+    const parsed = policy_mod.schema.Mode.parse(mode) orelse return false;
     return switch (parsed) {
         .ask, .yolo, .strict, .ci, .redteam => true,
         .observe, .trusted => false,
@@ -422,7 +422,7 @@ fn installSelectedHosts(
 fn processHome(allocator: std.mem.Allocator) ![]u8 {
     var env_map = try env_util.createProcessMap(allocator);
     defer env_map.deinit();
-    return (try env_util.getOwned(&env_map, allocator, "HOME")) orelse error.HomeNotSet;
+    return (try env_util.getOwnedHome(&env_map, allocator)) orelse error.HomeNotSet;
 }
 
 /// Soft product-path refresh for start (DIS-1). Always unions selected ∪
@@ -504,7 +504,7 @@ fn writeSuccessEndCard(
     }
     try stdout.writeAll("\n");
 
-    const policy_path = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "policy.yaml" });
+    const policy_path = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "policy.yaml" });
     defer allocator.free(policy_path);
     const policy_line = try std.fmt.allocPrint(allocator, "{s}  (preset {s})", .{ policy_path, preset });
     defer allocator.free(policy_line);
@@ -867,9 +867,9 @@ test "start with existing observe policy does not claim Ask protection" {
     defer tmp.cleanup();
 
     // Pre-seed observe policy — ensurePolicy must leave it unchanged.
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer file.close(std.testing.io);
         try file.writeStreamingAll(std.testing.io,
             \\version: 1
@@ -910,7 +910,7 @@ test "start with existing observe policy does not claim Ask protection" {
     // Residual callout, not full Ask protection claim.
     try std.testing.expect(std.mem.indexOf(u8, output, "residual policy mode") != null or std.mem.indexOf(u8, output, "Setup complete") != null);
     // Policy file still observe.
-    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".orca/policy.yaml", std.testing.allocator, .limited(4096));
+    const policy = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(4096));
     defer std.testing.allocator.free(policy);
     try std.testing.expect(std.mem.indexOf(u8, policy, "mode: observe") != null);
 }

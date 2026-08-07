@@ -135,12 +135,12 @@ pub fn shellGate(host: []const u8) []const u8 {
 /// wired host hook that fires and honors veto can claim fail-closed shell.
 /// `wired` is doctor wired label: `"yes"` / `"partial"` / `"no"` / `"—"`.
 pub fn failStance(host: []const u8, hermes_fail_open: bool, wired: []const u8) []const u8 {
-    // RT-06: never claim fail-closed (or Hermes fail-open default as “policy stance”)
+    // RT-06: never claim fail-closed (or explicit Hermes fail-open) when unwired.
     // when the host hook is unwired — process-wrap alone is not shell mediation.
     const hook_wired = std.mem.eql(u8, wired, "yes") or std.mem.eql(u8, wired, "partial");
     if (std.mem.eql(u8, host, "hermes")) {
         if (!hook_wired) return "unwired (no fail-closed shell)";
-        return if (hermes_fail_open) "fail-open (default)" else "fail-closed";
+        return if (hermes_fail_open) "fail-open (explicit)" else "fail-closed";
     }
     if (std.mem.eql(u8, host, "pi")) return "mode-dependent";
     if (!hook_wired) return "unwired (no fail-closed shell)";
@@ -201,7 +201,7 @@ pub fn formatFix(
     }
     if (std.mem.eql(u8, wired, "yes") or std.mem.eql(u8, wired, "partial")) {
         if (std.mem.eql(u8, host, "hermes") and hermes_fail_open) {
-            return try allocator.dupe(u8, "export RYK_HERMES_FAIL_OPEN=0  # or: ryk run -- hermes");
+            return try allocator.dupe(u8, "unset RYK_HERMES_FAIL_OPEN  # or: ryk run -- hermes");
         }
         return try allocator.dupe(u8, "—");
     }
@@ -296,7 +296,7 @@ fn resolveSmokeBinary(io: std.Io, allocator: std.mem.Allocator) !?[]u8 {
     var env_map = env_util.createProcessMap(allocator) catch null;
     defer if (env_map) |*m| m.deinit();
     if (env_map) |*m| {
-        // Prefer RYK_BIN, fall back to ORCA_BIN (Phase 5a dual-read).
+        // RYK_BIN only (hard-cut).
         if (try env_util.getOwnedBrand(m, allocator, "BIN")) |configured| {
             if (std.Io.Dir.accessAbsolute(io, configured, .{})) |_| {
                 return configured;
@@ -308,9 +308,9 @@ fn resolveSmokeBinary(io: std.Io, allocator: std.mem.Allocator) !?[]u8 {
 
     const self_exe = try std.process.executablePathAlloc(io, allocator);
     const base = std.fs.path.basename(self_exe);
-    // Real CLI binaries are named `ryk` or legacy `orca` (or `.exe`). The zig test harness is not.
+    // Real CLI binaries are named `ryk` (or `ryk.exe`). The zig test harness is not.
     const brand = @import("brand.zig");
-    if (brand.isPrimaryInvocation(base) or brand.isLegacyInvocation(base)) {
+    if (brand.isPrimaryInvocation(base)) {
         const owned = try allocator.dupe(u8, self_exe);
         allocator.free(self_exe);
         return owned;
@@ -407,18 +407,18 @@ pub fn writeHostSmokeReport(stdout: anytype, host: []const u8, smoke: HostSmokeP
     }
 }
 
-/// Inspect Pi host presence separately from legacy npm registration.
+/// Inspect Pi host presence separately from the npm registration surface.
 pub fn inspectPi(io: std.Io, allocator: std.mem.Allocator) PiStatus {
     const binary_detected = binaryInPath(io, allocator, "pi");
     var env_map = env_util.createProcessMap(allocator) catch return .{ .binary_detected = binary_detected };
     defer env_map.deinit();
-    const home_owned = env_util.getOwned(&env_map, allocator, "HOME") catch return .{ .binary_detected = binary_detected };
+    const home_owned = env_util.getOwnedHome(&env_map, allocator) catch return .{ .binary_detected = binary_detected };
     const home = home_owned orelse return .{ .binary_detected = binary_detected };
     defer allocator.free(home);
     return .{
         .binary_detected = binary_detected,
         .extension_installed = pi_install.isCompleteAtHome(io, allocator, home) or
-            legacyPiExtensionInstalledAtHome(io, allocator, home),
+            piExtensionInstalledAtHome(io, allocator, home),
     };
 }
 
@@ -436,12 +436,12 @@ const PiSettings = struct {
     packages: []const []const u8 = &.{},
 };
 
-fn legacyPiExtensionInstalledAtHome(io: std.Io, allocator: std.mem.Allocator, home: []const u8) bool {
-    const package_root = std.fs.path.join(allocator, &.{ home, ".pi/agent/npm/node_modules/@orca-sec/pi-orca" }) catch return false;
+fn piExtensionInstalledAtHome(io: std.Io, allocator: std.mem.Allocator, home: []const u8) bool {
+    const package_root = std.fs.path.join(allocator, &.{ home, ".pi/agent/npm/node_modules/@rykan/pi-ryk" }) catch return false;
     defer allocator.free(package_root);
     const manifest_path = std.fs.path.join(allocator, &.{ package_root, "package.json" }) catch return false;
     defer allocator.free(manifest_path);
-    const extension_path = std.fs.path.join(allocator, &.{ package_root, "extensions/orca.ts" }) catch return false;
+    const extension_path = std.fs.path.join(allocator, &.{ package_root, "extensions/ryk.ts" }) catch return false;
     defer allocator.free(extension_path);
     const settings_path = std.fs.path.join(allocator, &.{ home, ".pi/agent/settings.json" }) catch return false;
     defer allocator.free(settings_path);
@@ -451,14 +451,14 @@ fn legacyPiExtensionInstalledAtHome(io: std.Io, allocator: std.mem.Allocator, ho
     defer allocator.free(manifest_text);
     var parsed = std.json.parseFromSlice(PiPackageManifest, allocator, manifest_text, .{ .ignore_unknown_fields = true }) catch return false;
     defer parsed.deinit();
-    if (!std.mem.eql(u8, parsed.value.name, "@orca-sec/pi-orca") or parsed.value.version.len == 0) return false;
+    if (!std.mem.eql(u8, parsed.value.name, "@rykan/pi-ryk") or parsed.value.version.len == 0) return false;
 
     const settings_text = std.Io.Dir.cwd().readFileAlloc(io, settings_path, allocator, .limited(1024 * 1024)) catch return false;
     defer allocator.free(settings_text);
     var settings = std.json.parseFromSlice(PiSettings, allocator, settings_text, .{ .ignore_unknown_fields = true }) catch return false;
     defer settings.deinit();
     for (settings.value.packages) |package| {
-        if (std.mem.eql(u8, package, "npm:@orca-sec/pi-orca")) return true;
+        if (std.mem.eql(u8, package, "npm:@rykan/pi-ryk")) return true;
     }
     return false;
 }
@@ -481,13 +481,14 @@ fn binaryInPath(io: std.Io, allocator: std.mem.Allocator, name: []const u8) bool
 }
 
 /// Stance file written next to installed Hermes plugin for *new* installs (fail-closed).
-pub const hermes_fail_stance_filename = ".orca_fail_stance";
+pub const hermes_fail_stance_filename = ".ryk_fail_stance";
 
-/// Effective Hermes fail-open from an env value only (null/empty → fail-open product default).
+/// Effective Hermes fail-open from an env value only. Missing, empty, and
+/// unrecognized values are fail-closed.
 pub fn hermesFailOpenFromEnvValue(value: ?[]const u8) bool {
-    const raw = value orelse return true;
+    const raw = value orelse return false;
     const trimmed = std.mem.trim(u8, raw, " \t\r\n");
-    if (trimmed.len == 0) return true;
+    if (trimmed.len == 0) return false;
     if (std.ascii.eqlIgnoreCase(trimmed, "0") or
         std.ascii.eqlIgnoreCase(trimmed, "false") or
         std.ascii.eqlIgnoreCase(trimmed, "no") or
@@ -495,7 +496,14 @@ pub fn hermesFailOpenFromEnvValue(value: ?[]const u8) bool {
         std.ascii.eqlIgnoreCase(trimmed, "fail-closed") or
         std.ascii.eqlIgnoreCase(trimmed, "closed"))
         return false;
-    return true;
+    if (std.ascii.eqlIgnoreCase(trimmed, "1") or
+        std.ascii.eqlIgnoreCase(trimmed, "true") or
+        std.ascii.eqlIgnoreCase(trimmed, "yes") or
+        std.ascii.eqlIgnoreCase(trimmed, "on") or
+        std.ascii.eqlIgnoreCase(trimmed, "fail-open") or
+        std.ascii.eqlIgnoreCase(trimmed, "open"))
+        return true;
+    return false;
 }
 
 /// Parse install stance file content (`fail-closed` / `0` / `fail-open` / `1`).
@@ -519,25 +527,25 @@ pub fn hermesFailOpenFromStanceText(text: []const u8) ?bool {
     return null;
 }
 
-/// Env wins when set; else install stance file under `plugin_dir`; else fail-open default.
+/// Env wins when set; else install stance file under `plugin_dir`; else fail closed.
 pub fn hermesFailOpenEffective(env_value: ?[]const u8, stance_file_text: ?[]const u8) bool {
     if (env_value) |v| {
         const trimmed = std.mem.trim(u8, v, " \t\r\n");
-        if (trimmed.len > 0) return hermesFailOpenFromEnvValue(trimmed);
+        return hermesFailOpenFromEnvValue(trimmed);
     }
     if (stance_file_text) |text| {
         if (hermesFailOpenFromStanceText(text)) |open| return open;
     }
-    return true;
+    return false;
 }
 
 fn readHermesStanceFile(allocator: std.mem.Allocator) ?[]u8 {
     var env_map = env_util.createProcessMap(allocator) catch return null;
     defer env_map.deinit();
-    const home_owned = env_util.getOwned(&env_map, allocator, "HOME") catch return null;
+    const home_owned = env_util.getOwnedHome(&env_map, allocator) catch return null;
     const home = home_owned orelse return null;
     defer allocator.free(home);
-    const path = std.fs.path.join(allocator, &.{ home, ".hermes", "plugins", "orca", hermes_fail_stance_filename }) catch return null;
+    const path = std.fs.path.join(allocator, &.{ home, ".hermes", "plugins", "ryk", hermes_fail_stance_filename }) catch return null;
     defer allocator.free(path);
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();
@@ -545,23 +553,23 @@ fn readHermesStanceFile(allocator: std.mem.Allocator) ?[]u8 {
 }
 
 pub fn hermesFailOpenFromEnv() bool {
-    var env_map = env_util.createProcessMap(std.heap.page_allocator) catch return true;
+    var env_map = env_util.createProcessMap(std.heap.page_allocator) catch return false;
     defer env_map.deinit();
     const value = env_util.getOwnedBrand(&env_map, std.heap.page_allocator, "HERMES_FAIL_OPEN") catch null;
     defer if (value) |v| std.heap.page_allocator.free(v);
 
-    // When env is set (non-empty), it wins.
+    // When env is present, including empty or invalid values, it wins and
+    // remains fail-closed unless it contains an explicit recognized token.
     if (value) |v| {
-        const trimmed = std.mem.trim(u8, v, " \t\r\n");
-        if (trimmed.len > 0) return hermesFailOpenFromEnvValue(trimmed);
+        return hermesFailOpenFromEnvValue(v);
     }
 
-    // New installs write .orca_fail_stance under the user plugin dir.
+    // New installs write .ryk_fail_stance under the user plugin dir.
     if (readHermesStanceFile(std.heap.page_allocator)) |stance| {
         defer std.heap.page_allocator.free(stance);
         if (hermesFailOpenFromStanceText(stance)) |open| return open;
     }
-    return true;
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -601,7 +609,7 @@ test "Grok host status uses raw PreToolUse fixtures and exit-two deny" {
 }
 
 test "interpretSmokeOutcome codex deny uses exit code 2" {
-    try std.testing.expect(interpretSmokeOutcome("codex", "block", 2, "", "[[ORCA-GUARD]] blocked."));
+    try std.testing.expect(interpretSmokeOutcome("codex", "block", 2, "", "[[RYKAN-V-GUARD]] blocked."));
     try std.testing.expect(!interpretSmokeOutcome("codex", "block", 0, "", "error"));
     try std.testing.expect(interpretSmokeOutcome("codex", "block", 0, "{\"decision\":\"block\"}", ""));
 }
@@ -624,12 +632,12 @@ test "shellGate and failStance cover all P1 hosts" {
     try std.testing.expectEqualStrings("tool.before", shellGate("openclaw"));
     try std.testing.expectEqualStrings("pre_tool_call", shellGate("hermes"));
     try std.testing.expectEqualStrings("extension-managed (smoke not run)", shellGate("pi"));
-    try std.testing.expectEqualStrings("fail-open (default)", failStance("hermes", true, "yes"));
+    try std.testing.expectEqualStrings("fail-open (explicit)", failStance("hermes", true, "yes"));
     try std.testing.expectEqualStrings("fail-closed", failStance("hermes", false, "yes"));
-    // RT-06/H1: Hermes unwired must not claim fail-closed (or fail-open default as live stance).
+    // RT-06/H1: Hermes unwired must not claim an active fail stance.
     try std.testing.expectEqualStrings("unwired (no fail-closed shell)", failStance("hermes", false, "no"));
     try std.testing.expectEqualStrings("unwired (no fail-closed shell)", failStance("hermes", true, "—"));
-    try std.testing.expectEqualStrings("fail-open (default)", failStance("hermes", true, "partial"));
+    try std.testing.expectEqualStrings("fail-open (explicit)", failStance("hermes", true, "partial"));
     try std.testing.expectEqualStrings("mode-dependent", failStance("pi", true, "yes"));
     try std.testing.expectEqualStrings("mode-dependent", failStance("pi", true, "no"));
     try std.testing.expectEqualStrings("fail-closed shell", failStance("codex", true, "yes"));
@@ -648,7 +656,7 @@ test "formatFix prefers smoke failure and hermes fail-open remediation" {
 
     const hermes_open = try formatFix(allocator, "hermes", "yes", .{}, true);
     defer allocator.free(hermes_open);
-    try std.testing.expect(std.mem.indexOf(u8, hermes_open, "RYK_HERMES_FAIL_OPEN=0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hermes_open, "unset RYK_HERMES_FAIL_OPEN") != null);
 
     const pi_fix = try formatFix(allocator, "pi", "—", .{}, true);
     defer allocator.free(pi_fix);
@@ -694,24 +702,24 @@ test "Pi extension installation requires registration and official package marke
     const home = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(home);
 
-    try tmp.dir.createDirPath(std.testing.io, ".pi/agent/npm/node_modules/@orca-sec/pi-orca/extensions");
+    try tmp.dir.createDirPath(std.testing.io, ".pi/agent/npm/node_modules/@rykan/pi-ryk/extensions");
     try tmp.dir.writeFile(std.testing.io, .{
-        .sub_path = ".pi/agent/npm/node_modules/@orca-sec/pi-orca/package.json",
-        .data = "{\"name\":\"@orca-sec/pi-orca\",\"version\":\"1.2.8\"}",
+        .sub_path = ".pi/agent/npm/node_modules/@rykan/pi-ryk/package.json",
+        .data = "{\"name\":\"@rykan/pi-ryk\",\"version\":\"1.2.9\"}",
     });
-    try std.testing.expect(!legacyPiExtensionInstalledAtHome(std.testing.io, std.testing.allocator, home));
+    try std.testing.expect(!piExtensionInstalledAtHome(std.testing.io, std.testing.allocator, home));
 
     try tmp.dir.writeFile(std.testing.io, .{
-        .sub_path = ".pi/agent/npm/node_modules/@orca-sec/pi-orca/extensions/orca.ts",
-        .data = "export default function orca() {}",
+        .sub_path = ".pi/agent/npm/node_modules/@rykan/pi-ryk/extensions/ryk.ts",
+        .data = "export default function ryk() {}",
     });
-    try std.testing.expect(!legacyPiExtensionInstalledAtHome(std.testing.io, std.testing.allocator, home));
+    try std.testing.expect(!piExtensionInstalledAtHome(std.testing.io, std.testing.allocator, home));
 
     try tmp.dir.writeFile(std.testing.io, .{
         .sub_path = ".pi/agent/settings.json",
-        .data = "{\"packages\":[\"npm:@orca-sec/pi-orca\"]}",
+        .data = "{\"packages\":[\"npm:@rykan/pi-ryk\"]}",
     });
-    try std.testing.expect(legacyPiExtensionInstalledAtHome(std.testing.io, std.testing.allocator, home));
+    try std.testing.expect(piExtensionInstalledAtHome(std.testing.io, std.testing.allocator, home));
 }
 
 test "Pi process command is exact and copyable" {
@@ -743,11 +751,13 @@ test "formatFix degraded prefers daemon doctor not reinstall" {
     try std.testing.expect(std.mem.indexOf(u8, fix, "not ready") != null);
 }
 
-test "hermesFailOpenEffective prefers env then stance then default open" {
-    try std.testing.expect(hermesFailOpenEffective(null, null));
+test "hermesFailOpenEffective prefers env then stance then default closed" {
+    try std.testing.expect(!hermesFailOpenEffective(null, null));
     try std.testing.expect(!hermesFailOpenEffective(null, "fail-closed"));
     try std.testing.expect(hermesFailOpenEffective(null, "fail-open"));
     try std.testing.expect(!hermesFailOpenEffective("0", "fail-open"));
     try std.testing.expect(hermesFailOpenEffective("1", "fail-closed"));
+    try std.testing.expect(!hermesFailOpenEffective("typo", "fail-open"));
+    try std.testing.expect(!hermesFailOpenEffective("", "fail-open"));
     try std.testing.expect(!hermesFailOpenFromStanceText("fail-closed").?);
 }

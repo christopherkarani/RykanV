@@ -35,7 +35,7 @@
 - `zig build test`
 - `zig build run -- --help`
 - `zig build run -- version`
-- `./zig-out/bin/orca not-a-command`
+- `./zig-out/bin/ryk not-a-command`
 
 ## Acceptance Criteria Status
 
@@ -45,7 +45,7 @@
 - [x] `zig build run -- version` prints a version.
 - [x] Unknown command exits non-zero.
 - [x] Repository layout matches the intended architecture.
-- [x] README explains that Orca is pre-release and not yet enforcing security.
+- [x] README explains that ryk is pre-release and not yet enforcing security.
 
 ## Known Limitations
 

@@ -1,7 +1,7 @@
 //! OS-filesystem sandbox profile model (P1-U).
 //!
 //! Compiles a deterministic grant list: workspace RW (minus trusted control roots
-//! `{workspace}/.orca` and `{workspace}/.git`; control remains readable / write-deny),
+//! `{workspace}/.ryk` and `{workspace}/.git`; control remains readable / write-deny),
 //! system RO prefixes, optional classic tmp when `include_tmp` — never a broad $HOME
 //! grant and never automatic bare `/tmp` on production defaults (session temp is
 //! workspace-scoped). No Landlock/Seatbelt apply lives here; this is the portable
@@ -38,11 +38,11 @@ pub const CompileOptions = struct {
     /// Absolute workspace root. Relative or empty → fail closed.
     workspace_root: []const u8,
     /// Extra trusted control roots (absolute, or relative to workspace).
-    /// Always combined with `{workspace}/.orca` and `{workspace}/.git`.
+    /// Always combined with `{workspace}/.ryk` and `{workspace}/.git`.
     control_roots: []const []const u8 = &.{},
     /// When true, add explicit RW grants for classic platform temp trees
     /// (`tmp_path` plus `defaultTmpPrefixes`). **Default false:** production
-    /// attach rewrites TMPDIR into workspace session temp (`.orca-tmp`), which
+    /// attach rewrites TMPDIR into workspace session temp (`.ryk-tmp`), which
     /// is already covered by the workspace RW grant. Do not auto-grant bare
     /// `/tmp` / `/var/tmp` trees on production defaults (M-8 grant-width).
     /// Attach / apply should keep this false unless intentionally opting into
@@ -214,7 +214,7 @@ pub const CompiledProfile = struct {
 fn assertControlRootSafe(io: std.Io, path: []const u8) error{InvalidControlRoot}!void {
     if (path.len == 0) return error.InvalidControlRoot;
 
-    // Symlink control roots are always unsafe: path-based deny on `.orca` does not
+    // Symlink control roots are always unsafe: path-based deny on `.ryk` does not
     // cover writes via the realpath alias under an RW grant.
     var link_buf: [std.fs.max_path_bytes]u8 = undefined;
     if (std.Io.Dir.readLinkAbsolute(io, path, &link_buf)) |_| {
@@ -335,7 +335,7 @@ pub fn isClassicTmpPath(path: []const u8) bool {
 /// Scoped to classic system temp trees only — not `/private/var/folders` (macOS
 /// per-user TMPDIR parent), which is too broad and would swallow outside canaries
 /// under testing.tmpDir. Production attach keeps `include_tmp=false` and rewrites
-/// TMPDIR into workspace session temp (`.orca-tmp`, covered by workspace RW).
+/// TMPDIR into workspace session temp (`.ryk-tmp`, covered by workspace RW).
 pub fn defaultTmpPrefixes() []const []const u8 {
     return switch (builtin.os.tag) {
         .macos => &[_][]const u8{
@@ -500,7 +500,7 @@ pub fn compileProfile(allocator: std.mem.Allocator, options: CompileOptions) !Co
         has_host_config_rw = true;
     }
 
-    // Control roots: always workspace/.orca and workspace/.git plus any listed roots.
+    // Control roots: always workspace/.ryk and workspace/.git plus any listed roots.
     // Both match policy/builtin files.write deny; OS attach must not leave .git agent-writable.
     var control_list: std.ArrayList([]const u8) = .empty;
     errdefer {
@@ -509,7 +509,7 @@ pub fn compileProfile(allocator: std.mem.Allocator, options: CompileOptions) !Co
     }
 
     {
-        const default_controls = [_][]const u8{ ".orca", ".git" };
+        const default_controls = [_][]const u8{ ".ryk", ".git" };
         for (default_controls) |name| {
             const default_control = try joinAbsolute(allocator, workspace_root, name);
             control_list.append(allocator, default_control) catch |err| {
@@ -881,7 +881,7 @@ test "macOS default system RO includes DNS and TLS leaves not bare /etc" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var compiled = try compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-profile-dns-tls-ws",
+        .workspace_root = "/tmp/ryk-profile-dns-tls-ws",
         // null → production defaults
         .system_ro_prefixes = null,
     });
@@ -902,7 +902,7 @@ test "macOS default system RO includes DNS and TLS leaves not bare /etc" {
 
 test "P1-U-01 workspace grant is RW for absolute workspace" {
     const allocator = std.testing.allocator;
-    const ws = "/tmp/orca-profile-ws-unit";
+    const ws = "/tmp/ryk-profile-ws-unit";
     var profile = try compileProfile(allocator, .{
         .workspace_root = ws,
         .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
@@ -911,7 +911,7 @@ test "P1-U-01 workspace grant is RW for absolute workspace" {
 
     try std.testing.expect(profile.hasGrant(ws, .rw));
     try std.testing.expect(profile.isAgentWritable(ws));
-    try std.testing.expect(profile.isAgentWritable("/tmp/orca-profile-ws-unit/src/main.zig"));
+    try std.testing.expect(profile.isAgentWritable("/tmp/ryk-profile-ws-unit/src/main.zig"));
     try std.testing.expectEqualStrings(ws, profile.workspace_root);
 }
 
@@ -933,22 +933,22 @@ test "P1-U-02 system prefixes are RO only" {
     try std.testing.expect(!profile.isAgentWritable("/bin/sh"));
 }
 
-test "P1-U-04 trusted Orca state carve-out is not agent-writable" {
+test "P1-U-04 trusted ryk state carve-out is not agent-writable" {
     const allocator = std.testing.allocator;
     const ws = "/workspace/proj";
     var profile = try compileProfile(allocator, .{
         .workspace_root = ws,
         .system_ro_prefixes = &[_][]const u8{"/usr"},
-        .control_roots = &[_][]const u8{".orca/extra-control"},
+        .control_roots = &[_][]const u8{".ryk/extra-control"},
     });
     defer profile.deinit();
 
-    // Default workspace/.orca is always a control root.
-    try std.testing.expect(profile.isControlPath("/workspace/proj/.orca"));
-    try std.testing.expect(profile.isControlPath("/workspace/proj/.orca/policy.yaml"));
-    try std.testing.expect(profile.isControlPath("/workspace/proj/.orca/sessions/mode"));
-    try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.orca/policy.yaml"));
-    try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.orca/sessions/approvals"));
+    // Default workspace/.ryk is always a control root.
+    try std.testing.expect(profile.isControlPath("/workspace/proj/.ryk"));
+    try std.testing.expect(profile.isControlPath("/workspace/proj/.ryk/policy.yaml"));
+    try std.testing.expect(profile.isControlPath("/workspace/proj/.ryk/sessions/mode"));
+    try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.ryk/policy.yaml"));
+    try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.ryk/sessions/approvals"));
 
     // Default workspace/.git is always a control root (parity with policy write deny).
     try std.testing.expect(profile.isControlPath("/workspace/proj/.git"));
@@ -961,14 +961,14 @@ test "P1-U-04 trusted Orca state carve-out is not agent-writable" {
     try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.git/objects/zz"));
 
     // Extra control root (relative → under workspace).
-    try std.testing.expect(profile.isControlPath("/workspace/proj/.orca/extra-control"));
-    try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.orca/extra-control/ipc.sock"));
+    try std.testing.expect(profile.isControlPath("/workspace/proj/.ryk/extra-control"));
+    try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.ryk/extra-control/ipc.sock"));
 
     // Ordinary workspace file remains writable.
     try std.testing.expect(profile.isAgentWritable("/workspace/proj/src/app.zig"));
 }
 
-test "default control roots include .orca and .git" {
+test "default control roots include .ryk and .git" {
     const allocator = std.testing.allocator;
     var profile = try compileProfile(allocator, .{
         .workspace_root = "/workspace/proj",
@@ -976,13 +976,13 @@ test "default control roots include .orca and .git" {
     });
     defer profile.deinit();
 
-    try std.testing.expect(profile.isControlPath("/workspace/proj/.orca"));
+    try std.testing.expect(profile.isControlPath("/workspace/proj/.ryk"));
     try std.testing.expect(profile.isControlPath("/workspace/proj/.git"));
     try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.git/phase2-probe"));
     try std.testing.expect(profile.isAgentWritable("/workspace/proj/src/foo.zig"));
     // Control roots stay readable (write-deny only).
     try std.testing.expect(profile.isGrantedReadable("/workspace/proj/.git/config"));
-    try std.testing.expect(profile.isGrantedReadable("/workspace/proj/.orca/policy.yaml"));
+    try std.testing.expect(profile.isGrantedReadable("/workspace/proj/.ryk/policy.yaml"));
 }
 
 test "P1-U-03 no broad HOME grant" {
@@ -1173,11 +1173,11 @@ test "M-2 workspace at filesystem root fails closed" {
     try std.testing.expect(normal.hasGrant("/workspace/proj", .rw));
 
     var single = try compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-profile-m2-ws",
+        .workspace_root = "/tmp/ryk-profile-m2-ws",
         .system_ro_prefixes = &[_][]const u8{"/usr"},
     });
     defer single.deinit();
-    try std.testing.expect(single.hasGrant("/tmp/orca-profile-m2-ws", .rw));
+    try std.testing.expect(single.hasGrant("/tmp/ryk-profile-m2-ws", .rw));
 }
 
 test "P1-U-07 determinism: same inputs yield same canonical bytes and hash" {
@@ -1187,7 +1187,7 @@ test "P1-U-07 determinism: same inputs yield same canonical bytes and hash" {
         .system_ro_prefixes = &[_][]const u8{ "/lib", "/usr", "/bin" },
         .include_tmp = true,
         .tmp_path = "/tmp",
-        .control_roots = &[_][]const u8{"/var/orca-control"},
+        .control_roots = &[_][]const u8{"/var/ryk-control"},
     };
 
     var a = try compileProfile(allocator, opts);
@@ -1230,7 +1230,7 @@ test "optional tmp grant is RW only when requested" {
     });
     defer with_tmp.deinit();
     try std.testing.expect(with_tmp.hasGrant("/tmp", .rw));
-    try std.testing.expect(with_tmp.isAgentWritable("/tmp/orca-scratch"));
+    try std.testing.expect(with_tmp.isAgentWritable("/tmp/ryk-scratch"));
 }
 
 test "control root symlink on disk fails closed (F-1)" {
@@ -1247,11 +1247,11 @@ test "control root symlink on disk fails closed (F-1)" {
 
     const src_path = try std.fs.path.join(allocator, &.{ ws_root, "src" });
     defer allocator.free(src_path);
-    const orca_link = try std.fs.path.join(allocator, &.{ ws_root, ".orca" });
-    defer allocator.free(orca_link);
+    const ryk_link = try std.fs.path.join(allocator, &.{ ws_root, ".ryk" });
+    defer allocator.free(ryk_link);
 
-    // Plant workspace/.orca → workspace/src (path alias attack).
-    std.Io.Dir.cwd().symLink(io, src_path, orca_link, .{}) catch |err| switch (err) {
+    // Plant workspace/.ryk → workspace/src (path alias attack).
+    std.Io.Dir.cwd().symLink(io, src_path, ryk_link, .{}) catch |err| switch (err) {
         error.PermissionDenied => return error.SkipZigTest,
         else => return err,
     };
@@ -1273,7 +1273,7 @@ test "control root real directory is accepted" {
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     try ws_tmp.dir.createDirPath(io, ".git");
     try ws_tmp.dir.writeFile(io, .{ .sub_path = "neighbor.txt", .data = "ok" });
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
@@ -1296,8 +1296,8 @@ test "control root .git symlink on disk fails closed" {
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
     try ws_tmp.dir.createDirPath(io, "src");
-    // Real .orca so only the .git symlink fails validation.
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    // Real .ryk so only the .git symlink fails validation.
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
 
@@ -1331,7 +1331,7 @@ test "control root .git as gitdir file is accepted" {
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     try ws_tmp.dir.writeFile(io, .{ .sub_path = ".git", .data = "gitdir: /tmp/elsewhere/worktrees/wt1\n" });
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
@@ -1353,7 +1353,7 @@ test "control root regular file (authority path) is accepted" {
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     try ws_tmp.dir.createDirPath(io, ".git");
     try ws_tmp.dir.createDirPath(io, ".codex");
     try ws_tmp.dir.writeFile(io, .{ .sub_path = ".codex/config.toml", .data = "[mcp_servers]\n" });
@@ -1377,7 +1377,7 @@ test "control root regular file (authority path) is accepted" {
 test "isPathWithin handles filesystem root and prefix boundaries" {
     try std.testing.expect(isPathWithin("/", "/"));
     try std.testing.expect(isPathWithin("/etc", "/"));
-    try std.testing.expect(isPathWithin("/ws/.orca", "/"));
+    try std.testing.expect(isPathWithin("/ws/.ryk", "/"));
     try std.testing.expect(isPathWithin("/ws/src", "/ws"));
     try std.testing.expect(!isPathWithin("/workspace2", "/workspace"));
     try std.testing.expect(!isPathWithin("/ws", "/ws/src"));
@@ -1395,7 +1395,7 @@ test "macOS defaults never grant bare /System or data-volume homes" {
 
     const allocator = std.testing.allocator;
     var compiled = try compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-profile-m1-ws",
+        .workspace_root = "/tmp/ryk-profile-m1-ws",
         // Production defaults (null prefixes).
     });
     defer compiled.deinit();
@@ -1416,7 +1416,7 @@ test "macOS defaults never grant bare /Library (keychain surface)" {
 
     const allocator = std.testing.allocator;
     var compiled = try compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-profile-m7-ws",
+        .workspace_root = "/tmp/ryk-profile-m7-ws",
     });
     defer compiled.deinit();
 
@@ -1455,7 +1455,7 @@ test "Linux defaults include lib64 etc and dev" {
 
     const allocator = std.testing.allocator;
     var compiled = try compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-profile-m6-ws",
+        .workspace_root = "/tmp/ryk-profile-m6-ws",
     });
     defer compiled.deinit();
     try std.testing.expect(compiled.hasGrant("/lib64", .ro));
@@ -1477,7 +1477,7 @@ test "R2-3 Linux production grants writable device nodes without full /dev RW" {
 
     const allocator = std.testing.allocator;
     var prod = try compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-profile-r2-3-ws",
+        .workspace_root = "/tmp/ryk-profile-r2-3-ws",
     });
     defer prod.deinit();
 
@@ -1493,7 +1493,7 @@ test "R2-3 Linux production grants writable device nodes without full /dev RW" {
 
     // Custom (non-production) prefixes must not auto-install device RW.
     var custom = try compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-profile-r2-3-custom",
+        .workspace_root = "/tmp/ryk-profile-r2-3-custom",
         .system_ro_prefixes = &[_][]const u8{ "/usr", "/dev" },
         .include_tmp = false,
     });
@@ -1535,7 +1535,7 @@ test "production defaults omit classic tmp RW (session-tmp surface)" {
     try std.testing.expect(!without.hasGrant("/tmp", .rw));
 
     // Production path (null system_ro_prefixes) also omits classic tmp RW:
-    // session temp lives under workspace (`.orca-tmp`) via attach rewrite.
+    // session temp lives under workspace (`.ryk-tmp`) via attach rewrite.
     var prod = try compileProfile(allocator, .{
         .workspace_root = "/workspace/a",
         .include_tmp = false,
@@ -1545,10 +1545,10 @@ test "production defaults omit classic tmp RW (session-tmp surface)" {
     try std.testing.expect(!prod.hasGrant("/var/tmp", .rw));
     try std.testing.expect(!prod.hasGrant("/private/tmp", .rw));
     try std.testing.expect(!prod.hasGrant("/private/var/tmp", .rw));
-    try std.testing.expect(!prod.isAgentWritable("/tmp/orca-scratch"));
+    try std.testing.expect(!prod.isAgentWritable("/tmp/ryk-scratch"));
     // Workspace session temp path remains agent-writable via workspace RW.
-    try std.testing.expect(prod.isAgentWritable("/workspace/a/.orca-tmp"));
-    try std.testing.expect(prod.isAgentWritable("/workspace/a/.orca-tmp/scratch"));
+    try std.testing.expect(prod.isAgentWritable("/workspace/a/.ryk-tmp"));
+    try std.testing.expect(prod.isAgentWritable("/workspace/a/.ryk-tmp/scratch"));
     // Device grants still install on production defaults (Linux).
     if (builtin.os.tag == .linux) {
         try std.testing.expect(prod.hasGrant("/dev/null", .rw));
@@ -1568,7 +1568,7 @@ test "production defaults omit classic tmp RW (session-tmp surface)" {
     });
     defer with_tmp.deinit();
     try std.testing.expect(with_tmp.hasGrant("/tmp", .rw));
-    try std.testing.expect(with_tmp.isAgentWritable("/tmp/orca-scratch"));
+    try std.testing.expect(with_tmp.isAgentWritable("/tmp/ryk-scratch"));
     const with_scope = with_tmp.effectiveFsScopeSummary(.landlock);
     try std.testing.expect(std.mem.indexOf(u8, with_scope, "platform tmp RW") != null);
     try std.testing.expect(std.mem.indexOf(u8, with_scope, "control write-deny (readable)") != null);
@@ -1581,7 +1581,7 @@ test "isClassicTmpPath matches grant and summary literals" {
     try std.testing.expect(isClassicTmpPath("/private/var/tmp"));
     try std.testing.expect(!isClassicTmpPath("/tmp/subdir"));
     try std.testing.expect(!isClassicTmpPath("/var/folders/xx/T"));
-    try std.testing.expect(!isClassicTmpPath("/workspace/.orca-tmp"));
+    try std.testing.expect(!isClassicTmpPath("/workspace/.ryk-tmp"));
     // Platform default prefixes are a subset of the shared classic list.
     for (defaultTmpPrefixes()) |p| {
         try std.testing.expect(isClassicTmpPath(p));
@@ -1599,10 +1599,10 @@ test "control root is write-deny only and remains readable under pure model" {
     defer profile.deinit();
 
     // Write-deny: control is never agent-writable.
-    try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.orca/policy.yaml"));
-    try std.testing.expect(profile.isControlPath("/workspace/proj/.orca/policy.yaml"));
+    try std.testing.expect(!profile.isAgentWritable("/workspace/proj/.ryk/policy.yaml"));
+    try std.testing.expect(profile.isControlPath("/workspace/proj/.ryk/policy.yaml"));
     // Readable via parent workspace grant (pure model; backends may RO-narrow).
-    try std.testing.expect(profile.isGrantedReadable("/workspace/proj/.orca/policy.yaml"));
+    try std.testing.expect(profile.isGrantedReadable("/workspace/proj/.ryk/policy.yaml"));
     const seatbelt_scope = profile.effectiveFsScopeSummary(.seatbelt);
     try std.testing.expect(std.mem.indexOf(u8, seatbelt_scope, "control write-deny (readable)") != null);
     try std.testing.expect(std.mem.indexOf(u8, seatbelt_scope, "mach-lookup residual") != null);

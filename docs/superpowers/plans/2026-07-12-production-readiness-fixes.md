@@ -1,4 +1,4 @@
-# Orca Production-Readiness Fixes Implementation Plan
+# ryk Production-Readiness Fixes Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -48,19 +48,19 @@ Make the beginning of the OpenClaw lockfile exactly:
 
 ```json
 {
-  "name": "orca-openclaw-plugin",
+  "name": "ryk-openclaw-plugin",
   "version": "1.2.8",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
-      "name": "orca-openclaw-plugin",
+      "name": "ryk-openclaw-plugin",
       "version": "1.2.8",
 ```
 
 Keep all dependency resolutions unchanged.
 
-Make the OpenCode lockfile identical in shape with both name fields set to `orca-opencode-plugin` and both version fields set to `1.2.8`.
+Make the OpenCode lockfile identical in shape with both name fields set to `ryk-opencode-plugin` and both version fields set to `1.2.8`.
 
 - [ ] **Step 3: Verify lockfiles and package parity**
 
@@ -92,12 +92,12 @@ git commit -m "chore: resolve plugin release lockfiles"
 - Test: inline Zig tests in the files above and `tests/phase2510_gui_audit_feed.zig`
 
 **Interfaces:**
-- Consumes: `ORCA_RESOURCE_ROOT`, executable/install resource discovery, global `events.jsonl`, workspace registry, audit sessions.
+- Consumes: `RYK_RESOURCE_ROOT`, executable/install resource discovery, global `events.jsonl`, workspace registry, audit sessions.
 - Produces: `resolveDashboardDistDirTrusted(...)`, bounded tolerant feed loading with health metadata, correctly limited/sorted/enriched dashboard JSON.
 
 - [ ] **Step 1: Add failing trusted-resource tests**
 
-Add tests proving a workspace-local `orca-dashboard-ui/dist` is ignored unless it is the explicit trusted resource root, while an explicit installed resource root remains loadable. Run:
+Add tests proving a workspace-local `ryk-dashboard-ui/dist` is ignored unless it is the explicit trusted resource root, while an explicit installed resource root remains loadable. Run:
 
 ```bash
 ./scripts/zig build test-fast
@@ -117,7 +117,7 @@ fn resolveDashboardDistDirTrusted(io: std.Io, allocator: std.mem.Allocator) ![]u
 }
 ```
 
-Use the existing explicit `ORCA_RESOURCE_ROOT` and executable-relative install mechanisms; do not accept selected workspace/current-directory fallback for served code.
+Use the existing explicit `RYK_RESOURCE_ROOT` and executable-relative install mechanisms; do not accept selected workspace/current-directory fallback for served code.
 
 - [ ] **Step 3: Add failing malformed, oversized, and limit tests**
 
@@ -161,12 +161,12 @@ git commit -m "fix(dashboard): trust assets and harden aggregation"
 ### Task 3: Bring the Shipped Next Dashboard to Machine-Wide Parity
 
 **Files:**
-- Modify: `orca-dashboard-ui/app/lib/types.ts`
-- Modify: `orca-dashboard-ui/app/lib/nav.ts`
-- Modify: `orca-dashboard-ui/app/page.tsx`
-- Modify: `orca-dashboard-ui/app/activity/page.tsx`
-- Modify: `orca-dashboard-ui/app/components/TopNav.tsx`
-- Modify or create: dashboard UI tests under `orca-dashboard-ui/`
+- Modify: `ryk-dashboard-ui/app/lib/types.ts`
+- Modify: `ryk-dashboard-ui/app/lib/nav.ts`
+- Modify: `ryk-dashboard-ui/app/page.tsx`
+- Modify: `ryk-dashboard-ui/app/activity/page.tsx`
+- Modify: `ryk-dashboard-ui/app/components/TopNav.tsx`
+- Modify or create: dashboard UI tests under `ryk-dashboard-ui/`
 - Modify: `scripts/install-layout-smoke-test.sh`
 
 **Interfaces:**
@@ -197,17 +197,17 @@ Machine mode renders workspace count/cards, workspace and host in session/timeli
 - [ ] **Step 4: Verify built and installed artifacts**
 
 ```bash
-npm run build --prefix orca-dashboard-ui
-ORCA_RELEASE_PRODUCT=host ORCA_DIST_DIR=/tmp/orca-production-readiness-release ./scripts/build-release.sh
-ORCA_DIST_DIR=/tmp/orca-production-readiness-release ./scripts/install-layout-smoke-test.sh
+npm run build --prefix ryk-dashboard-ui
+RYK_RELEASE_PRODUCT=host RYK_DIST_DIR=/tmp/ryk-production-readiness-release ./scripts/build-release.sh
+RYK_DIST_DIR=/tmp/ryk-production-readiness-release ./scripts/install-layout-smoke-test.sh
 ```
 
-Expected: build and smoke exit 0; the packaged `orca-dashboard-ui/dist` contains machine-mode workspace and composite-session markers.
+Expected: build and smoke exit 0; the packaged `ryk-dashboard-ui/dist` contains machine-mode workspace and composite-session markers.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add orca-dashboard-ui scripts/install-layout-smoke-test.sh
+git add ryk-dashboard-ui scripts/install-layout-smoke-test.sh
 git commit -m "fix(dashboard): ship machine-wide operator UI"
 ```
 
@@ -272,7 +272,7 @@ git commit -m "fix(security): redact all presentation boundaries"
 
 - [ ] **Step 1: Add failing CLI regression tests**
 
-Assert `packs --help` equals canonical help and contains friendly flags; `version --no-rich` works; `run -- echo --no-rich` preserves the child argument; `COLUMNS=40` caps human output; ASCII mode contains no emoji/box glyphs; dashboard typo errors suggest `--host` and `orca help dashboard`; launch output states machine/workspace mode; completions hide `shim` and include dashboard/packs flags.
+Assert `packs --help` equals canonical help and contains friendly flags; `version --no-rich` works; `run -- echo --no-rich` preserves the child argument; `COLUMNS=40` caps human output; ASCII mode contains no emoji/box glyphs; dashboard typo errors suggest `--host` and `ryk help dashboard`; launch output states machine/workspace mode; completions hide `shim` and include dashboard/packs flags.
 
 - [ ] **Step 2: Normalize global options safely**
 
@@ -315,7 +315,7 @@ git commit -m "fix(cli): complete polished human interface"
 ./scripts/zig fmt --check src tests
 git diff --check
 git status --short
-git ls-files | rg '(^planning/|^go_to_market/|^customer_pilot/|^tasks/|^reports/|^\.orca-edge/|^\.edge/|^dist/|^dist-dry-run/|^docs/release/|^docs/orca_opencode_openclaw_plan/|node_modules/)'
+git ls-files | rg '(^planning/|^go_to_market/|^customer_pilot/|^tasks/|^reports/|^\.ryk-edge/|^\.edge/|^dist/|^dist-dry-run/|^docs/release/|^docs/orca_opencode_openclaw_plan/|node_modules/)'
 ```
 
 Expected: formatting/diff checks exit 0, no unmerged entries, and only explicitly permitted tracked planning file `planning/README.md` appears in the hygiene query.
@@ -328,16 +328,16 @@ Expected: formatting/diff checks exit 0, no unmerged entries, and only explicitl
 ./scripts/zig build test
 npm test --prefix integrations/openclaw-plugin
 npm test --prefix integrations/opencode-plugin
-npm run build --prefix orca-dashboard-ui
-ORCA_RELEASE_PRODUCT=host ORCA_DIST_DIR=/tmp/orca-production-readiness-release ./scripts/build-release.sh
-ORCA_DIST_DIR=/tmp/orca-production-readiness-release ./scripts/install-layout-smoke-test.sh
+npm run build --prefix ryk-dashboard-ui
+RYK_RELEASE_PRODUCT=host RYK_DIST_DIR=/tmp/ryk-production-readiness-release ./scripts/build-release.sh
+RYK_DIST_DIR=/tmp/ryk-production-readiness-release ./scripts/install-layout-smoke-test.sh
 ```
 
 Expected: every command exits 0. If the managed sandbox blocks localhost tests, rerun the identical gate with approved escalation before classifying it as environmental.
 
 - [ ] **Step 3: Inspect the shipped artifact and requirements**
 
-Confirm the release tar contains `orca-dashboard-ui/dist/index.html`, machine-wide UI markers, no source-map secrets, and plugin lockfiles at `1.2.8`. Re-read the design requirement by requirement and map each one to a passing test or artifact check.
+Confirm the release tar contains `ryk-dashboard-ui/dist/index.html`, machine-wide UI markers, no source-map secrets, and plugin lockfiles at `1.2.8`. Re-read the design requirement by requirement and map each one to a passing test or artifact check.
 
 - [ ] **Step 4: Review the complete diff**
 

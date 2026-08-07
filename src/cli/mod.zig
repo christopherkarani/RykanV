@@ -356,7 +356,7 @@ fn runWithCwdUsing(
     defer if (global_args.owned) allocator.free(global_args.argv);
     const argv = global_args.argv;
     const no_rich_env = tui.output_policy.envDisablesRich(
-        environ_map.get("RYK_NO_RICH") orelse environ_map.get("ORCA_NO_RICH"),
+        environ_map.get("RYK_NO_RICH"),
     );
     const machine_output = if (argv.len == 0) false else !shouldShowBanner(argv[0], argv) and
         (isMachineArgv(argv) or isAlwaysMachineCommand(argv[0]) or isRawGeneratedInvocation(argv[0], argv));
@@ -621,7 +621,7 @@ fn isDaemonLocalMutatingTopLevel(command: []const u8) bool {
         std.mem.eql(u8, command, "config");
 }
 
-/// True when this invocation must spawn `orca-daemon` locally (no UDS ExecuteCli).
+/// True when this invocation must spawn `ryk-daemon` locally (no UDS ExecuteCli).
 fn isDaemonLocalMutatingInvocation(command: []const u8, command_args: []const []const u8) bool {
     // Top-level mutators always go local (including `--help`).
     if (isDaemonLocalMutatingTopLevel(command)) return true;
@@ -725,7 +725,7 @@ test "help output is grouped, complete, and excludes hidden commands" {
     try std.testing.expect(std.mem.indexOf(u8, output, "ryk explain") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "ryk replay") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "help --all") != null);
-    // Phase 7 Task E: the --no-rich / ORCA_NO_RICH escape hatch is discoverable
+    // Phase 7 Task E: the --no-rich / RYK_NO_RICH escape hatch is discoverable
     // from the top-level help (global-options surface).
     try std.testing.expect(std.mem.indexOf(u8, output, "Global options") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "--no-rich") != null);
@@ -847,7 +847,7 @@ test "help run includes examples section" {
 fn fakeVersionSuccess(_: std.Io, argv: []const []const u8, stdout: anytype, _: anytype) !u8 {
     try std.testing.expectEqual(@as(usize, 1), argv.len);
     try std.testing.expectEqualStrings("version", argv[0]);
-    try stdout.writeAll("orca-rs 1.2.3\n");
+    try stdout.writeAll("ryk-daemon 1.2.3\n");
     return exit_codes.success;
 }
 
@@ -965,7 +965,7 @@ test "version proxy routes version argv and renders success" {
     const code = try proxyVersionCommand(fakeVersionSuccess, std.testing.io, &stdout_writer, &stderr_writer);
 
     try std.testing.expectEqual(exit_codes.success, code);
-    try std.testing.expectEqualStrings("orca-rs 1.2.3\n", stdout_writer.buffered());
+    try std.testing.expectEqualStrings("ryk-daemon 1.2.3\n", stdout_writer.buffered());
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 
@@ -1661,11 +1661,11 @@ test "top-level CI generated formats preserve exact bytes" {
     const expected_markdown =
         \\# ryk CI Check
         \\
-        \\- policy: **fail** - Missing .orca/policy.yaml. Run: ryk init --preset team-ci
+        \\- policy: **fail** - Missing .ryk/policy.yaml. Run: ryk init --preset team-ci
         \\
     ;
     const expected_json =
-        \\{"ok":false,"checks":[{"name":"policy","status":"fail","message":"Missing .orca/policy.yaml. Run: ryk init --preset team-ci"}]}
+        \\{"ok":false,"checks":[{"name":"policy","status":"fail","message":"Missing .ryk/policy.yaml. Run: ryk init --preset team-ci"}]}
         \\
     ;
     inline for (.{
@@ -1684,8 +1684,8 @@ test "top-level CI generated formats preserve exact bytes" {
 }
 
 test "top-level diff emits the exact patch from byte zero" {
-    const intercept_files = @import("orca").intercept.files;
-    const policy_load = @import("orca_core").policy.load;
+    const intercept_files = @import("ryk").intercept.files;
+    const policy_load = @import("ryk_core").policy.load;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.createDirPath(std.testing.io, ".git");
@@ -1719,8 +1719,8 @@ extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 
 fn writeTopLevelReportFixture(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
-    const core = @import("orca_core").core;
-    const core_api = @import("orca_core").api;
+    const core = @import("ryk_core").core;
+    const core_api = @import("ryk_core").api;
     const now = core.time.Timestamp.fromUnixSeconds(1_777_983_130);
     var session_id: core.session.SessionId = .{ .value = undefined, .len = 0 };
     const session_id_text = try std.fmt.bufPrint(&session_id.value, "report-output-fixture", .{});
@@ -1746,7 +1746,7 @@ fn writeTopLevelReportFixture(io: std.Io, allocator: std.mem.Allocator, workspac
         .event_id = event_id,
         .timestamp = now,
         .event_type = .command_denied,
-        .actor = .{ .kind = .orca, .display = "ryk" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .command, .value = "rm -rf ./fixture" },
         .decision = core_api.makeDecision(.{ .result = .deny, .reason = "blocked by fixture policy", .rule_id = "commands.deny" }),
         .redactions = .{ .count = 1, .labels = &.{"fixture-label"} },
@@ -1758,7 +1758,7 @@ fn writeTopLevelReportFixture(io: std.Io, allocator: std.mem.Allocator, workspac
         .status = .{ .exited = 1 },
         .event_count = audit_writer.event_count,
         .final_event_hash = audit_writer.finalHash() orelse "",
-        .policy = ".orca/policy.yaml",
+        .policy = ".ryk/policy.yaml",
         .product_label = brand.product_display,
     });
     return allocator.dupe(u8, audit_writer.session_id.slice());
@@ -1791,9 +1791,9 @@ test "top-level report exports preserve exact generated bytes" {
     }
     try std.testing.expectEqual(@as(c_int, 0), setenv("XDG_CONFIG_HOME", root, 1));
     try std.testing.expectEqual(@as(c_int, 0), setenv("PATH", "", 1));
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const policy_file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const policy_file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer policy_file.close(std.testing.io);
         try policy_file.writeStreamingAll(std.testing.io, "version: 1\nmode: strict\n");
     }
@@ -1810,7 +1810,7 @@ test "top-level report exports preserve exact generated bytes" {
         \\- Session id: `report-output-fixture`
         \\- Command: `ryk run -- rm -rf ./fixture`
         \\- Status: exit 1
-        \\- Policy path: .orca/policy.yaml
+        \\- Policy path: .ryk/policy.yaml
         \\- Hash-chain verification: verified
         \\- Denied/prevented actions: 1
         \\- Redactions: 1 (fixture-label)
@@ -1828,7 +1828,7 @@ test "top-level report exports preserve exact generated bytes" {
         \\
     ;
     const expected_json =
-        \\{"session_id":"report-output-fixture","command":"ryk run -- rm -rf ./fixture","status":"exit 1","policy_path":".orca/policy.yaml","hash_chain_verified":true,"denied_count":1,"redactions":{"count":1,"labels":["fixture-label"]},"denied_actions":[{"event_type":"command_denied","target":"rm -rf ./fixture","reason":"blocked by fixture policy"}],"plugins":[{"id":"openclaw","host_detected":false,"integration_present":false},{"id":"hermes","host_detected":false,"integration_present":false}]}
+        \\{"session_id":"report-output-fixture","command":"ryk run -- rm -rf ./fixture","status":"exit 1","policy_path":".ryk/policy.yaml","hash_chain_verified":true,"denied_count":1,"redactions":{"count":1,"labels":["fixture-label"]},"denied_actions":[{"event_type":"command_denied","target":"rm -rf ./fixture","reason":"blocked by fixture policy"}],"plugins":[{"id":"openclaw","host_detected":false,"integration_present":false},{"id":"hermes","host_detected":false,"integration_present":false}]}
         \\
     ;
 
@@ -2037,7 +2037,7 @@ test "init dispatch creates policy in provided working directory" {
     const code = try testRunWithCwd(tmp.dir, &.{ "init", "--mode", "strict" }, &stdout_writer, &stderr_writer);
     try std.testing.expectEqual(exit_codes.success, code);
 
-    const policy_text = try tmp.dir.readFileAlloc(std.testing.io, ".orca/policy.yaml", std.testing.allocator, .limited(4096));
+    const policy_text = try tmp.dir.readFileAlloc(std.testing.io, ".ryk/policy.yaml", std.testing.allocator, .limited(16 * 1024));
     defer std.testing.allocator.free(policy_text);
     try std.testing.expect(std.mem.indexOf(u8, policy_text, "mode: strict") != null);
 }
@@ -2247,7 +2247,7 @@ test "plugin help and disable re-enable messaging de-emphasize --yes in favor of
     // One-click repair is doctor --fix; guided multi-select remains ryk start. Setup removed.
     try std.testing.expect(std.mem.indexOf(u8, output, "ryk start") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "doctor --fix") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "orca setup") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ryk setup") == null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 
@@ -2262,11 +2262,11 @@ fn writeInstallEnv(io: std.Io, stdout: anytype) !void {
     const exe_path = std.process.executablePathAlloc(io, allocator) catch {
         // Fallback (static or exotic exe path): documented defaults per platform.
         if (builtin.os.tag == .windows) {
-            try stdout.writeAll("set \"PATH=%USERPROFILE%\\.orca\\bin;%PATH%\"\n");
-            try stdout.writeAll("set \"RYK_RESOURCE_ROOT=%USERPROFILE%\\.orca\\share\\current\"\n");
+            try stdout.writeAll("set \"PATH=%USERPROFILE%\\.ryk\\bin;%PATH%\"\n");
+            try stdout.writeAll("set \"RYK_RESOURCE_ROOT=%USERPROFILE%\\.ryk\\share\\current\"\n");
         } else {
             try stdout.writeAll("export PATH=\"$HOME/.local/bin:$PATH\"\n");
-            try stdout.writeAll("export RYK_RESOURCE_ROOT=\"$HOME/.local/share/orca/current\"\n");
+            try stdout.writeAll("export RYK_RESOURCE_ROOT=\"$HOME/.local/share/ryk/current\"\n");
         }
         return;
     };
@@ -2275,11 +2275,11 @@ fn writeInstallEnv(io: std.Io, stdout: anytype) !void {
     const bin_dir = std.fs.path.dirname(exe_path) orelse {
         // Same fallback as above.
         if (builtin.os.tag == .windows) {
-            try stdout.writeAll("set \"PATH=%USERPROFILE%\\.orca\\bin;%PATH%\"\n");
-            try stdout.writeAll("set \"RYK_RESOURCE_ROOT=%USERPROFILE%\\.orca\\share\\current\"\n");
+            try stdout.writeAll("set \"PATH=%USERPROFILE%\\.ryk\\bin;%PATH%\"\n");
+            try stdout.writeAll("set \"RYK_RESOURCE_ROOT=%USERPROFILE%\\.ryk\\share\\current\"\n");
         } else {
             try stdout.writeAll("export PATH=\"$HOME/.local/bin:$PATH\"\n");
-            try stdout.writeAll("export RYK_RESOURCE_ROOT=\"$HOME/.local/share/orca/current\"\n");
+            try stdout.writeAll("export RYK_RESOURCE_ROOT=\"$HOME/.local/share/ryk/current\"\n");
         }
         return;
     };
@@ -2290,14 +2290,14 @@ fn writeInstallEnv(io: std.Io, stdout: anytype) !void {
     const resource_root = if (is_win)
         std.fs.path.join(allocator, &.{ prefix_dir, "share", "current" }) catch {
             // Fallback on join failure (extremely rare).
-            try stdout.writeAll("set \"PATH=%USERPROFILE%\\.orca\\bin;%PATH%\"\n");
-            try stdout.writeAll("set \"RYK_RESOURCE_ROOT=%USERPROFILE%\\.orca\\share\\current\"\n");
+            try stdout.writeAll("set \"PATH=%USERPROFILE%\\.ryk\\bin;%PATH%\"\n");
+            try stdout.writeAll("set \"RYK_RESOURCE_ROOT=%USERPROFILE%\\.ryk\\share\\current\"\n");
             return;
         }
     else
-        std.fs.path.join(allocator, &.{ prefix_dir, "share", "orca", "current" }) catch {
+        std.fs.path.join(allocator, &.{ prefix_dir, "share", "ryk", "current" }) catch {
             try stdout.writeAll("export PATH=\"$HOME/.local/bin:$PATH\"\n");
-            try stdout.writeAll("export RYK_RESOURCE_ROOT=\"$HOME/.local/share/orca/current\"\n");
+            try stdout.writeAll("export RYK_RESOURCE_ROOT=\"$HOME/.local/share/ryk/current\"\n");
             return;
         };
     defer allocator.free(resource_root);

@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const core = @import("orca_core").core;
-const core_api = @import("orca_core").api;
+const core = @import("ryk_core").core;
+const core_api = @import("ryk_core").api;
 const supervisor = core.supervisor;
 const report = @import("../report.zig");
 const exit_codes = @import("exit_codes.zig");
@@ -143,9 +143,9 @@ test "report public errors render missing-session guidance without a license" {
     defer std.testing.allocator.free(previous_cwd);
     try std.process.setCurrentDir(std.testing.io, tmp.dir);
     defer std.process.setCurrentPath(std.testing.io, previous_cwd) catch {};
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const policy_file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const policy_file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer policy_file.close(std.testing.io);
         try policy_file.writeStreamingAll(std.testing.io, "version: 1\nmode: strict\n");
     }

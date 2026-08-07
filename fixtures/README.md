@@ -1,6 +1,6 @@
 # Red-team Fixtures
 
-Fixtures under this directory are deterministic local evidence for `orca redteam`.
+Fixtures under this directory are deterministic local evidence for `ryk redteam`.
 They must use fake local inputs and synthetic data only.
 
 Required structure:

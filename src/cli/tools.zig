@@ -2,8 +2,8 @@
 //! `ryk tools classify` and `ryk tools packs` — not shell `ryk classify`.
 
 const std = @import("std");
-const orca_policy = @import("orca_core").policy;
-const core = @import("orca_core").core;
+const policy_mod = @import("ryk_core").policy;
+const core = @import("ryk_core").core;
 const supervisor = core.supervisor;
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
@@ -81,7 +81,7 @@ fn classify(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyty
         return exit_codes.usage;
     };
 
-    var owned_args: ?orca_policy.effects.OwnedArgsView = null;
+    var owned_args: ?policy_mod.effects.OwnedArgsView = null;
     defer if (owned_args) |*oa| oa.deinit(allocator);
     if (args_json) |raw| {
         if (raw.len > max_args_json_bytes) {
@@ -97,25 +97,25 @@ fn classify(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyty
             try stderr.writeAll("ryk tools classify: --args must be a JSON object.\n");
             return exit_codes.usage;
         }
-        owned_args = try orca_policy.effects.toolArgsViewFromJsonObject(allocator, parsed_json.value);
+        owned_args = try policy_mod.effects.toolArgsViewFromJsonObject(allocator, parsed_json.value);
     }
-    const args_view: ?orca_policy.effects.ToolArgsView = if (owned_args) |oa| oa.view else null;
+    const args_view: ?policy_mod.effects.ToolArgsView = if (owned_args) |oa| oa.view else null;
 
     const root = supervisor.resolveWorkspaceRoot(io, allocator, null, ".") catch try allocator.dupe(u8, ".");
     defer allocator.free(root);
 
-    var pack_set = orca_policy.effects.loadPacks(io, allocator, root, null) catch |err| {
+    var pack_set = policy_mod.effects.loadPacks(io, allocator, root, null) catch |err| {
         try stderr.print("ryk tools classify: invalid effect pack: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
     defer pack_set.deinit();
 
     var classifier_enabled = false;
-    var loaded_policy: ?orca_policy.schema.Policy = null;
+    var loaded_policy: ?policy_mod.schema.Policy = null;
     defer if (loaded_policy) |*p| p.deinit();
 
     if (policy_path) |path| {
-        loaded_policy = orca_policy.load.loadFile(io, allocator, path) catch |err| {
+        loaded_policy = policy_mod.load.loadFile(io, allocator, path) catch |err| {
             try stderr.print("ryk tools classify: failed to load policy {s}: {s}\n", .{ path, @errorName(err) });
             return exit_codes.general;
         };
@@ -124,16 +124,16 @@ fn classify(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyty
         }
     }
 
-    const classified = try orca_policy.effects.classifyToolCallWithResidual(allocator, &pack_set, name, args_view, classifier_enabled);
+    const classified = try policy_mod.effects.classifyToolCallWithResidual(allocator, &pack_set, name, args_view, classifier_enabled);
     defer classified.deinit(allocator);
     if (classified.unavailable) {
         try stderr.writeAll("ryk tools classify: effects.classifier unavailable\n");
         return exit_codes.general;
     }
-    try orca_policy.effects.writeHitsHuman(stdout, classified.hits);
+    try policy_mod.effects.writeHitsHuman(stdout, classified.hits);
 
     if (loaded_policy) |*loaded| {
-        var evaluation = try orca_policy.evaluate.toolWithPacks(loaded, name, args_view, &pack_set, allocator);
+        var evaluation = try policy_mod.evaluate.toolWithPacks(loaded, name, args_view, &pack_set, allocator);
         defer evaluation.deinit(allocator);
         try stdout.print("Policy decision: {s}", .{evaluation.decision.result.toString()});
         if (evaluation.decision.rule_id) |rule_id| try stdout.print("  rule: {s}", .{rule_id});
@@ -153,7 +153,7 @@ fn listPacks(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyt
             \\  ryk tools packs
             \\
             \\List loaded user effect pack ids and source paths.
-            \\Search order: ~/.config/orca/effect-packs then .orca/effect-packs
+            \\Search order: ~/.config/ryk/effect-packs then .ryk/effect-packs
             \\
         );
         return exit_codes.success;
@@ -170,7 +170,7 @@ fn listPacks(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyt
     const root = supervisor.resolveWorkspaceRoot(io, allocator, null, ".") catch try allocator.dupe(u8, ".");
     defer allocator.free(root);
 
-    var pack_set = orca_policy.effects.loadPacks(io, allocator, root, null) catch |err| {
+    var pack_set = policy_mod.effects.loadPacks(io, allocator, root, null) catch |err| {
         try stderr.print("ryk tools packs: invalid effect pack: {s}\n", .{@errorName(err)});
         return exit_codes.general;
     };
@@ -178,7 +178,7 @@ fn listPacks(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anyt
 
     if (pack_set.isEmpty()) {
         try stdout.writeAll("Effect packs: (none)\n");
-        try stdout.writeAll("  Looked in: <user-config>/orca/effect-packs and .orca/effect-packs\n");
+        try stdout.writeAll("  Looked in: <user-config>/ryk/effect-packs and .ryk/effect-packs\n");
         return exit_codes.success;
     }
     try stdout.writeAll("Effect packs:\n");
@@ -337,9 +337,9 @@ test "tools classify residual denies acme_mailer_job despite arg decoys" {
 test "loadPacks classifies pack mapped tool" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca/effect-packs");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk/effect-packs");
     {
-        const f = try tmp.dir.createFile(std.testing.io, ".orca/effect-packs/acme.yaml", .{});
+        const f = try tmp.dir.createFile(std.testing.io, ".ryk/effect-packs/acme.yaml", .{});
         defer f.close(std.testing.io);
         try f.writeStreamingAll(std.testing.io,
             \\version: 1
@@ -352,9 +352,9 @@ test "loadPacks classifies pack mapped tool" {
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
 
-    var pack_set = try orca_policy.effects.loadPacks(std.testing.io, std.testing.allocator, root, null);
+    var pack_set = try policy_mod.effects.loadPacks(std.testing.io, std.testing.allocator, root, null);
     defer pack_set.deinit();
-    const hits = try orca_policy.effects.classifyToolCallWithPacks(std.testing.allocator, &pack_set, "send_acme_ping", null);
+    const hits = try policy_mod.effects.classifyToolCallWithPacks(std.testing.allocator, &pack_set, "send_acme_ping", null);
     defer std.testing.allocator.free(hits);
     try std.testing.expect(hits.len >= 1);
     var found_pack = false;

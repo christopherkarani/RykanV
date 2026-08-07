@@ -383,7 +383,7 @@ public actor LiveBackend: FoundationModelBackend {
     }
 
     nonisolated static let systemInstructions = """
-        You are Orca's Mac on-device semantic steward for **shell and agent commands** (v1).
+        You are ryk's Mac on-device semantic steward for **shell and agent commands** (v1).
         You run AFTER sandbox, policy, and the deterministic hard fence.
         Catastrophic denials (wipe disk, rm of system roots, etc.) are decided elsewhere — you never unlock a hard deny.
         Your only job is soft-interrupt nuance on commands that already passed the hard fence.

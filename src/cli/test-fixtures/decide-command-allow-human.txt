@@ -4,7 +4,7 @@ Decision  [ALLOW]
 | Decision details                                 |
 +--------------------------------------------------+
 | Reason    matched commands.allow rule "echo *"   |
-| Rule      commands.allow[40]                     |
+| Rule      commands.allow[21]                     |
 | Mode      ask                                    |
 | Category  command                                |
 | Message   command allowed by ryk policy.         |

@@ -3,7 +3,7 @@ import Foundation
 /// Product and override paths for the residual Wax few-shot store.
 ///
 /// Default product location: Application Support / ryk / fm-steward / ambig.wax.
-/// Legacy (pre–Phase 5a): Application Support / Orca / fm-steward / ambig.wax.
+/// Legacy (pre–Phase 5a): Application Support / ryk / fm-steward / ambig.wax.
 /// First resolve migrates/copies legacy → primary when primary is missing.
 /// Sidecar reseed key lives at `ambig.wax.seedsha`
 /// (`v{N}:<seed-sha256>:<store-sha256>`; see `FewShotSeedBootstrap`);
@@ -17,7 +17,7 @@ public enum FewShotStorePaths: Sendable {
     public static let productRelativeDirectory = "ryk/fm-steward"
 
     /// Pre–Phase 5a location kept for fallback/migration.
-    public static let legacyProductRelativeDirectory = "Orca/fm-steward"
+    public static let legacyProductRelativeDirectory = "ryk/fm-steward"
 
     /// Application Support base directory.
     public static func applicationSupportBase(fileManager: FileManager = .default) -> URL {
@@ -35,7 +35,7 @@ public enum FewShotStorePaths: Sendable {
             .appendingPathComponent(storeFileName, isDirectory: false)
     }
 
-    /// Legacy store URL under Application Support / Orca / fm-steward.
+    /// Legacy store URL under Application Support / ryk / fm-steward.
     public static func legacyProductStoreURL(fileManager: FileManager = .default) -> URL {
         applicationSupportBase(fileManager: fileManager)
             .appendingPathComponent(legacyProductRelativeDirectory, isDirectory: true)

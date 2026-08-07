@@ -3,7 +3,7 @@
 Run:
 
 ```powershell
-.\orca.exe doctor
+.\ryk.exe doctor
 ```
 
 ## Capability Matrix
@@ -31,4 +31,4 @@ Use policy deny rules for `.env`, SSH keys, cloud credentials, browser credentia
 
 ## Limitations
 
-Batch forwarding is not treated as a strong security boundary. Use Orca-managed sessions and check `doctor` for actual backend status.
+Batch forwarding is not treated as a strong security boundary. Use ryk-managed sessions and check `doctor` for actual backend status.

@@ -18,7 +18,7 @@ pub fn resolveResourcePath(io: std.Io, allocator: std.mem.Allocator, options: Re
     } else {
         var env_map = env_util.createProcessMap(allocator) catch return error.ResourceNotFound;
         defer env_map.deinit();
-        // Prefer RYK_RESOURCE_ROOT, fall back to ORCA_RESOURCE_ROOT (Phase 5a dual-read).
+        // RYK_RESOURCE_ROOT only (hard-cut).
         if (try env_util.getOwnedBrand(&env_map, allocator, "RESOURCE_ROOT")) |resource_root| {
             defer allocator.free(resource_root);
             const candidate = try std.fs.path.join(allocator, &.{ resource_root, relative_path });
@@ -43,12 +43,12 @@ pub fn resolveResourcePath(io: std.Io, allocator: std.mem.Allocator, options: Re
 
         // Strong improvement for non-interactive / container / CI usage:
         // The standard layout produced by our curl|sh installer (and recommended
-        // by doctor/Homebrew) places the binary at $PREFIX/bin/orca and assets at
-        // $PREFIX/share/orca/current. Auto-discover this when no explicit
-        // ORCA_RESOURCE_ROOT is set. This makes `sh -c 'ryk redteam --ci'` work
+        // by doctor/Homebrew) places the binary at $PREFIX/bin/ryk and assets at
+        // $PREFIX/share/ryk/current. Auto-discover this when no explicit
+        // RYK_RESOURCE_ROOT is set. This makes `sh -c 'ryk redteam --ci'` work
         // out of the box after a fresh install in many environments.
         if (std.fs.path.dirname(exe_dir)) |prefix_dir| {
-            const packaged = try std.fs.path.join(allocator, &.{ prefix_dir, "share", "orca", "current", relative_path });
+            const packaged = try std.fs.path.join(allocator, &.{ prefix_dir, "share", "ryk", "current", relative_path });
             if (pathExists(io, packaged)) return packaged;
             allocator.free(packaged);
         }
@@ -115,20 +115,20 @@ test "resource resolver prefers workspace resources" {
 }
 
 // Test for the packaged ~/.local layout recommendation (Tier-0 DX).
-// Simulates ORCA_RESOURCE_ROOT or the auto-discovered $PREFIX/share/orca/current
+// Simulates RYK_RESOURCE_ROOT or the auto-discovered $PREFIX/share/ryk/current
 // that install.sh, doctor, and Homebrew all converge on. This path must resolve
 // fixtures/integrations for non-interactive `sh -c 'ryk redteam --ci'` flows.
-test "resource resolver supports packaged share/orca/current layout via override" {
+test "resource resolver supports packaged share/ryk/current layout via override" {
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    // Simulate $PREFIX/share/orca/current/fixtures (the exact layout from improved install.sh)
-    try tmp.dir.createDirPath(std.testing.io, "share/orca/current/fixtures/redteam");
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "share/orca/current/fixtures/redteam/sample.txt", .data = "test" });
+    // Simulate $PREFIX/share/ryk/current/fixtures (the exact layout from improved install.sh)
+    try tmp.dir.createDirPath(std.testing.io, "share/ryk/current/fixtures/redteam");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "share/ryk/current/fixtures/redteam/sample.txt", .data = "test" });
 
-    const packaged_root = try tmp.dir.realPathFileAlloc(std.testing.io, "share/orca/current", std.testing.allocator);
+    const packaged_root = try tmp.dir.realPathFileAlloc(std.testing.io, "share/ryk/current", std.testing.allocator);
     defer std.testing.allocator.free(packaged_root);
 
     // No workspace, no explicit override in options (simulates clean env after install)
@@ -139,6 +139,6 @@ test "resource resolver supports packaged share/orca/current layout via override
     }, "fixtures/redteam/sample.txt");
     defer std.testing.allocator.free(resolved);
 
-    try std.testing.expect(std.mem.indexOf(u8, resolved, "share/orca/current") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resolved, "share/ryk/current") != null);
     try std.testing.expect(std.mem.endsWith(u8, resolved, "sample.txt"));
 }

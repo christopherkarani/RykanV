@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TMUX_SOCKET="orca-tui-smoke-$$"
-SMOKE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/orca-tui-smoke.XXXXXX")"
+TMUX_SOCKET="ryk-tui-smoke-$$"
+SMOKE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ryk-tui-smoke.XXXXXX")"
 
 cleanup() {
     tmux -L "$TMUX_SOCKET" kill-server 2>/dev/null || true
@@ -18,8 +18,8 @@ fail() {
 
 command -v tmux >/dev/null 2>&1 || fail "tmux is required"
 
-ORCA="$ROOT/zig-out/bin/orca"
-[[ -x "$ORCA" ]] || fail "build ryk first with ./scripts/zig build"
+RYK_BIN="$ROOT/zig-out/bin/ryk"
+[[ -x "$RYK_BIN" ]] || fail "build ryk first with ./scripts/zig build"
 
 capture_pane() {
     tmux -L "$TMUX_SOCKET" capture-pane -p -S -200 2>/dev/null
@@ -42,7 +42,7 @@ wait_for() {
 mkdir -p "$SMOKE_ROOT/start-workspace" "$SMOKE_ROOT/home"
 tmux -L "$TMUX_SOCKET" new-session -d -x 100 -y 30 \
     -c "$SMOKE_ROOT/start-workspace" \
-    "before=\$(stty -g); env HOME='$SMOKE_ROOT/home' PATH='/usr/bin:/bin' ORCA_RESOURCE_ROOT='$ROOT' '$ORCA' start --skip-verify; code=\$?; after=\$(stty -g); if [ \"\$before\" = \"\$after\" ]; then echo __ORCA_TERMIOS_RESTORED__; else echo __ORCA_TERMIOS_CHANGED__; fi; exit \$code"
+    "before=\$(stty -g); env HOME='$SMOKE_ROOT/home' PATH='/usr/bin:/bin' RYK_RESOURCE_ROOT='$ROOT' '$RYK_BIN' start --skip-verify; code=\$?; after=\$(stty -g); if [ \"\$before\" = \"\$after\" ]; then echo __RYK_TERMIOS_RESTORED__; else echo __RYK_TERMIOS_CHANGED__; fi; exit \$code"
 tmux -L "$TMUX_SOCKET" set-option remain-on-exit on
 
 # Scenario 1 (no hosts on PATH): start skips the multi-select and reports skipped verification.
@@ -58,7 +58,7 @@ if grep -Eq '^ {12,}(🛡  )?ryk' <<<"$start_screen"; then
 fi
 
 wait_for "Setup complete — verification skipped"
-wait_for "__ORCA_TERMIOS_RESTORED__"
+wait_for "__RYK_TERMIOS_RESTORED__"
 
 echo "ryk start (no hosts) PTY smoke passed"
 
@@ -70,7 +70,7 @@ chmod +x "$SMOKE_ROOT/bin/codex"
 # Scenario 2 (fake codex on PATH): multi-select shows once and reports skipped verification.
 tmux -L "$TMUX_SOCKET" new-session -d -x 100 -y 40 \
     -c "$SMOKE_ROOT/hosts-workspace" \
-    "before=\$(stty -g); env HOME='$SMOKE_ROOT/hosts-home' PATH='$SMOKE_ROOT/bin:/usr/bin:/bin' ORCA_RESOURCE_ROOT='$ROOT' '$ORCA' start --skip-verify; code=\$?; after=\$(stty -g); if [ \"\$before\" = \"\$after\" ]; then echo __ORCA_TERMIOS_RESTORED__; else echo __ORCA_TERMIOS_CHANGED__; fi; exit \$code"
+    "before=\$(stty -g); env HOME='$SMOKE_ROOT/hosts-home' PATH='$SMOKE_ROOT/bin:/usr/bin:/bin' RYK_RESOURCE_ROOT='$ROOT' '$RYK_BIN' start --skip-verify; code=\$?; after=\$(stty -g); if [ \"\$before\" = \"\$after\" ]; then echo __RYK_TERMIOS_RESTORED__; else echo __RYK_TERMIOS_CHANGED__; fi; exit \$code"
 tmux -L "$TMUX_SOCKET" set-option remain-on-exit on
 
 wait_for "Select agent hosts to integrate"
@@ -86,7 +86,7 @@ fi
 
 tmux -L "$TMUX_SOCKET" send-keys Enter
 wait_for "Setup complete — verification skipped"
-wait_for "__ORCA_TERMIOS_RESTORED__"
+wait_for "__RYK_TERMIOS_RESTORED__"
 
 echo "ryk start (host multi-select) PTY smoke passed"
 
@@ -98,7 +98,7 @@ verified_output="$SMOKE_ROOT/verified.out"
     env HOME="$SMOKE_ROOT/verified-home" \
         PATH="$SMOKE_ROOT/bin:/usr/bin:/bin" \
         RYK_RESOURCE_ROOT="$ROOT" \
-        "$ORCA" start --auto
+        "$RYK_BIN" start --auto
 ) >"$verified_output"
 
 [[ "$(grep -Fc "🛡  ryk" "$verified_output")" == "1" ]] ||
@@ -107,7 +107,7 @@ grep -Fq "codex  ✓ fail-closed chain verified" "$verified_output" ||
     fail "verified auto onboarding did not verify the Codex integration chain"
 [[ "$(grep -Fc "You're now protected by ryk" "$verified_output")" == "1" ]] ||
     fail "verified auto onboarding did not render exactly one protected end card"
-[[ -f "$SMOKE_ROOT/verified-workspace/.agents/plugins/orca/.codex-plugin/plugin.json" ]] ||
+[[ -f "$SMOKE_ROOT/verified-workspace/.agents/plugins/ryk/.codex-plugin/plugin.json" ]] ||
     fail "verified auto onboarding did not install the managed Codex plugin"
 
 echo "ryk start --auto (verified Codex chain) smoke passed"

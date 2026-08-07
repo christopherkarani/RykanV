@@ -744,7 +744,7 @@ test "bootstrap profile rebuild matches parent hash with launch exec grants" {
     const exec_paths = [_][]const u8{ "/home/user/.local/bin/agent", "/home/user/.local/bin/agent-real" };
     var parent = try profile_mod.compileProfile(allocator, .{
         .workspace_root = "/work/project",
-        .control_roots = &[_][]const u8{"/work/project/.orca"},
+        .control_roots = &[_][]const u8{"/work/project/.ryk"},
         .include_tmp = false,
         .exec_paths = &exec_paths,
         .protect_workspace_secrets = true,
@@ -754,7 +754,7 @@ test "bootstrap profile rebuild matches parent hash with launch exec grants" {
 
     var rebuilt = try profile_mod.compileProfile(allocator, .{
         .workspace_root = "/work/project",
-        .control_roots = &[_][]const u8{"/work/project/.orca"},
+        .control_roots = &[_][]const u8{"/work/project/.ryk"},
         .include_tmp = false,
         .exec_paths = &exec_paths,
         .protect_workspace_secrets = true,
@@ -770,7 +770,7 @@ test "bootstrap profile rebuild matches parent hash with launch exec grants" {
     // Omitting exec_paths must change the digest (detects the B1 regression).
     var without_exec = try profile_mod.compileProfile(allocator, .{
         .workspace_root = "/work/project",
-        .control_roots = &[_][]const u8{"/work/project/.orca"},
+        .control_roots = &[_][]const u8{"/work/project/.ryk"},
         .include_tmp = false,
         .protect_workspace_secrets = true,
         .system_ro_prefixes = &[_][]const u8{"/usr"},

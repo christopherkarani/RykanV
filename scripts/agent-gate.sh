@@ -38,7 +38,7 @@ Modes:
   shell-engine  ./scripts/zig build test-shell-engine (L0.5)
   rust          deprecated alias → shell-engine
   dx            quick-install-dx-verify (builds CLI if needed)
-  dashboard     npm test in orca-dashboard-ui/
+  dashboard     npm test in ryk-dashboard-ui/
   plugin        package-local tests for dirty integrations/*-plugin paths
   scripts       bash -n (+ light dry-run smoke) for dirty scripts/**
   auto          (default) choose from dirty paths / --paths
@@ -119,7 +119,7 @@ choose_auto() {
       *.md|docs/*|planning/*|.grok/*) ;;
       *) only_md=0 ;;
     esac
-    # Legacy dashboard assets are covered by orca-dashboard-ui contract tests,
+    # Legacy dashboard assets are covered by ryk-dashboard-ui contract tests,
     # not the Zig monopath — keep them out of has_zig so pure asset PRs route
     # to the dashboard gate (matches CI path filter).
     case "${p}" in
@@ -172,7 +172,7 @@ choose_auto() {
       scripts/*) has_scripts=1 ;;
     esac
     case "${p}" in
-      orca-dashboard-ui/*) has_dashboard=1 ;;
+      ryk-dashboard-ui/*) has_dashboard=1 ;;
       integrations/*-plugin|integrations/*-plugin/*) has_plugin=1 ;;
       integrations/*) has_other=1 ;;
     esac
@@ -347,7 +347,7 @@ run_scripts_gate() {
 
     agent_gate_smoke_case "zig+dashboard+scripts" \
       selected=units dashboard scripts -- \
-      src/cli/run.zig orca-dashboard-ui/app/dashboard.ts scripts/test-fast.sh
+      src/cli/run.zig ryk-dashboard-ui/app/dashboard.ts scripts/test-fast.sh
 
     # L0.5: pure shell_engine tree → test-shell-engine (not monopath units).
     agent_gate_smoke_case "shell-engine-only" \
@@ -357,24 +357,24 @@ run_scripts_gate() {
     # Mixed non-Zig trees must compose every gate (scripts companion).
     agent_gate_smoke_case "scripts+dashboard" \
       selected=dashboard scripts -- \
-      orca-dashboard-ui/app/foo.ts scripts/test-fast.sh
+      ryk-dashboard-ui/app/foo.ts scripts/test-fast.sh
 
     agent_gate_smoke_case "policy+dashboard" \
       selected=dx dashboard -- \
-      policies/default.yaml orca-dashboard-ui/app/foo.ts
+      policies/default.yaml ryk-dashboard-ui/app/foo.ts
   fi
 }
 
 run_dashboard_gate() {
   if [[ "${dry_run}" -eq 1 ]]; then
-    echo "[agent-gate] dry-run: (cd orca-dashboard-ui && npm test)"
+    echo "[agent-gate] dry-run: (cd ryk-dashboard-ui && npm test)"
     return 0
   fi
-  if [[ ! -d orca-dashboard-ui ]]; then
-    echo "error: orca-dashboard-ui/ missing" >&2
+  if [[ ! -d ryk-dashboard-ui ]]; then
+    echo "error: ryk-dashboard-ui/ missing" >&2
     exit 3
   fi
-  (cd orca-dashboard-ui && npm test)
+  (cd ryk-dashboard-ui && npm test)
 }
 
 run_plugin_gate() {
@@ -478,7 +478,7 @@ run_gate() {
     policy) ./scripts/test-slice.sh policy ;;
     intercept) ./scripts/test-slice.sh intercept ;;
     dx)
-      if [[ ! -x zig-out/bin/orca ]]; then
+      if [[ ! -x zig-out/bin/ryk ]]; then
         echo "[agent-gate] building CLI for DX matrix"
         ./scripts/zig build -fincremental -Dincremental=true
       fi

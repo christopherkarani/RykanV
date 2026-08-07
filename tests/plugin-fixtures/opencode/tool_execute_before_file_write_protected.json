@@ -5,6 +5,6 @@
   "payload": {
     "tool": "file_write",
     "path": "/etc/passwd",
-    "cwd": "/Users/chriskarani/CodingProjects/aegis"
+    "cwd": "/Users/chriskarani/CodingProjects/ryk"
   }
 }

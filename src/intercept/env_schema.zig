@@ -132,7 +132,7 @@ pub fn loadOptional(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
 ) !?Schema {
-    const path = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", "env.schema.yaml" });
+    const path = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", "env.schema.yaml" });
     defer allocator.free(path);
     const text = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(128 * 1024)) catch |err| switch (err) {
         error.FileNotFound => return null,

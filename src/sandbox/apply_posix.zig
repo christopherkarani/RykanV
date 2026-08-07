@@ -1,6 +1,6 @@
 //! POSIX fork → OS-FS apply → exec helper.
 //!
-//! Parent Orca stays free. Child installs Landlock (Linux) or Seatbelt (macOS)
+//! Parent ryk stays free. Child installs Landlock (Linux) or Seatbelt (macOS)
 //! then execs the agent. Child order: setpgid → stdio → apply → chdir →
 //! preflight → fd_scrub (keep `{0,1,2,status_w}`) → status_ok → close
 //! status_w → execve. Scrub runs before the handshake so the parent never
@@ -140,7 +140,7 @@ pub fn signalWorkspaceViewDaemon(daemon_pid: ?u32) void {
 const status_ok: u8 = 1;
 
 /// Parent waits at most this long for the child apply handshake (ms).
-/// Hung children must not block `orca run` forever.
+/// Hung children must not block `ryk run` forever.
 const status_handshake_timeout_ms: i32 = 10_000;
 
 /// Child-side apply payload (plan pointer must address stable storage for the
@@ -285,7 +285,7 @@ fn forkApplyAndExecLandlock(
 ) SpawnError!SpawnLease {
     const allocator = std.heap.page_allocator;
 
-    // Ensure `{workspace}/.orca-tmp` exists *before* expand enumeration (shared with apply).
+    // Ensure `{workspace}/.ryk-tmp` exists *before* expand enumeration (shared with apply).
     _ = session_tmp.ensureWorkspaceSessionTmp(compiled.workspace_root);
 
     // Enumerate control-expand paths in the parent before fork.
@@ -607,6 +607,7 @@ fn readStatusOk(read_fd: i32, child_pid: i32) bool {
 
 /// Best-effort: signal the process group (negative pid) then the pid itself.
 fn killProcessGroup(pid: i32) void {
+    if (comptime builtin.os.tag == .windows) return;
     if (pid <= 0) return;
     std.posix.kill(-pid, std.posix.SIG.KILL) catch {};
     std.posix.kill(pid, std.posix.SIG.KILL) catch {};
@@ -615,6 +616,7 @@ fn killProcessGroup(pid: i32) void {
 /// Best-effort kill process group + pid and reap (public for post-handshake
 /// promote hard-fail cleanup in `apply.spawnAgent`).
 pub fn killAndReapChild(pid: i32) void {
+    if (comptime builtin.os.tag == .windows) return;
     killProcessGroup(pid);
     var status: c_int = 0;
     // Retry waitpid on EINTR so parent does not free argv/env while the child
@@ -826,7 +828,7 @@ test "forkApplyLandlockAndExec applies then execs on Linux with handshake" {
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
 
@@ -872,7 +874,7 @@ test "forkApplyLandlockAndExec fails handshake on bad chdir" {
 
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
 
@@ -899,7 +901,7 @@ test "forkApplyLandlockAndExec fails handshake on bad chdir" {
         false,
         &[_][]const u8{true_path},
         null,
-        "/no/such/orca/cwd/for/handshake/test",
+        "/no/such/ryk/cwd/for/handshake/test",
         .inherit,
     ));
 }
@@ -1028,7 +1030,7 @@ test "resolveArgv0 prefers PATH from env_map over process" {
     // Point PATH at an empty directory so a bare name cannot resolve via env_map.
     var map = std.process.Environ.Map.init(std.testing.allocator);
     defer map.deinit();
-    try map.put("PATH", "/no/such/orca/path/for/resolve/test");
+    try map.put("PATH", "/no/such/ryk/path/for/resolve/test");
 
     const missing = resolveArgv0(std.testing.io, std.testing.allocator, "true", &map);
     try std.testing.expectError(error.FileNotFound, missing);
@@ -1088,7 +1090,7 @@ test "forkApplySeatbeltAndExec fails handshake on bad chdir" {
         sbpl_z.ptr,
         &[_][]const u8{"/usr/bin/true"},
         null,
-        "/no/such/orca/cwd/for/handshake/test",
+        "/no/such/ryk/cwd/for/handshake/test",
         .inherit,
     ));
 }
@@ -1118,7 +1120,7 @@ test "preflight fail does not write status_ok (missing exec target)" {
         defer std.testing.allocator.free(sbpl_z);
         try std.testing.expectError(error.ApplyFailed, forkApplySeatbeltAndExec(
             sbpl_z.ptr,
-            &[_][]const u8{"/no/such/orca/exec/target/for/preflight"},
+            &[_][]const u8{"/no/such/ryk/exec/target/for/preflight"},
             null,
             null,
             .inherit,
@@ -1132,7 +1134,7 @@ test "preflight fail does not write status_ok (missing exec target)" {
     const io = std.testing.io;
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
 
@@ -1148,7 +1150,7 @@ test "preflight fail does not write status_ok (missing exec target)" {
         &compiled,
         null,
         false,
-        &[_][]const u8{"/no/such/orca/exec/target/for/preflight"},
+        &[_][]const u8{"/no/such/ryk/exec/target/for/preflight"},
         null,
         ws_root,
         .inherit,
@@ -1207,7 +1209,7 @@ test "planted non-kept FD is closed after successful handshake" {
     const io = std.testing.io;
     var ws_tmp = std.testing.tmpDir(.{});
     defer ws_tmp.cleanup();
-    try ws_tmp.dir.createDirPath(io, ".orca");
+    try ws_tmp.dir.createDirPath(io, ".ryk");
     const ws_root = try ws_tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(ws_root);
 
@@ -1286,7 +1288,7 @@ test "protect-on landlock spawn fails closed without env map (no unprotected fal
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(root);
 

@@ -166,7 +166,7 @@ IDs are stable for planning (`ISS-*`); not GitHub numbers unless filed.
   3. Chrome selection uses `·` (not actionable `›`); section headers painted with info token.
   4. Footer is context-sensitive: `r remove` only when selection is removable; Enter omitted.
   5. List range override: `0 permanent entries` / `N permanent entries` (not chrome-row counts).
-  6. Write status abbreviated (`write: project · .orca/allowlist.toml`); full path in Detail.
+  6. Write status abbreviated (`write: project · .ryk/allowlist.toml`); full path in Detail.
   7. Mint `selected_token = .success` (aligned with packs).
   8. No allow-once leakage in list or empty Detail CTA.
 - **Residual (optional later):** in-TUI add wizard still out of scope (argv only by design).

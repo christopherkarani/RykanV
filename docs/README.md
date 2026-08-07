@@ -1,9 +1,9 @@
-# Orca Documentation
+# ryk Documentation
 
 Product package docs:
 
-- `../packages/core/README.md`: Orca Core shared policy, decision, audit, replay, redaction, fixture, schema registry, experimental ABI skeleton, and capability contract.
-- `../packages/cli/README.md`: Orca desktop and CI AI-agent mediation contract.
+- `../packages/core/README.md`: ryk Core shared policy, decision, audit, replay, redaction, fixture, schema registry, experimental ABI skeleton, and capability contract.
+- `../packages/cli/README.md`: ryk desktop and CI AI-agent mediation contract.
 
 Launch docs:
 
@@ -31,4 +31,4 @@ Developer docs:
 - `release/checklist.md`: Phase 19 release artifact, checksum, signing, SBOM, and install checklist.
 - `dev/`: architecture contracts, security invariants, production gates, phase handoffs, and [Zig hardening plan](dev/zig-hardening-plan.md).
 
-Orca reports platform capability limits through `orca doctor`; docs should not claim transparent sandboxing where the backend reports wrapper-only, observe-only, limited, or unavailable.
+ryk reports platform capability limits through `ryk doctor`; docs should not claim transparent sandboxing where the backend reports wrapper-only, observe-only, limited, or unavailable.

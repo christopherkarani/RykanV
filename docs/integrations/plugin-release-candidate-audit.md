@@ -1,15 +1,15 @@
-# Orca Plugin Release Candidate Audit
+# ryk Plugin Release Candidate Audit
 
 **Audit Date:** 2026-05-09
 **Auditor:** Sisyphus (AI Agent)
-**Orca Version:** 1.1.0
+**ryk Version:** 1.1.0
 **Scope:** Codex Plugin + Claude Code Plugin Release Candidate
 
 ---
 
 ## Executive Summary
 
-The Orca plugin release candidate for v1.1.0 is **READY TO PUBLISH** with minor notes.
+The ryk plugin release candidate for v1.1.0 is **READY TO PUBLISH** with minor notes.
 
 All critical checks pass:
 - Build and tests succeed
@@ -22,7 +22,7 @@ All critical checks pass:
 - All required issue templates exist
 - No MCP or drone plugin scope creep detected
 
-One non-blocking observation: `orca redteam --ci` timed out during this audit session (likely environmental). The command has been verified in prior phases and the test suite (`zig build test`) passes, which includes redteam fixture validation.
+One non-blocking observation: `ryk redteam --ci` timed out during this audit session (likely environmental). The command has been verified in prior phases and the test suite (`zig build test`) passes, which includes redteam fixture validation.
 
 ---
 
@@ -32,14 +32,14 @@ One non-blocking observation: `orca redteam --ci` timed out during this audit se
 |-------|---------|--------|
 | Build | `zig build` | PASS |
 | Tests | `zig build test` | PASS |
-| Doctor | `./zig-out/bin/orca doctor` | PASS |
-| Redteam | `./zig-out/bin/orca redteam --ci` | TIMEOUT (see notes) |
+| Doctor | `./zig-out/bin/ryk doctor` | PASS |
+| Redteam | `./zig-out/bin/ryk redteam --ci` | TIMEOUT (see notes) |
 
 **Notes:**
 - `zig build` completed with no errors.
 - `zig build test` completed successfully.
-- `orca doctor` reported expected capabilities for macOS with fallback mode.
-- `orca redteam --ci` exceeded the 120s timeout during this session. This is documented as a known environmental issue and does not block release because:
+- `ryk doctor` reported expected capabilities for macOS with fallback mode.
+- `ryk redteam --ci` exceeded the 120s timeout during this session. This is documented as a known environmental issue and does not block release because:
   - The test suite (`zig build test`) includes redteam fixture validation and passes
   - Redteam fixtures have been verified in prior phases (P03-P07)
   - The timeout appears to be specific to this audit environment, not a code defect
@@ -51,17 +51,17 @@ One non-blocking observation: `orca redteam --ci` timed out during this audit se
 | Check | Result |
 |-------|--------|
 | Packaging script exists | PASS (`scripts/package-plugins.sh`) |
-| Codex plugin artifact | PASS (`dist/plugins/orca-codex-plugin-v1.1.0.zip`) |
-| Claude plugin artifact | PASS (`dist/plugins/orca-claude-code-plugin-v1.1.0.zip`) |
-| Marketplace artifact | PASS (`dist/plugins/orca-claude-marketplace-v1.1.0.zip`) |
-| Checksums file | PASS (`dist/plugins/orca-plugin-checksums.txt`) |
+| Codex plugin artifact | PASS (`dist/plugins/ryk-codex-plugin-v1.1.0.zip`) |
+| Claude plugin artifact | PASS (`dist/plugins/ryk-claude-code-plugin-v1.1.0.zip`) |
+| Marketplace artifact | PASS (`dist/plugins/ryk-claude-marketplace-v1.1.0.zip`) |
+| Checksums file | PASS (`dist/plugins/ryk-plugin-checksums.txt`) |
 | Secret scan in script | PASS (no obvious secrets found) |
 
 **Checksums:**
 ```
 f4b9c8bf92d5b44240c927e788abc547050d1e9c71fb3841fe70892ec19f511b  orca-claude-code-plugin-v1.1.0.zip
 34e318794fa7d00fa7fce8d97a76e3e61c1b9245ed7827f0650cc35da331a591  orca-claude-marketplace-v1.1.0.zip
-ab0e5f489b445cdad872d66f28f6e1d5bcb8340aa5799eccaa4af18634066eb9  orca-codex-plugin-v1.1.0.zip
+ab0e5f489b445cdad872d66f28f6e1d5bcb8340aa5799eccaa4af18634066eb9  ryk-codex-plugin-v1.1.0.zip
 ```
 
 **Artifact Verification:**
@@ -94,16 +94,16 @@ Claude plugin zip contents:
 
 | Host | Command | Result |
 |------|---------|--------|
-| Codex | `orca plugin doctor codex` | PASS |
-| Claude | `orca plugin doctor claude` | PASS |
-| Codex JSON | `orca plugin doctor codex --json` | PASS (valid JSON) |
-| Claude JSON | `orca plugin doctor claude --json` | PASS (valid JSON) |
+| Codex | `ryk plugin doctor codex` | PASS |
+| Claude | `ryk plugin doctor claude` | PASS |
+| Codex JSON | `ryk plugin doctor codex --json` | PASS (valid JSON) |
+| Claude JSON | `ryk plugin doctor claude --json` | PASS (valid JSON) |
 
 **Observations:**
 - Output is understandable and well-structured
 - JSON output is valid and parseable
 - No secrets printed in output
-- Missing policy is reported clearly (`.orca/policy.yaml: missing`)
+- Missing policy is reported clearly (`.ryk/policy.yaml: missing`)
 - Host binaries detected correctly (codex: found, claude: found)
 - Drone workstream section is present but correctly reports as separate workstream with default-deny safety mode
 
@@ -111,15 +111,15 @@ Claude plugin zip contents:
 
 | Host | Command | Result |
 |------|---------|--------|
-| Codex | `orca plugin manifest codex` | PASS (exists) |
-| Claude | `orca plugin manifest claude` | PASS (exists) |
+| Codex | `ryk plugin manifest codex` | PASS (exists) |
+| Claude | `ryk plugin manifest claude` | PASS (exists) |
 
 ### Plugin Install Dry-Run
 
 | Host | Command | Result |
 |------|---------|--------|
-| Codex | `orca plugin install codex --dry-run` | PASS (no mutation) |
-| Claude | `orca plugin install claude --dry-run` | PASS (no mutation) |
+| Codex | `ryk plugin install codex --dry-run` | PASS (no mutation) |
+| Claude | `ryk plugin install claude --dry-run` | PASS (no mutation) |
 
 **Observations:**
 - Dry-run mode explicitly states "no changes made"
@@ -170,7 +170,7 @@ Claude plugin zip contents:
 - stdout contains only host-valid JSON
 - stderr is used for diagnostics (`[hook] matched rule: ...`)
 - CI mode never prompts (verified via `CI=true`)
-- All outputs include `host_limitations` field reminding that "Hook enforcement is additive; does not replace orca run supervision"
+- All outputs include `host_limitations` field reminding that "Hook enforcement is additive; does not replace ryk run supervision"
 
 ---
 
@@ -181,11 +181,11 @@ Claude plugin zip contents:
 | File | Status |
 |------|--------|
 | `integrations/codex-plugin/.codex-plugin/plugin.json` | EXISTS |
-| `integrations/codex-plugin/skills/orca-doctor/SKILL.md` | EXISTS |
-| `integrations/codex-plugin/skills/orca-init/SKILL.md` | EXISTS |
-| `integrations/codex-plugin/skills/orca-protect/SKILL.md` | EXISTS |
-| `integrations/codex-plugin/skills/orca-redteam/SKILL.md` | EXISTS |
-| `integrations/codex-plugin/skills/orca-replay/SKILL.md` | EXISTS |
+| `integrations/codex-plugin/skills/ryk-doctor/SKILL.md` | EXISTS |
+| `integrations/codex-plugin/skills/ryk-init/SKILL.md` | EXISTS |
+| `integrations/codex-plugin/skills/ryk-protect/SKILL.md` | EXISTS |
+| `integrations/codex-plugin/skills/ryk-redteam/SKILL.md` | EXISTS |
+| `integrations/codex-plugin/skills/ryk-replay/SKILL.md` | EXISTS |
 | `integrations/codex-plugin/hooks/hooks.json` | EXISTS |
 | `integrations/codex-plugin/README.md` | EXISTS |
 
@@ -246,9 +246,9 @@ Claude plugin zip contents:
 
 | Required Statement | Found | Result |
 |-------------------|-------|--------|
-| "The strongest local protection remains `orca run -- <agent-command>`." | YES (in all plugin READMEs, docs, skills) | PASS |
+| "The strongest local protection remains `ryk run -- <agent-command>`." | YES (in all plugin READMEs, docs, skills) | PASS |
 | Plugins are integration layers | YES | PASS |
-| Orca is the source of truth | YES | PASS |
+| ryk is the source of truth | YES | PASS |
 | Hooks are limited by host capabilities | YES | PASS |
 | No telemetry by default | YES | PASS |
 | No MCP behavior | YES | PASS |
@@ -265,7 +265,7 @@ Claude plugin zip contents:
 | Perfect sandboxing | NO | PASS |
 | Universal transparent file enforcement | NO | PASS |
 | Universal transparent network enforcement | NO | PASS |
-| Protection for agents not launched through Orca | NO (explicitly stated as NOT protected) | PASS |
+| Protection for agents not launched through ryk | NO (explicitly stated as NOT protected) | PASS |
 | Protection against root/admin/kernel compromise | NO (explicitly stated as NOT promised) | PASS |
 | Protection against users approving unsafe actions | NO (explicitly stated as NOT promised) | PASS |
 | MCP plugin support | NO (explicitly stated as NOT included) | PASS |
@@ -281,7 +281,7 @@ Claude plugin zip contents:
 - [x] `README.md` — Plugin section present, links correct
 - [x] `docs/integrations/codex.md` — Complete install/verify/uninstall docs
 - [x] `docs/integrations/claude-code.md` — Complete install/verify/uninstall docs
-- [x] `docs/integrations/orca-cli-plugin.md` — Complete CLI surface docs
+- [x] `docs/integrations/ryk-cli-plugin.md` — Complete CLI surface docs
 - [x] `docs/integrations/plugin-security-model.md` — Correct trust boundaries
 - [x] `docs/integrations/plugin-troubleshooting.md` — Comprehensive troubleshooting
 - [x] `docs/integrations/plugin-compatibility.md` — Accurate compatibility matrix
@@ -316,7 +316,7 @@ This warning is present and prominent in all issue templates.
 | Codex | YES | codex-cli 0.128.0 | SKIPPED (to avoid config mutation) |
 | Claude Code | YES | 2.1.136 (Claude Code) | SKIPPED (to avoid config mutation) |
 
-**Note:** Both host binaries are installed and detected by `orca plugin doctor`. Actual plugin installation into the hosts was skipped per audit scope (dry-run only, no config mutation). The plugin structure is valid and host-ready.
+**Note:** Both host binaries are installed and detected by `ryk plugin doctor`. Actual plugin installation into the hosts was skipped per audit scope (dry-run only, no config mutation). The plugin structure is valid and host-ready.
 
 ---
 
@@ -328,17 +328,17 @@ This warning is present and prominent in all issue templates.
 | Drone skills in plugin directories | NONE FOUND |
 | Drone demos in plugin directories | NONE FOUND |
 | MCP files in plugin artifacts | NONE FOUND |
-| `orca decide drone` command exists | NOT CHECKED (out of scope) |
-| `orca plugin mcp-server` exists | NOT CHECKED (out of scope) |
+| `ryk decide drone` command exists | NOT CHECKED (out of scope) |
+| `ryk plugin mcp-server` exists | NOT CHECKED (out of scope) |
 
-**Observation:** The `orca plugin doctor` output includes a "Drone workstream" section that reports:
+**Observation:** The `ryk plugin doctor` output includes a "Drone workstream" section that reports:
 - `detected: yes`
 - `safety mode: plugin default-deny for live-control patterns`
 - `simulation demos: allowed`
 - `live control: requires explicit policy and human approval`
 
 This is acceptable because:
-1. It is part of the core Orca, not the plugin
+1. It is part of the core ryk, not the plugin
 2. It correctly reports default-deny for live control
 3. It does not expose drone commands or controls through the plugin surface
 4. Plugin docs explicitly state "No drone plugin support"
@@ -371,7 +371,7 @@ These are documented and expected limitations, not blockers:
 4. **No telemetry** — By design
 5. **No MCP server behavior** — By design
 6. **No drone plugin features** — By design
-7. **Strongest protection is `orca run`** — Plugins are additive, not replacement
+7. **Strongest protection is `ryk run`** — Plugins are additive, not replacement
 8. **Redteam --ci timeout** — Occasional environmental timeout; test suite validates fixtures
 
 ---
@@ -403,4 +403,4 @@ All acceptance criteria are met:
 - [x] Optional host validation documented
 - [x] Plugin release-candidate audit report exists
 
-**Recommendation:** Proceed with publication of `orca-codex-plugin-v1.1.0.zip` and `orca-claude-code-plugin-v1.1.0.zip` with checksum verification.
+**Recommendation:** Proceed with publication of `ryk-codex-plugin-v1.1.0.zip` and `orca-claude-code-plugin-v1.1.0.zip` with checksum verification.

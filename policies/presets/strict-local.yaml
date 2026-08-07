@@ -1,4 +1,4 @@
-# Orca preset: strict-local
+# ryk preset: strict-local
 # Local strict mode. Unknown actions are denied or staged; add narrow allow rules as needed.
 version: 1
 mode: strict
@@ -49,7 +49,7 @@ files:
       - "./**"
     deny:
       - "./.git/**"
-      - "./.orca/**"
+      - "./.ryk/**"
     mode: staged
 
 commands:

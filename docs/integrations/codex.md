@@ -1,22 +1,22 @@
-# Orca Codex Plugin Integration
+# ryk Codex Plugin Integration
 
-This document describes the Orca Codex plugin, how to install it, and how to use it.
+This document describes the ryk Codex plugin, how to install it, and how to use it.
 
 ## Overview
 
-The Orca Codex plugin is a local integration package that adds Orca skills and lifecycle hooks to Codex. It lives under `integrations/codex-plugin/` in the Orca repository.
+The ryk Codex plugin is a local integration package that adds ryk skills and lifecycle hooks to Codex. It lives under `integrations/codex-plugin/` in the ryk repository.
 
-The plugin is a thin layer. All policy decisions are made by the Orca CLI. The plugin does not duplicate policy logic.
+The plugin is a thin layer. All policy decisions are made by the ryk CLI. The plugin does not duplicate policy logic.
 
 ## Prerequisites
 
-- Zig 0.15.2 (to build Orca from source)
-- Orca CLI built and available in PATH
+- Zig 0.16.0 (to build ryk from source)
+- ryk CLI built and available in PATH
 - Codex host binary installed
 
 ## Install instructions
 
-### Build Orca
+### Build ryk
 
 ```bash
 zig build
@@ -26,24 +26,24 @@ zig build
 
 1. Download the latest plugin zip from the release page:
    ```text
-   orca-codex-plugin-vX.Y.Z.zip
+   ryk-codex-plugin-vX.Y.Z.zip
    ```
 
 2. Verify the checksum:
    ```bash
-   sha256sum -c orca-plugin-checksums.txt
+   sha256sum -c ryk-plugin-checksums.txt
    ```
 
 3. Extract the plugin to your preferred location:
    ```bash
-   unzip orca-codex-plugin-vX.Y.Z.zip -d ~/orca-plugins/codex
+   unzip ryk-codex-plugin-vX.Y.Z.zip -d ~/ryk-plugins/codex
    ```
 
 4. Point Codex to the extracted plugin directory.
 
 ### Install from local path (repo)
 
-1. Build Orca:
+1. Build ryk:
    ```bash
    zig build
    ```
@@ -55,7 +55,7 @@ zig build
 
 3. Verify the plugin is recognized:
    ```bash
-   ./zig-out/bin/orca plugin doctor codex
+   ./zig-out/bin/ryk plugin doctor codex
    ```
 
 ### Repo marketplace install
@@ -80,10 +80,10 @@ integrations/codex-plugin/examples/marketplace.json
 
 This is a documented example only. The exact schema depends on your Codex version.
 
-The root-level marketplace file for repo marketplace install is:
+The tracked repository marketplace file for repo marketplace install is:
 
 ```text
-.agents/plugins/marketplace.json
+.agents/plugins/marketplace.json (plugin source: integrations/codex-plugin/)
 ```
 
 ### Manual fallback install
@@ -92,18 +92,18 @@ If your Codex version does not support automatic plugin loading:
 
 1. Copy the skills from `integrations/codex-plugin/skills/` into your Codex skills directory.
 2. Copy the hooks from `integrations/codex-plugin/hooks/hooks.json` into your Codex hooks configuration.
-3. Ensure `orca` is in PATH or use the full path to the binary.
+3. Ensure `ryk` is in PATH or use the full path to the binary.
 
 ## Verify install
 
 ### Plugin doctor
 
 ```bash
-./zig-out/bin/orca plugin doctor codex
+./zig-out/bin/ryk plugin doctor codex
 ```
 
 Expected output sections:
-- Orca version
+- ryk version
 - Policy status (present/valid)
 - Plugin directories (codex: found)
 - Host binaries (codex: detected or not detected)
@@ -111,7 +111,7 @@ Expected output sections:
 ### Plugin manifest
 
 ```bash
-./zig-out/bin/orca plugin manifest codex
+./zig-out/bin/ryk plugin manifest codex
 ```
 
 This reports the expected manifest path and existence status.
@@ -120,7 +120,7 @@ This reports the expected manifest path and existence status.
 
 ```bash
 cat tests/plugin-fixtures/codex/pre_tool_use_command_safe.json \
-  | ./zig-out/bin/orca hook codex PreToolUse
+  | ./zig-out/bin/ryk hook codex PreToolUse
 ```
 
 Expected: `allow` decision in valid JSON.
@@ -128,28 +128,28 @@ Expected: `allow` decision in valid JSON.
 ### Run redteam
 
 ```bash
-./zig-out/bin/orca redteam --ci
+./zig-out/bin/ryk redteam --ci
 ```
 
 ### Replay last session
 
 ```bash
-./zig-out/bin/orca replay --session last --verify
+./zig-out/bin/ryk replay --session last --verify
 ```
 
 ## Skill list
 
 | Skill | File | Purpose |
 |-------|------|---------|
-| `orca-doctor` | `skills/orca-doctor/SKILL.md` | Check installation and readiness |
-| `orca-init` | `skills/orca-init/SKILL.md` | Create or repair a policy |
-| `orca-protect` | `skills/orca-protect/SKILL.md` | Explain strongest protection |
-| `orca-redteam` | `skills/orca-redteam/SKILL.md` | Run red-team fixtures |
-| `orca-replay` | `skills/orca-replay/SKILL.md` | Replay latest session |
+| `ryk-doctor` | `skills/ryk-doctor/SKILL.md` | Check installation and readiness |
+| `ryk-init` | `skills/ryk-init/SKILL.md` | Create or repair a policy |
+| `ryk-protect` | `skills/ryk-protect/SKILL.md` | Explain strongest protection |
+| `ryk-redteam` | `skills/ryk-redteam/SKILL.md` | Run red-team fixtures |
+| `ryk-replay` | `skills/ryk-replay/SKILL.md` | Replay latest session |
 
 ## Hook list
 
-Hooks call `orca hook codex <event>` with a JSON payload on stdin:
+Hooks call `ryk hook codex <event>` with a JSON payload on stdin:
 
 | Event | Description | Timeout |
 |-------|-------------|---------|
@@ -170,19 +170,19 @@ If you installed from a release artifact, simply delete the extracted directory.
 
 ### Plugin directory not found
 
-Ensure you run `orca plugin doctor codex` from the repository root. The doctor looks for `integrations/codex-plugin/` relative to the workspace root.
+Ensure you run `ryk plugin doctor codex` from the repository root. The doctor looks for `integrations/codex-plugin/` relative to the workspace root.
 
 ### Hooks timeout
 
-If hooks exceed their timeout, Codex may skip them. Check that `orca` is in PATH and that `.orca/policy.yaml` loads quickly.
+If hooks exceed their timeout, Codex may skip them. Check that `ryk` is in PATH and that `.ryk/policy.yaml` loads quickly.
 
 ### Policy not found
 
-Run `orca init --preset codex` to create a default policy, then validate with `orca policy check .orca/policy.yaml`.
+Run `ryk init --preset codex` to create a default policy, then validate with `ryk policy check .ryk/policy.yaml`.
 
-### Orca binary not found
+### ryk binary not found
 
-Build Orca with `zig build` or ensure `./zig-out/bin/orca` is in your PATH.
+Build ryk with `zig build` or ensure `./zig-out/bin/ryk` is in your PATH.
 
 ### Fake secret redaction questions
 
@@ -191,14 +191,14 @@ The plugin uses synthetic test secrets (e.g., `fake_p05_secret_value`) in fixtur
 ## Limitations
 
 - Hooks are advisory; enforcement depends on Codex host support.
-- The strongest protection is `orca codex`.
+- The strongest protection is the process-level wrapper `ryk run -- <codex-command>` (the `ryk codex` launcher uses the same protected path).
 - Plugin installation is a preview/dry-run by default.
 - No telemetry is collected.
 - Official marketplace availability is not yet implemented.
 
 ## Security model
 
-- The Orca CLI is the source of truth.
+- The ryk CLI is the source of truth.
 - The plugin does not reimplement policy logic.
 - No secrets are stored in plugin files.
 - Hook stdout is host-valid JSON.
@@ -207,7 +207,7 @@ The plugin uses synthetic test secrets (e.g., `fake_p05_secret_value`) in fixtur
 
 ## Separate workstream note
 
-A separate drone workstream exists in this repository under `packages/edge/`. The Orca Codex plugin does not expose or modify drone functionality.
+A separate drone workstream exists in this repository under `packages/edge/`. The ryk Codex plugin does not expose or modify drone functionality.
 
 ## No MCP support
 

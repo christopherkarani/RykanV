@@ -3,7 +3,7 @@
 //! unprotected; hook grade is unverified; prefer wrapper `ryk run -- openclaw`.
 
 const std = @import("std");
-const core = @import("orca_core").core;
+const core = @import("ryk_core").core;
 
 /// Shared enforcement note (plain + JSON). Single source of truth for doctor copy.
 pub const enforcement_note =
@@ -23,7 +23,7 @@ pub fn writeDoctorHonesty(stdout: anytype) !void {
     try stdout.print("  enforcement: {s}\n", .{enforcement_note});
     try stdout.writeAll("  hook grade: unverified (no live host E2E); installed != protected\n");
     try stdout.writeAll("  install: use 'ryk plugin install openclaw --dry-run' to preview (plumbing only)\n");
-    try stdout.writeAll("  note: npm/ClawHub package orca-openclaw-plugin is published for distribution; not an enforcement install\n");
+    try stdout.writeAll("  note: npm/ClawHub package ryk-openclaw-plugin is published for distribution; not an enforcement install\n");
 }
 
 /// Append OpenClaw honesty fields inside an existing `openclaw_paths` JSON object
@@ -45,8 +45,8 @@ pub fn writeInstallPaths(stdout: anytype) !void {
     try stdout.writeAll("  install paths for OpenClaw:\n");
     try stdout.print("    preferred protection: {s}  (wrapper; not npm)\n", .{preferred_wrapper});
     try stdout.writeAll("    local:   openclaw plugins install ./integrations/openclaw-plugin\n");
-    try stdout.writeAll("    npm:     openclaw plugins install npm:orca-openclaw-plugin (published; unprotected — hooks no-op)\n");
-    try stdout.writeAll("    clawhub: openclaw plugins install clawhub:orca-openclaw-plugin (published; unprotected — hooks no-op)\n");
+    try stdout.writeAll("    npm:     openclaw plugins install npm:ryk-openclaw-plugin (published; unprotected — hooks no-op)\n");
+    try stdout.writeAll("    clawhub: openclaw plugins install clawhub:ryk-openclaw-plugin (published; unprotected — hooks no-op)\n");
 }
 
 test "openclaw honesty constants are stable tokens" {

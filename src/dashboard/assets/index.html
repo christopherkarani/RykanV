@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="orca-dashboard-token" content="__ORCA_DASHBOARD_TOKEN__">
-    <title>Orca Dashboard</title>
+    <meta name="ryk-dashboard-token" content="__RYK_DASHBOARD_TOKEN__">
+    <title>ryk Dashboard</title>
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="/assets/app.css">
   </head>
@@ -15,7 +15,7 @@
         <div class="brand">
           <span class="brand-mark" aria-hidden="true">O</span>
           <div>
-            <h1>Orca</h1>
+            <h1>ryk</h1>
             <p>Local guardrail dashboard</p>
           </div>
         </div>
@@ -51,7 +51,7 @@
             <div class="panel-header">
               <div>
                 <h4 id="workspaces-title">Registered workspaces</h4>
-                <span class="caption">Recent projects seen by local Orca decision writers</span>
+                <span class="caption">Recent projects seen by local ryk decision writers</span>
               </div>
             </div>
             <div class="workspace-list" id="workspaceList"></div>
@@ -60,7 +60,7 @@
             <section class="panel" aria-labelledby="quick-actions-title">
               <div class="panel-header">
                 <h4 id="quick-actions-title">Quick actions</h4>
-                <span class="caption">Fixed Orca commands only</span>
+                <span class="caption">Fixed ryk commands only</span>
               </div>
               <div class="action-grid" id="quickActions"></div>
             </section>
@@ -93,14 +93,14 @@
               </div>
               <label class="field-label" for="secretlessCommandInput">Agent command</label>
               <input id="secretlessCommandInput" class="text-input" type="text" value="codex">
-              <code class="command-line command-preview" id="secretlessRunCommand">orca run --secretless -- codex</code>
+              <code class="command-line command-preview" id="secretlessRunCommand">ryk run --secretless -- codex</code>
             </section>
 
             <section class="panel" aria-labelledby="secretless-broker-title">
               <div class="panel-header">
                 <div>
                   <h4 id="secretless-broker-title">Broker adapter</h4>
-                  <span class="caption">References only; raw values stay out of Orca</span>
+                  <span class="caption">References only; raw values stay out of ryk</span>
                 </div>
               </div>
               <div class="meta-grid" id="secretlessBrokerMeta"></div>
@@ -176,7 +176,7 @@
             <div class="panel-header">
               <div>
                 <h4 id="secretless-brokers-title">Supported broker extension points</h4>
-                <span class="caption">Orca owns references and audit; external brokers own secret retrieval</span>
+                <span class="caption">ryk owns references and audit; external brokers own secret retrieval</span>
               </div>
             </div>
             <div class="broker-grid" id="secretlessBrokerGrid"></div>
@@ -214,7 +214,7 @@
             <section class="panel" aria-labelledby="sessions-title">
               <div class="panel-header">
                 <h4 id="sessions-title">Sessions</h4>
-                <span class="caption">.orca/sessions</span>
+                <span class="caption">.ryk/sessions</span>
               </div>
               <div id="sessionList" class="session-list"></div>
             </section>
@@ -245,8 +245,8 @@
             <section class="panel policy-editor" aria-labelledby="policy-editor-title">
               <div class="panel-header">
                 <div>
-                  <h4 id="policy-editor-title">.orca/policy.yaml</h4>
-                  <span class="caption">Saved only after Orca validates it</span>
+                  <h4 id="policy-editor-title">.ryk/policy.yaml</h4>
+                  <span class="caption">Saved only after ryk validates it</span>
                 </div>
                 <button class="button secondary" type="button" id="savePolicyButton">Validate and save</button>
               </div>

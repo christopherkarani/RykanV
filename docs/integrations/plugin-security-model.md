@@ -1,6 +1,6 @@
 # Plugin Security Model
 
-> Scope: P01–P06 — Trust boundaries, sandbox expectations, and permission model for Orca plugins
+> Scope: P01–P06 — Trust boundaries, sandbox expectations, and permission model for ryk plugins
 > Version: 1.1.0
 
 ## Core Statement
@@ -8,24 +8,24 @@
 The strongest local protection remains:
 
 ```bash
-orca run -- <agent-command>
+ryk run -- <agent-command>
 ```
 
-Orca plugins are integration layers. They are not replacements for the Orca runtime.
+ryk plugins are integration layers. They are not replacements for the ryk runtime.
 
 The plugin system adds:
 - host-native skills
 - slash commands
 - lifecycle hooks
-- Orca CLI plugin commands
+- ryk CLI plugin commands
 - policy explanations
 - red-team shortcuts
 - replay shortcuts
 
 ## Principles
 
-1. **Orca CLI is the source of truth.** Plugins call Orca; they do not reimplement policy logic.
-2. **Strongest protection is `orca run`.** Plugin hooks are additive, not a replacement for supervised execution.
+1. **ryk CLI is the source of truth.** Plugins call ryk; they do not reimplement policy logic.
+2. **Strongest protection is `ryk run`.** Plugin hooks are additive, not a replacement for supervised execution.
 3. **Default deny.** If a plugin cannot verify safety, it must fail closed.
 4. **No silent mutation.** Host configs, policies, and credentials are never changed without explicit user approval.
 5. **No telemetry by default.** The plugin surface does not phone home.
@@ -37,21 +37,21 @@ The plugin system adds:
 │  Host IDE (Codex, Claude Code, OpenCode, OpenClaw, etc.)  │  ← Untrusted by default
 │  Runs arbitrary agent code                │
 ├─────────────────────────────────────────┤
-│  Orca Plugin (integration package)     │  ← Semi-trusted; read-only
-│  Calls Orca CLI for decisions            │
+│  ryk Plugin (integration package)     │  ← Semi-trusted; read-only
+│  Calls ryk CLI for decisions            │
 ├─────────────────────────────────────────┤
-│  Orca CLI (`orca plugin *`)           │  ← Trusted local surface
+│  ryk CLI (`ryk plugin *`)           │  ← Trusted local surface
 │  Owns policy, audit, replay               │
 ├─────────────────────────────────────────┤
-│  Orca Core (policy engine, audit)      │  ← Trusted
+│  ryk Core (policy engine, audit)      │  ← Trusted
 │  Local-only, no network dependency        │
 └─────────────────────────────────────────┘
 ```
 
 | Component | Trust Level | Notes |
 |-----------|-------------|-------|
-| Orca core CLI | trusted | source of truth |
-| Orca plugin commands | trusted if built from Orca | stable integration layer |
+| ryk core CLI | trusted | source of truth |
+| ryk plugin commands | trusted if built from ryk | stable integration layer |
 | Host plugin manifest | trusted if intentionally installed | should be reviewed |
 | Hook input | untrusted | comes from agent/tool context |
 | Prompt content | untrusted | may contain secrets or injection |
@@ -63,15 +63,15 @@ The plugin system adds:
 
 | Level | What It Can Do | Example |
 |-------|----------------|---------|
-| **Read-only** | Query status, read policy, check manifests | `orca plugin doctor`, `orca plugin manifest` |
-| **Preview** | Simulate changes without writing | `orca plugin install --dry-run` |
+| **Read-only** | Query status, read policy, check manifests | `ryk plugin doctor`, `ryk plugin manifest` |
+| **Preview** | Simulate changes without writing | `ryk plugin install --dry-run` |
 | **Mutate** | Modify host config or policy | Requires `--yes` + explicit user confirmation |
 | **Actuate** | Trigger real-world effects | **Not exposed by default** |
 
 ## Plugin Default Behavior
 
-- `orca plugin install` defaults to `--dry-run`.
-- `orca plugin doctor` does not print secrets or raw env values.
+- `ryk plugin install` defaults to `--dry-run`.
+- `ryk plugin doctor` does not print secrets or raw env values.
 - Drone-related operations are default-deny.
 
 ## Credential Handling
@@ -82,7 +82,7 @@ The plugin system adds:
 
 ## Host Config Mutations
 
-- Orca plugin commands must not silently overwrite Codex, Claude Code, OpenCode, OpenClaw, or other host configs.
+- ryk plugin commands must not silently overwrite Codex, Claude Code, OpenCode, OpenClaw, or other host configs.
 - Any config change must be previewed with `--dry-run` first.
 - Any actual change requires `--yes`.
 
@@ -95,13 +95,13 @@ The plugin surface does not claim to sandbox the host IDE. It provides:
 - Safe installation previews
 
 Actual sandboxing is provided by:
-- `orca run -- <command>` for child process supervision
+- `ryk run -- <command>` for child process supervision
 - Host IDE's own extension sandbox (if any)
 - OS-level protections
 
 ## Security Invariants
 
-1. Plugins call Orca; they do not reimplement Orca.
+1. Plugins call ryk; they do not reimplement ryk.
 2. Raw secrets are never persisted.
 3. Hook input is bounded.
 4. Hook stdout is host-valid.
@@ -118,7 +118,7 @@ Actual sandboxing is provided by:
 - **No drone-specific plugin features included.** Drone work is a separate workstream.
 - **No telemetry by default.** The plugin surface does not phone home.
 - **No SaaS requirement.** No hosted dashboard, account, or monetization layer is required.
-- **No protection for agents not launched through Orca** unless the host hook catches the action.
+- **No protection for agents not launched through ryk** unless the host hook catches the action.
 - **No protection against root/admin/kernel compromise.**
 - **No protection against a user approving unsafe actions.**
 
@@ -133,7 +133,7 @@ A plugin request is rejected if it would:
 
 ## See Also
 
-- `docs/integrations/orca-cli-plugin.md`
+- `docs/integrations/ryk-cli-plugin.md`
 - `docs/integrations/plugin-troubleshooting.md`
 - `docs/integrations/separate-workstream-guardrails.md`
 - `PLUGIN_SECURITY_MODEL.md`

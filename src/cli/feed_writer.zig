@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const core = @import("orca_core").core;
+const core = @import("ryk_core").core;
 const env_util = @import("../env_util.zig");
 const rust_visibility = @import("rust_visibility.zig");
 
@@ -13,11 +13,11 @@ pub const rotated_global_events_file_name = "events.jsonl.1";
 pub const max_registered_workspaces: usize = 200;
 
 pub fn feedPath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
-    return std.fs.path.join(allocator, &.{ workspace_root, ".orca", feed_dir_name, feed_file_name });
+    return std.fs.path.join(allocator, &.{ workspace_root, ".ryk", feed_dir_name, feed_file_name });
 }
 
 pub fn appendRecord(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8, record: rust_visibility.RustShellFeedRecord) !void {
-    const feed_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".orca", feed_dir_name });
+    const feed_dir = try std.fs.path.join(allocator, &.{ workspace_root, ".ryk", feed_dir_name });
     defer allocator.free(feed_dir);
     try std.Io.Dir.cwd().createDirPath(io, feed_dir);
 
@@ -108,7 +108,7 @@ pub fn resolveGlobalDashboardRoot(allocator: std.mem.Allocator) ![]u8 {
     defer env_map.deinit();
     const home = (try env_util.getOwned(&env_map, allocator, "HOME")) orelse return error.HomeDirectoryNotFound;
     defer allocator.free(home);
-    return std.fs.path.join(allocator, &.{ home, ".orca", "dashboard" });
+    return std.fs.path.join(allocator, &.{ home, ".ryk", "dashboard" });
 }
 
 fn updateWorkspaceRegistry(
@@ -127,7 +127,7 @@ fn updateWorkspaceRegistry(
     var parsed = if (existing) |text| std.json.parseFromSlice(std.json.Value, allocator, text, .{}) catch null else null;
     defer if (parsed) |*value| value.deinit();
 
-    const policy_path = try std.fs.path.join(allocator, &.{ record.workspace_root, ".orca", "policy.yaml" });
+    const policy_path = try std.fs.path.join(allocator, &.{ record.workspace_root, ".ryk", "policy.yaml" });
     defer allocator.free(policy_path);
     const policy_present = blk: {
         std.Io.Dir.cwd().access(io, policy_path, .{}) catch break :blk false;
@@ -961,7 +961,7 @@ test "global feed append records workspace and updates registry" {
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    const dashboard_root = try std.fs.path.join(std.testing.allocator, &.{ root, "home", ".orca", "dashboard" });
+    const dashboard_root = try std.fs.path.join(std.testing.allocator, &.{ root, "home", ".ryk", "dashboard" });
     defer std.testing.allocator.free(dashboard_root);
 
     var record = try rust_visibility.buildFeedRecordFromHookDecision(

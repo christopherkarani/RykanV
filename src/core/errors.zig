@@ -1,4 +1,4 @@
-pub const OrcaError = error{
+pub const RykError = error{
     PolicyParseFailed,
     PolicyValidationFailed,
     PolicyNotFound,
@@ -18,6 +18,6 @@ pub const OrcaError = error{
 };
 
 test "core error set imports security errors" {
-    const err: OrcaError = error.PermissionDenied;
+    const err: RykError = error.PermissionDenied;
     try @import("std").testing.expectEqual(error.PermissionDenied, err);
 }

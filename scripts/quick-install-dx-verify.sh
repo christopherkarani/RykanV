@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Quick-Install DX Verification Script (Orca)
+# Quick-Install DX Verification Script (ryk)
 #
-# Simulates the exact user quick-install path (`orca init --preset generic-agent --force`
+# Simulates the exact user quick-install path (`ryk init --preset generic-agent --force`
 # in a clean workspace) and runs a deterministic matrix of `policy explain` cases.
 #
 # Usage:
@@ -15,17 +15,17 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-ORCA_BIN="${REPO_ROOT}/zig-out/bin/orca"
+RYK_BIN="${REPO_ROOT}/zig-out/bin/ryk"
 
-if [[ ! -x "${ORCA_BIN}" ]]; then
-  echo "[quick-install-dx-verify] Building orca first..." >&2
+if [[ ! -x "${RYK_BIN}" ]]; then
+  echo "[quick-install-dx-verify] Building ryk first..." >&2
   (cd "${REPO_ROOT}" && ./scripts/zig build)
 fi
 
-echo "[quick-install-dx-verify] Using binary: ${ORCA_BIN}"
-"${ORCA_BIN}" version --json 2>/dev/null || "${ORCA_BIN}" --version
+echo "[quick-install-dx-verify] Using binary: ${RYK_BIN}"
+"${RYK_BIN}" version --json 2>/dev/null || "${RYK_BIN}" --version
 
-TD="$(mktemp -d "${TMPDIR:-/tmp}/orca-quick-dx-verify.XXXXXX")"
+TD="$(mktemp -d "${TMPDIR:-/tmp}/ryk-quick-dx-verify.XXXXXX")"
 cleanup() {
   rm -rf "${TD}"
 }
@@ -34,21 +34,21 @@ trap cleanup EXIT INT TERM
 echo "[quick-install-dx-verify] Clean workspace: ${TD}"
 cd "${TD}"
 
-echo "[1/4] orca init --preset generic-agent --force --quiet"
-"${ORCA_BIN}" init --preset generic-agent --force --quiet
-test -f .orca/policy.yaml || { echo "FAIL: policy not created"; exit 1; }
+echo "[1/4] ryk init --preset generic-agent --force --quiet"
+"${RYK_BIN}" init --preset generic-agent --force --quiet
+test -f .ryk/policy.yaml || { echo "FAIL: policy not created"; exit 1; }
 
 echo "[2/4] policy check"
-"${ORCA_BIN}" policy check .orca/policy.yaml
+"${RYK_BIN}" policy check .ryk/policy.yaml
 
-POLICY=".orca/policy.yaml"
+POLICY=".ryk/policy.yaml"
 
 expect_decision() {
   local want="$1"
   shift
   local label="$*"
   local out
-  out="$("${ORCA_BIN}" policy explain --policy "${POLICY}" "$@" 2>&1)"
+  out="$("${RYK_BIN}" policy explain --policy "${POLICY}" "$@" 2>&1)"
   local badge
   badge="$(printf '%s' "${want}" | tr '[:lower:]' '[:upper:]')"
   if echo "${out}" | grep -qE "^Decision[[:space:]]+\[${badge}\]\$"; then
@@ -61,7 +61,7 @@ expect_decision() {
 }
 
 echo "[3/4] file.write protected paths"
-for p in '.git/config' './.git/config' '.orca/secret' './.orca/policy.yaml'; do
+for p in '.git/config' './.git/config' '.ryk/secret' './.ryk/policy.yaml'; do
   expect_decision deny file.write "${p}"
 done
 

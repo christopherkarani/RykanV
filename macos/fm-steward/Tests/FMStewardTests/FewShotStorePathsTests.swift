@@ -14,10 +14,10 @@ struct FewShotStorePathsTests {
         #expect(url.lastPathComponent == "ambig.wax")
     }
 
-    @Test("legacy product directory is Orca/fm-steward")
+    @Test("legacy product directory is ryk/fm-steward")
     func legacyProductPath() {
         let url = FewShotStorePaths.legacyProductStoreURL()
-        #expect(url.path.contains("Orca/fm-steward"))
+        #expect(url.path.contains("ryk/fm-steward"))
         #expect(url.lastPathComponent == "ambig.wax")
     }
 
@@ -31,7 +31,7 @@ struct FewShotStorePathsTests {
         // Point Application Support at temp by using explicit file URLs via copy helpers.
         // We exercise migrate by constructing legacy/primary under a sandbox and invoking
         // the copy logic with real paths (product APIs use real App Support — use direct copy).
-        let legacyDir = root.appendingPathComponent("Orca/fm-steward", isDirectory: true)
+        let legacyDir = root.appendingPathComponent("ryk/fm-steward", isDirectory: true)
         let primaryDir = root.appendingPathComponent("ryk/fm-steward", isDirectory: true)
         try fm.createDirectory(at: legacyDir, withIntermediateDirectories: true)
         let legacyStore = legacyDir.appendingPathComponent("ambig.wax")
@@ -44,7 +44,7 @@ struct FewShotStorePathsTests {
         try fm.copyItem(at: legacyStore, to: primaryDir.appendingPathComponent("ambig.wax"))
         #expect(fm.fileExists(atPath: primaryDir.appendingPathComponent("ambig.wax").path))
         #expect(FewShotStorePaths.productRelativeDirectory == "ryk/fm-steward")
-        #expect(FewShotStorePaths.legacyProductRelativeDirectory == "Orca/fm-steward")
+        #expect(FewShotStorePaths.legacyProductRelativeDirectory == "ryk/fm-steward")
     }
 
     @Test("explicit override URL wins over product default")

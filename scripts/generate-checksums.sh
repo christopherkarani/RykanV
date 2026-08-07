@@ -12,7 +12,7 @@ OUTPUT="${ARTIFACT_DIR}/checksums.txt"
 tmp="${OUTPUT}.tmp"
 : > "$tmp"
 
-# Phase 5a: primary ryk-v* plus legacy orca-v* (dual-publish). Also Windows .zip.
+# Hash canonical ryk release archives. Also include the Windows .zip when present.
 hash_artifact() {
   file="$1"
   [ -f "$file" ] || return 0
@@ -33,8 +33,7 @@ hash_artifact() {
   esac
 }
 
-# Use nullglob-friendly loop: expand both brand prefixes; skip missing globs.
-for pattern in "$ARTIFACT_DIR"/ryk-v* "$ARTIFACT_DIR"/orca-v*; do
+for pattern in "$ARTIFACT_DIR"/ryk-v*; do
   # When a glob matches nothing, the literal pattern remains; skip non-files.
   hash_artifact "$pattern"
 done

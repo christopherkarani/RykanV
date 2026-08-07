@@ -9,7 +9,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION_FILE="${ROOT}/.zigversion"
-INSTALL_ROOT="${ORCA_ZIG_INSTALL_ROOT:-${HOME}/.local/zig}"
+INSTALL_ROOT="${RYK_ZIG_INSTALL_ROOT:-${HOME}/.local/zig}"
 
 if [[ ! -f "${VERSION_FILE}" ]]; then
   echo "error: missing ${VERSION_FILE}" >&2

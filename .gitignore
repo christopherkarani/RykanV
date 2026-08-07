@@ -1,7 +1,7 @@
 .zig-cache/
 zig-cache/
 zig-out/
-.orca-tmp/
+.ryk-tmp/
 .direnv/
 .envrc.local
 dist/
@@ -35,7 +35,7 @@ __pycache__/
 events.jsonl
 summary.json
 summary.md
-.orca/
+.ryk/
 .edge/
 .edge/**
 .aegis/last
@@ -53,7 +53,7 @@ node_modules/
 **/node_modules/
 orca-rs/.xwin-cache/
 
-# --- Orca internal planning / generated plan packs ---
+# --- ryk internal planning / generated plan packs ---
 aegis_phased_project/
 aegis_phased_project_reviewed/
 aegis_phased_project_final/
@@ -135,7 +135,7 @@ P07_*.md
 manifest.json
 [0-9][0-9]_*.md
 AEGIS_CLI_PLUGIN_CONTRACT.md
-ORCA_CLI_PLUGIN_CONTRACT.md
+RYK_CLI_PLUGIN_CONTRACT.md
 ARCHITECTURE_CONTRACTS.md
 CODEX_AGENT_CONTEXT.md
 DRONE_WORKSTREAM_GUARDRAILS.md
@@ -163,14 +163,14 @@ docs/integrations/openclaw-security-scan-analysis.md
 
 # --- Generated planning / UI collateral ---
 PROMPT_*.md
-orca-dashboard-ui/.next/
-orca-dashboard-ui/dist/
-orca-dashboard-ui/node_modules/
-orca-dashboard-ui/tsconfig.tsbuildinfo
-orca-dashboard-ui/.DS_Store
-orca-dashboard-ui/app/.DS_Store
-orca-dashboard-ui/playwright-qa*.mjs
-orca-dashboard-ui/screenshot.mjs
+ryk-dashboard-ui/.next/
+ryk-dashboard-ui/dist/
+ryk-dashboard-ui/node_modules/
+ryk-dashboard-ui/tsconfig.tsbuildinfo
+ryk-dashboard-ui/.DS_Store
+ryk-dashboard-ui/app/.DS_Store
+ryk-dashboard-ui/playwright-qa*.mjs
+ryk-dashboard-ui/screenshot.mjs
 
 .skynex/production-gate.json
 .skynex/audit.log

@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const audit = @import("orca_core").audit;
-const core = @import("orca_core").core;
+const audit = @import("ryk_core").audit;
+const core = @import("ryk_core").core;
 const runner = @import("runner.zig");
 const scorecard = @import("scorecard.zig");
 const tui = @import("../tui/mod.zig");

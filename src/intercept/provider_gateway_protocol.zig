@@ -94,7 +94,7 @@ pub fn parseInbound(
                 }
             },
         }
-        if (std.mem.indexOf(u8, value, "orca-secret://") != null) return error.PhantomInUnexpectedHeader;
+        if (std.mem.indexOf(u8, value, "ryk-secret://") != null) return error.PhantomInUnexpectedHeader;
         try forwarded.append(allocator, .{ .name = name, .value = value });
     }
     if (!saw_host) return error.MissingHost;
@@ -216,7 +216,7 @@ fn isValidHeaderValue(value: []const u8) bool {
 }
 
 test "provider protocol accepts exact auth and rejects forwarding grammar smuggling" {
-    const phantom = "orca-secret://session/0123456789abcdef0123456789abcdef/ANTHROPIC_API_KEY/0123456789abcdef";
+    const phantom = "ryk-secret://session/0123456789abcdef0123456789abcdef/ANTHROPIC_API_KEY/0123456789abcdef";
     const valid = try std.fmt.allocPrint(
         std.testing.allocator,
         "POST /v1/messages HTTP/1.1\r\nHost: localhost\r\nx-api-key: {s}\r\ncontent-length: 2\r\n\r\n{{}}",

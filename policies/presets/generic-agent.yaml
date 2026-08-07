@@ -1,4 +1,4 @@
-# Orca preset: generic-agent
+# ryk preset: generic-agent
 # Conservative starting point for local coding agents with no proprietary assumptions.
 # Edit allowlists for your repository before switching broad actions from ask to allow.
 version: 1
@@ -82,8 +82,8 @@ files:
       # See matchesPath + stripLeadingDotSlash in src/policy/matchers.zig.
       - "./.git/**"
       - ".git/**"
-      - "./.orca/**"
-      - ".orca/**"
+      - "./.ryk/**"
+      - ".ryk/**"
     mode: staged
 
 commands:

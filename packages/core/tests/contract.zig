@@ -1,24 +1,24 @@
 const std = @import("std");
-const orca_core = @import("orca_core");
+const ryk_core = @import("ryk_core");
 
 test "core package root exposes curated boundary only" {
-    try std.testing.expectEqualStrings("core-boundary-isolation", orca_core.phase);
-    try std.testing.expect(@hasDecl(orca_core, "api"));
-    try std.testing.expect(@hasDecl(orca_core, "abi"));
+    try std.testing.expectEqualStrings("core-boundary-isolation", ryk_core.phase);
+    try std.testing.expect(@hasDecl(ryk_core, "api"));
+    try std.testing.expect(@hasDecl(ryk_core, "abi"));
 
     // Product code needs access to the internal module graph for CLI and intercept
-    try std.testing.expect(@hasDecl(orca_core, "core"));
-    try std.testing.expect(@hasDecl(orca_core, "policy"));
-    try std.testing.expect(@hasDecl(orca_core, "audit"));
+    try std.testing.expect(@hasDecl(ryk_core, "core"));
+    try std.testing.expect(@hasDecl(ryk_core, "policy"));
+    try std.testing.expect(@hasDecl(ryk_core, "audit"));
 
-    try expectNoDecl(orca_core, "intercept");
-    try expectNoDecl(orca_core, "redteam");
-    try expectNoDecl(orca_core, "capabilities");
-    try expectNoDecl(orca_core, "schemas");
-    try expectNoDecl(orca_core, "cli");
-    try expectNoDecl(orca_core, "mcp");
-    try expectNoDecl(orca_core, "sandbox");
-    try expectNoDecl(orca_core, "edge");
+    try expectNoDecl(ryk_core, "intercept");
+    try expectNoDecl(ryk_core, "redteam");
+    try expectNoDecl(ryk_core, "capabilities");
+    try expectNoDecl(ryk_core, "schemas");
+    try expectNoDecl(ryk_core, "cli");
+    try expectNoDecl(ryk_core, "mcp");
+    try expectNoDecl(ryk_core, "sandbox");
+    try expectNoDecl(ryk_core, "edge");
 }
 
 test "core package sources do not import the monolithic product facade" {
@@ -40,25 +40,25 @@ test "core README does not advertise removed Edge placeholder exports" {
 }
 
 test "public Policy handle is opaque and does not expose storage pointers" {
-    try std.testing.expect(@typeInfo(orca_core.api.Policy) == .@"opaque");
+    try std.testing.expect(@typeInfo(ryk_core.api.Policy) == .@"opaque");
 }
 
 test "extension audit targets preserve extension kind in core events" {
-    const ts = orca_core.api.Timestamp.fromUnixSeconds(1_777_983_130);
-    const event = try orca_core.api.createAuditEvent(.{
-        .session_id = try orca_core.api.generateSessionId(ts),
-        .event_id = try orca_core.api.generateEventId(ts),
+    const ts = ryk_core.api.Timestamp.fromUnixSeconds(1_777_983_130);
+    const event = try ryk_core.api.createAuditEvent(.{
+        .session_id = try ryk_core.api.generateSessionId(ts),
+        .event_id = try ryk_core.api.generateEventId(ts),
         .timestamp = ts,
         .event_type = .command_attempt,
-        .actor = .{ .kind = .core, .display = "orca-core" },
+        .actor = .{ .kind = .core, .display = "ryk-core" },
         .target = .{ .kind = .extension, .value = "custom.vehicle_state_read/vehicle-1" },
     });
     try std.testing.expectEqualStrings("extension", @tagName(event.target.kind));
 }
 
 test "core public actions are product neutral" {
-    try std.testing.expect(@hasDecl(orca_core.api, "Action"));
-    const info = @typeInfo(orca_core.api.Action).@"union";
+    try std.testing.expect(@hasDecl(ryk_core.api, "Action"));
+    const info = @typeInfo(ryk_core.api.Action).@"union";
 
     try expectUnionField(info, "env_read");
     try expectUnionField(info, "file_read");
@@ -83,12 +83,12 @@ test "core public actions are product neutral" {
 }
 
 test "core public event names exclude MCP Edge drone and SITL domains" {
-    try std.testing.expect(@hasDecl(orca_core.api, "EventType"));
-    const fields = @typeInfo(orca_core.api.EventType).@"enum".fields;
+    try std.testing.expect(@hasDecl(ryk_core.api, "EventType"));
+    const fields = @typeInfo(ryk_core.api.EventType).@"enum".fields;
 
-    try expectEnumField(orca_core.api.EventType, "session_start");
-    try expectEnumField(orca_core.api.EventType, "command_attempt");
-    try expectEnumField(orca_core.api.EventType, "network_connect_denied");
+    try expectEnumField(ryk_core.api.EventType, "session_start");
+    try expectEnumField(ryk_core.api.EventType, "command_attempt");
+    try expectEnumField(ryk_core.api.EventType, "network_connect_denied");
 
     inline for (fields) |field| {
         try std.testing.expect(std.mem.indexOf(u8, field.name, "edge") == null);
@@ -102,17 +102,17 @@ test "core public event names exclude MCP Edge drone and SITL domains" {
 }
 
 test "core public API omits host plugin presets and direct MCP evaluator surface" {
-    try expectNoDecl(orca_core.api, "AgentPreset");
-    try expectNoDecl(orca_core.api, "loadAgentPreset");
+    try expectNoDecl(ryk_core.api, "AgentPreset");
+    try expectNoDecl(ryk_core.api, "loadAgentPreset");
     // ExplainKind and explainAction exposed for CLI decide command
-    try std.testing.expect(@hasDecl(orca_core.api, "ExplainKind"));
-    try std.testing.expect(@hasDecl(orca_core.api, "explainAction"));
-    try expectNoDecl(orca_core.api, "mcp");
-    try expectNoDecl(orca_core.api, "MCPPolicy");
+    try std.testing.expect(@hasDecl(ryk_core.api, "ExplainKind"));
+    try std.testing.expect(@hasDecl(ryk_core.api, "explainAction"));
+    try expectNoDecl(ryk_core.api, "mcp");
+    try expectNoDecl(ryk_core.api, "MCPPolicy");
 }
 
 test "core API evaluates generic command and extension actions" {
-    var selected = try orca_core.api.parsePolicyFromSlice(std.testing.allocator,
+    var selected = try ryk_core.api.parsePolicyFromSlice(std.testing.allocator,
         \\version: 1
         \\mode: observe
         \\commands:
@@ -121,30 +121,30 @@ test "core API evaluates generic command and extension actions" {
     , "core-boundary-policy.yaml");
     defer selected.deinit();
 
-    var command_eval = try orca_core.api.evaluateAction(
+    var command_eval = try ryk_core.api.evaluateAction(
         std.testing.allocator,
         selected,
         .{ .command_exec = .{ .argv = &.{ "echo", "hello" } } },
         .{},
     );
     defer command_eval.deinit(std.testing.allocator);
-    try std.testing.expectEqual(orca_core.api.DecisionResult.allow, command_eval.decision.result);
+    try std.testing.expectEqual(ryk_core.api.DecisionResult.allow, command_eval.decision.result);
 
-    var extension_eval = try orca_core.api.evaluateAction(
+    var extension_eval = try ryk_core.api.evaluateAction(
         std.testing.allocator,
         selected,
         .{ .extension = .{ .domain = "custom", .operation = "vehicle_state_read", .target = "vehicle-1" } },
         .{},
     );
     defer extension_eval.deinit(std.testing.allocator);
-    try std.testing.expectEqual(orca_core.api.DecisionResult.observe, extension_eval.decision.result);
+    try std.testing.expectEqual(ryk_core.api.DecisionResult.observe, extension_eval.decision.result);
     try std.testing.expect(std.mem.indexOf(u8, extension_eval.explanation, "extension custom.vehicle_state_read") != null);
     try std.testing.expect(std.mem.indexOf(u8, extension_eval.explanation, "drone") == null);
     try std.testing.expect(std.mem.indexOf(u8, extension_eval.explanation, "SITL") == null);
 }
 
 test "core API preserves deny priority through policy evaluation" {
-    var selected = try orca_core.api.parsePolicyFromSlice(std.testing.allocator,
+    var selected = try ryk_core.api.parsePolicyFromSlice(std.testing.allocator,
         \\version: 1
         \\mode: strict
         \\files:
@@ -156,14 +156,14 @@ test "core API preserves deny priority through policy evaluation" {
     , "phase23-core-test.yaml");
     defer selected.deinit();
 
-    var evaluation = try orca_core.api.evaluateAction(std.testing.allocator, selected, .{ .file_read = .{ .path = .{ .kind = .relative, .raw = "secrets/token.txt" } } }, .{});
+    var evaluation = try ryk_core.api.evaluateAction(std.testing.allocator, selected, .{ .file_read = .{ .path = .{ .kind = .relative, .raw = "secrets/token.txt" } } }, .{});
     defer evaluation.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(orca_core.api.DecisionResult.deny, evaluation.decision.result);
+    try std.testing.expectEqual(ryk_core.api.DecisionResult.deny, evaluation.decision.result);
 }
 
 test "core API keeps CI non-interactive and deny beats allow" {
-    var selected = try orca_core.api.parsePolicyFromSlice(std.testing.allocator,
+    var selected = try ryk_core.api.parsePolicyFromSlice(std.testing.allocator,
         \\version: 1
         \\mode: strict
         \\commands:
@@ -176,13 +176,13 @@ test "core API keeps CI non-interactive and deny beats allow" {
     , "phase24-ci.yaml");
     defer selected.deinit();
 
-    var deny_eval = try orca_core.api.evaluateAction(std.testing.allocator, selected, .{ .command_exec = .{ .argv = &.{ "rm", "-rf", "tmp" } } }, .{});
+    var deny_eval = try ryk_core.api.evaluateAction(std.testing.allocator, selected, .{ .command_exec = .{ .argv = &.{ "rm", "-rf", "tmp" } } }, .{});
     defer deny_eval.deinit(std.testing.allocator);
-    try std.testing.expectEqual(orca_core.api.DecisionResult.deny, deny_eval.decision.result);
+    try std.testing.expectEqual(ryk_core.api.DecisionResult.deny, deny_eval.decision.result);
 
-    var ci_eval = try orca_core.api.evaluateAction(std.testing.allocator, selected, .{ .command_exec = .{ .argv = &.{ "deploy", "prod" } } }, .{ .mode = .ci });
+    var ci_eval = try ryk_core.api.evaluateAction(std.testing.allocator, selected, .{ .command_exec = .{ .argv = &.{ "deploy", "prod" } } }, .{ .mode = .ci });
     defer ci_eval.deinit(std.testing.allocator);
-    try std.testing.expectEqual(orca_core.api.DecisionResult.deny, ci_eval.decision.result);
+    try std.testing.expectEqual(ryk_core.api.DecisionResult.deny, ci_eval.decision.result);
     try std.testing.expect(!ci_eval.decision.requires_user);
     try std.testing.expect(!ci_eval.decision.ci_may_proceed);
 }
@@ -193,34 +193,34 @@ test "core API writes redacted audit events and verifies replay hash chain" {
 
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
-    const ts = orca_core.api.Timestamp.fromUnixSeconds(1_777_983_130);
-    const session: orca_core.api.Session = .{
-        .id = try orca_core.api.generateSessionId(ts),
+    const ts = ryk_core.api.Timestamp.fromUnixSeconds(1_777_983_130);
+    const session: ryk_core.api.Session = .{
+        .id = try ryk_core.api.generateSessionId(ts),
         .started_at = ts,
         .command = "echo",
         .args = &.{"fake_secret_value_phase24"},
         .workspace_root = root,
         .mode = .observe,
-        .platform = orca_core.api.detectOs(),
+        .platform = ryk_core.api.detectOs(),
     };
 
-    var writer = try orca_core.api.createAuditWriter(std.testing.io, std.testing.allocator, session);
+    var writer = try ryk_core.api.createAuditWriter(std.testing.io, std.testing.allocator, session);
     defer writer.deinit();
-    const ev = try orca_core.api.createAuditEvent(.{
+    const ev = try ryk_core.api.createAuditEvent(.{
         .session_id = session.id,
-        .event_id = try orca_core.api.generateEventId(ts),
+        .event_id = try ryk_core.api.generateEventId(ts),
         .timestamp = ts,
         .event_type = .command_attempt,
-        .actor = .{ .kind = .core, .display = "orca-core" },
+        .actor = .{ .kind = .core, .display = "ryk-core" },
         .target = .{ .kind = .command, .value = "echo fake_secret_value_phase24" },
-        .decision = orca_core.api.makeDecision(.{
+        .decision = ryk_core.api.makeDecision(.{
             .result = .deny,
             .reason = "blocked fake_secret_value_phase24 before persistence",
         }),
     });
-    try orca_core.api.appendAuditEvent(&writer, ev);
+    try ryk_core.api.appendAuditEvent(&writer, ev);
     try writer.writeLastPointer();
-    try orca_core.api.writeAuditSummary(std.testing.allocator, writer.sessionDirPath(), .{
+    try ryk_core.api.writeAuditSummary(std.testing.allocator, writer.sessionDirPath(), .{
         .session = session,
         .status = .{ .exited = 1 },
         .event_count = writer.event_count,
@@ -228,24 +228,24 @@ test "core API writes redacted audit events and verifies replay hash chain" {
         .policy = "phase24 fake_secret_value_phase24 policy",
     });
 
-    var verify = try orca_core.api.verifyReplay(std.testing.io, std.testing.allocator, writer.sessionDirPath());
+    var verify = try ryk_core.api.verifyReplay(std.testing.io, std.testing.allocator, writer.sessionDirPath());
     defer verify.deinit(std.testing.allocator);
     try std.testing.expect(verify.ok);
 
-    const events_path = try std.fs.path.join(std.testing.allocator, &.{ ".orca", "sessions", session.id.slice(), "events.jsonl" });
+    const events_path = try std.fs.path.join(std.testing.allocator, &.{ ".ryk", "sessions", session.id.slice(), "events.jsonl" });
     defer std.testing.allocator.free(events_path);
     const events = try tmp.dir.readFileAlloc(std.testing.io, events_path, std.testing.allocator, .limited(16 * 1024));
     defer std.testing.allocator.free(events);
     try std.testing.expect(std.mem.indexOf(u8, events, "fake_secret_value_phase24") == null);
     try std.testing.expect(std.mem.indexOf(u8, events, "[REDACTED:") != null);
 
-    var replay = try orca_core.api.loadReplay(std.testing.io, std.testing.allocator, root, .{ .session = session.id.slice(), .verify = true });
+    var replay = try ryk_core.api.loadReplay(std.testing.io, std.testing.allocator, root, .{ .session = session.id.slice(), .verify = true });
     defer replay.deinit();
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(std.testing.allocator);
     var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer aw.deinit();
-    try orca_core.api.writeReplayJson(&aw.writer, replay);
+    try ryk_core.api.writeReplayJson(&aw.writer, replay);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "fake_secret_value_phase24") == null);
 }
 
@@ -257,13 +257,13 @@ test "cli and edge compat facade dead code has been removed" {
 }
 
 test "phase 24 experimental ABI skeleton compiles and documents instability" {
-    try std.testing.expectEqualStrings("experimental", orca_core.abi.stability);
-    try std.testing.expect(std.mem.indexOf(u8, orca_core.abi.documentation, "not stable v1") != null);
+    try std.testing.expectEqualStrings("experimental", ryk_core.abi.stability);
+    try std.testing.expect(std.mem.indexOf(u8, ryk_core.abi.documentation, "not stable v1") != null);
 
     const raw = "OPENAI_API_KEY=fake_secret_value_phase24";
     var output: [128]u8 = undefined;
     var written: usize = 0;
-    const code = orca_core.abi.core_redact(raw, raw.len, &output, output.len, &written);
+    const code = ryk_core.abi.core_redact(raw, raw.len, &output, output.len, &written);
     try std.testing.expectEqual(@as(c_int, 0), code);
     try std.testing.expect(std.mem.indexOf(u8, output[0..written], "fake_secret_value_phase24") == null);
 }
@@ -309,7 +309,7 @@ const fake_secret = "fake_secret_value_phase23";
 
 test "phase 23 fake secret guardrail covers redaction before durable strings" {
     var buffer: [256]u8 = undefined;
-    const redacted = orca_core.api.redactStringBounded("OPENAI_API_KEY=" ++ fake_secret, &buffer);
+    const redacted = ryk_core.api.redactStringBounded("OPENAI_API_KEY=" ++ fake_secret, &buffer);
 
     try std.testing.expect(std.mem.indexOf(u8, redacted, fake_secret) == null);
     try std.testing.expect(std.mem.indexOf(u8, redacted, "[REDACTED") != null);
@@ -335,8 +335,8 @@ test "policy schema matches runtime file-write and MCP server-scoped policy shap
     const server_properties = servers.get("additionalProperties").?.object.get("properties").?.object;
     try std.testing.expect(server_properties.get("tools") != null);
 
-    const policy_load = orca_core.policy.load;
-    const policy_schema = orca_core.policy.schema;
+    const policy_load = ryk_core.policy.load;
+    const policy_schema = ryk_core.policy.schema;
     var policy = try policy_load.parseFromSlice(std.testing.allocator,
         \\{"version":1,"mode":"strict","files":{"write":{"mode":"direct","allow":["docs/**"]}},"mcp":{"servers":{"github":{"tools":{"allow":["search_repositories"]}}}}}
     , "schema-alignment.json");

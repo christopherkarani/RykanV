@@ -3,8 +3,8 @@
 const std = @import("std");
 
 const brand = @import("cli/brand.zig");
-const core_api = @import("orca_core").api;
-const core = @import("orca_core").core;
+const core_api = @import("ryk_core").api;
+const core = @import("ryk_core").core;
 
 pub fn createBlockedActionSession(io: std.Io, allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
     const now = core.time.Timestamp.now(io);
@@ -26,7 +26,7 @@ pub fn createBlockedActionSession(io: std.Io, allocator: std.mem.Allocator, work
         .event_id = try core.event.generateEventId(now),
         .timestamp = now,
         .event_type = .command_denied,
-        .actor = .{ .kind = .orca, .display = "ryk" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .command, .value = "rm -rf ./fixture-target" },
         .decision = core_api.makeDecision(.{
             .result = .deny,
@@ -44,7 +44,7 @@ pub fn createBlockedActionSession(io: std.Io, allocator: std.mem.Allocator, work
         .status = .{ .exited = 1 },
         .event_count = writer.event_count,
         .final_event_hash = final_hash,
-        .policy = ".orca/policy.yaml",
+        .policy = ".ryk/policy.yaml",
         .product_label = brand.product_display,
     });
     _ = &session;

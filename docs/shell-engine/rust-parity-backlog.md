@@ -8,7 +8,7 @@ Living checklist of shell destructive-command protection that existed in
 |-------|-------|
 | Status | Parity complete (2026-07-22) |
 | Baseline | `origin/main` tree `orca-rs/src/packs/**` + `orca-rs/tests/corpus/**` |
-| Temporary oracle repo | `/Users/chriskarani/CodingProjects/orca-rs-parity-ref` (tag `baseline-eec9446f702d`) |
+| Temporary oracle repo | `/Users/chriskarani/CodingProjects/ryk-rs-parity-ref` (tag `baseline-eec9446f702d`) |
 | Agent goal prompt | [`GOAL-parity-prompt.md`](GOAL-parity-prompt.md) |
 | Zig engine | `src/shell_engine/` (85 oracle packs embedded; full corpus gate) |
 | Inventory date | 2026-07-22 |
@@ -38,7 +38,7 @@ Zig is fine if decisions and rule IDs match.
 | Hook transport / evaluate failure | Often fail-**open** in hook mode | Fail-**closed** deny | Keep Zig fail-closed; do not “parity” this away |
 | Unmatched command | Pack miss → allow (after safe/destructive scan) | Same (full 85 packs loaded) | Miss after full pack scan is allow — not a pack gap |
 | Graduated response / suggestions | Rich daemon fields | Optional later | Decision parity first; UX second |
-| `ORCA_SHELL_EVAL=rust` | Live daemon | Gone after cutover | Remove env once Zig parity gate is green |
+| `RYK_SHELL_EVAL=rust` | Live daemon | Gone after cutover | Remove env once Zig parity gate is green |
 
 ## Snapshot: parity status
 

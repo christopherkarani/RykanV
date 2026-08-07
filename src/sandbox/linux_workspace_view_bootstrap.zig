@@ -445,6 +445,7 @@ fn redirectDaemonStdio() !void {
 }
 
 fn waitForFuseReady(read_fd: i32, daemon_pid: i32) bool {
+    if (comptime builtin.os.tag != .linux) return false;
     // One remaining-deadline budget (do not restart a full 10s on EINTR).
     const deadline_ms: i64 = 10_000;
     const start_ms = fuseReadyMonotonicMs() orelse return false;
@@ -479,6 +480,7 @@ fn waitForFuseReady(read_fd: i32, daemon_pid: i32) bool {
 }
 
 fn fuseReadyMonotonicMs() ?i64 {
+    if (comptime builtin.os.tag != .linux) return null;
     var ts: std.c.timespec = undefined;
     if (std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts) != 0) return null;
     return @as(i64, @intCast(ts.sec)) * std.time.ms_per_s +

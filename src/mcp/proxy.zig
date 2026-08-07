@@ -1,9 +1,9 @@
 const std = @import("std");
 
-const audit = @import("orca_core").audit;
-const core = @import("orca_core").core;
+const audit = @import("ryk_core").audit;
+const core = @import("ryk_core").core;
 const intercept = @import("../intercept/mod.zig");
-const policy_mod = @import("orca_core").policy;
+const policy_mod = @import("ryk_core").policy;
 const jsonrpc = @import("jsonrpc.zig");
 const manifests = @import("manifests.zig");
 const prompts = @import("prompts.zig");
@@ -827,7 +827,7 @@ fn appendAudit(
         .event_id = try core.event.generateEventId(now),
         .timestamp = now,
         .event_type = event_type,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = target_kind, .value = target_value },
         .decision = decision,
         .redactions = .{ .count = @intCast(label_slice.len), .labels = label_slice },

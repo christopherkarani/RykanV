@@ -93,7 +93,7 @@ fn genericTakePath(path: []const u8, reason: []const u8) HostIdentity {
 /// 3. Basename of realpath must match `host_config_table`
 /// 4. Realpath must not be under workspace / tmp
 /// 5. Realpath must match a trusted install prefix (builtin, HOME/.local/…,
-///    HOME/.grok/{bin,downloads}, HOME/.opencode, optional nvm pattern, ORCA_TRUSTED_HOST_PREFIXES,
+///    HOME/.grok/{bin,downloads}, HOME/.opencode, optional nvm pattern, RYK_TRUSTED_HOST_PREFIXES,
 ///    extra_trusted_prefixes)
 pub fn resolveHostIdentity(
     io: std.Io,
@@ -347,13 +347,13 @@ fn isTrustedInstallPath(
         if (pathHasTrustedPrefix(path, prefix)) return true;
     }
 
-    // ORCA_TRUSTED_HOST_PREFIXES=colon-separated absolute prefixes (tests + ops extend).
+    // RYK_TRUSTED_HOST_PREFIXES=colon-separated absolute prefixes (tests + ops extend).
     // Reject over-broad prefixes (filesystem root, bare $HOME, tmp/shared, bare brew roots).
     const injected = blk: {
         if (env_map) |map| {
-            if (map.get("ORCA_TRUSTED_HOST_PREFIXES")) |v| break :blk v;
+            if (map.get("RYK_TRUSTED_HOST_PREFIXES")) |v| break :blk v;
         }
-        if (std.c.getenv("ORCA_TRUSTED_HOST_PREFIXES")) |v| break :blk std.mem.span(v);
+        if (std.c.getenv("RYK_TRUSTED_HOST_PREFIXES")) |v| break :blk std.mem.span(v);
         break :blk "";
     };
     if (injected.len > 0) {
@@ -988,7 +988,7 @@ test "resolveHostIdentity trusted pi table host via extra prefix" {
     try std.testing.expectEqualStrings("pi", id.host.?);
 }
 
-test "isTrustedInstallPath ORCA_TRUSTED_HOST_PREFIXES accepts narrow non-tmp inject" {
+test "isTrustedInstallPath RYK_TRUSTED_HOST_PREFIXES accepts narrow non-tmp inject" {
     // Pure path match: acceptable inject prefix (not bare brew / tmp / Shared).
     const allocator = std.testing.allocator;
     const io = std.testing.io;
@@ -996,7 +996,7 @@ test "isTrustedInstallPath ORCA_TRUSTED_HOST_PREFIXES accepts narrow non-tmp inj
     var env_map = std.process.Environ.Map.init(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", "/Users/synthetic");
-    try env_map.put("ORCA_TRUSTED_HOST_PREFIXES", "/Users/synthetic/.tools/bin");
+    try env_map.put("RYK_TRUSTED_HOST_PREFIXES", "/Users/synthetic/.tools/bin");
 
     try std.testing.expect(try isTrustedInstallPath(
         io,
@@ -1006,7 +1006,7 @@ test "isTrustedInstallPath ORCA_TRUSTED_HOST_PREFIXES accepts narrow non-tmp inj
         &.{},
     ));
     // Over-broad inject must not open trust (M-2).
-    try env_map.put("ORCA_TRUSTED_HOST_PREFIXES", "/private/var:/var/folders:/Users/Shared:/usr/local");
+    try env_map.put("RYK_TRUSTED_HOST_PREFIXES", "/private/var:/var/folders:/Users/Shared:/usr/local");
     try std.testing.expect(!try isTrustedInstallPath(
         io,
         allocator,
@@ -1121,7 +1121,7 @@ test "resolveHostIdentity workspace hardlink of trusted binary is generic" {
     try std.testing.expectEqualStrings("", id.hostKey());
 }
 
-test "ORCA_TRUSTED_HOST_PREFIXES rejects over-broad roots" {
+test "RYK_TRUSTED_HOST_PREFIXES rejects over-broad roots" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -1146,7 +1146,7 @@ test "ORCA_TRUSTED_HOST_PREFIXES rejects over-broad roots" {
     try env_map.put("HOME", home);
     try env_map.put("PATH", "/usr/bin:/bin");
     // Bare HOME / filesystem root / single-component must not open grants.
-    try env_map.put("ORCA_TRUSTED_HOST_PREFIXES", "/:/tmp:/Users");
+    try env_map.put("RYK_TRUSTED_HOST_PREFIXES", "/:/tmp:/Users");
 
     var id = try resolveHostIdentity(io, allocator, binary, &env_map, .{});
     defer id.deinit(allocator);
@@ -1155,7 +1155,7 @@ test "ORCA_TRUSTED_HOST_PREFIXES rejects over-broad roots" {
     try std.testing.expectEqualStrings("", id.hostKey());
 
     // Injecting bare $HOME must also fail closed.
-    try env_map.put("ORCA_TRUSTED_HOST_PREFIXES", home);
+    try env_map.put("RYK_TRUSTED_HOST_PREFIXES", home);
     var id2 = try resolveHostIdentity(io, allocator, binary, &env_map, .{});
     defer id2.deinit(allocator);
     try std.testing.expect(!id2.isTrusted());
@@ -1273,7 +1273,7 @@ test "resolveHostIdentity realpath under TMPDIR with lexical dual form denies tm
     try env_map.put("PATH", "/usr/bin:/bin");
     try env_map.put("TMPDIR", lexical_tmpdir);
     // Even with over-broad inject, tmp fence must win first (deny_tmp, not trusted).
-    try env_map.put("ORCA_TRUSTED_HOST_PREFIXES", tmp_path);
+    try env_map.put("RYK_TRUSTED_HOST_PREFIXES", tmp_path);
 
     var id = try resolveHostIdentity(io, allocator, spoof, &env_map, .{});
     defer id.deinit(allocator);
@@ -1314,7 +1314,7 @@ test "isTrustedInstallPath HOME joins match Data-volume realpath form" {
     ));
 }
 
-test "ORCA_TRUSTED_HOST_PREFIXES rejects Darwin tmp Shared and bare brew roots" {
+test "RYK_TRUSTED_HOST_PREFIXES rejects Darwin tmp Shared and bare brew roots" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -1338,7 +1338,7 @@ test "ORCA_TRUSTED_HOST_PREFIXES rejects Darwin tmp Shared and bare brew roots" 
     defer env_map.deinit();
     try env_map.put("HOME", "/Users/synthetic");
     try env_map.put("PATH", "/usr/bin:/bin");
-    try env_map.put("ORCA_TRUSTED_HOST_PREFIXES", "/private/var:/var/folders:/Users/Shared:/usr/local:/opt/homebrew");
+    try env_map.put("RYK_TRUSTED_HOST_PREFIXES", "/private/var:/var/folders:/Users/Shared:/usr/local:/opt/homebrew");
 
     var id = try resolveHostIdentity(io, allocator, binary, &env_map, .{});
     defer id.deinit(allocator);

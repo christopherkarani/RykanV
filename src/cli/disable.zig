@@ -51,7 +51,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
             target = .openclaw;
             continue;
         }
-        if (std.mem.eql(u8, arg, "hermes") or std.mem.eql(u8, arg, "hermess")) {
+        if (std.mem.eql(u8, arg, "hermes")) {
             target = .hermes;
             continue;
         }
@@ -59,7 +59,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
             target = .grok;
             continue;
         }
-        if (std.mem.eql(u8, arg, "all") or std.mem.eql(u8, arg, "-all")) {
+        if (std.mem.eql(u8, arg, "all")) {
             target = .all;
             continue;
         }
@@ -151,11 +151,11 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
 
 pub fn disableOpenCode(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) !bool {
     var removed = false;
-    const project_path = try std.fs.path.join(allocator, &.{ ".opencode", "plugins", "orca.ts" });
+    const project_path = try std.fs.path.join(allocator, &.{ ".opencode", "plugins", "ryk.ts" });
     defer allocator.free(project_path);
     const global_path = blk: {
         const home = std.c.getenv("HOME") orelse break :blk null;
-        break :blk try std.fs.path.join(allocator, &.{ std.mem.span(home), ".config", "opencode", "plugins", "orca.ts" });
+        break :blk try std.fs.path.join(allocator, &.{ std.mem.span(home), ".config", "opencode", "plugins", "ryk.ts" });
     };
     defer if (global_path) |p| allocator.free(p);
 
@@ -165,7 +165,7 @@ pub fn disableOpenCode(io: std.Io, allocator: std.mem.Allocator, stdout: anytype
                 try stdout.print("  project plugin: failed to remove ({s})\n", .{@errorName(err)});
                 break :blk;
             };
-            try stdout.writeAll("  project plugin: removed (.opencode/plugins/orca.ts)\n");
+            try stdout.writeAll("  project plugin: removed (.opencode/plugins/ryk.ts)\n");
             removed = true;
         }
     }
@@ -176,7 +176,7 @@ pub fn disableOpenCode(io: std.Io, allocator: std.mem.Allocator, stdout: anytype
                     try stdout.print("  global plugin: failed to remove ({s})\n", .{@errorName(err)});
                     break :blk;
                 };
-                try stdout.writeAll("  global plugin: removed (~/.config/opencode/plugins/orca.ts)\n");
+                try stdout.writeAll("  global plugin: removed (~/.config/opencode/plugins/ryk.ts)\n");
                 removed = true;
             }
         }
@@ -186,7 +186,7 @@ pub fn disableOpenCode(io: std.Io, allocator: std.mem.Allocator, stdout: anytype
 
 pub fn disableOpenClaw(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) !bool {
     if (plugin.binaryInPath(io, allocator, "openclaw")) {
-        try stdout.writeAll("  openclaw: running 'openclaw plugins uninstall orca-openclaw-plugin' (10s timeout)...\n");
+        try stdout.writeAll("  openclaw: running 'openclaw plugins uninstall ryk-openclaw-plugin' (10s timeout)...\n");
 
         const status = runOpenClawUninstall(allocator) catch |err| blk: {
             try stdout.print("  host uninstall: failed ({s})\n", .{@errorName(err)});
@@ -210,19 +210,19 @@ pub fn disableOpenClaw(io: std.Io, allocator: std.mem.Allocator, stdout: anytype
 pub fn disableHermes(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) !bool {
     var disabled = false;
     if (plugin.binaryInPath(io, allocator, "hermes")) {
-        try stdout.writeAll("  hermes: running 'hermes plugins disable orca' (10s timeout)...\n");
+        try stdout.writeAll("  hermes: running 'hermes plugins disable ryk' (10s timeout)...\n");
 
         const status = runHermesDisable(allocator) catch |err| blk: {
             try stdout.print("  host disable: failed ({s})\n", .{@errorName(err)});
-            try stdout.writeAll("    → Will perform direct file cleanup of ~/.hermes/plugins/orca/\n");
+            try stdout.writeAll("    → Will perform direct file cleanup of ~/.hermes/plugins/ryk/\n");
             break :blk 255;
         };
         if (status == 0) {
-            try stdout.writeAll("  host disable: hermes plugins disable orca\n");
+            try stdout.writeAll("  host disable: hermes plugins disable ryk\n");
             disabled = true;
         } else {
             try stdout.print("  host disable: hermes exited with code {d} (or timed out)\n", .{status});
-            try stdout.writeAll("    → Ensuring ~/.hermes/plugins/orca/ is removed directly...\n");
+            try stdout.writeAll("    → Ensuring ~/.hermes/plugins/ryk/ is removed directly...\n");
         }
     }
     const user_root = try plugin.hermesUserPluginRoot(allocator);
@@ -242,14 +242,14 @@ pub fn disableHermes(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) 
 
 pub fn disableCodex(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) !bool {
     return try removeKnownPluginPaths(io, allocator, stdout, "codex", &[_][]const u8{
-        ".agents/plugins/orca",
-        ".codex/plugins/orca",
+        ".agents/plugins/ryk",
+        ".codex/plugins/ryk",
     });
 }
 
 pub fn disableClaude(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) !bool {
     return try removeKnownPluginPaths(io, allocator, stdout, "claude", &[_][]const u8{
-        ".claude/plugins/orca",
+        ".claude/plugins/ryk",
     });
 }
 
@@ -275,11 +275,11 @@ pub fn disableGrok(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) !b
 
 pub fn disableCursor(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) !bool {
     var removed = try removeKnownPluginPaths(io, allocator, stdout, "cursor", &[_][]const u8{
-        ".cursor/hooks/orca-pre-shell.py",
+        ".cursor/hooks/ryk-pre-shell.py",
     });
 
     const global_hook = if (std.c.getenv("HOME")) |home|
-        try std.fs.path.join(allocator, &.{ std.mem.span(home), ".cursor", "hooks", "orca-pre-shell.py" })
+        try std.fs.path.join(allocator, &.{ std.mem.span(home), ".cursor", "hooks", "ryk-pre-shell.py" })
     else
         null;
     defer if (global_hook) |p| allocator.free(p);
@@ -287,14 +287,14 @@ pub fn disableCursor(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) 
         removed = try removeKnownPluginPaths(io, allocator, stdout, "cursor", &[_][]const u8{path}) or removed;
     }
 
-    removed = try disableCursorHooksJsonIfOrcaOnly(io, allocator, stdout, ".cursor/hooks.json") or removed;
+    removed = try disableCursorHooksJsonIfRykOnly(io, allocator, stdout, ".cursor/hooks.json") or removed;
     const global_hooks_json = if (std.c.getenv("HOME")) |home|
         try std.fs.path.join(allocator, &.{ std.mem.span(home), ".cursor", "hooks.json" })
     else
         null;
     defer if (global_hooks_json) |p| allocator.free(p);
     if (global_hooks_json) |path| {
-        removed = try disableCursorHooksJsonIfOrcaOnly(io, allocator, stdout, path) or removed;
+        removed = try disableCursorHooksJsonIfRykOnly(io, allocator, stdout, path) or removed;
     }
 
     return removed;
@@ -304,7 +304,7 @@ pub fn disableCursor(io: std.Io, allocator: std.mem.Allocator, stdout: anytype) 
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-fn disableCursorHooksJsonIfOrcaOnly(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, path: []const u8) !bool {
+fn disableCursorHooksJsonIfRykOnly(io: std.Io, allocator: std.mem.Allocator, stdout: anytype, path: []const u8) !bool {
     if (!plugin.fileExistsAbsolute(io, path)) return false;
 
     const content = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64 * 1024)) catch |err| {
@@ -313,38 +313,47 @@ fn disableCursorHooksJsonIfOrcaOnly(io: std.Io, allocator: std.mem.Allocator, st
     };
     defer allocator.free(content);
 
-    if (std.mem.indexOf(u8, content, "orca") == null) return false;
-    const is_orca_hook = std.mem.indexOf(u8, content, "orca-pre-shell.py") != null or
-        std.mem.indexOf(u8, content, "\"orca\"") != null;
-    if (!is_orca_hook) return false;
-
-    if (countOccurrences(content, "\"command\"") != 1) {
-        try stdout.print("  cursor hooks: {s} references ryk alongside other hooks; remove the ryk beforeShellExecution entry manually\n", .{path});
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch |err| {
+        try stdout.print("  cursor hooks: failed to parse {s} ({s})\n", .{ path, @errorName(err) });
         return false;
-    }
+    };
+    defer parsed.deinit();
+    if (parsed.value != .object) return false;
 
-    const disabled_hooks =
-        \\{
-        \\  "version": 1,
-        \\  "hooks": {
-        \\    "beforeShellExecution": []
-        \\  }
-        \\}
-        \\
-    ;
-    try overwriteTextFile(io, path, disabled_hooks);
+    const hooks = parsed.value.object.getPtr("hooks") orelse return false;
+    if (hooks.* != .object) return false;
+    const before_shell = hooks.object.getPtr("beforeShellExecution") orelse return false;
+    if (before_shell.* != .array) return false;
+
+    const tree_allocator = parsed.arena.allocator();
+    var retained = std.json.Array.init(tree_allocator);
+    var removed = false;
+    for (before_shell.array.items) |entry| {
+        const managed = if (entry == .object) blk: {
+            const command_value = entry.object.get("command") orelse break :blk false;
+            break :blk command_value == .string and isRykCursorHookCommand(command_value.string);
+        } else false;
+        if (managed) {
+            removed = true;
+        } else {
+            try retained.append(entry);
+        }
+    }
+    if (!removed) return false;
+
+    before_shell.* = .{ .array = retained };
+    const rewritten = try std.json.Stringify.valueAlloc(allocator, parsed.value, .{ .whitespace = .indent_2 });
+    defer allocator.free(rewritten);
+    try overwriteTextFile(io, path, rewritten);
     try stdout.print("  cursor hooks: disabled ryk beforeShellExecution in {s}\n", .{path});
     return true;
 }
 
-fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
-    var count: usize = 0;
-    var index: usize = 0;
-    while (std.mem.indexOfPos(u8, haystack, index, needle)) |found| {
-        count += 1;
-        index = found + needle.len;
-    }
-    return count;
+fn isRykCursorHookCommand(hook_command: []const u8) bool {
+    const trimmed = std.mem.trim(u8, hook_command, " \t\r\n");
+    return std.mem.eql(u8, trimmed, "ryk-pre-shell.py") or
+        std.mem.endsWith(u8, trimmed, "/ryk-pre-shell.py") or
+        std.mem.endsWith(u8, trimmed, "\\ryk-pre-shell.py");
 }
 
 fn overwriteTextFile(io: std.Io, path: []const u8, content: []const u8) !void {
@@ -361,7 +370,7 @@ fn overwriteTextFile(io: std.Io, path: []const u8, content: []const u8) !void {
 
 pub fn runOpenClawUninstall(allocator: std.mem.Allocator) !u8 {
     const child_process = @import("child_process.zig");
-    const argv = [_][]const u8{ "openclaw", "plugins", "uninstall", "orca-openclaw-plugin" };
+    const argv = [_][]const u8{ "openclaw", "plugins", "uninstall", "ryk-openclaw-plugin" };
 
     // Use the robust timed runner (10s) so a stuck/broken/misbehaving openclaw
     // cannot hang `ryk uninstall` or `ryk stop` forever.
@@ -377,7 +386,7 @@ pub fn runOpenClawUninstall(allocator: std.mem.Allocator) !u8 {
 
 pub fn runHermesDisable(allocator: std.mem.Allocator) !u8 {
     const child_process = @import("child_process.zig");
-    const argv = [_][]const u8{ "hermes", "plugins", "disable", "orca" };
+    const argv = [_][]const u8{ "hermes", "plugins", "disable", "ryk"};
 
     const res = try child_process.runHostCommandTimed(allocator, &argv, 10_000, null, null);
     defer child_process.deinitHostCommandResult(res, allocator);
@@ -441,7 +450,81 @@ test "stop command help and invalid args" {
     try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "ryk help stop") != null);
 }
 
-test "stop accepts legacy -all spelling but requires confirmation in non-TTY" {
+test "stop rejects compatibility target spellings" {
+    var stdout_buf: [2048]u8 = undefined;
+    var stderr_buf: [256]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
+
+    const hermes_alias_code = try command(std.testing.io, &.{"hermess"}, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.usage, hermes_alias_code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "requires --yes") == null);
+
+    stdout_writer = .fixed(&stdout_buf);
+    stderr_writer = .fixed(&stderr_buf);
+    const all_alias_code = try command(std.testing.io, &.{"-all"}, &stdout_writer, &stderr_writer);
+    try std.testing.expectEqual(exit_codes.usage, all_alias_code);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_writer.buffered(), "requires --yes") == null);
+}
+
+test "cursor cleanup only rewrites canonical ryk hook registrations" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+    const hooks_path = try std.fs.path.join(std.testing.allocator, &.{ root, "hooks.json" });
+    defer std.testing.allocator.free(hooks_path);
+
+    const canonical = try std.Io.Dir.createFileAbsolute(std.testing.io, hooks_path, .{});
+    try canonical.writeStreamingAll(std.testing.io,
+        "{\"version\":1,\"hooks\":{\"beforeShellExecution\":[{\"command\":\"/tmp/ryk-pre-shell.py\"}]}}",
+    );
+    canonical.close(std.testing.io);
+
+    var stdout_buf: [2048]u8 = undefined;
+    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
+    try std.testing.expect(try disableCursorHooksJsonIfRykOnly(
+        std.testing.io,
+        std.testing.allocator,
+        &stdout_writer,
+        hooks_path,
+    ));
+    const disabled = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, hooks_path, std.testing.allocator, .limited(4096));
+    defer std.testing.allocator.free(disabled);
+    try std.testing.expect(std.mem.indexOf(u8, disabled, "\"beforeShellExecution\": []") != null);
+
+    const mixed = try std.Io.Dir.createFileAbsolute(std.testing.io, hooks_path, .{ .truncate = true });
+    try mixed.writeStreamingAll(std.testing.io,
+        "{\"metadata\":\"ryk\",\"hooks\":{\"beforeShellExecution\":[{\"command\":\"/tmp/ryk-pre-shell.py\"},{\"command\":\"/tmp/user-hook.sh\"}]}}",
+    );
+    mixed.close(std.testing.io);
+    stdout_writer = .fixed(&stdout_buf);
+    try std.testing.expect(try disableCursorHooksJsonIfRykOnly(
+        std.testing.io,
+        std.testing.allocator,
+        &stdout_writer,
+        hooks_path,
+    ));
+    const mixed_disabled = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, hooks_path, std.testing.allocator, .limited(4096));
+    defer std.testing.allocator.free(mixed_disabled);
+    try std.testing.expect(std.mem.indexOf(u8, mixed_disabled, "/tmp/user-hook.sh") != null);
+    try std.testing.expect(std.mem.indexOf(u8, mixed_disabled, "\"metadata\": \"ryk\"") != null);
+
+    const legacy = try std.Io.Dir.createFileAbsolute(std.testing.io, hooks_path, .{ .truncate = true });
+    try legacy.writeStreamingAll(std.testing.io,
+        "{\"version\":1,\"hooks\":{\"beforeShellExecution\":[{\"command\":\"/tmp/orca-pre-shell.py\"}]}}",
+    );
+    legacy.close(std.testing.io);
+    stdout_writer = .fixed(&stdout_buf);
+    try std.testing.expect(!try disableCursorHooksJsonIfRykOnly(
+        std.testing.io,
+        std.testing.allocator,
+        &stdout_writer,
+        hooks_path,
+    ));
+}
+
+test "stop all requires confirmation in non-TTY" {
     var stdout_buf: [2048]u8 = undefined;
     var stderr_buf: [256]u8 = undefined;
     var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
@@ -463,5 +546,5 @@ test "stop success output points at ryk start not setup" {
     try std.testing.expectEqual(exit_codes.success, code);
     const out = stdout_writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "ryk start") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "orca setup") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "ryk setup") == null);
 }

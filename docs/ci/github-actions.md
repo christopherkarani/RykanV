@@ -6,7 +6,7 @@ Use a CI policy:
 
 ```bash
 ryk init --preset github-actions
-ryk policy check .orca/policy.yaml
+ryk policy check .ryk/policy.yaml
 ```
 
 Example workflow:
@@ -25,7 +25,7 @@ jobs:
       - name: Install ryk
         run: ./scripts/install.sh
       - name: Check ryk policy
-        run: ryk policy check .orca/policy.yaml
+        run: ryk policy check .ryk/policy.yaml
       - name: Run agent safely
         run: ryk run --mode ci -- ./scripts/agent-task.sh
       - name: Run red-team fixtures
@@ -34,14 +34,14 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: orca-audit
-          path: .orca/sessions
+          name: ryk-audit
+          path: .ryk/sessions
 ```
 
 You can also wrap a command with the repository-local composite action:
 
 ```yaml
-- uses: ./.github/actions/orca-run
+- uses: ./.github/actions/ryk-run
   with:
     command: ./scripts/agent-task.sh
 ```

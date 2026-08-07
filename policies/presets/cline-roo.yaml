@@ -1,4 +1,4 @@
-# Orca preset: cline-roo
+# ryk preset: cline-roo
 # Generic/experimental: conservative policy for local editor agents with MCP-style extensions.
 version: 1
 mode: ask
@@ -48,7 +48,7 @@ files:
       - "./**"
     deny:
       - "./.git/**"
-      - "./.orca/**"
+      - "./.ryk/**"
     mode: staged
 
 commands:

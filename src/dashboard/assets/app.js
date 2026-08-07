@@ -1,4 +1,4 @@
-const token = document.querySelector('meta[name="orca-dashboard-token"]').content;
+const token = document.querySelector('meta[name="ryk-dashboard-token"]').content;
 const state = {
   status: null,
   policy: null,
@@ -6,9 +6,9 @@ const state = {
   blockedActions: [],
 };
 
-/** Honest Pi coverage note (matches orca-pi protected tool set). */
+/** Honest Pi coverage note (matches ryk-pi protected tool set). */
 const PI_COVERAGE =
-  "Pi: bash + write + edit + read + grep + find + ls protected; custom tool names gated via decide tool (not full MCP protocol). Shell always via daemon Evaluate. Process env/network/secretless: orca run -- pi …";
+  "Pi: bash + write + edit + read + grep + find + ls protected; custom tool names gated via decide tool (not full MCP protocol). Shell always via daemon Evaluate. Process env/network/secretless: ryk run -- pi …";
 
 const els = {
   modeEyebrow: document.querySelector("#modeEyebrow"),
@@ -122,10 +122,10 @@ async function refresh() {
 function applyMode(data) {
   const machineMode = data.mode === "machine";
   document.body.classList.toggle("machine-mode", machineMode);
-  els.modeTitle.textContent = machineMode ? "Machine-wide" : workspaceName(data.orca.workspace_root);
+  els.modeTitle.textContent = machineMode ? "Machine-wide" : workspaceName(data.ryk.workspace_root);
   els.modeEyebrow.textContent = machineMode
     ? "Local activity across every registered workspace"
-    : data.orca.workspace_root;
+    : data.ryk.workspace_root;
   document.querySelectorAll("[data-workspace-only]").forEach((element) => {
     element.hidden = machineMode;
   });
@@ -146,7 +146,7 @@ async function postJson(path, body) {
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      "X-Orca-Dashboard-Token": token,
+      "X-Ryk-Dashboard-Token": token,
     },
     body: JSON.stringify(body),
   });
@@ -171,7 +171,7 @@ function renderStatus(data) {
     metric("Sessions", `${sessionCount}`, "merged from registered workspaces"),
     metric("Report export", "Free", "safety reports available without a license"),
   ].join("") : [
-    metric("CLI", "Installed", `Orca ${data.orca.version}`),
+    metric("CLI", "Installed", `ryk ${data.ryk.version}`),
     metric("Policy", policy.exists ? (policy.valid ? "Valid" : "Invalid") : "Missing", policy.exists ? policy.path : "Create one from a preset"),
     metric("Daemon", daemonHealthLabel(daemonHealth.status), daemonHealth.detail || "Rust shell evaluator"),
     metric("Secretless", secretless.available ? "Available" : "Unavailable", `${secretless.active_broker.label}: references only`),
@@ -179,7 +179,7 @@ function renderStatus(data) {
     metric("CI", ci.ok ? "Ready" : "Needs work", ci.error || ci.checks.map((check) => `${check.name}: ${check.status}`).join(", ")),
     metric("Prevented", `${blockedCount}`, blockedCount === 1 ? "blocked action found" : "blocked actions found"),
     metric("Rust shell", `${rustShellCount}`, rustShellCount === 1 ? "daemon decision recorded" : "daemon decisions recorded"),
-    metric("Sessions", `${sessionCount}`, data.orca.workspace_root),
+    metric("Sessions", `${sessionCount}`, data.ryk.workspace_root),
   ].join("");
 
   renderWorkspaces(data.workspaces || [], machineMode);
@@ -207,7 +207,7 @@ function renderWorkspaces(workspaces, machineMode) {
   els.workspacePanel.hidden = !machineMode;
   if (!machineMode) return;
   if (!workspaces.length) {
-    els.workspaceList.innerHTML = `<div class="workspace-card"><h5>No workspaces registered yet</h5><p class="caption">Run Orca through an agent or hook in a project to register it here.</p></div>`;
+    els.workspaceList.innerHTML = `<div class="workspace-card"><h5>No workspaces registered yet</h5><p class="caption">Run ryk through an agent or hook in a project to register it here.</p></div>`;
     return;
   }
   els.workspaceList.innerHTML = workspaces.map((workspace) => `
@@ -226,7 +226,7 @@ function renderWorkspaces(workspaces, machineMode) {
 }
 
 async function copyWorkspaceCommand(workspaceRoot) {
-  const command = `orca dashboard --workspace ${shellQuote(workspaceRoot)}`;
+  const command = `ryk dashboard --workspace ${shellQuote(workspaceRoot)}`;
   try {
     await navigator.clipboard.writeText(command);
     toast("Workspace drill-down command copied");
@@ -274,7 +274,7 @@ function renderSecretless(secretless) {
       <code>${escapeHtml(item.ref)}</code>
       <span class="status-pill ok">redacted</span>
     </article>
-  `).join("") : `<div class="timeline-item"><h5>No refs declared</h5><p class="caption">Add credentials.refs in .orca/policy.yaml to map services to external broker refs.</p></div>`;
+  `).join("") : `<div class="timeline-item"><h5>No refs declared</h5><p class="caption">Add credentials.refs in .ryk/policy.yaml to map services to external broker refs.</p></div>`;
 
   const proxy = secretless.proxy_backend || {};
   els.secretlessProxyMeta.innerHTML = [
@@ -341,7 +341,7 @@ function renderSecretless(secretless) {
 
 function updateSecretlessRunCommand() {
   const command = els.secretlessCommandInput.value.trim() || "<agent-command>";
-  els.secretlessRunCommand.textContent = `orca run --secretless --network-backend proxy -- ${command}`;
+  els.secretlessRunCommand.textContent = `ryk run --secretless --network-backend proxy -- ${command}`;
 }
 
 async function copySecretlessRunCommand() {
@@ -452,12 +452,12 @@ function remediationCommandsFor(action) {
   if (rule) {
     commands.push({
       label: "Copy allowlist add",
-      value: `orca allowlist add ${rule} -r "approved denial remediation"`,
+      value: `ryk allowlist add ${rule} -r "approved denial remediation"`,
     });
   }
   commands.push({
     label: "Copy suggest-allowlist",
-    value: "orca suggest-allowlist --confidence high --non-interactive",
+    value: "ryk suggest-allowlist --confidence high --non-interactive",
   });
   return commands;
 }
@@ -475,7 +475,7 @@ function renderBlockedList(container, actions, compact) {
       : "No denials yet";
     const emptyHint = actions.length
       ? "Choose All hosts or another host chip above."
-      : "Next: run <code>orca run -- &lt;agent&gt;</code>, install a host plugin, or use <code>orca doctor</code>.";
+      : "Next: run <code>ryk run -- &lt;agent&gt;</code>, install a host plugin, or use <code>ryk doctor</code>.";
     container.innerHTML = `<div class="timeline-item"><h5>${emptyTitle}</h5><p class="caption">${emptyHint}</p>
       <div class="remediation-actions">
         ${workspaceActionMarkup(machineMode, `<button class="button secondary" type="button" data-action="suggest-allowlist">Run suggest-allowlist</button>`)}
@@ -547,7 +547,7 @@ function renderHermesActivity(records) {
         ${meta("Host", "Hermes")}
         ${meta("Session", event.session_id || "not recorded")}
         ${meta("Target", event.target || "redacted")}
-        ${meta("Reason", event.reason || "recorded by Orca")}
+        ${meta("Reason", event.reason || "recorded by ryk")}
       </div>
     </article>
   `).join("");
@@ -592,7 +592,7 @@ function daemonHealthLabel(status) {
 
 function renderSessions(sessions) {
   if (!sessions.length) {
-    els.sessionList.innerHTML = `<div class="session-card"><h5>No sessions yet</h5><p class="caption">Session artifacts appear after running an agent through Orca.</p></div>`;
+    els.sessionList.innerHTML = `<div class="session-card"><h5>No sessions yet</h5><p class="caption">Session artifacts appear after running an agent through ryk.</p></div>`;
     return;
   }
   els.sessionList.innerHTML = sessions.map((session) => `
@@ -603,7 +603,7 @@ function renderSessions(sessions) {
       </header>
       <div class="meta-grid">
         ${meta("Command", session.command || "unknown")}
-        ${meta("Workspace", session.workspace_root || state.status?.orca?.workspace_root || "unknown")}
+        ${meta("Workspace", session.workspace_root || state.status?.ryk?.workspace_root || "unknown")}
         ${meta("Host", session.host || "not recorded")}
         ${meta("Time", session.timestamp || session.id)}
         ${meta("Policy", session.policy || "unknown")}
@@ -619,7 +619,7 @@ function renderPolicy(policy) {
   const summary = policy.summary;
   els.policyHelp.textContent = summary.exists
     ? (summary.valid ? `Policy is valid in ${summary.mode} mode.` : `Policy is invalid: ${summary.error}.`)
-    : "No .orca/policy.yaml found. Initialize from a preset.";
+    : "No .ryk/policy.yaml found. Initialize from a preset.";
   els.presetList.innerHTML = policy.presets.map((preset) => `
     <article class="preset-card">
       <h5>${escapeHtml(preset.name)}</h5>
@@ -640,7 +640,7 @@ function renderIntegrations(plugins) {
       </header>
       <div class="meta-grid">
         ${meta("Host binary", plugin.host_detected ? "found in PATH" : "not found")}
-        ${meta("Orca integration", plugin.integration_present ? "present in repo" : "not found")}
+        ${meta("ryk integration", plugin.integration_present ? "present in repo" : "not found")}
       </div>
       <div class="action-grid">
         ${plugin.setup_commands.map((command) => `<code class="command-line">${escapeHtml(command)}</code>`).join("")}

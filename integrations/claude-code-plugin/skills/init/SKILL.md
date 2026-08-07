@@ -4,7 +4,7 @@ Create or repair an ryk policy for the current repository.
 
 ## When to use
 
-Use this skill when starting a new project, when `.orca/policy.yaml` is missing, or when you want to reset to a known-good policy preset.
+Use this skill when starting a new project, when `.ryk/policy.yaml` is missing, or when you want to reset to a known-good policy preset.
 
 ## Commands
 
@@ -17,7 +17,7 @@ ryk init --preset claude-code
 Validate the resulting policy:
 
 ```bash
-ryk policy check .orca/policy.yaml
+ryk policy check .ryk/policy.yaml
 ```
 
 ## Preset fallback
@@ -34,20 +34,20 @@ Or, for stricter defaults:
 ryk init --preset strict-local
 ```
 
-The `generic-agent` preset is a conservative starting point for local coding agents. Review the generated `.orca/policy.yaml` before trusting it.
+The `generic-agent` preset is a conservative starting point for local coding agents. Review the generated `.ryk/policy.yaml` before trusting it.
 
 ## Safety rules
 
-- **Do not silently overwrite** `.orca/policy.yaml`. If a policy already exists, review it first.
+- **Do not silently overwrite** `.ryk/policy.yaml`. If a policy already exists, review it first.
 - If you need to recreate it, back up the old file:
   ```bash
-  cp .orca/policy.yaml .orca/policy.yaml.bak
+  cp .ryk/policy.yaml .ryk/policy.yaml.bak
   ```
 - Always run `ryk policy check` after creating or editing a policy.
 
 ## Notes
 
-- This skill modifies only `.orca/policy.yaml` in the current workspace.
+- This skill modifies only `.ryk/policy.yaml` in the current workspace.
 - No host configuration is changed.
 - No telemetry is sent.
 - The generated policy does not contain real secrets.

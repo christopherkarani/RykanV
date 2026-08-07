@@ -5,7 +5,7 @@ import FoundationModels
 ///
 /// Constrained via guided generation so the model cannot invent free-form
 /// verdict strings outside the product enum. **v1:** shell / command danger.
-@Generable(description: "Orca FM steward classify decision for a shell/command risk card")
+@Generable(description: "ryk FM steward classify decision for a shell/command risk card")
 struct StewardModelOutput {
     @Guide(
         description: "Soft-interrupt decision for a shell or agent command",

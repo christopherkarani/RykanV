@@ -1,7 +1,7 @@
 const std = @import("std");
-const exit_codes = @import("orca").cli.exit_codes;
+const exit_codes = @import("ryk").cli.exit_codes;
 
-const orca_bin = "./zig-out/bin/orca";
+const ryk_bin = "./zig-out/bin/ryk";
 const fake_daemon_script = "tests/fixtures/fake-daemon-exit.sh";
 
 const HookRunResult = struct {
@@ -98,7 +98,7 @@ fn createProcessEnvMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
 
 fn isolatedHomePath(allocator: std.mem.Allocator, label: []const u8) ![]const u8 {
     const pid = std.c.getpid();
-    return try std.fmt.allocPrint(allocator, "/tmp/orca-phase2e-{s}-{d}", .{ label, pid });
+    return try std.fmt.allocPrint(allocator, "/tmp/ryk-phase2e-{s}-{d}", .{ label, pid });
 }
 
 fn makeIsolatedFailClosedEnv(allocator: std.mem.Allocator) !struct {
@@ -112,7 +112,7 @@ fn makeIsolatedFailClosedEnv(allocator: std.mem.Allocator) !struct {
     errdefer env_map.deinit();
 
     try env_map.put("HOME", home);
-    try env_map.put("ORCA_DAEMON", fake_daemon_script);
+    try env_map.put("RYK_DAEMON", fake_daemon_script);
 
     return .{ .env_map = env_map, .home = home };
 }
@@ -133,17 +133,18 @@ fn readFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 fn readPipeToAlloc(io: std.Io, allocator: std.mem.Allocator, file: std.Io.File, limit: usize) ![]u8 {
     var list: std.ArrayList(u8) = .empty;
     errdefer list.deinit(allocator);
-    var buf: [4096]u8 = undefined;
-    var reader = file.reader(io, &buf);
+    var reader_buf: [4096]u8 = undefined;
+    var chunk: [4096]u8 = undefined;
+    var reader = file.reader(io, &reader_buf);
     while (list.items.len < limit) {
-        const n = reader.interface.readSliceShort(buf[0..@min(buf.len, limit - list.items.len)]) catch break;
+        const n = reader.interface.readSliceShort(chunk[0..@min(chunk.len, limit - list.items.len)]) catch break;
         if (n == 0) break;
-        try list.appendSlice(allocator, buf[0..n]);
+        try list.appendSlice(allocator, chunk[0..n]);
     }
     return try list.toOwnedSlice(allocator);
 }
 
-fn runOrca(
+fn runRyk(
     allocator: std.mem.Allocator,
     args: []const []const u8,
     stdin_data: []const u8,
@@ -208,7 +209,7 @@ fn expectHookDecision(
 }
 
 test "phase2e non-shell hook events stay on zig path without daemon" {
-    if (!fileExists(orca_bin)) return;
+    if (!fileExists(ryk_bin)) return;
 
     const allocator = std.testing.allocator;
 
@@ -216,7 +217,7 @@ test "phase2e non-shell hook events stay on zig path without daemon" {
         const fixture = try readFile(allocator, case.fixture);
         defer allocator.free(fixture);
 
-        const result = try runOrca(allocator, &.{ orca_bin, "hook", case.host, case.event }, fixture, null);
+        const result = try runRyk(allocator, &.{ ryk_bin, "hook", case.host, case.event }, fixture, null);
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 
@@ -224,8 +225,8 @@ test "phase2e non-shell hook events stay on zig path without daemon" {
     }
 }
 
-test "phase2e shell PreToolUse fails closed when daemon is unavailable" {
-    if (!fileExists(orca_bin)) return;
+test "phase2e shell PreToolUse uses Zig evaluation despite a removed daemon override" {
+    if (!fileExists(ryk_bin)) return;
     try requireFakeDaemonFixture();
 
     const allocator = std.testing.allocator;
@@ -236,18 +237,18 @@ test "phase2e shell PreToolUse fails closed when daemon is unavailable" {
     defer allocator.free(isolated.home);
     defer isolated.env_map.deinit();
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "claude", "PreToolUse" }, fixture, &isolated.env_map);
+    const result = try runRyk(allocator, &.{ ryk_bin, "hook", "claude", "PreToolUse" }, fixture, &isolated.env_map);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    try expectHookDecision(allocator, "claude", "block", result);
+    try expectHookDecision(allocator, "claude", "allow", result);
     const combined = try std.fmt.allocPrint(allocator, "{s}{s}", .{ result.stdout, result.stderr });
     defer allocator.free(combined);
-    try std.testing.expect(std.mem.indexOf(u8, combined, "daemon") != null or std.mem.indexOf(u8, combined, "unavailable") != null or std.mem.indexOf(u8, combined, "blocked") != null);
+    try std.testing.expect(std.mem.indexOf(u8, combined, "daemon unavailable") == null);
 }
 
 test "phase2e shell PreToolUse missing command fails closed without daemon" {
-    if (!fileExists(orca_bin)) return;
+    if (!fileExists(ryk_bin)) return;
     try requireFakeDaemonFixture();
 
     const allocator = std.testing.allocator;
@@ -259,7 +260,7 @@ test "phase2e shell PreToolUse missing command fails closed without daemon" {
     defer allocator.free(isolated.home);
     defer isolated.env_map.deinit();
 
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "codex", "PreToolUse" }, envelope, &isolated.env_map);
+    const result = try runRyk(allocator, &.{ ryk_bin, "hook", "codex", "PreToolUse" }, envelope, &isolated.env_map);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -269,23 +270,23 @@ test "phase2e shell PreToolUse missing command fails closed without daemon" {
 }
 
 test "phase2e Codex PreToolUse invalid JSON fails closed with exit 2 and sentinel" {
-    if (!fileExists(orca_bin)) return;
+    if (!fileExists(ryk_bin)) return;
 
     const allocator = std.testing.allocator;
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "codex", "PreToolUse" }, "{not json", null);
+    const result = try runRyk(allocator, &.{ ryk_bin, "hook", "codex", "PreToolUse" }, "{not json", null);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
     try std.testing.expectEqual(codex_deny_exit_code, result.code);
     try std.testing.expectEqual(@as(usize, 0), result.stdout.len);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "[[ORCA-GUARD]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "[[RYKAN-V-GUARD]]") != null);
 }
 
 test "phase2e Claude PreToolUse invalid JSON fails closed with block JSON" {
-    if (!fileExists(orca_bin)) return;
+    if (!fileExists(ryk_bin)) return;
 
     const allocator = std.testing.allocator;
-    const result = try runOrca(allocator, &.{ orca_bin, "hook", "claude", "PreToolUse" }, "{not json", null);
+    const result = try runRyk(allocator, &.{ ryk_bin, "hook", "claude", "PreToolUse" }, "{not json", null);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 

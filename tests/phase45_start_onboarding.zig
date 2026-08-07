@@ -1,9 +1,9 @@
 const std = @import("std");
 
-const onboarding = @import("orca").cli.onboarding;
-const start = @import("orca").cli.start;
-const exit_codes = @import("orca").cli.exit_codes;
-const shell_eval = @import("orca").cli.shell_eval;
+const onboarding = @import("ryk").cli.onboarding;
+const start = @import("ryk").cli.start;
+const exit_codes = @import("ryk").cli.exit_codes;
+const shell_eval = @import("ryk").cli.shell_eval;
 
 test "phase45 start idempotent second run preserves policy" {
     var tmp = std.testing.tmpDir(.{});
@@ -54,9 +54,9 @@ test "phase45 maximum protection verifies shell path with mock evaluator" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.createDirPath(std.testing.io, ".orca");
+    try tmp.dir.createDirPath(std.testing.io, ".ryk");
     {
-        const file = try tmp.dir.createFile(std.testing.io, ".orca/policy.yaml", .{});
+        const file = try tmp.dir.createFile(std.testing.io, ".ryk/policy.yaml", .{});
         defer file.close(std.testing.io);
         try file.writeStreamingAll(std.testing.io, "version: 1\nmode: strict\n");
     }
@@ -76,7 +76,7 @@ test "phase45 maximum protection verifies shell path with mock evaluator" {
     try std.testing.expect(outcome.passed());
 }
 
-test "phase45 daemon missing blocks command guard onboarding" {
+test "phase45 command guard onboarding is in-process and does not require a daemon" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -88,6 +88,7 @@ test "phase45 daemon missing blocks command guard onboarding" {
     const flags = onboarding.StartFlags{
         .auto = true,
         .protection = .command_guard,
+        .hosts_csv = "",
         .skip_verify = true,
     };
 
@@ -106,8 +107,8 @@ test "phase45 daemon missing blocks command guard onboarding" {
         failing_checker,
         null,
     );
-    try std.testing.expectEqual(exit_codes.general, code);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "unavailable") != null);
+    try std.testing.expectEqual(exit_codes.success, code);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_writer.buffered(), "Zig shell_engine ready (in-process)") != null);
 }
 
 test "phase45 allow-only mock fails verification gate" {

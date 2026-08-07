@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Live host E2E: exercise each host's real ryk veto path when the host (or evaluate) is available.
 #
-# Fixture/install smoke (`orca hook …`) proves the CLI entrypoint offline.
-# This script is the optional live path: skip honestly when host/ORCA_BIN missing.
+# Fixture/install smoke (`ryk hook …`) proves the CLI entrypoint offline.
+# This script is the optional live path: skip honestly when host/RYK_BIN missing.
 # Not part of default `test-fast` — do not make CI flaky.
 #
 # Usage:
 #   ./scripts/host-live-e2e.sh              # all hosts
 #   ./scripts/host-live-e2e.sh codex hermes # subset
-#   ORCA_BIN=/path/to/orca ./scripts/host-live-e2e.sh
+#   RYK_BIN=/path/to/ryk ./scripts/host-live-e2e.sh
 #
 # Exit: 0 if no hard failures (skips OK); 1 if any host present failed allow or deny.
 
@@ -17,12 +17,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-ORCA_BIN="${ORCA_BIN:-}"
-if [[ -z "$ORCA_BIN" ]]; then
-  if [[ -x "$ROOT/zig-out/bin/orca" ]]; then
-    ORCA_BIN="$ROOT/zig-out/bin/orca"
-  elif command -v orca >/dev/null 2>&1; then
-    ORCA_BIN="$(command -v orca)"
+RYK_BIN="${RYK_BIN:-}"
+if [[ -z "$RYK_BIN" ]]; then
+  if [[ -x "$ROOT/zig-out/bin/ryk" ]]; then
+    RYK_BIN="$ROOT/zig-out/bin/ryk"
+  elif command -v ryk >/dev/null 2>&1; then
+    RYK_BIN="$(command -v ryk)"
   fi
 fi
 
@@ -106,7 +106,7 @@ run_hook_case() {
   event="$(resolve_event "$host")"
   out="$(mktemp)"
   set +e
-  fixture_for "$host" "$event" "$cmd" | "$ORCA_BIN" hook "$host" "$event" >"$out" 2>/dev/null
+  fixture_for "$host" "$event" "$cmd" | "$RYK_BIN" hook "$host" "$event" >"$out" 2>/dev/null
   code=$?
   set -e
   local body
@@ -127,7 +127,7 @@ run_pi_case() {
     "$cmd" "$cwd")"
   out="$(mktemp)"
   set +e
-  printf '%s' "$payload" | "$ORCA_BIN" evaluate --json --stdin >"$out" 2>/dev/null
+  printf '%s' "$payload" | "$RYK_BIN" evaluate --json --stdin >"$out" 2>/dev/null
   code=$?
   set -e
   local body
@@ -165,24 +165,24 @@ host_present() {
 
 live_note() {
   case "$1" in
-    codex) echo "hooks.json → orca hook codex PreToolUse (deny=exit 2)" ;;
-    claude) echo "settings hooks → orca hook claude PreToolUse (JSON decision)" ;;
+    codex) echo "hooks.json → ryk hook codex PreToolUse (deny=exit 2)" ;;
+    claude) echo "settings hooks → ryk hook claude PreToolUse (JSON decision)" ;;
     opencode) echo "plugin throw path ← tool.execute.before decision" ;;
     openclaw) echo "plugin tool.before → JSON block" ;;
-    hermes) echo "Hermes plugin pre_tool_call → {action:block}; fixture uses orca hook" ;;
+    hermes) echo "Hermes plugin pre_tool_call → {action:block}; fixture uses ryk hook" ;;
     pi) echo "direct smoke: evaluate bash; extension also protects write/edit/read and approval-gates grep/find/ls after root preflight (not exercised here)" ;;
   esac
 }
 
-if [[ -z "$ORCA_BIN" || ! -x "$ORCA_BIN" ]]; then
-  log "ORCA_BIN missing — cannot run live E2E. Build with ./scripts/zig build or set ORCA_BIN."
-  log "status: skipped (no orca binary)"
+if [[ -z "$RYK_BIN" || ! -x "$RYK_BIN" ]]; then
+  log "RYK_BIN missing — cannot run live E2E. Build with ./scripts/zig build or set RYK_BIN."
+  log "status: skipped (no ryk binary)"
   exit 0
 fi
 
 log "ryk live host E2E"
-log "  orca: $ORCA_BIN"
-log "  note: fixture path via orca hook/evaluate; host CLI presence gates skip vs run"
+log "  ryk: $RYK_BIN"
+log "  note: fixture path via ryk hook/evaluate; host CLI presence gates skip vs run"
 log ""
 
 for host in "${HOSTS[@]}"; do
@@ -196,9 +196,9 @@ for host in "${HOSTS[@]}"; do
   if ! host_present "$host"; then
     log "[$host] skip — host not installed (live: skipped — host not installed)"
     if [[ "$host" == "pi" ]]; then
-      log "         install Pi, then: pi install npm:@orca-sec/pi-orca"
+      log "         install Pi, then: pi install npm:@rykan/pi-ryk"
     else
-      log "         fixture smoke still available via: orca plugin install $host / orca plugin doctor $host"
+      log "         fixture smoke still available via: ryk plugin install $host / ryk plugin doctor $host"
     fi
     log "         live differs: $(live_note "$host")"
     skip=$((skip + 1))
@@ -221,7 +221,7 @@ for host in "${HOSTS[@]}"; do
     log "  readiness: protected (allow+deny pass)"
     pass=$((pass + 1))
   elif [[ "$deny_ok" -eq 1 && "$allow_ok" -eq 0 ]]; then
-    log "  readiness: degraded (deny ok, allow failed — policy/eval? fix: orca doctor)"
+    log "  readiness: degraded (deny ok, allow failed — policy/eval? fix: ryk doctor)"
     # Degraded is not a hard fail for protection proof, but counts as fail for usability gate.
     fail=$((fail + 1))
   elif [[ "$deny_ok" -eq 0 ]]; then

@@ -1,26 +1,26 @@
 # Replay
 
-Orca writes per-session artifacts under `.orca/sessions/<session-id>/`.
+ryk writes per-session artifacts under `.ryk/sessions/<session-id>/`.
 
 ## Files
 
 - `events.jsonl`: deterministic security events.
 - `summary.json`: machine-readable session summary.
 - `summary.md`: human-readable summary.
-- `.orca/last`: pointer to the last session.
+- `.ryk/last`: pointer to the last session.
 
 ## Commands
 
-Bare `orca replay` loads the **last** session and highlights denied actions. No sessions yet → friendly empty state pointing at Safe Launch (`orca start` then `orca <agent>`).
+Bare `ryk replay` loads the **last** session and highlights denied actions. No sessions yet → friendly empty state pointing at Safe Launch (`ryk start` then `ryk <agent>`).
 
 ```sh
-./zig-out/bin/orca replay
-./zig-out/bin/orca replay --json
-./zig-out/bin/orca replay --only denied
-./zig-out/bin/orca replay --verify
-./zig-out/bin/orca replay --tui
-./zig-out/bin/orca replay --session <id>
-./zig-out/bin/orca replay --list
+./zig-out/bin/ryk replay
+./zig-out/bin/ryk replay --json
+./zig-out/bin/ryk replay --only denied
+./zig-out/bin/ryk replay --verify
+./zig-out/bin/ryk replay --tui
+./zig-out/bin/ryk replay --session <id>
+./zig-out/bin/ryk replay --list
 ```
 
 ## Alt-screen timeline

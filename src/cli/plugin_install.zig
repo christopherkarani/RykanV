@@ -1,13 +1,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const core = @import("orca_core").core;
+const core = @import("ryk_core").core;
 const supervisor = core.supervisor;
 
 pub const MarketplaceHost = enum { codex, claude };
 
 const max_manifest_bytes = 64 * 1024;
 const max_marketplace_bytes = 1024 * 1024;
-const managed_plugin_name = "orca";
+const managed_plugin_name = "ryk";
 const managed_brand_name = "ryk";
 var temp_sequence: std.atomic.Value(u64) = .init(0);
 
@@ -36,13 +36,13 @@ pub fn marketplaceHostInstallSpec(
     return switch (target) {
         .codex => .{
             .host_label = "Codex",
-            .plugin_dest = try std.fs.path.join(allocator, &.{ workspace_root, ".agents", "plugins", "orca" }),
+            .plugin_dest = try std.fs.path.join(allocator, &.{ workspace_root, ".agents", "plugins", "ryk"}),
             .marketplace_path = try std.fs.path.join(allocator, &.{ workspace_root, ".agents", "plugins", "marketplace.json" }),
             .marketplace_json = marketplace_json,
         },
         .claude => .{
             .host_label = "Claude Code",
-            .plugin_dest = try std.fs.path.join(allocator, &.{ workspace_root, ".claude", "plugins", "orca" }),
+            .plugin_dest = try std.fs.path.join(allocator, &.{ workspace_root, ".claude", "plugins", "ryk"}),
             .marketplace_path = try std.fs.path.join(allocator, &.{ workspace_root, ".claude-plugin", "marketplace.json" }),
             .marketplace_json = marketplace_json,
         },
@@ -445,10 +445,10 @@ fn pluginRegistrationMatches(plugin: std.json.Value, target: MarketplaceHost) bo
             break :blk source_kind == .string and
                 std.mem.eql(u8, source_kind.string, "local") and
                 path == .string and
-                std.mem.eql(u8, path.string, "./orca");
+                std.mem.eql(u8, path.string, "./ryk");
         },
         .claude => source == .string and
-            std.mem.eql(u8, source.string, "../.claude/plugins/orca"),
+            std.mem.eql(u8, source.string, "../.claude/plugins/ryk"),
     };
 }
 
@@ -783,19 +783,19 @@ test "loadMarketplaceTemplate rewrites bundled source path" {
         std.testing.allocator,
         template_path,
         "./integrations/codex-plugin",
-        "./orca",
+        "./ryk",
     );
     defer std.testing.allocator.free(json);
-    try std.testing.expect(std.mem.indexOf(u8, json, "./orca") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "./ryk") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "./integrations/codex-plugin") == null);
 }
 
 test "mergeMarketplaceAlloc preserves unrelated plugins and marketplace metadata" {
     const existing =
-        \\{"name":"team-marketplace","custom":{"keep":true},"plugins":[{"name":"other","source":"./other"},{"name":"orca","source":"./old"}]}
+        \\{"name":"team-marketplace","custom":{"keep":true},"plugins":[{"name":"other","source":"./other"},{"name":"ryk","source":"./old"}]}
     ;
     const desired =
-        \\{"name":"ryk-local","plugins":[{"name":"orca","source":"./ryk"}]}
+        \\{"name":"ryk-local","plugins":[{"name":"ryk","source":"./ryk"}]}
     ;
 
     const merged = try mergeMarketplaceAlloc(std.testing.allocator, existing, desired);
@@ -816,7 +816,7 @@ test "mergeMarketplaceAlloc rejects an invalid existing plugins shape" {
             std.testing.allocator,
             \\{"plugins":{}}
         ,
-            \\{"plugins":[{"name":"orca","source":"./ryk"}]}
+            \\{"plugins":[{"name":"ryk","source":"./ryk"}]}
             ,
         ),
     );
@@ -830,7 +830,7 @@ test "installDirectoryIfSafe refuses an arbitrary destination without deleting i
     try tmp.dir.writeFile(std.testing.io, .{
         .sub_path = "source/.codex-plugin/plugin.json",
         .data =
-        \\{"name":"orca","author":{"name":"ryk"},"interface":{"displayName":"ryk"}}
+        \\{"name":"ryk","author":{"name":"ryk"},"interface":{"displayName":"ryk"}}
         ,
     });
     try tmp.dir.createDirPath(std.testing.io, "destination");
@@ -865,7 +865,7 @@ test "installDirectoryIfSafe refuses a symlink destination and leaves its target
     try tmp.dir.writeFile(std.testing.io, .{
         .sub_path = "source/.codex-plugin/plugin.json",
         .data =
-        \\{"name":"orca","author":{"name":"ryk"},"interface":{"displayName":"ryk"}}
+        \\{"name":"ryk","author":{"name":"ryk"},"interface":{"displayName":"ryk"}}
         ,
     });
     try tmp.dir.createDirPath(std.testing.io, "outside");
@@ -903,7 +903,7 @@ test "installDirectoryIfSafe refuses a symlinked parent component" {
     try tmp.dir.writeFile(std.testing.io, .{
         .sub_path = "source/.codex-plugin/plugin.json",
         .data =
-        \\{"name":"orca","author":{"name":"ryk"},"interface":{"displayName":"ryk"}}
+        \\{"name":"ryk","author":{"name":"ryk"},"interface":{"displayName":"ryk"}}
         ,
     });
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "source/managed.txt", .data = "managed" });
@@ -932,7 +932,7 @@ test "installDirectoryIfSafe upgrades a managed destination without removing unr
     defer tmp.cleanup();
 
     const manifest =
-        \\{"name":"orca","author":{"name":"ryk"},"interface":{"displayName":"ryk"}}
+        \\{"name":"ryk","author":{"name":"ryk"},"interface":{"displayName":"ryk"}}
     ;
     try tmp.dir.createDirPath(std.testing.io, "source/.codex-plugin");
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "source/.codex-plugin/plugin.json", .data = manifest });
@@ -1089,8 +1089,8 @@ test "marketplace registration validation requires the exact host source" {
         .sub_path = "marketplace.json",
         .data =
         \\{"plugins":[
-        \\  {"name":"other","source":{"source":"local","path":"./orca"}},
-        \\  {"name":"orca","source":{"source":"local","path":"./orca"}}
+        \\  {"name":"other","source":{"source":"local","path":"./ryk"}},
+        \\  {"name":"ryk","source":{"source":"local","path":"./ryk"}}
         \\]}
         ,
     });
@@ -1115,7 +1115,7 @@ test "marketplace registration validation requires the exact host source" {
     try tmp.dir.writeFile(std.testing.io, .{
         .sub_path = "marketplace.json",
         .data =
-        \\{"plugins":[{"name":"orca","source":"../.claude/plugins/orca"}]}
+        \\{"plugins":[{"name":"ryk","source":"../.claude/plugins/ryk"}]}
         ,
     });
     try std.testing.expect(marketplaceRegistersExpectedPlugin(

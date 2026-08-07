@@ -1,10 +1,10 @@
 const std = @import("std");
-const orca = @import("orca");
+const ryk = @import("ryk");
 
-const core_api = orca.core_api;
-const presentation = orca.presentation;
-const report = orca.report;
-const rust_visibility = orca.cli.rust_visibility;
+const core_api = ryk.core_api;
+const presentation = ryk.presentation;
+const report = ryk.report;
+const rust_visibility = ryk.cli.rust_visibility;
 
 test "zh2 cross-sink matrix redacts shared synthetic token from report and feed" {
     const allocator = std.testing.allocator;
@@ -16,7 +16,7 @@ test "zh2 cross-sink matrix redacts shared synthetic token from report and feed"
     var feed_record = try rust_visibility.buildFeedRecordFromHookDecision(
         allocator,
         io,
-        "/tmp/orca-zh2",
+        "/tmp/ryk-zh2",
         "claude",
         "healthy",
         "deny",
@@ -51,17 +51,17 @@ test "zh2 replay verify fails closed on tampered hash chain" {
     const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root);
 
-    const session_id = try orca.demo.createBlockedActionSession(std.testing.io, std.testing.allocator, root);
+    const session_id = try ryk.blocked_action_fixture.createBlockedActionSession(std.testing.io, std.testing.allocator, root);
     defer std.testing.allocator.free(session_id);
 
-    const session_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca", "sessions", session_id });
+    const session_dir = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk", "sessions", session_id });
     defer std.testing.allocator.free(session_dir);
     const events_path = try std.fs.path.join(std.testing.allocator, &.{ session_dir, "events.jsonl" });
     defer std.testing.allocator.free(events_path);
 
     const original = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, events_path, std.testing.allocator, .limited(64 * 1024));
     defer std.testing.allocator.free(original);
-    const tampered = try std.mem.replaceOwned(u8, std.testing.allocator, original, "demo policy", "tampered policy");
+    const tampered = try std.mem.replaceOwned(u8, std.testing.allocator, original, "fixture-target", "tampered-target");
     defer std.testing.allocator.free(tampered);
     try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = events_path, .data = tampered });
 

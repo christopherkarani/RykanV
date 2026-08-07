@@ -1,7 +1,7 @@
 const std = @import("std");
 const exit_codes = @import("exit_codes.zig");
 const contracts = @import("daemon_contracts.zig");
-const tui = @import("orca").tui;
+const tui = @import("ryk").tui;
 
 pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: anytype) !u8 {
     return commandWithExecutor(realExecute, io, argv, stdout, stderr);
@@ -395,7 +395,7 @@ test "human history stats requests structured daemon JSON" {
     try std.testing.expectEqual(exit_codes.success, code);
     try std.testing.expect(std.mem.indexOf(u8, stdout.buffered(), "PATTERN") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.buffered(), "19.05%") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.buffered(), "orca-daemon") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.buffered(), "ryk-daemon") == null);
 }
 
 fn fakeStats(_: std.Io, argv: []const []const u8, stdout: anytype, _: anytype) !u8 {
@@ -456,7 +456,7 @@ test "history help is Zig-owned and has no daemon branding" {
     var stderr: std.Io.Writer = .fixed(&err);
     const code = try commandWithExecutor(unexpectedExecutor, std.testing.io, &.{"--help"}, &stdout, &stderr);
     try std.testing.expectEqual(exit_codes.success, code);
-    try std.testing.expect(std.mem.indexOf(u8, stdout.buffered(), "orca-daemon") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.buffered(), "ryk-daemon") == null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.buffered(), "ryk history stats") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout.buffered(), "--live") != null);
 }
@@ -564,7 +564,7 @@ fn renderAllocationFailureProbe(allocator: std.mem.Allocator) !void {
         .outcomes = .{ .allowed = 1, .denied = 1, .warned = 0, .bypassed = 0 },
         .block_rate = 50,
         .top_patterns = &.{ .{ .name = "zeta", .count = 1 }, .{ .name = "alpha", .count = 1, .pack_id = "core.git" } },
-        .top_projects = &.{.{ .path = "/work/orca", .command_count = 2 }},
+        .top_projects = &.{.{ .path = "/work/ryk", .command_count = 2 }},
         .agents = &.{.{ .name = "codex", .count = 2 }},
         .performance = .{ .p50_us = 1, .p95_us = 2, .p99_us = 3, .max_us = 4 },
     };

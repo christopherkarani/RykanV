@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://orca.local/schemas/host-decision-mapping-v1.json",
+  "$id": "https://ryk.local/schemas/host-decision-mapping-v1.json",
   "title": "ryk Host Decision Mapping v1",
   "description": "Machine-readable contract for how adapters map ryk decisions to host actions. Prevents silent lies about approval/enforcement.",
   "type": "object",

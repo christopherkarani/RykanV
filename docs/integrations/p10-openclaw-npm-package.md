@@ -2,7 +2,7 @@
 
 ## Summary
 
-This phase packaged the Orca OpenClaw plugin for npm distribution as `orca-openclaw-plugin`. The package is a thin wrapper around the Orca CLI and does not bundle or compile the Zig binary.
+This phase packaged the ryk OpenClaw plugin for npm distribution as `ryk-openclaw-plugin`. The package is a thin wrapper around the ryk CLI and does not bundle or compile the Zig binary.
 
 ## Package path
 
@@ -13,13 +13,13 @@ integrations/openclaw-plugin/
 ## Package name
 
 ```text
-orca-openclaw-plugin
+ryk-openclaw-plugin
 ```
 
 ## Package metadata status
 
 - `package.json` exists and validates as JSON.
-- `name` is `orca-openclaw-plugin`.
+- `name` is `ryk-openclaw-plugin`.
 - `version` is `1.1.3`.
 - `main` points to `dist/index.js`.
 - `types` points to `dist/index.d.ts`.
@@ -33,7 +33,7 @@ orca-openclaw-plugin
 ## Manifest status
 
 - `openclaw.plugin.json` exists and validates as JSON.
-- Contains `id: "orca"`, `name: "Orca"`, `version: "1.1.3"`.
+- Contains `id: "ryk"`, `name: "ryk"`, `version: "1.1.3"`.
 - Contains `configSchema` with `type: "object"`, `additionalProperties: false`.
 
 ## Build output status
@@ -93,8 +93,8 @@ The package does **not** include:
 
 ## Docs updated
 
-- `integrations/openclaw-plugin/README.md` — Added npm install instructions with `openclaw plugins install npm:orca-openclaw-plugin`.
-- `docs/integrations/openclaw.md` — Added npm install path, verification commands (`orca plugin doctor openclaw`, `openclaw plugins list --json`, `openclaw plugins doctor`), and updated limitations wording.
+- `integrations/openclaw-plugin/README.md` — Added npm install instructions with `openclaw plugins install npm:ryk-openclaw-plugin`.
+- `docs/integrations/openclaw.md` — Added npm install path, verification commands (`ryk plugin doctor openclaw`, `openclaw plugins list --json`, `openclaw plugins doctor`), and updated limitations wording.
 - `docs/integrations/p09-openclaw-plugin.md` — Referenced as prior phase.
 
 ## Tests run
@@ -122,10 +122,10 @@ New tests added to `tests/phase39_openclaw_plugin.zig`:
 ### Plugin smoke tests
 
 ```bash
-cat tests/plugin-fixtures/openclaw/tool_command_safe.json | ./zig-out/bin/orca hook openclaw tool.before
-cat tests/plugin-fixtures/openclaw/tool_command_dangerous.json | ./zig-out/bin/orca hook openclaw tool.before
-./zig-out/bin/orca plugin doctor openclaw
-./zig-out/bin/orca plugin manifest openclaw
+cat tests/plugin-fixtures/openclaw/tool_command_safe.json | ./zig-out/bin/ryk hook openclaw tool.before
+cat tests/plugin-fixtures/openclaw/tool_command_dangerous.json | ./zig-out/bin/ryk hook openclaw tool.before
+./zig-out/bin/ryk plugin doctor openclaw
+./zig-out/bin/ryk plugin manifest openclaw
 ```
 
 Results: **all passed**.
@@ -133,9 +133,9 @@ Results: **all passed**.
 ### Cross-plugin regression tests
 
 ```bash
-cat tests/plugin-fixtures/codex/pre_tool_use_command_safe.json | ./zig-out/bin/orca hook codex PreToolUse
-cat tests/plugin-fixtures/claude/pre_tool_use_command_safe.json | ./zig-out/bin/orca hook claude PreToolUse
-cat tests/plugin-fixtures/opencode/tool_execute_before_command_safe.json | ./zig-out/bin/orca hook opencode tool.execute.before
+cat tests/plugin-fixtures/codex/pre_tool_use_command_safe.json | ./zig-out/bin/ryk hook codex PreToolUse
+cat tests/plugin-fixtures/claude/pre_tool_use_command_safe.json | ./zig-out/bin/ryk hook claude PreToolUse
+cat tests/plugin-fixtures/opencode/tool_execute_before_command_safe.json | ./zig-out/bin/ryk hook opencode tool.execute.before
 ```
 
 Results: **all passed**.
@@ -143,7 +143,7 @@ Results: **all passed**.
 ### Redteam
 
 ```bash
-./zig-out/bin/orca redteam --ci
+./zig-out/bin/ryk redteam --ci
 ```
 
 Result: **10/10 fixtures passed (100%)**.
@@ -157,9 +157,9 @@ Result: **10/10 fixtures passed (100%)**.
 Result: **succeeded**. Produced:
 
 ```text
-dist/npm/orca-openclaw-plugin-v1.1.3.tgz
-dist/npm/orca-opencode-plugin-v1.1.1.tgz
-dist/npm/orca-npm-plugin-checksums.txt
+dist/npm/ryk-openclaw-plugin-v1.1.3.tgz
+dist/npm/ryk-opencode-plugin-v1.1.1.tgz
+dist/npm/ryk-npm-plugin-checksums.txt
 ```
 
 Secret scan: **passed**.
@@ -174,15 +174,15 @@ Secret scan: **passed**.
 
 ## Known limitations
 
-- npm package `orca-openclaw-plugin@1.1.3` is published.
-- ClawHub package `orca-openclaw-plugin@1.1.3` is published.
+- npm package `ryk-openclaw-plugin@1.1.3` is published.
+- ClawHub package `ryk-openclaw-plugin@1.1.3` is published.
 - The OpenClaw plugin does not add MCP server behavior or drone-specific plugin features.
 - Hooks are advisory for informational events; blocking hooks depend on OpenClaw honoring thrown errors.
-- The strongest local protection remains `orca openclaw`.
+- The strongest local protection remains `ryk openclaw`.
 
 ## Whether npm publication is ready
 
-**Yes.** The `orca-openclaw-plugin` package is ready for npm publication:
+**Yes.** The `ryk-openclaw-plugin` package is ready for npm publication:
 
 - Package metadata is complete.
 - Runtime JS output exists.
@@ -191,8 +191,8 @@ Secret scan: **passed**.
 - `npm pack --dry-run` succeeds.
 - Package contents are clean and minimal.
 - Docs explain the npm install flow.
-- The package does not bundle Orca CLI.
-- The package requires `orca` on PATH.
+- The package does not bundle ryk CLI.
+- The package requires `ryk` on PATH.
 - No unsafe install scripts.
 - No MCP behavior.
 - No drone plugin behavior.

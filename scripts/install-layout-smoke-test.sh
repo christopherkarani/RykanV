@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-DIST_DIR="${ORCA_DIST_DIR:-dist}"
+DIST_DIR="${RYK_DIST_DIR:-dist}"
 VERSION="$(tr -d '[:space:]' <"${REPO_ROOT}/VERSION")"
 
 detect_os() {
@@ -49,18 +49,8 @@ ARCH="$(detect_arch)"
 [[ "${OS}" != "unsupported" ]] || fail "unsupported host OS for smoke test"
 [[ "${ARCH}" != "unsupported" ]] || fail "unsupported host architecture for smoke test"
 
-# Phase 5a: primary archive is ryk-v*; dual-publish may also emit orca-v* (same root layout).
-ARTIFACT=""
-STAGE_NAME=""
-for prefix in ryk orca; do
-  candidate="${DIST_DIR}/${prefix}-v${VERSION}-${OS}-${ARCH}.tar.gz"
-  if [[ -f "${candidate}" ]]; then
-    ARTIFACT="${candidate}"
-    STAGE_NAME="${prefix}-v${VERSION}-${OS}-${ARCH}"
-    break
-  fi
-done
-[[ -n "${ARTIFACT}" ]] || fail "missing host artifact: ${DIST_DIR}/ryk-v${VERSION}-${OS}-${ARCH}.tar.gz (or orca-v* dual-publish)"
+ARTIFACT="${DIST_DIR}/ryk-v${VERSION}-${OS}-${ARCH}.tar.gz"
+[[ -f "${ARTIFACT}" ]] || fail "missing host artifact: ${ARTIFACT}"
 
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ryk-install-layout.XXXXXX")"
 cleanup() {
@@ -69,24 +59,15 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 tar -xzf "${ARTIFACT}" -C "${TMP_ROOT}"
-STAGE_ROOT="${TMP_ROOT}/${STAGE_NAME}"
-# Archive root is always ryk-v… even when dual-published as orca-v* filename
-# (byte-identical copy of the ryk archive). Prefer that layout first.
-if [[ ! -d "${STAGE_ROOT}" ]]; then
-  if [[ -d "${TMP_ROOT}/ryk-v${VERSION}-${OS}-${ARCH}" ]]; then
-    STAGE_ROOT="${TMP_ROOT}/ryk-v${VERSION}-${OS}-${ARCH}"
-  else
-    fail "staged archive root not found under ${TMP_ROOT}"
-  fi
-fi
+STAGE_ROOT="${TMP_ROOT}/ryk-v${VERSION}-${OS}-${ARCH}"
+[[ -d "${STAGE_ROOT}" ]] || fail "staged archive root not found under ${TMP_ROOT}"
 
 RYK_BIN="${STAGE_ROOT}/bin/ryk"
-ORCA_BIN="${STAGE_ROOT}/bin/orca"
 # Product packaging is CLI-only; Zig shell_engine evaluates shell in-process.
 [[ -x "${RYK_BIN}" ]] || fail "staged ryk binary is missing or not executable"
-[[ -x "${ORCA_BIN}" ]] || fail "staged orca compat alias is missing or not executable"
-if [[ -e "${STAGE_ROOT}/bin/orca-daemon" ]]; then
-  fail "staged release unexpectedly contains orca-daemon (daemon removed from product packaging)"
+[[ ! -e "${STAGE_ROOT}/bin/orca" ]] || fail "staged release contains a removed orca binary alias"
+if [[ -e "${STAGE_ROOT}/bin/ryk-daemon" ]]; then
+  fail "staged release unexpectedly contains ryk-daemon (daemon removed from product packaging)"
 fi
 
 TMP_HOME="${TMP_ROOT}/home"
@@ -94,9 +75,7 @@ mkdir -p "${TMP_HOME}/workspace"
 
 export HOME="${TMP_HOME}"
 export PATH="${STAGE_ROOT}/bin:${PATH}"
-# Dual-read: prefer RYK_RESOURCE_ROOT when set.
 export RYK_RESOURCE_ROOT="${STAGE_ROOT}"
-export ORCA_RESOURCE_ROOT="${STAGE_ROOT}"
 
 version_output="$("${RYK_BIN}" version)"
 assert_contains "${version_output}" "Version"
@@ -106,10 +85,6 @@ assert_contains "${version_output}" "${VERSION}"
 doctor_output="$("${RYK_BIN}" doctor --verbose)"
 assert_contains "${doctor_output}" "ryk Doctor"
 assert_contains "${doctor_output}" "Version: ${VERSION}"
-
-# Legacy alias must also run.
-alias_version="$("${ORCA_BIN}" version)"
-assert_contains "${alias_version}" "${VERSION}"
 
 "${RYK_BIN}" packs --help >/dev/null
 
@@ -129,12 +104,12 @@ if [[ "${safe_output}" == *"daemon unavailable"* ]]; then
   fail "safe hook decision unexpectedly cited daemon unavailable (shell_engine path)"
 fi
 
-[[ -d "${STAGE_ROOT}/orca-dashboard-ui/dist" ]] || fail "staged release missing orca-dashboard-ui/dist"
-[[ -f "${STAGE_ROOT}/orca-dashboard-ui/dist/index.html" ]] || fail "staged dashboard bundle missing index.html"
+[[ -d "${STAGE_ROOT}/ryk-dashboard-ui/dist" ]] || fail "staged release missing ryk-dashboard-ui/dist"
+[[ -f "${STAGE_ROOT}/ryk-dashboard-ui/dist/index.html" ]] || fail "staged dashboard bundle missing index.html"
 
 assert_dashboard_bundle_contains() {
   local marker="$1"
-  if ! grep -R -F -q -- "${marker}" "${STAGE_ROOT}/orca-dashboard-ui/dist"; then
+  if ! grep -R -F -q -- "${marker}" "${STAGE_ROOT}/ryk-dashboard-ui/dist"; then
     fail "staged dashboard bundle missing machine-wide marker: ${marker}"
   fi
 }

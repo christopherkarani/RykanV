@@ -7,15 +7,15 @@
 //! - re-exports config path + enable/disable mutation from `pack_config.zig`
 //!
 //! Config path rule (documented in help + status):
-//! - Prefer project `.orca.toml` when the workspace is a git repo
-//! - Otherwise write user config (`$XDG_CONFIG_HOME/orca/config.toml` or `~/.config/orca/config.toml`)
+//! - Prefer project `.ryk.toml` when the workspace is a git repo
+//! - Otherwise write user config (`$XDG_CONFIG_HOME/ryk/config.toml` or `~/.config/ryk/config.toml`)
 //!
 //! Baseline always-on (never claim the user "disabled" these unless explicitly in `disabled`):
 //! - `core` / `core.*` (always enabled by PacksConfig)
 //! - `system.disk` (default-on, opt-out via disabled)
 
 const std = @import("std");
-const orca_policy = @import("orca_core").policy;
+const policy_mod = @import("ryk_core").policy;
 const contracts = @import("daemon_contracts.zig");
 const exit_codes = @import("exit_codes.zig");
 const pack_config = @import("pack_config.zig");
@@ -74,7 +74,7 @@ pub const PacksSummary = struct {
 
 /// Opt-in pack IDs for a policy preset. Empty means baseline only.
 /// Real registry IDs only — daemon remains source of truth for definitions.
-pub fn presetOptInPacks(preset: orca_policy.presets.AgentPreset) []const []const u8 {
+pub fn presetOptInPacks(preset: policy_mod.presets.AgentPreset) []const []const u8 {
     return switch (preset) {
         // Default / conservative coding agents: no surprise opt-ins.
         .generic_agent, .solo_dev, .trusted_local, .mcp_dev => &.{},
@@ -101,7 +101,7 @@ pub fn presetOptInPacks(preset: orca_policy.presets.AgentPreset) []const []const
 }
 
 pub fn presetOptInPacksByName(preset_name: []const u8) []const []const u8 {
-    const preset = orca_policy.presets.AgentPreset.parse(preset_name) orelse return &.{};
+    const preset = policy_mod.presets.AgentPreset.parse(preset_name) orelse return &.{};
     return presetOptInPacks(preset);
 }
 
@@ -341,7 +341,7 @@ pub fn ensurePresetPacks(
     io: std.Io,
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
-    preset: orca_policy.presets.AgentPreset,
+    preset: policy_mod.presets.AgentPreset,
 ) !EnsurePacksResult {
     const desired = presetOptInPacks(preset);
     if (desired.len == 0) {
@@ -379,7 +379,7 @@ pub fn ensurePresetPacksByName(
     workspace_root: []const u8,
     preset_name: []const u8,
 ) !EnsurePacksResult {
-    const preset = orca_policy.presets.AgentPreset.parse(preset_name) orelse {
+    const preset = policy_mod.presets.AgentPreset.parse(preset_name) orelse {
         return .{
             .message = "Packs: baseline only",
             .changed = false,
@@ -455,7 +455,7 @@ test "ensurePresetPacks writes project config and is idempotent" {
     try std.testing.expect(first.scope == .project);
     try std.testing.expect(std.mem.indexOf(u8, first.message, "containers.docker") != null);
 
-    const config = try tmp.dir.readFileAlloc(std.testing.io, ".orca.toml", std.testing.allocator, .limited(8192));
+    const config = try tmp.dir.readFileAlloc(std.testing.io, ".ryk.toml", std.testing.allocator, .limited(8192));
     defer std.testing.allocator.free(config);
     try std.testing.expect(std.mem.indexOf(u8, config, "containers.docker") != null);
     try std.testing.expect(std.mem.indexOf(u8, config, "kubernetes.kubectl") != null);
@@ -469,7 +469,7 @@ test "ensurePresetPacks writes project config and is idempotent" {
     var third = try ensurePresetPacks(std.testing.io, std.testing.allocator, root, .claude_code);
     defer third.deinit(std.testing.allocator);
     try std.testing.expect(third.changed);
-    const config2 = try tmp.dir.readFileAlloc(std.testing.io, ".orca.toml", std.testing.allocator, .limited(8192));
+    const config2 = try tmp.dir.readFileAlloc(std.testing.io, ".ryk.toml", std.testing.allocator, .limited(8192));
     defer std.testing.allocator.free(config2);
     try std.testing.expect(std.mem.indexOf(u8, config2, "containers.docker") != null);
     try std.testing.expect(std.mem.indexOf(u8, config2, "package_managers") != null);
@@ -489,7 +489,7 @@ test "generic-agent ensure leaves baseline only without writing" {
     defer result.deinit(std.testing.allocator);
     try std.testing.expect(!result.changed);
     try std.testing.expectEqualStrings("Packs: baseline only", result.message);
-    const cfg_path = try std.fs.path.join(std.testing.allocator, &.{ root, ".orca.toml" });
+    const cfg_path = try std.fs.path.join(std.testing.allocator, &.{ root, ".ryk.toml" });
     defer std.testing.allocator.free(cfg_path);
     try std.testing.expect(!plugin.fileExistsAbsolute(std.testing.io, cfg_path));
 }
@@ -538,7 +538,7 @@ test "merge does not promote disabled packs into enabled" {
         \\
     ;
     {
-        const f = try tmp.dir.createFile(std.testing.io, ".orca.toml", .{});
+        const f = try tmp.dir.createFile(std.testing.io, ".ryk.toml", .{});
         defer f.close(std.testing.io);
         try f.writeStreamingAll(std.testing.io, seed);
     }
@@ -547,7 +547,7 @@ test "merge does not promote disabled packs into enabled" {
     defer result.deinit(std.testing.allocator);
     try std.testing.expect(result.changed);
 
-    const config = try tmp.dir.readFileAlloc(std.testing.io, ".orca.toml", std.testing.allocator, .limited(8192));
+    const config = try tmp.dir.readFileAlloc(std.testing.io, ".ryk.toml", std.testing.allocator, .limited(8192));
     defer std.testing.allocator.free(config);
     try std.testing.expect(std.mem.indexOf(u8, config, "containers.docker") != null);
     try std.testing.expect(std.mem.indexOf(u8, config, "package_managers") != null);

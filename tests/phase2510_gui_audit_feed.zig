@@ -1,11 +1,11 @@
 const std = @import("std");
-const orca = @import("orca");
+const ryk = @import("ryk");
 
-const core = orca.core;
-const dashboard = orca.dashboard;
-const feed_writer = orca.cli.feed_writer;
-const rust_visibility = orca.cli.rust_visibility;
-const shell_eval = orca.cli.shell_eval;
+const core = ryk.core;
+const dashboard = ryk.dashboard;
+const feed_writer = ryk.cli.feed_writer;
+const rust_visibility = ryk.cli.rust_visibility;
+const shell_eval = ryk.cli.shell_eval;
 
 const fake_secret = "sk-fakeSyntheticOpenAIKey1234567890";
 
@@ -144,7 +144,7 @@ test "phase2510 daemon unavailable and incompatible feed statuses" {
     var unavailable = try rust_visibility.buildFeedRecordFromUnavailable(
         allocator,
         std.testing.io,
-        "/tmp/orca-workspace",
+        "/tmp/ryk-workspace",
         rust_visibility.event_source_hook,
         "codex",
         error.SocketConnectFailed,
@@ -157,7 +157,7 @@ test "phase2510 daemon unavailable and incompatible feed statuses" {
     var incompatible = try rust_visibility.buildFeedRecordFromUnavailable(
         allocator,
         std.testing.io,
-        "/tmp/orca-workspace",
+        "/tmp/ryk-workspace",
         rust_visibility.event_source_hook,
         "codex",
         error.ProtocolMismatch,
@@ -190,7 +190,7 @@ test "phase2510 status json exposes daemon health and shell feed" {
         "claude",
         "healthy",
         "deny",
-        "blocked by Orca policy rule: destructive_rm",
+        "blocked by ryk policy rule: destructive_rm",
         "destructive_rm",
         "Critical",
         "Use a safer workflow.",
@@ -226,32 +226,32 @@ test "phase2510 zig-native session replay blocked actions remain compatible" {
         .id = try core.session.generateSessionId(timestamp),
         .started_at = timestamp,
         .ended_at = timestamp,
-        .command = "orca",
+        .command = "ryk",
         .args = &.{ "run", "--", "curl", "https://evil.example" },
         .workspace_root = root,
         .mode = .strict,
         .platform = core.platform.detectOs(),
     };
-    var writer = try orca.core_api.createAuditWriter(std.testing.io, std.testing.allocator, session);
+    var writer = try ryk.core_api.createAuditWriter(std.testing.io, std.testing.allocator, session);
     defer writer.deinit();
-    const ev = try orca.core_api.createAuditEvent(.{
+    const ev = try ryk.core_api.createAuditEvent(.{
         .session_id = session.id,
         .event_id = try core.event.generateEventId(timestamp),
         .timestamp = timestamp,
         .event_type = .network_connect_denied,
-        .actor = .{ .kind = .orca, .display = "orca" },
+        .actor = .{ .kind = .ryk, .display = "ryk" },
         .target = .{ .kind = .network_endpoint, .value = "https://evil.example" },
-        .decision = orca.core_api.makeDecision(.{ .result = .deny, .reason = "network denied" }),
+        .decision = ryk.core_api.makeDecision(.{ .result = .deny, .reason = "network denied" }),
     });
-    try orca.core_api.appendAuditEvent(&writer, ev);
+    try ryk.core_api.appendAuditEvent(&writer, ev);
     try writer.writeLastPointer();
-    try orca.core_api.writeAuditSummary(std.testing.allocator, writer.sessionDirPath(), .{
+    try ryk.core_api.writeAuditSummary(std.testing.allocator, writer.sessionDirPath(), .{
         .session = session,
         .status = .{ .exited = 1 },
         .event_count = writer.event_count,
         .final_event_hash = writer.finalHash().?,
-        .policy = ".orca/policy.yaml",
-        .product_label = "Orca",
+        .policy = ".ryk/policy.yaml",
+        .product_label = "ryk",
     });
 
     var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);

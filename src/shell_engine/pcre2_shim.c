@@ -6,9 +6,9 @@
 
 typedef struct {
     pcre2_code *code;
-} orca_regex;
+} ryk_regex;
 
-orca_regex *orca_regex_compile(const char *pattern, size_t len, int *err_code, size_t *err_offset) {
+ryk_regex *ryk_regex_compile(const char *pattern, size_t len, int *err_code, size_t *err_offset) {
     int ec = 0;
     PCRE2_SIZE eo = 0;
     /* DOTALL so `.` matches newlines (heredoc bodies). UTF off (byte patterns). */
@@ -19,7 +19,7 @@ orca_regex *orca_regex_compile(const char *pattern, size_t len, int *err_code, s
         if (err_offset) *err_offset = (size_t)eo;
         return NULL;
     }
-    orca_regex *re = (orca_regex *)malloc(sizeof(orca_regex));
+    ryk_regex *re = (ryk_regex *)malloc(sizeof(ryk_regex));
     if (!re) {
         pcre2_code_free(code);
         return NULL;
@@ -28,14 +28,14 @@ orca_regex *orca_regex_compile(const char *pattern, size_t len, int *err_code, s
     return re;
 }
 
-void orca_regex_free(orca_regex *re) {
+void ryk_regex_free(ryk_regex *re) {
     if (!re) return;
     pcre2_code_free(re->code);
     free(re);
 }
 
-int orca_regex_match_span(
-    orca_regex *re,
+int ryk_regex_match_span(
+    ryk_regex *re,
     const char *text,
     size_t len,
     size_t *out_start,
@@ -66,6 +66,6 @@ int orca_regex_match_span(
     return rc < 0 ? rc : -3;
 }
 
-int orca_regex_is_match(orca_regex *re, const char *text, size_t len) {
-    return orca_regex_match_span(re, text, len, NULL, NULL);
+int ryk_regex_is_match(ryk_regex *re, const char *text, size_t len) {
+    return ryk_regex_match_span(re, text, len, NULL, NULL);
 }

@@ -1,10 +1,10 @@
-const orca_core = @import("orca_core");
+const ryk_core = @import("ryk_core");
 
 pub const cli = @import("cli/mod.zig");
-pub const core = orca_core.core;
-pub const core_api = orca_core.api;
-pub const policy = orca_core.policy;
-pub const audit = orca_core.audit;
+pub const core = ryk_core.core;
+pub const core_api = ryk_core.api;
+pub const policy = ryk_core.policy;
+pub const audit = ryk_core.audit;
 pub const intercept = @import("intercept/mod.zig");
 pub const shell_engine = @import("shell_engine/mod.zig");
 pub const scan = @import("scan/mod.zig");

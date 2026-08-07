@@ -1,24 +1,24 @@
-# Orca OpenClaw Plugin — ClawHub Submission
+# ryk OpenClaw Plugin — ClawHub Submission
 
-This document describes how to publish the Orca OpenClaw plugin to [ClawHub](https://docs.openclaw.ai/clawhub), the OpenClaw plugin registry.
+This document describes how to publish the ryk OpenClaw plugin to [ClawHub](https://docs.openclaw.ai/clawhub), the OpenClaw plugin registry.
 
 ## What is ClawHub
 
-ClawHub is the OpenClaw plugin registry. After publication, users can install the Orca plugin with:
+ClawHub is the OpenClaw plugin registry. After publication, users can install the ryk plugin with:
 
 ```bash
-openclaw plugins install clawhub:orca
+openclaw plugins install clawhub:ryk-openclaw-plugin
 ```
 
-**Status:** The plugin has been published to ClawHub as `orca-openclaw-plugin@1.1.3`.
+**Status:** The plugin has been published to ClawHub as `ryk-openclaw-plugin@1.1.3`.
 
 ## Prerequisites
 
-1. **Orca CLI installed separately**
-   The plugin requires `orca` to be available on `PATH`. It does not bundle the Orca CLI.
+1. **ryk CLI installed separately**
+   The plugin requires `ryk` to be available on `PATH`. It does not bundle the ryk CLI.
 
    ```bash
-   orca doctor
+   ryk doctor
    ```
 
 2. **OpenClaw plugin package exists**
@@ -41,10 +41,10 @@ openclaw plugins install clawhub:orca
 
 ```json
 {
-  "id": "orca",
-  "name": "Orca",
+  "id": "ryk",
+  "name": "ryk",
   "version": "1.1.3",
-  "description": "Runtime guardrails for OpenClaw workflows via the Orca CLI.",
+  "description": "Runtime guardrails for OpenClaw workflows via the ryk CLI.",
   "configSchema": {
     "type": "object",
     "properties": {},
@@ -54,15 +54,15 @@ openclaw plugins install clawhub:orca
 ```
 
 Checks:
-- `id` is `"orca"` ✓
-- `name` is `"Orca"` ✓
+- `id` is `"ryk"` ✓
+- `name` is `"ryk"` ✓
 - `version` is present ✓
 - `description` is accurate ✓
 - `configSchema` exists ✓
 
 ### `package.json`
 
-- `name`: `orca-openclaw-plugin` ✓
+- `name`: `ryk-openclaw-plugin` ✓
 - `main`: `dist/index.js` ✓
 - `types`: `dist/index.d.ts` ✓
 - `files`: includes `dist`, `openclaw.plugin.json`, `README.md`, `package.json` ✓
@@ -89,10 +89,10 @@ npm pack --dry-run ./integrations/openclaw-plugin
 # 3. Verify the plugin manifest is valid JSON
 node -e "JSON.parse(require('fs').readFileSync('integrations/openclaw-plugin/openclaw.plugin.json'))"
 
-# 4. Run Orca plugin checks
-./zig-out/bin/orca plugin doctor openclaw
-./zig-out/bin/orca plugin manifest openclaw
-./zig-out/bin/orca plugin install openclaw --dry-run
+# 4. Run ryk plugin checks
+./zig-out/bin/ryk plugin doctor openclaw
+./zig-out/bin/ryk plugin manifest openclaw
+./zig-out/bin/ryk plugin install openclaw --dry-run
 ```
 
 ### Publish command (already completed)
@@ -103,8 +103,8 @@ The plugin was published with:
 clawhub package publish \
   ./integrations/openclaw-plugin \
   --family code-plugin \
-  --name "orca-openclaw-plugin" \
-  --display-name "Orca" \
+  --name "ryk-openclaw-plugin" \
+  --display-name "ryk" \
   --version "1.1.3" \
   --changelog "Initial ClawHub submission..." \
   --tags "security,guardrails,ai-agents,policy,audit,latest"
@@ -123,7 +123,7 @@ The `clawhub publish` command (ClawHub CLI v0.7.0) accepts:
 After ClawHub publication, install with:
 
 ```bash
-openclaw plugins install clawhub:orca-openclaw-plugin
+openclaw plugins install clawhub:ryk-openclaw-plugin
 ```
 
 **Note:** The `clawhub:` install protocol requires a recent OpenClaw version. If your OpenClaw version does not support it, use the local path or npm install methods instead.
@@ -137,19 +137,19 @@ openclaw plugins list --json
 openclaw plugins doctor
 ```
 
-Through Orca CLI:
+Through ryk CLI:
 
 ```bash
-orca plugin doctor openclaw
-orca plugin manifest openclaw
-orca plugin install openclaw --dry-run
+ryk plugin doctor openclaw
+ryk plugin manifest openclaw
+ryk plugin install openclaw --dry-run
 ```
 
 Hook smoke test:
 
 ```bash
 cat tests/plugin-fixtures/openclaw/tool_command_safe.json \
-  | ./zig-out/bin/orca hook openclaw tool.before
+  | ./zig-out/bin/ryk hook openclaw tool.before
 ```
 
 ## Known Limitations
@@ -158,22 +158,22 @@ cat tests/plugin-fixtures/openclaw/tool_command_safe.json \
 - **`clawhub:` install protocol requires recent OpenClaw.** Older OpenClaw versions may not support `clawhub:` installs. Use local path or npm install as fallback.
 - **Local path install may show runtime warnings.** OpenClaw local path installs load TypeScript source directly and may show context-shape warnings depending on OpenClaw version. The npm package (with compiled `dist/index.js`) is the recommended distribution format.
 - **Hooks are advisory for informational events.** Blocking hooks depend on OpenClaw honoring thrown errors.
-- **The strongest protection remains `orca openclaw`.**
+- **The strongest protection remains `ryk openclaw`.**
 - **No telemetry is collected.**
 - **No MCP server behavior is added.**
 - **No drone-specific plugin features are added.**
 
 ## No Telemetry Statement
 
-The Orca OpenClaw plugin does not collect telemetry. No usage data, session content, or metadata is transmitted to any external service.
+The ryk OpenClaw plugin does not collect telemetry. No usage data, session content, or metadata is transmitted to any external service.
 
 ## No MCP Behavior Statement
 
-The Orca OpenClaw plugin does not add MCP server behavior or `.mcp.json`.
+The ryk OpenClaw plugin does not add MCP server behavior or `.mcp.json`.
 
 ## No Drone Plugin Behavior Statement
 
-The Orca OpenClaw plugin does not add drone-specific plugin features, drone skills, drone demos, or operational drone-control instructions.
+The ryk OpenClaw plugin does not add drone-specific plugin features, drone skills, drone demos, or operational drone-control instructions.
 
 ## Security
 

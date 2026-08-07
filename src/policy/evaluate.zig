@@ -776,7 +776,7 @@ const Risk = struct {
 fn riskHeuristic(surface: Surface, value: []const u8) ?Risk {
     return switch (surface) {
         .file_read => if (matchers.matchesPath("~/.ssh/**", value) or matchers.matchesPath("~/.aws/**", value) or matchers.matchesPath("./.env*", value)) .{ .score = 90, .reason = "sensitive file path" } else null,
-        .file_write => if (matchers.matchesPath("./.git/**", value) or matchers.matchesPath("./.orca/**", value)) .{ .score = 80, .reason = "control directory write" } else null,
+        .file_write => if (matchers.matchesPath("./.git/**", value) or matchers.matchesPath("./.ryk/**", value)) .{ .score = 80, .reason = "control directory write" } else null,
         .env => if (isSecretLikeEnvName(value)) .{ .score = 90, .reason = "secret-like environment variable" } else null,
         .command => commandRiskHeuristic(value),
         .network => if (std.mem.indexOf(u8, value, "localhost") != null or std.mem.startsWith(u8, value, "127.")) .{ .score = 40, .reason = "local network destination" } else null,

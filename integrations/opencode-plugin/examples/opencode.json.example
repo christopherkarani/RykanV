@@ -1,5 +1,5 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": [],
-  "_comment": "Local plugins in .opencode/plugins/ (e.g. orca.ts) load automatically. Optional npm: \"plugin\": [\"orca-opencode-plugin\"]"
+  "_comment": "Local plugins in .opencode/plugins/ (e.g. ryk.ts) load automatically. Optional npm: \"plugin\": [\"ryk-opencode-plugin\"]"
 }

@@ -6,13 +6,13 @@
 //! Nested re-apply is not supported: sandbox_init fails if the process is
 //! already sandboxed; children inherit.
 //!
-//! `applyInChild` must run only after fork / before exec (never on the Orca
+//! `applyInChild` must run only after fork / before exec (never on the ryk
 //! parent). Parent-side code uses `evaluateSupport` + profile render only.
 //!
 //! ## Multi-thread / fork residual
 //!
 //! `sandbox_init` is **not** async-signal-safe and is not defined for use in a
-//! multi-threaded process after fork. Orca's parent may already have threads
+//! multi-threaded process after fork. ryk's parent may already have threads
 //! (e.g. proxy/runtime) when `forkApplySeatbeltAndExec` runs.
 //!
 //! **Mitigations (production path):**
@@ -158,7 +158,7 @@ pub const ApplyInChildError = error{
 /// Apply a custom SBPL profile to the **current** process via deprecated sandbox_init.
 ///
 /// Must only be called in the post-fork child before exec (or in isolation tests).
-/// Applying in the Orca parent would confine the CLI itself.
+/// Applying in the ryk parent would confine the CLI itself.
 ///
 /// Nested apply is not supported: if already sandboxed, returns ApplyFailed.
 /// Inheritance is the only composition model for descendants.
@@ -366,7 +366,7 @@ test "prepareForChildApply unavailable outside matrix" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var compiled = try profile.compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-seatbelt-ws",
+        .workspace_root = "/tmp/ryk-seatbelt-ws",
         .system_ro_prefixes = &[_][]const u8{"/usr"},
     });
     defer compiled.deinit();
@@ -382,7 +382,7 @@ test "prepareForChildApply yields SBPL when supported" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var compiled = try profile.compileProfile(allocator, .{
-        .workspace_root = "/tmp/orca-seatbelt-ws",
+        .workspace_root = "/tmp/ryk-seatbelt-ws",
         .system_ro_prefixes = &[_][]const u8{ "/usr", "/bin" },
     });
     defer compiled.deinit();
@@ -423,7 +423,7 @@ test "applyInChild succeeds for minimal profile in forked child" {
         applyInChild(sbpl) catch std.c._exit(2);
         // Nested composition is not a product feature (inheritance only).
         // Some OS versions return an error on re-apply; others ignore with rc=0.
-        // Either way Orca must not claim a second attach succeeded.
+        // Either way ryk must not claim a second attach succeeded.
         applyInChild(sbpl) catch {};
         std.c._exit(0);
     }

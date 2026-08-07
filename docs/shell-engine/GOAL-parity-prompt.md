@@ -1,12 +1,12 @@
-# /goal — Zig shell_engine 100% Rust parity
+# /goal — Zig shell_engine 100% parity
 
 Paste the block below into a coding agent as `/goal` (or as the standing
 session objective). The agent must keep working until the Done criteria are
 met — not stop at MVP.
 
 **Reference oracle (temporary local repo):**
-`/Users/chriskarani/CodingProjects/orca-rs-parity-ref`  
-(tag `baseline-eec9446f702d`, frozen from Orca `main` `orca-rs/**`)
+`/Users/chriskarani/CodingProjects/ryk-rs-parity-ref`
+(tag `baseline-eec9446f702d`, frozen from the historical ryk `main` Rust oracle tree)
 
 **Backlog:** `docs/shell-engine/rust-parity-backlog.md`
 
@@ -15,18 +15,18 @@ met — not stop at MVP.
 ## Goal prompt (copy from here)
 
 ```text
-/goal Achieve 100% Zig shell_engine parity with the frozen Rust orca-rs command guard.
+/goal Achieve 100% Zig shell_engine parity with the frozen Rust command-guard oracle.
 
 ## Mission
-Port and harden Orca’s in-process Zig `src/shell_engine/` until it has:
+Port and harden ryk’s in-process Zig `src/shell_engine/` until it has:
 1. **100% command-guard parity** with the Rust pack engine in the temporary reference repo, and
 2. **100% test parity** with the Rust shell/corpus/regression surface that defines allow/deny behavior.
 
 Do not stop at the current MVP (~6 partial packs, ~47 corpus lines, ≥95% match). The goal is complete only when Done criteria below are all true.
 
 ## Workspaces
-- **Product (edit here):** `/Users/chriskarani/CodingProjects/orca`
-- **Oracle (read-only reference):** `/Users/chriskarani/CodingProjects/orca-rs-parity-ref`
+- **Product (edit here):** `/Users/chriskarani/CodingProjects/ryk`
+- **Oracle (read-only reference):** `/Users/chriskarani/CodingProjects/ryk-rs-parity-ref`
   - Packs: `src/packs/**`
   - Corpora: `tests/corpus/**`
   - Related regressions/repros under `tests/repro_*.rs`, `tests/security_regressions*.rs`, fixtures
@@ -59,7 +59,7 @@ Never reintroduce a required Rust daemon into the product path. Zig owns shell E
 ### C. Tracking / hygiene
 - Backlog pack table statuses updated (`missing` → `partial` → `done`).
 - Threat-model / AGENTS / help text describe Zig as shell authority; no stale “required Rust daemon” for Evaluate.
-- Do not commit `planning/` notes, secrets, `dist/`, or the temporary oracle repo into Orca.
+- Do not commit `planning/` notes, secrets, `dist/`, or the temporary oracle repo into ryk.
 
 ## Execution loop (persist until Done)
 1. Fix P0 engine gaps first (backlog E1–E10), especially safe-before-destructive ordering and compound/wrapper parsing.
@@ -91,7 +91,7 @@ Until then: keep implementing.
 
 ## Operator notes
 
-1. Start the agent in the **Orca** product repo, not only the oracle.
-2. Keep `/Users/chriskarani/CodingProjects/orca-rs-parity-ref` around until Done; it is the frozen oracle.
-3. There may also be a looser copy at `CodingProjects/orca-rs` (no git) and an untracked leftover `orca/orca-rs/` with build `target/` — **prefer the parity-ref repo** as canonical.
+1. Start the agent in the **ryk** product repo, not only the oracle.
+2. Keep `/Users/chriskarani/CodingProjects/ryk-rs-parity-ref` around until Done; it is the frozen oracle.
+3. Ignore any untracked or loose oracle copies; **prefer the parity-ref repo** as canonical.
 4. Pair with `/loop` if you want periodic progress checks, e.g. `/loop 30m continue the shell_engine parity goal; report packs done/85 and corpus %`.

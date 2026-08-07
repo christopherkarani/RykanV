@@ -1,6 +1,6 @@
 //! Essentials tool pack + PATH honesty for OS-attached agent sessions.
 //!
-//! ## Tool pack (`ORCA_TOOL_PACK`)
+//! ## Tool pack (`RYK_TOOL_PACK`)
 //! When OS sandbox attach is active, a small **essentials** pack may add
 //! file-only `.exec` grants for everyday coding tools that exist on the host:
 //! `rg`, `fd`, `jq`, project `./scripts/zig` (or `zig` on PATH), and `git`.
@@ -20,7 +20,7 @@ const builtin = @import("builtin");
 const apply_posix = @import("apply_posix.zig");
 
 /// Env kill switch / selector.
-pub const tool_pack_env = "ORCA_TOOL_PACK";
+pub const tool_pack_env = "RYK_TOOL_PACK";
 
 /// Max file-only `.exec` paths emitted by the pack (link + realpath + shebang extras).
 pub const max_pack_exec_paths: usize = 16;
@@ -70,7 +70,7 @@ pub const PathFilterOpts = struct {
     honesty: PathFilterHonesty = path_filter_honesty,
 };
 
-/// Parse `ORCA_TOOL_PACK` value. Unknown / empty → null (caller applies default).
+/// Parse `RYK_TOOL_PACK` value. Unknown / empty → null (caller applies default).
 pub fn parseToolPack(value: ?[]const u8) ?ToolPack {
     const raw = value orelse return null;
     if (raw.len == 0) return null;
@@ -207,7 +207,7 @@ pub fn filterPathForSandbox(
 }
 
 /// Apply PATH filter to env map when attach is active. No-op when `os_attach` is false.
-/// Sets `ORCA_PATH_FILTER` / `ORCA_TOOL_PACK` honesty labels for the child session.
+/// Sets `RYK_PATH_FILTER` / `RYK_TOOL_PACK` honesty labels for the child session.
 pub fn applyPathFilterToEnv(
     allocator: std.mem.Allocator,
     env_map: *std.process.Environ.Map,
@@ -220,8 +220,8 @@ pub fn applyPathFilterToEnv(
     const filtered = try filterPathForSandbox(allocator, old, opts);
     defer allocator.free(filtered);
     try env_map.put("PATH", filtered);
-    try env_map.put("ORCA_PATH_FILTER", path_filter_honesty.toString());
-    try env_map.put("ORCA_TOOL_PACK", pack.toString());
+    try env_map.put("RYK_PATH_FILTER", path_filter_honesty.toString());
+    try env_map.put("RYK_TOOL_PACK", pack.toString());
 }
 
 // --- internals ---
@@ -285,13 +285,10 @@ fn appendOwnedPath(allocator: std.mem.Allocator, list: *std.ArrayList([]const u8
     try list.append(allocator, owned);
 }
 
-fn realpathInto(path: []const u8, out: *[std.fs.max_path_bytes]u8) ?[]const u8 {
+fn realpathInto(io: std.Io, path: []const u8, out: *[std.fs.max_path_bytes]u8) ?[]const u8 {
     if (path.len == 0 or path.len >= std.fs.max_path_bytes) return null;
-    var in_buf: [std.fs.max_path_bytes]u8 = undefined;
-    @memcpy(in_buf[0..path.len], path);
-    in_buf[path.len] = 0;
-    const resolved = std.c.realpath(in_buf[0..path.len :0].ptr, out) orelse return null;
-    return std.mem.span(resolved);
+    const n = std.Io.Dir.cwd().realPathFile(io, path, out[0..]) catch return null;
+    return out[0..n];
 }
 
 fn isRegularFile(io: std.Io, path: []const u8) bool {
@@ -311,7 +308,7 @@ fn appendFileAndRealpath(
     if (!isRegularFile(io, path)) return;
     try appendOwnedPath(allocator, list, path);
     var real_buf: [std.fs.max_path_bytes]u8 = undefined;
-    if (realpathInto(path, &real_buf)) |real| {
+    if (realpathInto(io, path, &real_buf)) |real| {
         if (!std.mem.eql(u8, real, path)) {
             if (isRegularFile(io, real)) {
                 try appendOwnedPath(allocator, list, real);
@@ -458,7 +455,7 @@ fn appendLinkedLibRoDirs(
         try appendOwnedRoPath(allocator, list, lib_dir);
         // Also grant realpath target dir when opt/ is a symlink into Cellar.
         var real_buf: [std.fs.max_path_bytes]u8 = undefined;
-        if (realpathInto(lib_path, &real_buf)) |real| {
+        if (realpathInto(io, lib_path, &real_buf)) |real| {
             if (!std.mem.eql(u8, real, lib_path)) {
                 if (std.fs.path.dirname(real)) |real_dir| {
                     try appendOwnedRoPath(allocator, list, real_dir);

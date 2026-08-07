@@ -2,22 +2,22 @@
 
 ## Summary
 
-This phase adds native OpenCode plugin support to Orca. Users can now use Orca with OpenCode in two ways:
+This phase adds native OpenCode plugin support to ryk. Users can now use ryk with OpenCode in two ways:
 
-1. **Strongest protection**: `orca opencode`
-2. **Native OpenCode plugin guardrails**: OpenCode plugin hooks call the Orca CLI for policy decisions, secret checks, and diagnostics.
+1. **Strongest protection**: `ryk opencode`
+2. **Native OpenCode plugin guardrails**: OpenCode plugin hooks call the ryk CLI for policy decisions, secret checks, and diagnostics.
 
 ## Commands Added
 
 ### CLI Commands
 
-- `orca plugin doctor opencode` — Reports Orca version, OpenCode binary detection, plugin directory status, and OpenCode-specific paths.
-- `orca plugin doctor opencode --json` — JSON output with `opencode_paths` field.
-- `orca plugin manifest opencode` — Reports the expected OpenCode plugin path (`integrations/opencode-plugin/orca.ts`).
-- `orca plugin manifest opencode --json` — JSON output.
-- `orca plugin install opencode --dry-run` — Previews safe install options (`.opencode/plugins/orca.ts` and `~/.config/opencode/plugins/orca.ts`).
-- `orca hook opencode <event>` — Processes OpenCode lifecycle hooks.
-- `orca decide <kind> --json '{"host":"opencode",...}'` — Evaluates policy decisions with OpenCode host attribution.
+- `ryk plugin doctor opencode` — Reports ryk version, OpenCode binary detection, plugin directory status, and OpenCode-specific paths.
+- `ryk plugin doctor opencode --json` — JSON output with `opencode_paths` field.
+- `ryk plugin manifest opencode` — Reports the expected OpenCode plugin path (`integrations/opencode-plugin/ryk.ts`).
+- `ryk plugin manifest opencode --json` — JSON output.
+- `ryk plugin install opencode --dry-run` — Previews safe install options (`.opencode/plugins/ryk.ts` and `~/.config/opencode/plugins/ryk.ts`).
+- `ryk hook opencode <event>` — Processes OpenCode lifecycle hooks.
+- `ryk decide <kind> --json '{"host":"opencode",...}'` — Evaluates policy decisions with OpenCode host attribution.
 
 ### Hook Events Supported
 
@@ -39,7 +39,7 @@ This phase adds native OpenCode plugin support to Orca. Users can now use Orca w
 
 ```text
 integrations/opencode-plugin/
-  orca.ts                          # TypeScript OpenCode plugin
+  ryk.ts                           # TypeScript OpenCode plugin
   README.md                        # Plugin documentation
   package.json                     # Minimal package metadata
   examples/
@@ -80,8 +80,8 @@ tests/plugin-fixtures/opencode/
 
 ## Packaging Status
 
-- `scripts/package-plugins.sh` updated to produce `dist/plugins/orca-opencode-plugin-vX.Y.Z.zip`
-- `dist/plugins/orca-plugin-checksums.txt` includes the OpenCode artifact
+- `scripts/package-plugins.sh` updated to produce `dist/plugins/ryk-opencode-plugin-vX.Y.Z.zip`
+- `dist/plugins/ryk-plugin-checksums.txt` includes the OpenCode artifact
 - Secret scan passes on all artifacts
 
 ## Tests Run
@@ -106,33 +106,33 @@ tests/plugin-fixtures/opencode/
 
 ### CLI Smoke Tests
 ```bash
-./zig-out/bin/orca plugin doctor opencode              # ✅ Works
-./zig-out/bin/orca plugin doctor opencode --json       # ✅ Works
-./zig-out/bin/orca plugin manifest opencode            # ✅ Works
-./zig-out/bin/orca plugin install opencode --dry-run   # ✅ Works
-./zig-out/bin/orca decide command --json '{"version":1,"host":"opencode","command":"git status","mode":"strict"}'  # ✅ Works
-./zig-out/bin/orca decide prompt --json '{"version":1,"host":"opencode","prompt":"fake_p08_secret_value","mode":"strict"}'  # ✅ Works
-cat tests/plugin-fixtures/opencode/tool_execute_before_command_safe.json | ./zig-out/bin/orca hook opencode tool.execute.before  # ✅ Works
-cat tests/plugin-fixtures/opencode/tool_execute_before_command_dangerous.json | ./zig-out/bin/orca hook opencode tool.execute.before  # ✅ Works
-cat tests/plugin-fixtures/opencode/permission_asked.json | ./zig-out/bin/orca hook opencode permission.asked  # ✅ Works
+./zig-out/bin/ryk plugin doctor opencode              # ✅ Works
+./zig-out/bin/ryk plugin doctor opencode --json       # ✅ Works
+./zig-out/bin/ryk plugin manifest opencode            # ✅ Works
+./zig-out/bin/ryk plugin install opencode --dry-run   # ✅ Works
+./zig-out/bin/ryk decide command --json '{"version":1,"host":"opencode","command":"git status","mode":"strict"}'  # ✅ Works
+./zig-out/bin/ryk decide prompt --json '{"version":1,"host":"opencode","prompt":"fake_p08_secret_value","mode":"strict"}'  # ✅ Works
+cat tests/plugin-fixtures/opencode/tool_execute_before_command_safe.json | ./zig-out/bin/ryk hook opencode tool.execute.before  # ✅ Works
+cat tests/plugin-fixtures/opencode/tool_execute_before_command_dangerous.json | ./zig-out/bin/ryk hook opencode tool.execute.before  # ✅ Works
+cat tests/plugin-fixtures/opencode/permission_asked.json | ./zig-out/bin/ryk hook opencode permission.asked  # ✅ Works
 ```
 
 ### Existing Plugin Regression
 ```bash
-cat tests/plugin-fixtures/codex/pre_tool_use_command_dangerous.json | ./zig-out/bin/orca hook codex PreToolUse   # ✅ Works
-cat tests/plugin-fixtures/claude/pre_tool_use_command_dangerous.json | ./zig-out/bin/orca hook claude PreToolUse # ✅ Works
+cat tests/plugin-fixtures/codex/pre_tool_use_command_dangerous.json | ./zig-out/bin/ryk hook codex PreToolUse   # ✅ Works
+cat tests/plugin-fixtures/claude/pre_tool_use_command_dangerous.json | ./zig-out/bin/ryk hook claude PreToolUse # ✅ Works
 ```
 
 ### Packaging
 ```bash
 ./scripts/package-plugins.sh                           # ✅ Works
-ls -la dist/plugins                                    # ✅ orca-opencode-plugin-v1.1.0.zip present
-cat dist/plugins/orca-plugin-checksums.txt             # ✅ Includes opencode artifact
+ls -la dist/plugins                                    # ✅ ryk-opencode-plugin-v1.1.0.zip present
+cat dist/plugins/ryk-plugin-checksums.txt             # ✅ Includes opencode artifact
 ```
 
 ### Doctor / Redteam
 ```bash
-./zig-out/bin/orca doctor                              # ✅ Works
+./zig-out/bin/ryk doctor                              # ✅ Works
 ```
 
 ## Optional Local OpenCode Validation
@@ -142,7 +142,7 @@ OpenCode binary was detected in PATH. Local host validation was not performed be
 ## Known Limitations
 
 - OpenCode plugin hooks are advisory; actual enforcement depends on OpenCode host capabilities.
-- The strongest local protection remains `orca opencode`.
+- The strongest local protection remains `ryk opencode`.
 - OpenCode does not use skills in the same sense as Codex/Claude; the plugin provides hooks and documentation only.
 - Official npm/marketplace distribution is not yet implemented.
 - Plugin installation is preview/dry-run by default.
@@ -158,7 +158,7 @@ OpenCode binary was detected in PATH. Local host validation was not performed be
 - Hook/plugin output remains host-compatible JSON.
 - Human logs go to stderr.
 - CI mode never prompts.
-- The plugin does not duplicate Orca policy logic.
+- The plugin does not duplicate ryk policy logic.
 - No MCP behavior was added.
 - No drone plugin behavior was added.
 - No `.mcp.json` was added.
@@ -186,7 +186,7 @@ Release packaging is safe:
 - `src/cli/help.zig` — Updated command documentation for opencode
 
 ### Plugin Files
-- `integrations/opencode-plugin/orca.ts` — TypeScript plugin (NEW)
+- `integrations/opencode-plugin/ryk.ts` — TypeScript plugin (NEW)
 - `integrations/opencode-plugin/README.md` — Plugin docs (NEW)
 - `integrations/opencode-plugin/package.json` — Package metadata (NEW)
 - `integrations/opencode-plugin/examples/*` — Install guides and config example (NEW)
@@ -220,4 +220,4 @@ Release packaging is safe:
 - No MCP behavior was added.
 - No drone plugin behavior was added.
 - No secrets leak.
-- The 2 pre-existing test failures are unrelated to this change (they concern "orca" vs "orca" naming in docs).
+- The 2 pre-existing test failures are unrelated to this change (they concern "ryk" vs "ryk" naming in docs).

@@ -8,7 +8,7 @@
 
 ## Summary
 
-Built the Orca Claude Code plugin package under `integrations/claude-code-plugin/` and the local marketplace catalog under `integrations/claude-marketplace/`. The plugin includes a manifest, five skills, a hooks configuration, README, marketplace files, integration documentation, and tests. All verification commands pass.
+Built the ryk Claude Code plugin package under `integrations/claude-code-plugin/` and the local marketplace catalog under `integrations/claude-marketplace/`. The plugin includes a manifest, five skills, a hooks configuration, README, marketplace files, integration documentation, and tests. All verification commands pass.
 
 ---
 
@@ -50,11 +50,11 @@ build.zig
 
 | Skill | Purpose |
 |-------|---------|
-| `doctor` | Check Orca installation, policy status, host integration status, and plugin readiness |
-| `init` | Create or repair an Orca policy for the current repository |
-| `protect` | Explain how to run the current Claude Code workflow under Orca protection |
-| `redteam` | Run Orca red-team fixtures and summarize results |
-| `replay` | Show and explain the latest Orca session replay |
+| `doctor` | Check ryk installation, policy status, host integration status, and plugin readiness |
+| `init` | Create or repair a ryk policy for the current repository |
+| `protect` | Explain how to run the current Claude Code workflow under ryk protection |
+| `redteam` | Run ryk red-team fixtures and summarize results |
+| `replay` | Show and explain the latest ryk session replay |
 
 No drone skills were added.
 No MCP skills were added.
@@ -72,7 +72,7 @@ No MCP skills were added.
 - `PostToolUse`
 - `SessionEnd`
 
-Each hook calls `orca hook claude <event>` with a JSON payload on stdin.
+Each hook calls `ryk hook claude <event>` with a JSON payload on stdin.
 
 Note: Claude Code uses `SessionEnd` instead of Codex's `Stop` event.
 
@@ -102,9 +102,9 @@ Result: **27/27 passed**
 
 Tests cover:
 - Manifest exists, valid JSON, expected fields
-- Skills exist, non-empty, reference real Orca commands
+- Skills exist, non-empty, reference real ryk commands
 - No drone skill, no MCP skill
-- Hooks exist, valid JSON, call `orca hook claude`
+- Hooks exist, valid JSON, call `ryk hook claude`
 - No nonexistent scripts, no absolute paths
 - Marketplace file valid JSON, points to claude plugin directory
 - No fake secrets in plugin files
@@ -138,49 +138,49 @@ Result: Pre-existing MCP proxy stdin hang still occurs. The phase36 and phase37 
 ### Verification Commands
 
 ```bash
-./zig-out/bin/orca plugin doctor claude
+./zig-out/bin/ryk plugin doctor claude
 ```
 Result: Pass. Reports Claude Code plugin directory as "present".
 
 ```bash
-./zig-out/bin/orca plugin manifest claude
+./zig-out/bin/ryk plugin manifest claude
 ```
 Result: Pass. Reports manifest as "exists".
 
 ```bash
 cat tests/plugin-fixtures/claude/pre_tool_use_command_safe.json \
-  | ./zig-out/bin/orca hook claude PreToolUse
+  | ./zig-out/bin/ryk hook claude PreToolUse
 ```
 Result: Pass. Returns `allow` decision.
 
 ```bash
 cat tests/plugin-fixtures/claude/user_prompt_submit_secret.json \
-  | ./zig-out/bin/orca hook claude UserPromptSubmit
+  | ./zig-out/bin/ryk hook claude UserPromptSubmit
 ```
 Result: Pass. Returns `warn` decision with redaction.
 
 ```bash
-./zig-out/bin/orca decide command --json '{"version":1,"host":"claude","command":"git status","mode":"strict"}'
+./zig-out/bin/ryk decide command --json '{"version":1,"host":"claude","command":"git status","mode":"strict"}'
 ```
 Result: Pass. Returns `allow` decision.
 
 ```bash
-./zig-out/bin/orca plugin doctor codex
+./zig-out/bin/ryk plugin doctor codex
 ```
 Result: Pass. Non-regression verified.
 
 ```bash
-./zig-out/bin/orca plugin manifest codex
+./zig-out/bin/ryk plugin manifest codex
 ```
 Result: Pass. Non-regression verified.
 
 ```bash
-./zig-out/bin/orca redteam --ci
+./zig-out/bin/ryk redteam --ci
 ```
 Result: Pass. 10/10 fixtures passed, 100%.
 
 ```bash
-./zig-out/bin/orca doctor
+./zig-out/bin/ryk doctor
 ```
 Result: Pass.
 
@@ -202,7 +202,7 @@ Result: Pass.
 - No drone demos were added.
 - No drone docs were added.
 - No drone commands were exposed.
-- The `orca plugin doctor` command still detects the separate drone workstream and reports safety mode active.
+- The `ryk plugin doctor` command still detects the separate drone workstream and reports safety mode active.
 - Existing Edge tests were not modified.
 - `edge redteam --ci` was not run because it is a separate binary and the plugin plan does not require it.
 
@@ -211,17 +211,17 @@ Result: Pass.
 ## Known Limitations
 
 - Hooks are advisory; enforcement depends on Claude Code host support.
-- The strongest protection remains `orca claude`.
+- The strongest protection remains `ryk claude`.
 - Plugin installation is preview/dry-run by default.
 - Official marketplace availability is not yet implemented.
-- The `orca plugin install` command does not yet perform actual host plugin installation.
+- The `ryk plugin install` command does not yet perform actual host plugin installation.
 - The marketplace catalog uses a relative path (`../claude-code-plugin`) which may need adjustment depending on the Claude Code version.
 
 ---
 
 ## Security Notes
 
-- The Orca remains the source of truth.
+- The ryk remains the source of truth.
 - The plugin does not duplicate policy logic.
 - Hook stdout is host-valid JSON.
 - Human logs go to stderr.
@@ -237,8 +237,8 @@ Result: Pass.
 **Yes.** P05 (Plugin Security and Compatibility) is safe to start.
 
 Rationale:
-- P01 commands (`orca plugin doctor`, `orca plugin manifest`, `orca plugin install`) still work.
-- P02 commands (`orca decide`, `orca hook`) still work.
+- P01 commands (`ryk plugin doctor`, `ryk plugin manifest`, `ryk plugin install`) still work.
+- P02 commands (`ryk decide`, `ryk hook`) still work.
 - P03 Codex plugin files/tests still work.
 - The Claude Code plugin does not conflict with the Codex plugin.
 - No MCP config was added.

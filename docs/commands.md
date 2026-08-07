@@ -6,11 +6,11 @@ ryk checks the direct command before launch and installs session PATH shims for 
 
 By default ryk renders human-facing output with colour, Unicode box-drawing, decision badges, risk meters, and (where useful) inline spinner frames on a terminal. When output is piped, when `NO_COLOR` is set, or when `TERM=dumb`, ryk automatically falls back to clean plain text.
 
-For piping, scripting, CI logs, or terminals that mis-render colour, force plain text everywhere with `--no-rich` (or set `ORCA_NO_RICH=1`):
+For piping, scripting, CI logs, or terminals that mis-render colour, force plain text everywhere with `--no-rich` (or set `RYK_NO_RICH=1`):
 
 ```sh
 ryk --no-rich decide command --json '{"command":"rm -rf /"}' --human
-ORCA_NO_RICH=1 ryk replay
+RYK_NO_RICH=1 ryk replay
 ```
 
 `--no-rich` disables colour and animation but keeps the full information content — panels become ASCII, badges become `[ALLOW]`/`[DENY]`, and risk meters become text bars. It never affects `--json`/`--robot` machine output, which stays byte-stable regardless.
@@ -20,7 +20,7 @@ Interactive alt-screen views:
 - **Default on colour TTY:** `ryk packs` and `ryk allowlist` open dual-layer browse TUIs (linear/`--json`/`--plain`/`--no-rich` stay non-TUI).
 - **Opt-in:** `ryk doctor --tui` (linear doctor remains the default) and `ryk replay --tui` (scrollable timeline for the last session or `ryk replay --session <id> --tui`). Advanced `ryk history --live` remains available via `ryk help --all`.
 
-Alt-screen views require an interactive rich terminal and are rejected under machine/plain/no-rich modes (`--json`, `--plain`, `--no-rich`, `RYK_NO_RICH` / `ORCA_NO_RICH`).
+Alt-screen views require an interactive rich terminal and are rejected under machine/plain/no-rich modes (`--json`, `--plain`, `--no-rich`, `RYK_NO_RICH` / `RYK_NO_RICH`).
 
 ## Dashboard
 
@@ -71,14 +71,14 @@ OS filesystem and network attach still apply to absolute paths when the sandbox 
 
 ## Session sandbox grade
 
-Protected launches export **`ORCA_SESSION_SANDBOX_GRADE`** and print `Session grade: …` on the session banner:
+Protected launches export **`RYK_SESSION_SANDBOX_GRADE`** and print `Session grade: …` on the session banner:
 
 | Value | When |
 |---|---|
 | `strong-mediated` | OS attach + network route-force (typical `ryk pi` / host alias) |
 | `fs-attached` | OS attach without route-force |
 | `wrapper-only` | No OS attach |
-| `unrestricted-escape` | `--network open` or `ORCA_AGENT_NETWORK_DEFAULT=legacy` |
+| `unrestricted-escape` | `--network open` or `RYK_AGENT_NETWORK_DEFAULT=legacy` |
 
 Doctor reports **capability** only; do not treat doctor “partial” strong-sandbox as a live session claim. See `docs/platform-macos.md` and `./scripts/sandbox-stress-regression.sh` for the P1–4 probe pack.
 
@@ -86,8 +86,8 @@ Doctor reports **capability** only; do not treat doctor “partial” strong-san
 
 When an OS sandbox will attach to the agent child (Seatbelt/Landlock materials prepared):
 
-1. **PATH filter (honesty: denylist)** — well-known ungranted host package trees (Homebrew `/opt/homebrew/...`, linuxbrew, Intel Homebrew Cellar/opt) are removed from child `PATH` so tools do not appear runnable and then fail with EPERM. Safe system prefixes (`/usr/bin`, `/bin`, CLT paths), the session shim dir (first), workspace path entries, and parent directories of pack-granted tools are kept. This is **not** full grant-aligned PATH filtering; residual host dirs outside the denylist may still advertise binaries that OS grants deny. Session labels: `ORCA_PATH_FILTER=denylist`.
-2. **Essentials tool pack** — `ORCA_TOOL_PACK=essentials|none` (default **essentials** under attach; set `none` to disable). When essentials is on, ryk resolves existing host files and adds **file-only** `.exec` grants (link path + realpath, never bare `$HOME` or package trees):
+1. **PATH filter (honesty: denylist)** — well-known ungranted host package trees (Homebrew `/opt/homebrew/...`, linuxbrew, Intel Homebrew Cellar/opt) are removed from child `PATH` so tools do not appear runnable and then fail with EPERM. Safe system prefixes (`/usr/bin`, `/bin`, CLT paths), the session shim dir (first), workspace path entries, and parent directories of pack-granted tools are kept. This is **not** full grant-aligned PATH filtering; residual host dirs outside the denylist may still advertise binaries that OS grants deny. Session labels: `RYK_PATH_FILTER=denylist`.
+2. **Essentials tool pack** — `RYK_TOOL_PACK=essentials|none` (default **essentials** under attach; set `none` to disable). When essentials is on, ryk resolves existing host files and adds **file-only** `.exec` grants (link path + realpath, never bare `$HOME` or package trees):
    - `rg`, `fd`, `jq` (when present on host PATH)
    - project `./scripts/zig` when present, else `zig` on PATH
    - `git` (so shim + real binary can exec)

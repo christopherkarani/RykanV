@@ -334,7 +334,7 @@ fn parseHost(name: []const u8) ?scan_lib.types.Host {
     if (std.mem.eql(u8, name, "pi")) return .pi;
     if (std.mem.eql(u8, name, "opencode")) return .opencode;
     if (std.mem.eql(u8, name, "grok")) return .grok;
-    if (std.mem.eql(u8, name, "ryk") or std.mem.eql(u8, name, "orca")) return .ryk;
+    if (std.mem.eql(u8, name, "ryk")) return .ryk;
     return null;
 }
 
