@@ -187,6 +187,6 @@ Report vulnerabilities privately through [SECURITY.md](../../SECURITY.md).
 
 ## Support
 
-- Issues: [https://github.com/christopherkarani/rykan/issues](https://github.com/christopherkarani/rykan/issues)
+- Issues: [https://github.com/christopherkarani/ryk/issues](https://github.com/christopherkarani/ryk/issues)
 - Docs: [docs/integrations/openclaw.md](openclaw.md)
 - Security: [SECURITY.md](../../SECURITY.md)

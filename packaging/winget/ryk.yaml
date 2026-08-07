@@ -5,7 +5,7 @@ PackageName: ryk
 Publisher: Chris Karani
 License: Apache-2.0
 ShortDescription: Local runtime firewall for AI agents.
-PackageUrl: https://github.com/christopherkarani/rykan
+PackageUrl: https://github.com/christopherkarani/ryk
 ManifestType: singleton
 ManifestVersion: 1.6.0
 Installers:
@@ -15,6 +15,6 @@ Installers:
     NestedInstallerFiles:
       - RelativeFilePath: ryk-v1.2.9-windows-amd64\bin\ryk.exe
         PortableCommandAlias: ryk
-    InstallerUrl: https://github.com/christopherkarani/rykan/releases/download/v1.2.9/ryk-v1.2.9-windows-amd64.zip
+    InstallerUrl: https://github.com/christopherkarani/ryk/releases/download/v1.2.9/ryk-v1.2.9-windows-amd64.zip
     InstallerSha256: PLACEHOLDER_WINDOWS_AMD64_SHA256
 ReleaseNotes: Canonical ryk CLI. Verify checksums.txt before publishing.

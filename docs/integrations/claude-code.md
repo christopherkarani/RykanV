@@ -63,13 +63,13 @@ zig build
 If your Claude Code version supports repo marketplace sources, add this repository:
 
 ```bash
-claude plugin marketplace add christopherkarani/rykan
+claude plugin marketplace add christopherkarani/ryk
 claude plugin install ryk@ryk-local-plugins --scope user
 ```
 
 Or inside Claude Code:
 ```text
-/plugin marketplace add christopherkarani/rykan
+/plugin marketplace add christopherkarani/ryk
 /plugin install ryk@ryk-local-plugins
 /reload-plugins
 ```

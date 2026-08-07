@@ -13,14 +13,14 @@ const danger_confirmation = @import("danger_confirmation.zig");
 const suggestions = @import("suggestions.zig");
 const env_util = @import("../env_util.zig");
 
-pub const github_latest_url = "https://api.github.com/repos/christopherkarani/rykan/releases/latest";
+pub const github_latest_url = "https://api.github.com/repos/christopherkarani/ryk/releases/latest";
 /// Fallback when no target version is known (should be rare — prefer tag-pinned URLs).
-pub const install_script_url_main = "https://raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh";
-pub const install_ps1_url_main = "https://raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.ps1";
+pub const install_script_url_main = "https://raw.githubusercontent.com/christopherkarani/ryk/main/scripts/install.sh";
+pub const install_ps1_url_main = "https://raw.githubusercontent.com/christopherkarani/ryk/main/scripts/install.ps1";
 /// Back-compat alias used in user-facing manual recovery messages.
 pub const install_script_url = install_script_url_main;
 pub const install_ps1_url = install_ps1_url_main;
-pub const docs_install_url = "https://github.com/christopherkarani/rykan/blob/main/docs/install.md";
+pub const docs_install_url = "https://github.com/christopherkarani/ryk/blob/main/docs/install.md";
 
 /// Pin installer script to the release tag that matches `target_version` (no leading `v`).
 pub fn installScriptUrlForVersion(allocator: std.mem.Allocator, target_version: []const u8, windows: bool) ![]u8 {
@@ -31,13 +31,13 @@ pub fn installScriptUrlForVersion(allocator: std.mem.Allocator, target_version: 
     if (windows) {
         return try std.fmt.allocPrint(
             allocator,
-            "https://raw.githubusercontent.com/christopherkarani/rykan/v{s}/scripts/install.ps1",
+            "https://raw.githubusercontent.com/christopherkarani/ryk/v{s}/scripts/install.ps1",
             .{tag},
         );
     }
     return try std.fmt.allocPrint(
         allocator,
-        "https://raw.githubusercontent.com/christopherkarani/rykan/v{s}/scripts/install.sh",
+        "https://raw.githubusercontent.com/christopherkarani/ryk/v{s}/scripts/install.sh",
         .{tag},
     );
 }
@@ -225,7 +225,7 @@ pub fn packageManagerHint(channel: InstallChannel) []const u8 {
         .npm => "npm update -g @rykan/ryk",
         .scoop => "scoop update ryk",
         .winget => "winget upgrade ryk",
-        .curl_installer, .unknown => "curl -fsSL https://raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh | sh",
+        .curl_installer, .unknown => "curl -fsSL https://raw.githubusercontent.com/christopherkarani/ryk/main/scripts/install.sh | sh",
     };
 }
 
@@ -629,7 +629,7 @@ fn writeCheckResult(
     return exit_codes.success;
 }
 
-const github_latest_html_url = "https://github.com/christopherkarani/rykan/releases/latest";
+const github_latest_html_url = "https://github.com/christopherkarani/ryk/releases/latest";
 
 fn fetchGitHubLatest(allocator: std.mem.Allocator, io: std.Io) ![]u8 {
     var ua_header: [80]u8 = undefined;
@@ -956,13 +956,13 @@ test "installScriptUrlForVersion pins release tag" {
     const sh = try installScriptUrlForVersion(std.testing.allocator, "1.3.0", false);
     defer std.testing.allocator.free(sh);
     try std.testing.expectEqualStrings(
-        "https://raw.githubusercontent.com/christopherkarani/rykan/v1.3.0/scripts/install.sh",
+        "https://raw.githubusercontent.com/christopherkarani/ryk/v1.3.0/scripts/install.sh",
         sh,
     );
     const ps1 = try installScriptUrlForVersion(std.testing.allocator, "v2.0.0", true);
     defer std.testing.allocator.free(ps1);
     try std.testing.expectEqualStrings(
-        "https://raw.githubusercontent.com/christopherkarani/rykan/v2.0.0/scripts/install.ps1",
+        "https://raw.githubusercontent.com/christopherkarani/ryk/v2.0.0/scripts/install.ps1",
         ps1,
     );
 }
@@ -986,7 +986,7 @@ test "channelAllowsInstaller respects force" {
 
 test "parseGitHubLatestTag extracts version" {
     const body =
-        \\{"url":"https://api.github.com/repos/christopherkarani/rykan/releases/123","tag_name":"v1.2.9","name":"1.2.9"}
+        \\{"url":"https://api.github.com/repos/christopherkarani/ryk/releases/123","tag_name":"v1.2.9","name":"1.2.9"}
     ;
     try std.testing.expectEqualStrings("1.2.9", try parseGitHubLatestTag(body));
     try std.testing.expectEqualStrings("2.0.0", try parseGitHubLatestTag("{\"tag_name\": \"2.0.0\"}"));
@@ -1009,13 +1009,13 @@ test "packageManagerHint is non-empty" {
 test "tagFromReleaseUrl strips path prefix and v" {
     try std.testing.expectEqualStrings(
         "1.2.9",
-        tagFromReleaseUrl("https://github.com/christopherkarani/rykan/releases/tag/v1.2.9").?,
+        tagFromReleaseUrl("https://github.com/christopherkarani/ryk/releases/tag/v1.2.9").?,
     );
     try std.testing.expectEqualStrings(
         "2.0.0",
-        tagFromReleaseUrl("https://github.com/christopherkarani/rykan/releases/tag/2.0.0\n").?,
+        tagFromReleaseUrl("https://github.com/christopherkarani/ryk/releases/tag/2.0.0\n").?,
     );
-    try std.testing.expect(tagFromReleaseUrl("https://github.com/christopherkarani/rykan/releases") == null);
+    try std.testing.expect(tagFromReleaseUrl("https://github.com/christopherkarani/ryk/releases") == null);
 }
 
 test "writeJsonResult escapes hostile target strings" {

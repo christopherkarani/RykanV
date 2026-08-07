@@ -63,7 +63,7 @@ zig build
 If your Codex version supports repo marketplace sources, add this repository:
 
 ```bash
-codex plugin marketplace add christopherkarani/rykan
+codex plugin marketplace add christopherkarani/ryk
 ```
 
 Then install ryk from Codex's plugin UI/directory after adding the marketplace.

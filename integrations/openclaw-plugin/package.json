@@ -30,11 +30,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/christopherkarani/rykan.git"
+    "url": "git+https://github.com/christopherkarani/ryk.git"
   },
-  "homepage": "https://github.com/christopherkarani/rykan#readme",
+  "homepage": "https://github.com/christopherkarani/ryk#readme",
   "bugs": {
-    "url": "https://github.com/christopherkarani/rykan/issues"
+    "url": "https://github.com/christopherkarani/ryk/issues"
   },
   "openclaw": {
     "extensions": [

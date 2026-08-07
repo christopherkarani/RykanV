@@ -2,7 +2,7 @@ FROM ubuntu:24.04@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae
 
 LABEL org.opencontainers.image.title="ryk CI"
 LABEL org.opencontainers.image.description="ryk CLI and runtime resources for CI (shell_engine in-process)."
-LABEL org.opencontainers.image.source="https://github.com/christopherkarani/rykan"
+LABEL org.opencontainers.image.source="https://github.com/christopherkarani/ryk"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates git bash coreutils \

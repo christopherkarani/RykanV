@@ -28,14 +28,7 @@ Cada acción produce una decisión `allow`, `ask`, `deny` u `observe`. Las sesio
 curl -fsSL https://rykanv.com/install | sh
 ```
 
-Después de activar `ryk` en tu `PATH`:
-
-```sh
-ryk start
-ryk doctor
-```
-
-`ryk start` crea una política si no existe, detecta los agentes instalados, configura sus integraciones y verifica el evaluador de shell.
+Después de activar `ryk` en tu `PATH`, inicia un agente mediante `ryk <agent>`.
 
 ## Iniciar un agente
 
@@ -52,6 +45,12 @@ También hay rutas para OpenClaw y Grok:
 ```sh
 ryk openclaw
 ryk grok
+```
+
+Comprueba el estado local cuando lo necesites:
+
+```sh
+ryk doctor
 ```
 
 Las integraciones principales son Pi, Hermes, OpenCode, Codex y Claude. El onboarding también detecta Cursor para el descubrimiento del host.
@@ -134,9 +133,9 @@ Lee [`CONTRIBUTING.md`](CONTRIBUTING.md) antes de abrir un pull request. Los pro
 
 - [Sitio web](https://rykanv.com/)
 - [Discord](https://discord.gg/uZn9MDUYKx)
-- [Issues](https://github.com/christopherkarani/RykanV/issues)
+- [Issues](https://github.com/christopherkarani/ryk/issues)
 
-Si ryk te resulta útil, [marca el repositorio con una estrella](https://github.com/christopherkarani/RykanV). Ayuda a que otros ingenieros encuentren el proyecto.
+Si ryk te resulta útil, [marca el repositorio con una estrella](https://github.com/christopherkarani/ryk). Ayuda a que otros ingenieros encuentren el proyecto.
 
 ## Licencia
 

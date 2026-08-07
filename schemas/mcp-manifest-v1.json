@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/christopherkarani/rykan/schemas/mcp-manifest-v1.json",
+  "$id": "https://github.com/christopherkarani/ryk/schemas/mcp-manifest-v1.json",
   "title": "ryk MCP Manifest v1",
   "type": "object",
   "additionalProperties": false,

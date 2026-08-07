@@ -32,7 +32,7 @@ Do not use an install-only path without verification. Download the archive, veri
 
 ## Homebrew
 
-Homebrew distribution uses the `christopherkarani/homebrew-ryk` tap and the GitHub Release archives from `christopherkarani/rykan`.
+Homebrew distribution uses the `christopherkarani/homebrew-ryk` tap and the GitHub Release archives from `christopherkarani/ryk`.
 
 Maintainer release flow:
 

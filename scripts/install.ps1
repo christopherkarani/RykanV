@@ -22,7 +22,7 @@ if (-not $Version) {
     }
 }
 if (-not $BaseUrl) {
-    $BaseUrl = "https://github.com/christopherkarani/rykan/releases/download/v$Version"
+    $BaseUrl = "https://github.com/christopherkarani/ryk/releases/download/v$Version"
 }
 
 $ResourceRoot = if ($env:RYK_RESOURCE_ROOT) { $env:RYK_RESOURCE_ROOT } else { Join-Path $ShareDir $Version }

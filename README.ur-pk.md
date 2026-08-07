@@ -28,14 +28,7 @@ ryk ایک local control layer ہے جو ان agents کے لیے ہے جنہیں
 curl -fsSL https://rykanv.com/install | sh
 ```
 
-`ryk` کو اپنے `PATH` میں فعال کرنے کے بعد:
-
-```sh
-ryk start
-ryk doctor
-```
-
-اگر policy موجود نہ ہو تو `ryk start` اسے بناتا ہے، installed agent hosts تلاش کرتا ہے، integrations configure کرتا ہے اور shell verification چلاتا ہے۔
+`ryk` کو اپنے `PATH` میں فعال کرنے کے بعد `ryk <agent>` کے ذریعے agent چلائیں۔
 
 ## Agent چلائیں
 
@@ -52,6 +45,12 @@ OpenClaw اور Grok کے لیے بھی launch paths موجود ہیں:
 ```sh
 ryk openclaw
 ryk grok
+```
+
+جب ضرورت ہو تو local posture دیکھیں:
+
+```sh
+ryk doctor
 ```
 
 اہم integrations Pi، Hermes، OpenCode، Codex اور Claude کے لیے ہیں۔ Onboarding host discovery کے لیے Cursor کو بھی detect کرتا ہے۔
@@ -134,9 +133,9 @@ Pull request سے پہلے [`CONTRIBUTING.md`](CONTRIBUTING.md) پڑھیں۔ Sec
 
 - [ویب سائٹ](https://rykanv.com/)
 - [Discord](https://discord.gg/uZn9MDUYKx)
-- [GitHub issues](https://github.com/christopherkarani/RykanV/issues)
+- [GitHub issues](https://github.com/christopherkarani/ryk/issues)
 
-اگر ryk آپ کے agent workflow میں مفید ہے تو [repository کو star کریں](https://github.com/christopherkarani/RykanV)، تاکہ دوسرے engineers بھی اسے تلاش کر سکیں۔
+اگر ryk آپ کے agent workflow میں مفید ہے تو [repository کو star کریں](https://github.com/christopherkarani/ryk)، تاکہ دوسرے engineers بھی اسے تلاش کر سکیں۔
 
 ## License
 

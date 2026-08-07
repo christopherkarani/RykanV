@@ -1,25 +1,25 @@
 class Ryk < Formula
   desc "Local runtime firewall for AI agents"
-  homepage "https://github.com/christopherkarani/rykan"
+  homepage "https://github.com/christopherkarani/ryk"
   version "1.2.9"
   license "Apache-2.0"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/christopherkarani/rykan/releases/download/v#{version}/ryk-v#{version}-darwin-arm64.tar.gz"
+      url "https://github.com/christopherkarani/ryk/releases/download/v#{version}/ryk-v#{version}-darwin-arm64.tar.gz"
       sha256 "{{DARWIN_ARM64_SHA256}}"
     else
-      url "https://github.com/christopherkarani/rykan/releases/download/v#{version}/ryk-v#{version}-darwin-amd64.tar.gz"
+      url "https://github.com/christopherkarani/ryk/releases/download/v#{version}/ryk-v#{version}-darwin-amd64.tar.gz"
       sha256 "{{DARWIN_AMD64_SHA256}}"
     end
   end
 
   on_linux do
     if Hardware::CPU.arm?
-      url "https://github.com/christopherkarani/rykan/releases/download/v#{version}/ryk-v#{version}-linux-arm64.tar.gz"
+      url "https://github.com/christopherkarani/ryk/releases/download/v#{version}/ryk-v#{version}-linux-arm64.tar.gz"
       sha256 "{{LINUX_ARM64_SHA256}}"
     else
-      url "https://github.com/christopherkarani/rykan/releases/download/v#{version}/ryk-v#{version}-linux-amd64.tar.gz"
+      url "https://github.com/christopherkarani/ryk/releases/download/v#{version}/ryk-v#{version}-linux-amd64.tar.gz"
       sha256 "{{LINUX_AMD64_SHA256}}"
     end
   end

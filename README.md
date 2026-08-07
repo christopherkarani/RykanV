@@ -16,9 +16,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/christopherkarani/RykanV/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/christopherkarani/RykanV/build.yml?label=build" alt="Build status"></a>
-  <a href="https://github.com/christopherkarani/RykanV/blob/main/LICENSE"><img src="https://img.shields.io/github/license/christopherkarani/RykanV" alt="Apache 2.0 license"></a>
-  <a href="https://github.com/christopherkarani/RykanV"><img src="https://img.shields.io/github/stars/christopherkarani/RykanV?style=flat" alt="GitHub stars"></a>
+  <a href="https://github.com/christopherkarani/ryk/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/christopherkarani/ryk/build.yml?label=build" alt="Build status"></a>
+  <a href="https://github.com/christopherkarani/ryk/blob/main/LICENSE"><img src="https://img.shields.io/github/license/christopherkarani/ryk" alt="Apache 2.0 license"></a>
+  <a href="https://github.com/christopherkarani/ryk"><img src="https://img.shields.io/github/stars/christopherkarani/ryk?style=flat" alt="GitHub stars"></a>
 </p>
 
 # ryk
@@ -29,7 +29,7 @@ ryk is a local control layer for the agents engineers already use. Launch Pi, He
 
 The result is a clear path from agent to action: allow, ask, deny, or observe. Sessions leave a local audit trail that you can inspect with `ryk dashboard` or `ryk replay`.
 
-If you run coding agents in real repositories, [star the project](https://github.com/christopherkarani/RykanV). It helps other engineers find the project and gives us a useful signal on which host integrations to prioritize.
+If you run coding agents in real repositories, [star the project](https://github.com/christopherkarani/ryk). It helps other engineers find the project and gives us a useful signal on which host integrations to prioritize.
 
 ## What you get
 
@@ -47,19 +47,7 @@ If you run coding agents in real repositories, [star the project](https://github
 curl -fsSL https://rykanv.com/install | sh
 ```
 
-The installer prints the shell activation line for your platform. Once `ryk` is on your `PATH`, start setup:
-
-```sh
-ryk start
-```
-
-`ryk start` creates a policy when one is missing, detects installed agent hosts, configures their integrations, and runs the shell verification path. It is safe to run again when you add another host.
-
-Check the local posture:
-
-```sh
-ryk doctor
-```
+The installer prints the shell activation line for your platform. Once `ryk` is on your `PATH`, launch an agent through `ryk <agent>`.
 
 ## Start an agent
 
@@ -76,6 +64,12 @@ ryk hermes
 ryk opencode
 ryk codex
 ryk claude
+```
+
+Check the local posture when you need it:
+
+```sh
+ryk doctor
 ```
 
 The aliases set agent-primary defaults for network mediation, OS route enforcement, and the secret boundary. Use `ryk run -- <command>` when you need to run a command that is not one of the host aliases.
@@ -212,9 +206,9 @@ Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a pull request. For sec
 
 - [Website](https://rykanv.com/)
 - [Discord](https://discord.gg/uZn9MDUYKx)
-- [GitHub issues](https://github.com/christopherkarani/RykanV/issues)
+- [GitHub issues](https://github.com/christopherkarani/ryk/issues)
 
-If ryk is useful in your agent workflow, [star the repository](https://github.com/christopherkarani/RykanV) and share what you are running. A star is a small action that helps the project reach the engineers who need this boundary.
+If ryk is useful in your agent workflow, [star the repository](https://github.com/christopherkarani/ryk) and share what you are running. A star is a small action that helps the project reach the engineers who need this boundary.
 
 ## License
 

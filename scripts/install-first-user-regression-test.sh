@@ -457,9 +457,9 @@ grep -qF 'version "1.2.9"' "${REPO_ROOT}/packaging/homebrew/Formula/ryk.rb" ||
   fail "primary Homebrew formula version does not match VERSION"
 grep -qF 'brew install christopherkarani/ryk/ryk' "${REPO_ROOT}/packaging/homebrew/README.md" ||
   fail "Homebrew README does not provide a one-line primary ryk install"
-grep -qF 'raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh' "${INSTALL_SH}" ||
+grep -qF 'raw.githubusercontent.com/christopherkarani/ryk/main/scripts/install.sh' "${INSTALL_SH}" ||
   fail "curl installer guidance does not use the canonical rykan repository"
-grep -qF 'github.com/christopherkarani/rykan/releases/download' "${REPO_ROOT}/packaging/homebrew/Formula/ryk.rb" ||
+grep -qF 'github.com/christopherkarani/ryk/releases/download' "${REPO_ROOT}/packaging/homebrew/Formula/ryk.rb" ||
   fail "Homebrew release artifacts do not use the canonical rykan repository"
 if git -C "${REPO_ROOT}" grep -nE \
   'github\.com/(christopherkarani|chriskarani)/(orca|aegis|ryk-rs)([^A-Za-z0-9_-]|$)|raw\.githubusercontent\.com/(christopherkarani|chriskarani)/(orca|aegis|ryk-rs)/' \

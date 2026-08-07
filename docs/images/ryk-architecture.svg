@@ -1,58 +1,78 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 500" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 640" role="img" aria-labelledby="title desc">
   <title id="title">ryk architecture</title>
-  <desc id="desc">Agent hosts enter the ryk launch and adapter layer, then pass through policy and safety packs before reaching guarded effects and local evidence.</desc>
-  <rect width="1500" height="500" rx="20" fill="#0b1220"/>
-  <path d="M0 100H1500M0 200H1500M0 300H1500M0 400H1500" stroke="#17243a" stroke-width="2"/>
-  <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">
-    <text x="62" y="56" fill="#8fa5bd" font-size="16" font-weight="700" letter-spacing="2">HOSTS</text>
-    <text x="356" y="56" fill="#8fa5bd" font-size="16" font-weight="700" letter-spacing="2">RYK LAUNCH + ADAPTERS</text>
-    <text x="708" y="56" fill="#8fa5bd" font-size="16" font-weight="700" letter-spacing="2">POLICY PATH</text>
-    <text x="1056" y="56" fill="#8fa5bd" font-size="16" font-weight="700" letter-spacing="2">GUARDED EFFECTS</text>
-    <text x="1308" y="56" fill="#8fa5bd" font-size="16" font-weight="700" letter-spacing="2">EVIDENCE</text>
+  <desc id="desc">Five coding-agent hosts enter ryk, pass through local policy, reach guarded effects, and produce local evidence.</desc>
+  <rect width="1600" height="640" rx="24" fill="#050505"/>
+
+  <g font-family="Geist, ui-sans-serif, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">
+    <g fill="#a1a1aa" font-size="16" font-weight="600" letter-spacing="3">
+      <text x="170" y="66" text-anchor="middle">HOSTS</text>
+      <text x="480" y="66" text-anchor="middle">RYK LAUNCH</text>
+      <text x="790" y="66" text-anchor="middle">POLICY</text>
+      <text x="1100" y="66" text-anchor="middle">GUARDED EFFECTS</text>
+      <text x="1410" y="66" text-anchor="middle">EVIDENCE</text>
+    </g>
+
+    <g fill="#0a0a0a" stroke="#2a2a2a" stroke-width="2">
+      <rect x="64" y="112" width="212" height="56" rx="12"/>
+      <rect x="64" y="188" width="212" height="56" rx="12"/>
+      <rect x="64" y="264" width="212" height="56" rx="12"/>
+      <rect x="64" y="340" width="212" height="56" rx="12"/>
+      <rect x="64" y="416" width="212" height="56" rx="12"/>
+
+      <rect x="370" y="196" width="220" height="244" rx="16" stroke="#ededed"/>
+      <rect x="680" y="170" width="220" height="292" rx="16" stroke="#ededed"/>
+      <rect x="990" y="196" width="220" height="244" rx="16" stroke="#ededed"/>
+      <rect x="1300" y="196" width="220" height="244" rx="16" stroke="#ededed"/>
+    </g>
+
+    <g fill="#f5f5f5" font-size="20" font-weight="600" text-anchor="middle">
+      <text x="170" y="147">Pi</text>
+      <text x="170" y="223">Hermes</text>
+      <text x="170" y="299">OpenCode</text>
+      <text x="170" y="375">Codex</text>
+      <text x="170" y="451">Claude</text>
+    </g>
+
+    <g font-size="19" text-anchor="middle">
+      <text x="480" y="282" fill="#ededed" font-weight="600">ryk &lt;agent&gt;</text>
+      <text x="480" y="326" fill="#d4d4d8">session boundary</text>
+      <text x="480" y="362" fill="#d4d4d8">host hooks</text>
+      <text x="480" y="398" fill="#d4d4d8">tool events</text>
+
+      <text x="790" y="254" fill="#ededed" font-weight="600">local policy</text>
+      <text x="790" y="298" fill="#d4d4d8">rules + mode</text>
+      <text x="790" y="336" fill="#d4d4d8">86 safety packs</text>
+      <text x="790" y="390" fill="#f5f5f5" font-weight="600">allow · ask · deny</text>
+
+      <text x="1100" y="282" fill="#ededed" font-weight="600">commands</text>
+      <text x="1100" y="326" fill="#d4d4d8">files · env</text>
+      <text x="1100" y="370" fill="#d4d4d8">network · tools</text>
+
+      <text x="1410" y="282" fill="#ededed" font-weight="600">audit</text>
+      <text x="1410" y="326" fill="#d4d4d8">replay</text>
+      <text x="1410" y="370" fill="#d4d4d8">dashboard</text>
+    </g>
   </g>
-  <g fill="#12233a" stroke="#2b4567" stroke-width="2">
-    <rect x="48" y="82" width="220" height="52" rx="10"/><rect x="48" y="150" width="220" height="52" rx="10"/>
-    <rect x="48" y="218" width="220" height="52" rx="10"/><rect x="48" y="286" width="220" height="52" rx="10"/>
-    <rect x="48" y="354" width="220" height="52" rx="10"/>
-    <rect x="342" y="128" width="284" height="184" rx="14" stroke="#65e6c1"/>
-    <rect x="694" y="92" width="284" height="256" rx="14" stroke="#65e6c1"/>
-    <rect x="1044" y="128" width="220" height="184" rx="14"/>
-    <rect x="1296" y="128" width="156" height="184" rx="14"/>
-    <rect x="694" y="382" width="284" height="58" rx="12"/>
+
+  <g fill="none" stroke="#ededed" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M276 140H326V240H370"/>
+    <path d="M276 216H344V276H370"/>
+    <path d="M276 292H370"/>
+    <path d="M276 368H344V336H370"/>
+    <path d="M276 444H326V372H370"/>
+    <path d="M590 318H680"/>
+    <path d="M900 318H990"/>
+    <path d="M1210 318H1300"/>
   </g>
-  <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="18" font-weight="700">
-    <text x="158" y="115" text-anchor="middle" fill="#f4f7fb">Pi</text>
-    <text x="158" y="183" text-anchor="middle" fill="#f4f7fb">Hermes</text>
-    <text x="158" y="251" text-anchor="middle" fill="#f4f7fb">OpenCode</text>
-    <text x="158" y="319" text-anchor="middle" fill="#f4f7fb">Codex · Claude</text>
-    <text x="158" y="387" text-anchor="middle" fill="#f4f7fb">Other host aliases</text>
-    <text x="484" y="180" text-anchor="middle" fill="#65e6c1">ryk &lt;agent&gt;</text>
-    <text x="484" y="214" text-anchor="middle" fill="#d9e5f2" font-size="16" font-weight="500">session boundary</text>
-    <text x="484" y="242" text-anchor="middle" fill="#d9e5f2" font-size="16" font-weight="500">host hooks</text>
-    <text x="484" y="270" text-anchor="middle" fill="#d9e5f2" font-size="16" font-weight="500">tool events</text>
-    <text x="836" y="142" text-anchor="middle" fill="#65e6c1">local policy</text>
-    <text x="836" y="178" text-anchor="middle" fill="#d9e5f2" font-size="16" font-weight="500">rules + mode</text>
-    <text x="836" y="208" text-anchor="middle" fill="#d9e5f2" font-size="16" font-weight="500">86 safety packs</text>
-    <text x="836" y="238" text-anchor="middle" fill="#d9e5f2" font-size="16" font-weight="500">surface + effect</text>
-    <text x="836" y="278" text-anchor="middle" fill="#f4f7fb">allow · ask · deny</text>
-    <text x="836" y="416" text-anchor="middle" fill="#d9e5f2" font-size="16">observe, ask, strict, ci</text>
-    <text x="1154" y="180" text-anchor="middle" fill="#65e6c1">commands</text>
-    <text x="1154" y="214" text-anchor="middle" fill="#d9e5f2" font-size="16" font-weight="500">files · env</text>
-    <text x="1154" y="248" text-anchor="middle" fill="#d9e5f2" font-size="16" font-weight="500">network · tools</text>
-    <text x="1154" y="282" text-anchor="middle" fill="#d9e5f2" font-size="16" font-weight="500">sandbox paths</text>
-    <text x="1374" y="190" text-anchor="middle" fill="#65e6c1">audit</text>
-    <text x="1374" y="226" text-anchor="middle" fill="#d9e5f2" font-size="16" font-weight="500">replay</text>
-    <text x="1374" y="262" text-anchor="middle" fill="#d9e5f2" font-size="16" font-weight="500">dashboard</text>
-  </g>
-  <g stroke="#65e6c1" stroke-width="3" fill="none">
-    <path d="M268 108H342M268 176H342M268 244H342M268 312H342M268 380H342"/>
-    <path d="M626 220H694"/>
-    <path d="M978 220H1044"/>
-    <path d="M1264 220H1296"/>
-    <path d="M836 348V382"/>
-  </g>
-  <g fill="#65e6c1">
-    <circle cx="342" cy="108" r="5"/><circle cx="342" cy="176" r="5"/><circle cx="342" cy="244" r="5"/><circle cx="342" cy="312" r="5"/><circle cx="342" cy="380" r="5"/>
-    <circle cx="694" cy="220" r="5"/><circle cx="1044" cy="220" r="5"/><circle cx="1296" cy="220" r="5"/><circle cx="836" cy="382" r="5"/>
+
+  <g fill="#ededed">
+    <circle cx="370" cy="240" r="6"/>
+    <circle cx="370" cy="276" r="6"/>
+    <circle cx="370" cy="292" r="6"/>
+    <circle cx="370" cy="336" r="6"/>
+    <circle cx="370" cy="372" r="6"/>
+    <circle cx="680" cy="318" r="6"/>
+    <circle cx="990" cy="318" r="6"/>
+    <circle cx="1300" cy="318" r="6"/>
   </g>
 </svg>

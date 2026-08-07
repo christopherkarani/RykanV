@@ -83,7 +83,7 @@ clawhub package publish ./integrations/openclaw-plugin --family code-plugin --dr
 Output:
 ```json
 {
-  "source": "github:christopherkarani/rykan@p11-clawhub-submission-prep:integrations/openclaw-plugin",
+  "source": "github:christopherkarani/ryk@p11-clawhub-submission-prep:integrations/openclaw-plugin",
   "name": "ryk-openclaw-plugin",
   "displayName": "ryk",
   "family": "code-plugin",

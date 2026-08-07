@@ -1,11 +1,11 @@
 {
   "version": "1.2.9",
   "description": "Local runtime firewall for AI agents (canonical binary: ryk).",
-  "homepage": "https://github.com/christopherkarani/rykan",
+  "homepage": "https://github.com/christopherkarani/ryk",
   "license": "Apache-2.0",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/christopherkarani/rykan/releases/download/v1.2.9/ryk-v1.2.9-windows-amd64.zip",
+      "url": "https://github.com/christopherkarani/ryk/releases/download/v1.2.9/ryk-v1.2.9-windows-amd64.zip",
       "hash": "PLACEHOLDER_WINDOWS_AMD64_SHA256"
     }
   },
@@ -13,12 +13,12 @@
     "ryk-v1.2.9-windows-amd64\\bin\\ryk.exe"
   ],
   "checkver": {
-    "github": "https://github.com/christopherkarani/rykan"
+    "github": "https://github.com/christopherkarani/ryk"
   },
   "autoupdate": {
     "architecture": {
       "64bit": {
-        "url": "https://github.com/christopherkarani/rykan/releases/download/v$version/ryk-v$version-windows-amd64.zip",
+        "url": "https://github.com/christopherkarani/ryk/releases/download/v$version/ryk-v$version-windows-amd64.zip",
         "hash": {
           "url": "$baseurl/checksums.txt"
         }

@@ -6,7 +6,7 @@ Copy this entire file into a new agent session, or run: `pbcopy < docs/dev/zig-0
 
 ---
 
-You are a senior Zig systems engineer maintaining the **ryk** repository (`christopherkarani/rykan`) on **Zig 0.16.0**.
+You are a senior Zig systems engineer maintaining the **ryk** repository (`christopherkarani/ryk`) on **Zig 0.16.0**.
 
 The 0.15-to-0.16 migration is complete. Do not re-open it as a migration task; use this prompt to verify current behavior and make narrowly scoped 0.16-compatible changes.
 

@@ -6,7 +6,7 @@ set -eu
 # Documented one-liner:
 #   curl -fsSL https://rykanv.com/install | sh
 # Fallback (same script, GitHub raw):
-#   curl -fsSL https://raw.githubusercontent.com/christopherkarani/rykan/main/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/christopherkarani/ryk/main/scripts/install.sh | sh
 #
 # Environment (RYK_* only (hard-cut)):
 #   RYK_VERSION         Pin release version (default: latest / local VERSION / 1.2.9)
@@ -116,7 +116,7 @@ fail() {
     done
   fi
   printf '\n' >&2
-  printf '  %sDocs%s  https://github.com/christopherkarani/rykan/blob/main/docs/install.md\n' "$C_DIM" "$C_RESET" >&2
+  printf '  %sDocs%s  https://github.com/christopherkarani/ryk/blob/main/docs/install.md\n' "$C_DIM" "$C_RESET" >&2
   exit 1
 }
 
@@ -163,12 +163,12 @@ elif [ -n "${DEFAULT_VERSION}" ]; then
   RESOLVED_FROM="local VERSION"
 else
   # Piped / non-filesystem path: best-effort latest release.
-  _url="https://api.github.com/repos/christopherkarani/rykan/releases/latest"
+  _url="https://api.github.com/repos/christopherkarani/ryk/releases/latest"
   _resp=""
   if command -v curl >/dev/null 2>&1; then
-    _resp="$(curl -fsSL --max-time 8 -H "User-Agent: ryk-install-script/1.0 (github.com/christopherkarani/rykan)" "$_url" 2>/dev/null || true)"
+    _resp="$(curl -fsSL --max-time 8 -H "User-Agent: ryk-install-script/1.0 (github.com/christopherkarani/ryk)" "$_url" 2>/dev/null || true)"
   elif command -v wget >/dev/null 2>&1; then
-    _resp="$(wget -qO- --timeout=8 --user-agent="ryk-install-script/1.0 (github.com/christopherkarani/rykan)" "$_url" 2>/dev/null || true)"
+    _resp="$(wget -qO- --timeout=8 --user-agent="ryk-install-script/1.0 (github.com/christopherkarani/ryk)" "$_url" 2>/dev/null || true)"
   fi
   if [ -n "${_resp:-}" ]; then
     _tag="$(printf '%s' "$_resp" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[vV]*[^"]*"' | head -n1 | \
@@ -181,7 +181,7 @@ else
 fi
 
 VERSION="${RYK_VERSION:-${DEFAULT_VERSION:-1.2.9}}"
-BASE_URL="${RYK_BASE_URL:-https://github.com/christopherkarani/rykan/releases/download/v${VERSION}}"
+BASE_URL="${RYK_BASE_URL:-https://github.com/christopherkarani/ryk/releases/download/v${VERSION}}"
 INSTALL_DIR="${RYK_INSTALL_DIR:-${HOME}/.local/bin}"
 SHARE_DIR="${RYK_SHARE_DIR:-${HOME}/.local/share/ryk}"
 RESOURCE_ROOT="${SHARE_DIR}/${VERSION}"
@@ -203,7 +203,7 @@ detect_os() {
     *) fail "unsupported operating system: ${RYK_OS_OVERRIDE:-$(uname -s)}" \
          "ryk's curl installer supports macOS and Linux only.
 Windows: use scripts/install.ps1
-Docs:    https://github.com/christopherkarani/rykan/blob/main/docs/install.md" ;;
+Docs:    https://github.com/christopherkarani/ryk/blob/main/docs/install.md" ;;
   esac
 }
 

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/christopherkarani/rykan/schemas/policy-v1.json",
+  "$id": "https://github.com/christopherkarani/ryk/schemas/policy-v1.json",
   "title": "ryk Policy v1",
   "type": "object",
   "additionalProperties": false,

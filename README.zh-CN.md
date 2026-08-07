@@ -28,14 +28,7 @@ ryk 是一个运行在本机的控制层，面向工程师已经在使用的编�
 curl -fsSL https://rykanv.com/install | sh
 ```
 
-让 `ryk` 出现在 `PATH` 后运行：
-
-```sh
-ryk start
-ryk doctor
-```
-
-如果没有策略文件，`ryk start` 会创建一个。它还会检测已安装的代理、配置集成并验证 shell evaluator。
+让 `ryk` 出现在 `PATH` 后，使用 `ryk <agent>` 启动代理。
 
 ## 启动代理
 
@@ -52,6 +45,12 @@ OpenClaw 和 Grok 也有对应的入口：
 ```sh
 ryk openclaw
 ryk grok
+```
+
+需要时检查本机状态：
+
+```sh
+ryk doctor
 ```
 
 主要集成包括 Pi、Hermes、OpenCode、Codex 和 Claude。Onboarding 也会检测 Cursor，用于发现主机环境。
@@ -134,9 +133,9 @@ ryk 使用 Zig 0.16.0。修改代码后运行这些检查：
 
 - [网站](https://rykanv.com/)
 - [Discord](https://discord.gg/uZn9MDUYKx)
-- [GitHub Issues](https://github.com/christopherkarani/RykanV/issues)
+- [GitHub Issues](https://github.com/christopherkarani/ryk/issues)
 
-如果 ryk 对你的代理工作有帮助，请给[仓库加星](https://github.com/christopherkarani/RykanV)，让更多工程师找到它。
+如果 ryk 对你的代理工作有帮助，请给[仓库加星](https://github.com/christopherkarani/ryk)，让更多工程师找到它。
 
 ## 许可证
 
