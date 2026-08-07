@@ -57,7 +57,6 @@ require_archive_binary() {
 
 disallowed_archive_path() {
   case "$1" in
-    */schemas/safety-report*|\
     */customer_pilot/*)
       return 0
       ;;
@@ -89,7 +88,7 @@ require_archive_excludes() {
 
     for path in $listing; do
       if disallowed_archive_path "$path"; then
-        fail "artifact $name contains Edge-only path: $path"
+        fail "artifact $name contains a private path: $path"
       fi
     done
   done

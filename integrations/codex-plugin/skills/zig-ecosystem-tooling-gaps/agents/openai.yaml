@@ -1,4 +1,0 @@
-interface:
-  display_name: "Zig Ecosystem Tooling Gaps"
-  short_description: "Mitigate current Zig ecosystem and tooling gaps"
-  default_prompt: "Use $zig-ecosystem-tooling-gaps to assess current Zig tooling risks and mitigations."

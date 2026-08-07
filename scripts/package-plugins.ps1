@@ -54,7 +54,7 @@ function Package-Plugin {
 
     # Remove unwanted files
     Get-ChildItem -Recurse -Force $tempDir | Where-Object {
-      $_.Name -match '\.DS_Store|\.mcp\.json|drone|build|tmp|secret'
+      $_.Name -match '\.DS_Store|\.mcp\.json|build|tmp|secret'
     } | Remove-Item -Recurse -Force
 
     Compress-Archive -Path (Join-Path $tempDir "*") -DestinationPath $ZipPath -Force

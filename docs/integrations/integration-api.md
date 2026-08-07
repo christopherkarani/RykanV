@@ -1,6 +1,5 @@
 # Integration API
 
-> Scope: P01, local integration contract for `ryk decide` and `ryk hook`
 > Version: 1.0.0
 
 ## Overview

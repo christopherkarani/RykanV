@@ -5,7 +5,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 RYK_BIN="$ROOT/zig-out/bin/ryk"
 
 if [ ! -x "$RYK_BIN" ]; then
-  echo "missing ryk binary at $RYK_BIN; run zig build first" >&2
+  echo "missing ryk binary at $RYK_BIN; run ./scripts/zig build first" >&2
   exit 1
 fi
 

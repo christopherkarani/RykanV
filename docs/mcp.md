@@ -53,7 +53,7 @@ Stdio MCP stdout must contain only newline-delimited JSON-RPC protocol messages.
 
 ## Remote/HTTP Status
 
-Remote HTTP MCP, OAuth, and hosted gateway support are not v1.1 defaults. Use stdio proxying unless docs for a future phase say otherwise.
+Remote HTTP MCP, OAuth, and hosted gateway support are not current defaults. Use stdio proxying unless a future release documents a supported alternative.
 
 ## Limitations
 

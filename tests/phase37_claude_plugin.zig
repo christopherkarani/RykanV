@@ -146,11 +146,6 @@ test "each claude skill references real ryk commands" {
     }
 }
 
-test "no drone skill exists in claude plugin" {
-    const drone_skill_path = plugin_dir ++ "/skills/drone/SKILL.md";
-    try std.testing.expect(!fileExists(drone_skill_path));
-}
-
 test "no mcp skill exists in claude plugin" {
     const mcp_skill_path = plugin_dir ++ "/skills/mcp/SKILL.md";
     try std.testing.expect(!fileExists(mcp_skill_path));
@@ -315,13 +310,6 @@ test "claude plugin README states no MCP server behavior" {
     try std.testing.expect(std.mem.indexOf(u8, content, "does not add MCP server behavior") != null);
 }
 
-test "claude plugin README states no drone plugin features" {
-    const content = try readFile(std.testing.allocator, readme_path);
-    defer std.testing.allocator.free(content);
-
-    try std.testing.expect(std.mem.indexOf(u8, content, "drone-specific plugin features") != null);
-}
-
 // ---------------------------------------------------------------------------
 // Docs content tests
 // ---------------------------------------------------------------------------
@@ -350,18 +338,6 @@ test "claude docs do not claim MCP support" {
     const lower = try std.ascii.allocLowerString(std.testing.allocator, content);
     defer std.testing.allocator.free(lower);
     try std.testing.expect(std.mem.indexOf(u8, lower, "mcp server") == null or std.mem.indexOf(u8, lower, "no mcp support") != null);
-}
-
-test "claude docs do not claim drone plugin support" {
-    const docs_path = "docs/integrations/claude-code.md";
-    if (!fileExists(docs_path)) return;
-
-    const content = try readFile(std.testing.allocator, docs_path);
-    defer std.testing.allocator.free(content);
-
-    const lower = try std.ascii.allocLowerString(std.testing.allocator, content);
-    defer std.testing.allocator.free(lower);
-    try std.testing.expect(std.mem.indexOf(u8, lower, "drone plugin") == null or std.mem.indexOf(u8, lower, "no drone plugin") != null);
 }
 
 // ---------------------------------------------------------------------------

@@ -53,7 +53,7 @@ npm install ryk-opencode-plugin
 If you are installing from the ryk repository:
 
 ```bash
-zig build
+./scripts/zig build
 ```
 
 ### Local project install
@@ -230,7 +230,7 @@ Run `ryk init --preset generic-agent` to create a default policy, then validate 
 
 ### ryk binary not found
 
-Build ryk with `zig build` or ensure `./zig-out/bin/ryk` is in your PATH.
+Build ryk with `./scripts/zig build` or ensure `./zig-out/bin/ryk` is in your PATH.
 
 ### Fake secret redaction questions
 
@@ -242,7 +242,7 @@ The plugin uses synthetic test secrets (e.g., `fake_p05_secret_value`) in fixtur
 - The strongest protection is `ryk opencode`.
 - Plugin installation is a preview/dry-run by default.
 - No telemetry is collected.
-- The OpenCode plugin does not add MCP server behavior or drone-specific plugin features.
+- The OpenCode plugin does not add MCP server behavior.
 
 ## Security model
 
@@ -260,7 +260,3 @@ This plugin does not collect telemetry. No usage data, session content, or metad
 ## No MCP behavior
 
 This plugin does not add MCP server behavior.
-
-## No drone features
-
-This plugin does not add drone-specific plugin features. A separate drone workstream exists in this repository under `packages/edge/`. The ryk OpenCode plugin does not expose or modify drone functionality.

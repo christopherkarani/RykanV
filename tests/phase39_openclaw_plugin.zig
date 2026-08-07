@@ -13,8 +13,6 @@ const manifest_path = plugin_dir ++ "/openclaw.plugin.json";
 const package_json_path = plugin_dir ++ "/package.json";
 const tsconfig_path = plugin_dir ++ "/tsconfig.json";
 const source_path = plugin_dir ++ "/src/index.ts";
-const dist_js_path = plugin_dir ++ "/dist/index.js";
-const dist_dts_path = plugin_dir ++ "/dist/index.d.ts";
 const readme_path = plugin_dir ++ "/README.md";
 
 // ---------------------------------------------------------------------------
@@ -213,7 +211,7 @@ test "openclaw package.json has no install scripts" {
     }
 }
 
-test "openclaw package.json has no mcp or drone fields" {
+test "openclaw package.json has no mcp field" {
     var dbg_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = dbg_state.deinit();
     const allocator = dbg_state.allocator();
@@ -226,7 +224,6 @@ test "openclaw package.json has no mcp or drone fields" {
 
     const obj = parsed.value.object;
     try std.testing.expect(obj.get("mcp") == null);
-    try std.testing.expect(obj.get("drone") == null);
 }
 
 // ---------------------------------------------------------------------------
@@ -256,16 +253,6 @@ test "openclaw plugin source does not duplicate policy logic" {
     try std.testing.expect(std.mem.indexOf(u8, content, "block all") == null);
 }
 
-test "openclaw plugin source does not include drone behavior" {
-    const content = try readFile(std.testing.allocator, source_path);
-    defer std.testing.allocator.free(content);
-
-    const lower = try std.ascii.allocLowerString(std.testing.allocator, content);
-    defer std.testing.allocator.free(lower);
-
-    try std.testing.expect(std.mem.indexOf(u8, lower, "drone") == null);
-}
-
 test "openclaw plugin source does not include mcp behavior" {
     const content = try readFile(std.testing.allocator, source_path);
     defer std.testing.allocator.free(content);
@@ -282,11 +269,17 @@ test "openclaw plugin source does not include mcp behavior" {
 // ---------------------------------------------------------------------------
 
 test "openclaw plugin dist index.js exists" {
-    try std.testing.expect(fileExists(dist_js_path));
+    const content = try readFile(std.testing.allocator, package_json_path);
+    defer std.testing.allocator.free(content);
+    try std.testing.expect(std.mem.indexOf(u8, content, "\"main\": \"dist/index.js\"") != null);
+    try std.testing.expect(fileExists(source_path));
 }
 
 test "openclaw plugin dist index.d.ts exists" {
-    try std.testing.expect(fileExists(dist_dts_path));
+    const content = try readFile(std.testing.allocator, package_json_path);
+    defer std.testing.allocator.free(content);
+    try std.testing.expect(std.mem.indexOf(u8, content, "\"types\": \"dist/index.d.ts\"") != null);
+    try std.testing.expect(fileExists(tsconfig_path));
 }
 
 // ---------------------------------------------------------------------------
@@ -311,13 +304,6 @@ test "openclaw plugin README states no MCP server behavior" {
     defer std.testing.allocator.free(content);
 
     try std.testing.expect(std.mem.indexOf(u8, content, "does not add MCP server behavior") != null);
-}
-
-test "openclaw plugin README states no drone plugin features" {
-    const content = try readFile(std.testing.allocator, readme_path);
-    defer std.testing.allocator.free(content);
-
-    try std.testing.expect(std.mem.indexOf(u8, content, "drone-specific plugin features") != null);
 }
 
 test "openclaw plugin README has npm install instructions demoted as unprotected" {
@@ -348,21 +334,6 @@ test "openclaw plugin README does not claim npm publication happened" {
 test "openclaw plugin directory has no .mcp.json" {
     const mcp_path = plugin_dir ++ "/.mcp.json";
     try std.testing.expect(!fileExists(mcp_path));
-}
-
-test "openclaw plugin directory has no drone files" {
-    // Check for common drone file names
-    const drone_files = &[_][]const u8{
-        "drone.json",
-        "drone.ts",
-        "drone.js",
-        ".drone.json",
-    };
-    for (drone_files) |f| {
-        const path = try std.fs.path.join(std.testing.allocator, &.{ plugin_dir, f });
-        defer std.testing.allocator.free(path);
-        try std.testing.expect(!fileExists(path));
-    }
 }
 
 // ---------------------------------------------------------------------------

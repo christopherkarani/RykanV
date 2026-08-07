@@ -67,9 +67,9 @@ pub fn build(b: *std.Build) void {
     const version = blk: {
         if (version_override) |v| break :blk v;
         const io = b.graph.io;
-        const version_file = std.Io.Dir.cwd().readFileAlloc(io, "VERSION", b.allocator, std.Io.Limit.limited(32)) catch break :blk "1.1.0";
+        const version_file = std.Io.Dir.cwd().readFileAlloc(io, "VERSION", b.allocator, std.Io.Limit.limited(32)) catch break :blk "1.2.9";
         const trimmed = std.mem.trim(u8, version_file, " \n\r\t");
-        const result = b.allocator.dupe(u8, trimmed) catch break :blk "1.1.0";
+        const result = b.allocator.dupe(u8, trimmed) catch break :blk "1.2.9";
         b.allocator.free(version_file);
         break :blk result;
     };
@@ -141,7 +141,7 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    // Product binary is `ryk` only (no legacy orca alias).
+    // Product binary is `ryk` only.
     const exe = b.addExecutable(.{
         .name = "ryk",
         .root_module = b.createModule(.{
@@ -374,14 +374,14 @@ pub fn build(b: *std.Build) void {
     daemon_ipc_hardening_tests.root_module.link_libc = true;
     const run_daemon_ipc_hardening_tests = addRunTestTerminal(b, daemon_ipc_hardening_tests);
 
-    const phase42_customer_acquisition_tests = b.addTest(.{
+    const public_surface_contract_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("tests/phase42_drone_customer_acquisition.zig"),
+            .root_source_file = b.path("tests/public_surface_contract.zig"),
             .target = target,
             .optimize = optimize,
         }),
     });
-    const run_phase42_customer_acquisition_tests = addRunTestTerminal(b, phase42_customer_acquisition_tests);
+    const run_public_surface_contract_tests = addRunTestTerminal(b, public_surface_contract_tests);
 
     const phase36_codex_plugin_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -569,7 +569,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_phase2f_hook_validation_tests.step);
     test_step.dependOn(&run_phase2510_gui_audit_feed_tests.step);
     test_step.dependOn(&run_phase_zh2_presentation_redaction_tests.step);
-    test_step.dependOn(&run_phase42_customer_acquisition_tests.step);
+    test_step.dependOn(&run_public_surface_contract_tests.step);
     test_step.dependOn(&run_phase36_codex_plugin_tests.step);
     test_step.dependOn(&run_phase37_claude_plugin_tests.step);
     test_step.dependOn(&run_phase38_plugin_security_tests.step);

@@ -23,23 +23,23 @@
 
 # ryk
 
-Run coding agents with guardrails.
+Local guardrails for coding agents.
 
-ryk is a local control layer for the coding agents engineers already use. Launch Pi, Hermes, OpenCode, Codex, Claude, OpenClaw, or Grok through `ryk <agent>`. Cursor is included in the supported host matrix with its `beforeShellExecution` surface and dedicated `cursor-agent` policy preset. The agent keeps its normal terminal and tool workflow while ryk evaluates commands, files, environment and secrets, network requests, MCP actions, and other effects against policy.
+ryk runs the agents you already use with local checks for commands, files, secrets, network requests, MCP actions, and other effects. It returns an explicit `allow`, `ask`, `deny`, or `observe` decision and keeps session evidence on your machine.
 
-The result is a clear path from agent to action: allow, ask, deny, or observe. Sessions leave a local audit trail that you can inspect with `ryk dashboard` or `ryk replay`.
+There is no hosted enforcement service. The CLI is a single Zig binary, and the same policy path serves the launch aliases, host integrations, shell evaluator, dashboard, and replay tools.
 
-If you run coding agents in real repositories, [star the project](https://github.com/christopherkarani/ryk). It helps other engineers find the project and gives us a useful signal on which host integrations to prioritize.
+If ryk is useful in your workflow, [star the repository](https://github.com/christopherkarani/ryk). It helps other engineers find the project.
 
 ## What you get
 
 | | |
 | --- | --- |
-| Host coverage | Guarded launch aliases for Pi, Hermes, OpenCode, Codex, Claude, OpenClaw, and Grok, plus Cursor host discovery and policy setup. |
-| 86 built-in safety packs | Command patterns for common destructive and sensitive operations, with focused packs you can enable per project. |
-| `allow`, `ask`, `deny`, `observe` | Policy decisions that are visible to the host and recorded for review. |
-| Local dashboard and replay | Inspect sessions, policy decisions, and evidence without sending the session to a hosted service. |
-| Zig CLI | A single local binary for launch, evaluation, policy checks, host adapters, and diagnostics. |
+| Host integrations | Launch aliases for Pi, Hermes, OpenCode, Codex, Claude Code, OpenClaw, and Grok. Cursor is supported through host discovery and its shell hook. |
+| 86 safety packs | Built-in command patterns for destructive and sensitive operations, with project-level opt-in packs. |
+| Policy decisions | `allow`, `ask`, `deny`, and `observe` decisions for local actions. |
+| Local evidence | A dashboard and replay commands for sessions, decisions, and audit records. |
+| One local binary | The Zig CLI owns launch, evaluation, policy checks, host adapters, and diagnostics. |
 
 ## Install
 
@@ -47,106 +47,95 @@ If you run coding agents in real repositories, [star the project](https://github
 curl -fsSL https://rykanv.com/install | sh
 ```
 
-The installer prints the shell activation line for your platform. Once `ryk` is on your `PATH`, launch an agent through `ryk <agent>`.
-
-## Start an agent
-
-Use the host name after `ryk`:
-
-```sh
-ryk pi
-```
-
-Launch aliases for the main hosts:
-
-```sh
-ryk hermes
-ryk opencode
-ryk codex
-ryk claude
-ryk grok
-```
-
-Cursor is included through its native `beforeShellExecution` hook surface and the dedicated `cursor-agent` policy preset. It is discovered during onboarding instead of using a direct launch alias.
-
-Check the local posture when you need it:
+The installer prints the shell activation line for your platform. After `ryk` is on your `PATH`, check the local posture:
 
 ```sh
 ryk doctor
 ```
 
-The aliases set agent-primary defaults for network mediation, OS route enforcement, and the secret boundary. Use `ryk run -- <command>` when you need to run a command that is not one of the host aliases.
+## Start an agent
+
+For a new checkout, `ryk start` creates the local policy and wires the host integrations it finds. Then launch an agent with its ryk alias:
+
+```sh
+ryk start
+ryk claude
+```
+
+The available process aliases are:
+
+```sh
+ryk pi
+ryk hermes
+ryk opencode
+ryk codex
+ryk claude
+ryk openclaw
+ryk grok
+```
+
+Cursor is discovered during onboarding. Its `beforeShellExecution` hook uses the `cursor-agent` policy preset; it does not have a direct `ryk cursor` launch alias.
 
 ### Supported hosts
 
-The host matrix covers eight supported hosts. Direct launch aliases are shown for process-based hosts. Hook-based hosts connect through their native entry point.
-
 | Host | Entry point | Integration point |
 | --- | --- | --- |
-| Pi | `ryk pi` | Extension-managed |
+| Pi | `ryk pi` | Bundled extension |
 | Hermes | `ryk hermes` | `pre_tool_call` |
 | OpenCode | `ryk opencode` | `tool.execute.before` |
 | Codex | `ryk codex` | `PreToolUse` |
 | Claude Code | `ryk claude` | `PreToolUse` |
 | OpenClaw | `ryk openclaw` | `tool.before` |
 | Grok | `ryk grok` | `PreToolUse` |
-| Cursor | Host discovery + `cursor-agent` preset | `beforeShellExecution` |
+| Cursor | Host discovery and `cursor-agent` preset | `beforeShellExecution` |
 
-Grok has a direct launch alias. Cursor is part of onboarding discovery and policy setup through its native shell-hook surface.
+The protection grade depends on the host surface and the platform. See the [compatibility matrix](docs/compatibility.md) before treating a hook, wrapper, proxy, or OS attach as equivalent.
 
 ## How policy works
 
-Every guarded action is evaluated on the local machine. The policy covers five surfaces:
+ryk evaluates each guarded action locally. The main policy surfaces are:
 
 | Surface | Examples |
 | --- | --- |
 | Commands | Shell commands, pipelines, redirects, and interpreters |
-| Files | Workspace reads and writes, project control files, and sensitive paths |
-| Environment | Environment inheritance and secret access |
+| Files | Workspace files, project control files, and sensitive paths |
+| Environment | Inherited variables and secret access |
 | Network | Host allowlists and mediated outbound connections |
 | Tools | MCP and host tool calls mapped to effects |
 
-The mode controls the response:
+The policy mode controls the response:
 
 | Mode | Behavior |
 | --- | --- |
-| `observe` | Log decisions without blocking supported actions |
-| `ask` | Prompt for risky actions when the host is interactive |
+| `observe` | Record decisions without blocking supported actions |
+| `ask` | Prompt for risky actions when the host can resume them |
 | `strict` | Deny unknown or risky actions unless a rule allows them |
-| `ci` | Run strict behavior without prompts. An `ask` becomes a deny. |
+| `ci` | Run strict behavior without prompts; `ask` becomes deny |
 
 Explicit deny rules take priority. Safety packs classify commands and effects, but they do not grant permission past a deny rule.
 
-Inspect the built-in policy presets:
+Validate a built-in preset:
 
 ```sh
 ryk policy check --preset ask
-ryk policy packs
 ```
 
-For the complete policy format, see [`docs/policy.md`](docs/policy.md).
+See the [policy reference](docs/policy.md) for policy files, priorities, and examples.
 
 ## Safety packs
 
-The shell engine ships with 86 built-in packs. The baseline enables the core packs and `system.disk`; extra packs are opt-in so a project can add coverage for the tools it uses.
-
-List packs and inspect a pack:
+Safety packs extend the shell evaluator with focused command coverage. Baseline packs such as `core.*` and `system.disk` are enabled by default.
 
 ```sh
 ryk packs
 ryk packs show core.git
-```
-
-Enable or disable packs by ID:
-
-```sh
 ryk packs enable containers.docker database.postgresql
 ryk packs disable containers.docker
 ```
 
-From a Git workspace, project pack choices are written to `.orca.toml`. Outside a Git workspace, ryk uses the user configuration. `ryk packs --json` is useful for scripts and diagnostics.
+In a Git workspace, project pack choices are stored in `.ryk.toml`. Use `ryk packs --json` for scripts and diagnostics.
 
-Test a command without running it:
+Test or explain a command without running it:
 
 ```sh
 ryk test "git status"
@@ -159,52 +148,58 @@ ryk explain "rm -rf /"
 The launch aliases, host adapters, shell evaluator, and policy engine share one local decision path.
 
 <p align="center">
-  <img src="docs/images/ryk-architecture.svg" alt="ryk architecture from agent hosts through policy to guarded effects and local evidence" width="100%">
+  <img src="docs/images/ryk-architecture.svg" alt="ryk architecture from agent hosts through local policy to guarded effects and evidence" width="100%">
 </p>
 
-1. The launch boundary starts a session with the agent-primary defaults.
-2. Host adapters send shell and tool events into the evaluator.
+1. A launch alias starts the agent with ryk's session defaults.
+2. Host adapters send shell and tool events to the evaluator.
 3. The evaluator combines policy rules, safety-pack matches, and the active mode.
-4. The result permits, asks about, observes, or denies the action.
-5. Session evidence feeds the local dashboard and replay commands.
-
-The core stays in the Zig CLI. Host adapters are thin integrations around the same policy path, so a rule is not specific to one agent’s UI.
+4. ryk allows, asks, observes, or denies the action.
+5. The session records local evidence for the dashboard and replay commands.
 
 ## Dashboard
 
-Start the local dashboard:
+Start the localhost dashboard:
 
 ```sh
 ryk dashboard
 ```
 
-Open [http://127.0.0.1:7742](http://127.0.0.1:7742) in your browser. The dashboard is localhost-only by default and uses the existing ryk policy and CLI paths.
+Open [http://127.0.0.1:7742](http://127.0.0.1:7742). The server is localhost-only by default and uses the existing ryk policy and CLI paths.
 
-For a one-request smoke test or automation:
+For smoke tests and automation, `--once` serves one request and then exits:
 
 ```sh
 ryk dashboard --once
 ```
 
+## Limits
+
+ryk is graded mediation, not a universal OS sandbox. Absolute-path binaries, non-shimmed tools, non-proxy traffic, and host hooks that do not fire can sit outside a particular enforcement surface. `ryk doctor` reports platform capability; it does not prove that a child session attached to an OS sandbox. Read the [compatibility matrix](docs/compatibility.md) and [threat model](docs/threat-model.md) before making a stronger claim.
+
+## Documentation
+
+Start with the [documentation index](docs/README.md). The most useful guides are:
+
+- [Install and release artifacts](docs/install.md)
+- [Quickstart](docs/quickstart.md)
+- [Commands](docs/commands.md)
+- [Policy](docs/policy.md)
+- [Credentials and secret handling](docs/credentials.md)
+- [MCP](docs/mcp.md)
+- [Platform notes](docs/platform-linux.md)
+
 ## Contributing
 
-ryk is built with Zig 0.16.0. After checking out the repository, verify the toolchain and run the focused checks:
+ryk is built with Zig 0.16.0. From a checkout:
 
 ```sh
 ./scripts/zig version
 ./scripts/compile-fast.sh check
-./scripts/zig build
 ./scripts/zig build test-shell-engine
 ```
 
-Useful areas to explore:
-
-- [`src/cli/`](src/cli/) for launch aliases, host integrations, and diagnostics
-- [`src/policy/`](src/policy/) for policy parsing and evaluation
-- [`src/shell_engine/`](src/shell_engine/) for the safety-pack registry and command evaluator
-- [`docs/`](docs/) for user-facing behavior and operational guides
-
-Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a pull request. For security issues, use [`SECURITY.md`](SECURITY.md).
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. For security issues, use [SECURITY.md](SECURITY.md).
 
 ## Community
 
@@ -212,8 +207,6 @@ Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a pull request. For sec
 - [Discord](https://discord.gg/uZn9MDUYKx)
 - [GitHub issues](https://github.com/christopherkarani/ryk/issues)
 
-If ryk is useful in your agent workflow, [star the repository](https://github.com/christopherkarani/ryk) and share what you are running. A star is a small action that helps the project reach the engineers who need this boundary.
-
 ## License
 
-Apache 2.0. See [`LICENSE`](LICENSE).
+Apache 2.0. See [LICENSE](LICENSE).

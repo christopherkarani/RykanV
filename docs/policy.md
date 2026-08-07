@@ -38,7 +38,7 @@ After an interactive **ask** that the user allows, ryk can record sticky trust s
 | **session** | Allow that fingerprint until process/session end |
 | **effect-class** | Allow a semantic effect-class id for the session |
 
-Sticky state is **in-memory for the session** only (no on-disk sticky in this phase). Critical / hard-fence denies are **never** recorded as sticky allows.
+Sticky state is **in-memory for the session** only. Critical and hard-fence denies are **never** recorded as sticky allows.
 
 **Host-owned sticky limitation (A5):** FM sticky scope hints (`ask_sticky_candidate` → suggested once/session/effect-class) apply only when ryk itself observes the ask→allow transition in-process — notably `ryk run` / shim paths that call `recordStickyFromAskWithHints` after the user approves. Claude, Codex, Pi, and similar host UIs that approve **outside** ryk do **not** automatically feed that allow back into the ryk sticky store unless the host integration explicitly records it (e.g. by calling the same sticky record path). Sticky session trust remains **in-memory for the process session only** — a new ryk process starts with an empty sticky store.
 

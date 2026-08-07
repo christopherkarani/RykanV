@@ -1,4 +1,0 @@
-interface:
-  display_name: "Zig Best Practices"
-  short_description: "Production-grade Zig guidance"
-  default_prompt: "Use -best-practices to review this Zig code for allocator, error, build, test, and cross-platform issues."

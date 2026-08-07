@@ -2,14 +2,14 @@ const std = @import("std");
 
 fn expectContains(haystack: []const u8, needle: []const u8) !void {
     if (std.mem.indexOf(u8, haystack, needle) == null) {
-        std.debug.print("expected Phase 42 text not found: {s}\n", .{needle});
+        std.debug.print("expected public text not found: {s}\n", .{needle});
         return error.ExpectedTextMissing;
     }
 }
 
 fn expectNotContains(haystack: []const u8, needle: []const u8) !void {
     if (std.mem.indexOf(u8, haystack, needle) != null) {
-        std.debug.print("forbidden Phase 42 text found: {s}\n", .{needle});
+        std.debug.print("forbidden public text found: {s}\n", .{needle});
         return error.ForbiddenTextFound;
     }
 }
@@ -18,7 +18,7 @@ fn expectMissing(path: []const u8) !void {
     try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, path, .{}));
 }
 
-test "phase 42 go-to-market package is excluded from the public repository" {
+test "private go-to-market material is excluded from the public repository" {
     const excluded = [_][]const u8{
         "go_to_market/README.md",
         "go_to_market/30-day-plan.md",
@@ -27,12 +27,12 @@ test "phase 42 go-to-market package is excluded from the public repository" {
         "go_to_market/pilots/paid-pilot-offer.md",
         "go_to_market/safety/claims-to-avoid.md",
         "go_to_market/target-account-template.csv",
-        "go_to_market/PHASE_42_OUTPUT_SUMMARY.md",
+        "go_to_market/internal-output-summary.md",
     };
     for (excluded) |path| try expectMissing(path);
 }
 
-test "phase 42 public docs keep customer acquisition claims out of release surfaces" {
+test "public docs contain no customer acquisition collateral" {
     const allocator = std.testing.allocator;
     const public_files = [_][]const u8{
         "README.md",
@@ -62,7 +62,7 @@ test "phase 42 public docs keep customer acquisition claims out of release surfa
     }
 }
 
-test "phase 42 public README stays product-focused and safety-bounded" {
+test "public README stays product-focused and safety-bounded" {
     const text = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "README.md", std.testing.allocator, .limited(512 * 1024));
     defer std.testing.allocator.free(text);
     try expectContains(text, "ryk");

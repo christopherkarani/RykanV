@@ -4,20 +4,20 @@
 
 This demo shows ryk Codex and Claude Code plugin flows using checked-in synthetic fixtures and deterministic CLI behavior. It is meant for local validation, documentation, and regression checks only.
 
-This deterministic demo uses fake hook payloads. It does not require real Codex, Claude Code, a real LLM, real secrets, external network access, MCP, or drone hardware.
+This deterministic demo uses fake hook payloads. It does not require real Codex, Claude Code, a real LLM, real secrets, external network access, or MCP.
 
 See the host-specific walkthroughs in [codex-demo.md](codex-demo.md) and [claude-demo.md](claude-demo.md). The checked-in payload index is in [fake-hook-payloads/README.md](fake-hook-payloads/README.md).
 
 ## Prerequisites
 
-- Zig 0.15.2
+- Zig 0.16.0
 - A built ryk binary (`./zig-out/bin/ryk`)
 
 ## Demo flow
 
 1. Build ryk:
    ```bash
-   zig build
+   ./scripts/zig build
    ```
 
 2. Package plugins:

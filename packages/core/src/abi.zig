@@ -11,7 +11,6 @@ pub const documentation =
     \\String inputs are UTF-8 byte slices passed as pointer plus length and must be no larger than Core runtime limits.
     \\String outputs are written into caller-provided buffers; functions return -2 when the output buffer is too small.
     \\Return convention: 0 success, -1 invalid arguments, -2 output buffer too small, -3 input too large, -9 unsupported skeleton behavior.
-    \\This ABI does not expose real drone hardware, MAVLink, PX4, ArduPilot, or real-flight command enforcement.
 ;
 
 pub export fn core_version(output_ptr: ?[*]u8, output_len: usize, written_ptr: ?*usize) c_int {

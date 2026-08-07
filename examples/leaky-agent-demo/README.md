@@ -16,7 +16,7 @@ ryk runs those requested actions through protected sessions, blocks them before 
 From the repository root:
 
 ```sh
-zig build
+./scripts/zig build
 cd examples/leaky-agent-demo
 ./run-demo.sh
 ../../zig-out/bin/ryk replay --session last --verify

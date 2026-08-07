@@ -1,34 +1,24 @@
 # ryk Core C ABI
 
-Status: experimental. This ABI is not stable v1.
+Status: experimental. This ABI is not stable and is not a supported integration surface yet.
 
-Phase 24 reserves a small C ABI skeleton for future bindings:
+The current skeleton reserves functions for:
 
 - `core_version`
 - `core_redact`
 - `core_evaluate_policy`
 - `core_append_audit_event`
 
-Only `version` and `redact` provide useful skeleton behavior in Phase 24. Policy evaluation and audit append return an unsupported skeleton code until a later phase defines tested serialization and ownership contracts for those calls.
+Only `version` and `redact` have useful behavior today. Policy evaluation and audit append return an unsupported result until the serialization, ownership, and compatibility contracts are complete.
 
 ## Ownership
 
-Callers own all input and output buffers. ryk Core does not allocate memory for the caller and never frees caller memory.
+Callers own input and output buffers. ryk Core does not allocate memory for the caller or free caller-owned memory. Inputs use pointer-plus-length byte slices, and outputs report the number of bytes written through an output parameter.
 
-Inputs are pointer-plus-length byte slices. Outputs are written into caller-provided buffers and report the number of bytes written through an output parameter.
-
-## Limits
-
-String inputs must be UTF-8 where the underlying Core API requires UTF-8. Event-field-sized inputs must not exceed ryk Core runtime limits.
-
-## Return Codes
+## Return codes
 
 - `0`: success
-- `-1`: invalid arguments, including required null pointers
+- `-1`: invalid arguments
 - `-2`: output buffer too small
-- `-3`: input exceeds current Core limits
-- `-9`: function name reserved, but behavior unsupported in this experimental skeleton
-
-## Scope
-
-This ABI does not implement mobile bindings, embedded bindings, MAVLink, PX4, ArduPilot, real drone hardware access, or real-flight command enforcement.
+- `-3`: input exceeds current limits
+- `-9`: reserved function with unsupported behavior

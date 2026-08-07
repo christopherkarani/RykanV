@@ -33,9 +33,9 @@ test "core engine module graph stays within core policy and audit" {
     try expectFileDoesNotContain("src/core/boundary_api.zig", "@import(\"aegis\")");
 }
 
-test "core README does not advertise removed Edge placeholder exports" {
-    try expectFileNotContains("packages/core/README.md", "Edge placeholder");
-    try expectFileNotContains("packages/core/README.md", "reserved Edge");
+test "core README does not advertise removed placeholder exports" {
+    try expectFileNotContains("packages/core/README.md", "placeholder exports");
+    try expectFileNotContains("packages/core/README.md", "reserved exports");
     try expectFileNotContains("packages/core/README.md", "safety-report placeholders");
 }
 
@@ -51,7 +51,7 @@ test "extension audit targets preserve extension kind in core events" {
         .timestamp = ts,
         .event_type = .command_attempt,
         .actor = .{ .kind = .core, .display = "ryk-core" },
-        .target = .{ .kind = .extension, .value = "custom.vehicle_state_read/vehicle-1" },
+        .target = .{ .kind = .extension, .value = "custom.inventory_read/resource-1" },
     });
     try std.testing.expectEqualStrings("extension", @tagName(event.target.kind));
 }
@@ -73,32 +73,13 @@ test "core public actions are product neutral" {
     try expectNoUnionField(info, "mcp_resource_read");
     try expectNoUnionField(info, "mcp_prompt_get");
     try expectNoUnionField(info, "mcp_sampling_request");
-    try expectNoUnionField(info, "edge_vehicle_state_read");
-    try expectNoUnionField(info, "edge_vehicle_command_request");
-    try expectNoUnionField(info, "edge_mission_upload_request");
-    try expectNoUnionField(info, "edge_geofence_evaluation_request");
-    try expectNoUnionField(info, "edge_telemetry_egress_request");
-    try expectNoUnionField(info, "edge_emergency_command_request");
-    try expectNoUnionField(info, "edge_safety_envelope_evaluation_request");
 }
 
-test "core public event names exclude MCP Edge drone and SITL domains" {
+test "core public event names expose current stable events" {
     try std.testing.expect(@hasDecl(ryk_core.api, "EventType"));
-    const fields = @typeInfo(ryk_core.api.EventType).@"enum".fields;
-
     try expectEnumField(ryk_core.api.EventType, "session_start");
     try expectEnumField(ryk_core.api.EventType, "command_attempt");
     try expectEnumField(ryk_core.api.EventType, "network_connect_denied");
-
-    inline for (fields) |field| {
-        try std.testing.expect(std.mem.indexOf(u8, field.name, "edge") == null);
-        try std.testing.expect(std.mem.indexOf(u8, field.name, "drone") == null);
-        try std.testing.expect(std.mem.indexOf(u8, field.name, "vehicle") == null);
-        try std.testing.expect(std.mem.indexOf(u8, field.name, "mavlink") == null);
-        try std.testing.expect(std.mem.indexOf(u8, field.name, "px4") == null);
-        try std.testing.expect(std.mem.indexOf(u8, field.name, "ardupilot") == null);
-        try std.testing.expect(std.mem.indexOf(u8, field.name, "sitl") == null);
-    }
 }
 
 test "core public API omits host plugin presets and direct MCP evaluator surface" {
@@ -133,14 +114,12 @@ test "core API evaluates generic command and extension actions" {
     var extension_eval = try ryk_core.api.evaluateAction(
         std.testing.allocator,
         selected,
-        .{ .extension = .{ .domain = "custom", .operation = "vehicle_state_read", .target = "vehicle-1" } },
+        .{ .extension = .{ .domain = "custom", .operation = "inventory_read", .target = "resource-1" } },
         .{},
     );
     defer extension_eval.deinit(std.testing.allocator);
     try std.testing.expectEqual(ryk_core.api.DecisionResult.observe, extension_eval.decision.result);
-    try std.testing.expect(std.mem.indexOf(u8, extension_eval.explanation, "extension custom.vehicle_state_read") != null);
-    try std.testing.expect(std.mem.indexOf(u8, extension_eval.explanation, "drone") == null);
-    try std.testing.expect(std.mem.indexOf(u8, extension_eval.explanation, "SITL") == null);
+    try std.testing.expect(std.mem.indexOf(u8, extension_eval.explanation, "extension custom.inventory_read") != null);
 }
 
 test "core API preserves deny priority through policy evaluation" {
@@ -249,7 +228,7 @@ test "core API writes redacted audit events and verifies replay hash chain" {
     try std.testing.expect(std.mem.indexOf(u8, out.items, "fake_secret_value_phase24") == null);
 }
 
-test "cli and edge compat facade dead code has been removed" {
+test "cli compatibility facade dead code has been removed" {
     const compat_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "build.zig", std.testing.allocator, .limited(256 * 1024));
     defer std.testing.allocator.free(compat_source);
     try std.testing.expect(std.mem.indexOf(u8, compat_source, "aegis_core_product_compat_mod") == null);
