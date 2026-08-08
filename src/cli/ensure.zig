@@ -18,6 +18,7 @@ const grok_install = @import("grok_install.zig");
 const host_status = @import("host_status.zig");
 const child_process = @import("child_process.zig");
 const brand = @import("brand.zig");
+const telemetry = @import("../telemetry.zig");
 
 /// Teach repair door for soft host/wire failures — never `ryk start` as required.
 pub const doctor_fix_hint: []const u8 = "ryk doctor --fix";
@@ -624,6 +625,23 @@ pub const DayOneInstallResult = enum {
 /// Single host install path shared by ensure auto-wire and start multi-select (no dual drift).
 /// `workspace_root` is the install cwd for plugin marketplace wires (from_install → HOME).
 pub fn installOneHost(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    host_id: []const u8,
+    home: []const u8,
+    self_exe: []const u8,
+    workspace_root: []const u8,
+) DayOneInstallResult {
+    const result = installOneHostInner(io, allocator, host_id, home, self_exe, workspace_root);
+    telemetry.recordIntegration(host_id, "install", switch (result) {
+        .installed, .upgraded, .already_installed => "success",
+        .assets_unavailable, .failed => "failure",
+        .deferred => "deferred",
+    });
+    return result;
+}
+
+fn installOneHostInner(
     io: std.Io,
     allocator: std.mem.Allocator,
     host_id: []const u8,

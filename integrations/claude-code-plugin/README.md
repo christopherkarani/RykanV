@@ -103,7 +103,7 @@ Remove the plugin from Claude Code using your Claude Code plugin management comm
 - Hooks are advisory; they do not enforce policy independently of the host.
 - The strongest protection remains `ryk run -- <claude-code-command>`.
 - Plugin installation preview only; actual host plugin loading depends on Claude Code version.
-- No telemetry is collected.
+- The plugin does not collect telemetry itself. Hook, plugin, and machine-readable calls are excluded from release CLI telemetry; a user-invoked `ryk run -- <claude-code-command>` wrapper may record only the fixed anonymous CLI metadata described in [`../../docs/telemetry.md`](../../docs/telemetry.md).
 - Official marketplace availability is not yet implemented.
 
 ## Security model

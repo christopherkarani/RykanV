@@ -173,7 +173,7 @@ This plugin does not mutate host configuration, so uninstalling is safe.
 - Local/bundled install does not by itself prove **`hook`** grade without live-host E2E.
 - Hooks are advisory for informational events; blocking depends on OpenClaw honoring hook return values.
 - Plugin installation depends on OpenClaw version and plugin loading mechanism.
-- No telemetry is collected.
+- The plugin does not collect telemetry itself. Hook, plugin, and machine-readable calls are excluded from release CLI telemetry; a user-invoked `ryk run -- openclaw` wrapper may record only the fixed anonymous CLI metadata described in [`../../docs/telemetry.md`](../../docs/telemetry.md).
 - npm package name prepared: `ryk-openclaw-plugin`. ClawHub package published for distribution — distribution ≠ enforcement.
 
 ## Security model

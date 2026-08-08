@@ -178,7 +178,7 @@ This plugin does not mutate host configuration, so uninstalling is safe.
 - Hooks are advisory for informational events; blocking hooks depend on OpenCode honoring thrown errors.
 - The strongest protection remains `ryk run -- opencode`.
 - Plugin installation depends on OpenCode version and plugin loading mechanism.
-- No telemetry is collected.
+- The plugin does not collect telemetry itself. Hook, plugin, and machine-readable calls are excluded from release CLI telemetry; a user-invoked `ryk run -- opencode` wrapper may record only the fixed anonymous CLI metadata described in [`../../docs/telemetry.md`](../../docs/telemetry.md).
 - Official npm publication is in progress; the package structure is ready for publication.
 
 ## Security model

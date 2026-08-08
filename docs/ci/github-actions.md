@@ -1,6 +1,6 @@
 # GitHub Actions
 
-This integration is local-only. It does not assume a hosted ryk service, policy sync, telemetry, or model-provider secrets.
+This integration is local-only. CI and hook paths do not emit telemetry or assume a hosted ryk policy service. Release builds may include the separate default-on pseudonymous CLI telemetry described in [`../telemetry.md`](../telemetry.md); `RYK_NO_TELEMETRY=1` is available for an environment-level hard disable.
 
 Use a CI policy:
 

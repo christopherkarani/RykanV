@@ -71,6 +71,7 @@ pub const danger_confirmation = @import("danger_confirmation.zig");
 pub const fm_steward_client = @import("fm_steward_client.zig");
 pub const codex_mcp_sandbox = @import("codex_mcp_sandbox.zig");
 pub const host_mcp_sandbox = @import("host_mcp_sandbox.zig");
+pub const telemetry = @import("../telemetry.zig");
 
 test {
     _ = brand;
@@ -165,7 +166,7 @@ const self_banner_commands = [_][]const u8{ "version", "--version", "help", "run
 /// Commands whose output is always machine/raw (JSON, generated scripts, export
 /// lines, long-running servers) — never receive the human brand banner.
 const always_machine_commands = [_][]const u8{
-    "evaluate", "hook", "shim", "completions", "env", "dashboard", "--print-install-env",
+    "evaluate", "hook", "shim", "completions", "env", "dashboard", "telemetry", "--print-install-env",
     // Zig-native shell tools (formerly daemon-proxied): keep machine/banner-free.
     // `explain` is human pretty by default (DCG-class colors); machine only via
     // `--format json` (isMachineArgv). Own header is `RYK EXPLAIN` (no brand banner).
@@ -441,6 +442,10 @@ fn runWithCwdUsing(
         // Human path: compact brand banner + key-value grid (Phase 2).
         try version_command.writeHumanBanner(std.heap.smp_allocator, io, stdout);
         return exit_codes.success;
+    }
+
+    if (std.mem.eql(u8, command, "telemetry")) {
+        return telemetry.command(io, environ_map, allocator, argv[1..], stdout, stderr);
     }
 
     // Slice 1 honesty: unfinished / hide-list verbs fail short (usage), not a daemon essay.

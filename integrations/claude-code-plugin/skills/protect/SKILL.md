@@ -40,5 +40,5 @@ ryk plugin doctor claude
 ## Notes
 
 - This skill does not modify host configuration.
-- No telemetry is sent.
+- The plugin does not collect telemetry. A user-invoked `ryk run` wrapper may record only fixed anonymous CLI metadata; see [`docs/telemetry.md`](../../../../docs/telemetry.md).
 - Hooks call the ryk CLI; they do not duplicate policy logic.

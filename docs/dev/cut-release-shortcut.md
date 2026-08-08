@@ -2,7 +2,7 @@
 
 Primary way to ship ryk: **build on your Mac**, cut a GitHub Release, publish npm, push the Homebrew tap.
 
-GitHub Actions `release.yml` remains a **manual backup** (`workflow_dispatch`). On `v*` tag push it **no-ops** if the release already has `checksums.txt` (so the Mac cutter is not raced).
+GitHub Actions `release.yml` remains a **manual backup** (`workflow_dispatch`). On `v*` tag push it **no-ops** if the release already has the complete archive, checksum, SBOM, package-manifest, and telemetry-contract inventory (so the Mac cutter is not raced).
 
 ## Prerequisites
 
@@ -64,6 +64,8 @@ State: `.release-cut/state.env` (gitignored)
 | `RYK_DIST_DIR` | `dist` |
 | `RYK_CLI_ARTIFACT_DIR` | `.release-cli-bins` (outside `dist/` — build-release wipes `dist/`) |
 | `RYK_SIGNING_ENABLED` | `0` (optional signing hook; not required for v1) |
+| `RYK_POSTHOG_PROJECT_TOKEN` | Required for release telemetry; this is a public project token |
+| `RYK_TELEMETRY_BUILD_DISABLED` | `0`; set to `1` only for local dry-runs that must disable transport |
 
 ## Build the Shortcuts.app shortcut
 

@@ -193,7 +193,7 @@ The plugin uses synthetic test secrets (e.g., `fake_p05_secret_value`) in fixtur
 - Hooks are advisory; enforcement depends on Codex host support.
 - The strongest protection is the process-level wrapper `ryk run -- <codex-command>` (the `ryk codex` launcher uses the same protected path).
 - Plugin installation is a preview/dry-run by default.
-- No telemetry is collected.
+- The plugin does not collect telemetry itself. Hook and machine-readable calls are excluded from release CLI telemetry; user-invoked CLI wrappers may record only the fixed pseudonymous metadata described in [`../telemetry.md`](../telemetry.md).
 - Official marketplace availability is not yet implemented.
 
 ## Security model

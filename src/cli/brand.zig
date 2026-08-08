@@ -37,9 +37,11 @@ pub fn isPrimaryInvocation(argv0_basename: []const u8) bool {
     return false;
 }
 
-/// Safety-boundary blurb for version metadata (local-only product claim).
+/// Safety-boundary blurb for version metadata. Telemetry is intentionally
+/// separate from hosted policy, enforcement, and synchronization services.
 pub fn safetyBoundary() []const u8 {
-    return "ryk enforces local command, file, network, MCP, audit, and red-team controls; it does not provide hosted telemetry or cloud enforcement.";
+    return "ryk enforces local command, file, network, MCP, audit, and red-team controls; " ++
+        "it does not provide hosted policy sync or cloud enforcement. Release builds may send fixed pseudonymous CLI telemetry.";
 }
 
 test "brand constants: ryk primary, Rykan V full name" {

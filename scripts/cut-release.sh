@@ -300,6 +300,13 @@ phase_preflight() {
   command -v npm >/dev/null || fail "npm is required"
   command -v node >/dev/null || fail "node is required (dashboard + npm)"
 
+  if [[ "$PLAN_ONLY" -ne 1 && "${RYK_TELEMETRY_BUILD_DISABLED:-0}" != "1" && -z "${RYK_POSTHOG_PROJECT_TOKEN:-}" ]]; then
+    fail "RYK_POSTHOG_PROJECT_TOKEN is required for release telemetry (or set RYK_TELEMETRY_BUILD_DISABLED=1 for a local dry-run)"
+  fi
+  if [[ "$LIVE" -eq 1 && "${RYK_TELEMETRY_BUILD_DISABLED:-0}" == "1" ]]; then
+    fail "live releases cannot disable telemetry transport"
+  fi
+
   if [[ "$PLAN_ONLY" -ne 1 ]]; then
     command -v docker >/dev/null || fail "docker is required for Linux artifacts"
     docker info >/dev/null 2>&1 || fail "Docker daemon unavailable (start Docker Desktop)"
@@ -630,6 +637,12 @@ fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
 # ---------------------------------------------------------------------------
 phase_build() {
   log "build…"
+  if [[ "$LIVE" -eq 1 && "${RYK_TELEMETRY_BUILD_DISABLED:-0}" == "1" ]]; then
+    fail "live releases cannot disable telemetry transport"
+  fi
+  if [[ "${RYK_TELEMETRY_BUILD_DISABLED:-0}" != "1" && -z "${RYK_POSTHOG_PROJECT_TOKEN:-}" ]]; then
+    fail "RYK_POSTHOG_PROJECT_TOKEN is required for release telemetry (or set RYK_TELEMETRY_BUILD_DISABLED=1 for a local dry-run)"
+  fi
   export RYK_VERSION="$VERSION"
   export RYK_COMMIT RYK_BUILD_DATE
   RYK_COMMIT="$(git rev-parse --short=12 HEAD)"
@@ -649,6 +662,9 @@ phase_build() {
   RYK_VERSION="$VERSION" \
     RYK_COMMIT="$RYK_COMMIT" \
     RYK_BUILD_DATE="$RYK_BUILD_DATE" \
+    RYK_POSTHOG_PROJECT_TOKEN="${RYK_POSTHOG_PROJECT_TOKEN:-}" \
+    RYK_TELEMETRY_BUILD_DISABLED="${RYK_TELEMETRY_BUILD_DISABLED:-0}" \
+    RYK_RELEASE_LIVE="$LIVE" \
     ./scripts/build-linux-release-docker.sh "$CLI_BINS_DIR"
 
   # Prefer primary ryk staged name for CLI_ARTIFACT_DIR contract.
@@ -664,6 +680,9 @@ phase_build() {
   RYK_VERSION="$VERSION" \
     RYK_COMMIT="$RYK_COMMIT" \
     RYK_BUILD_DATE="$RYK_BUILD_DATE" \
+    RYK_POSTHOG_PROJECT_TOKEN="${RYK_POSTHOG_PROJECT_TOKEN:-}" \
+    RYK_TELEMETRY_BUILD_DISABLED="${RYK_TELEMETRY_BUILD_DISABLED:-0}" \
+    RYK_RELEASE_LIVE="$LIVE" \
     RYK_CLI_ARTIFACT_DIR="$CLI_BINS_DIR" \
     RYK_DIST_DIR="$DIST_DIR" \
     ./scripts/build-release.sh
@@ -683,7 +702,7 @@ phase_build() {
 # ---------------------------------------------------------------------------
 phase_verify() {
   log "verify…"
-  RYK_RELEASE_PRODUCT=all ./scripts/verify-release.sh "$DIST_DIR"
+  RYK_RELEASE_LIVE="$LIVE" RYK_RELEASE_PRODUCT=all ./scripts/verify-release.sh "$DIST_DIR"
 
   local npm_pkg="${DIST_DIR}/package-manifests/npm/package.json"
   [[ -f "$npm_pkg" ]] || fail "missing rendered npm package: $npm_pkg"
@@ -692,6 +711,7 @@ phase_verify() {
   fi
   for f in \
     "${DIST_DIR}/checksums.txt" \
+    "${DIST_DIR}/telemetry-contract.txt" \
     "${DIST_DIR}/sbom.json" \
     "${DIST_DIR}/release-manifest.json" \
     "${DIST_DIR}/ryk-v${VERSION}-darwin-arm64.tar.gz" \
@@ -737,6 +757,7 @@ phase_publish_git() {
     "${DIST_DIR}/ryk-v${VERSION}-"*.tar.gz \
     "${DIST_DIR}/ryk-v${VERSION}-"*.zip \
     "${DIST_DIR}/checksums.txt" \
+    "${DIST_DIR}/telemetry-contract.txt" \
     "${DIST_DIR}/sbom.json" \
     "${DIST_DIR}/release-manifest.json" \
     "${DIST_DIR}/plugins/"*.zip \

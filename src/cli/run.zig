@@ -21,6 +21,7 @@ const suggestions = @import("suggestions.zig");
 const run_os_sandbox = @import("run_os_sandbox.zig");
 const codex_mcp_sandbox = @import("codex_mcp_sandbox.zig");
 const host_mcp_sandbox = @import("host_mcp_sandbox.zig");
+const telemetry = @import("../telemetry.zig");
 
 const RunOptions = struct {
     workspace: ?[]const u8 = null,
@@ -884,6 +885,15 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
                     },
                 }
             }
+
+            telemetry.recordEnforcement(
+                "run",
+                null,
+                @tagName(final_decision.result),
+                @tagName(shell_eval.riskLevelFromScore(final_decision.risk_score orelse 60)),
+                "shell",
+                self.effective_mode.toString(),
+            );
 
             if (final_decision.result == .allow or final_decision.result == .observe) {
                 try self.auditCommandEvent(session, .command_allowed, rust_visibility.target_summary_shell, final_decision, rust_metadata);

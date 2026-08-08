@@ -68,5 +68,5 @@ If the doctor reports warnings:
 ## Notes
 
 - This skill does not modify host configuration.
-- No telemetry is sent.
+- The plugin does not collect telemetry. Release CLI commands may record only fixed anonymous metadata; see [`docs/telemetry.md`](../../../../docs/telemetry.md).
 - The doctor output goes to stdout; errors go to stderr.

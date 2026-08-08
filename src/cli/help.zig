@@ -679,6 +679,20 @@ pub const commands =
                 "See also: docs/install.md",
             },
         },
+        .{
+            .name = "telemetry",
+            .summary = "View or change pseudonymous usage telemetry",
+            .usage = "ryk telemetry [status|enable|disable] [--json]",
+            .category = .advanced,
+            .public = true,
+            .additional_completion_flags = &.{"--json"},
+            .details = &.{
+                "Telemetry is enabled by default in release builds and sends only a fixed allowlist of pseudonymous product metadata to PostHog, including FM, enforcement, integration, session, feature, and reliability summaries.",
+                "Use `ryk telemetry disable` to opt out, `ryk telemetry enable` to resume, and `ryk telemetry status` to inspect the local state.",
+                "Telemetry never records command text, arguments, prompts, paths, policy contents, environment values, secrets, or host payloads.",
+                "RYK_NO_TELEMETRY=1 is an environment-level hard disable. Local development builds have transport disabled until built with a release PostHog token.",
+            },
+        },
         .{ .name = "plugin", .summary = "Plugin management and diagnostics", .usage = "ryk plugin <list|host|doctor|manifest|install> [options]", .category = .integrations, .additional_completion_flags = &.{ "--dry-run", "--yes", "--json", "--path" }, .details = &.{
             "Subcommands:",
             "  ryk plugin list",
@@ -774,7 +788,7 @@ pub const commands =
 const public_help_prefix = [_][]const u8{ "start", "stop" };
 /// Suffix of Safe Launch teaching order (after host aliases).
 /// Day-2 loop: doctor → packs → allowlist, then review/forensics/explain/update.
-const public_help_suffix = [_][]const u8{ "doctor", "packs", "allowlist", "replay", "scan", "explain", "update" };
+const public_help_suffix = [_][]const u8{ "doctor", "packs", "allowlist", "replay", "scan", "explain", "update", "telemetry" };
 
 pub const WriteMode = enum {
     /// Safe Launch surface only (default `ryk` / `ryk help`).

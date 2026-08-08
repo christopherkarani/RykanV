@@ -16,6 +16,7 @@ const brand = @import("brand.zig");
 const exit_codes = @import("exit_codes.zig");
 const shell_eval = @import("shell_eval.zig");
 const fm_steward_client = @import("fm_steward_client.zig");
+const telemetry = @import("../telemetry.zig");
 const core_api = @import("ryk_core").api;
 const policy = @import("ryk_core").policy;
 
@@ -184,6 +185,7 @@ pub fn evaluatePayloadWithModeOpts(
     const daemon_response = shell_eval.evaluateParsed(allocator, shell_event, evaluator) catch |err| {
         const unavailable = try shell_eval.failClosedDaemonUnavailableDecision(allocator, err);
         defer unavailable.deinit(allocator);
+        telemetry.recordEnforcement("hook", "other", "error", "unknown", "shell", "strict");
         try writeDeny(stdout, format, unavailable.owned_reason);
         return exit_codes.success;
     };
@@ -205,6 +207,8 @@ pub fn evaluatePayloadWithModeOpts(
             .disable_fm = opts.disable_fm,
             .fm_client = opts.fm_client,
             .session_id = opts.session_id,
+            .host = "other",
+            .telemetry_source = "hook",
         },
     );
     defer decision.deinit(allocator);

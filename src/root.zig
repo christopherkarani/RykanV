@@ -20,6 +20,7 @@ pub const ci_check = @import("ci_check.zig");
 pub const blocked_action_fixture = @import("blocked_action_fixture.zig");
 pub const resource_root = @import("resource_root.zig");
 pub const env_util = @import("env_util.zig");
+pub const telemetry = cli.telemetry;
 pub const tui = @import("tui/mod.zig");
 
 test {
@@ -42,5 +43,6 @@ test {
     _ = blocked_action_fixture;
     _ = resource_root;
     _ = env_util;
+    _ = telemetry;
     _ = tui;
 }

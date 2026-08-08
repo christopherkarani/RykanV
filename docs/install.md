@@ -15,13 +15,16 @@ Use Zig `0.16.0` (see `.zigversion`; prefer `./scripts/zig`). The product CLI is
 Release helpers build checksum-covered **ryk** archives into `dist/`:
 
 ```sh
-./scripts/build-release.sh
+RYK_POSTHOG_PROJECT_TOKEN="<release-project-token>" ./scripts/build-release.sh
 (cd dist && shasum -a 256 -c checksums.txt)
 ```
+
+The release token is embedded as a public project identifier, not a user credential. For local archive and layout checks where telemetry transport must remain disabled, set `RYK_TELEMETRY_BUILD_DISABLED=1` instead.
 
 Windows archive smoke-test helper:
 
 ```powershell
+$env:RYK_TELEMETRY_BUILD_DISABLED = "1"
 .\scripts\build-release.ps1 -ArchiveOnly
 .\scripts\install.ps1 -Version 1.2.9 -ArtifactDir .\dist -InstallDir "$env:USERPROFILE\bin"
 ```
@@ -37,7 +40,7 @@ Homebrew distribution uses the `christopherkarani/homebrew-ryk` tap and the GitH
 Maintainer release flow:
 
 ```sh
-./scripts/build-release.sh
+RYK_POSTHOG_PROJECT_TOKEN="<release-project-token>" ./scripts/build-release.sh
 brew audit --strict --online dist/package-manifests/homebrew/Formula/ryk.rb
 brew install --build-from-source dist/package-manifests/homebrew/Formula/ryk.rb
 brew test dist/package-manifests/homebrew/Formula/ryk.rb

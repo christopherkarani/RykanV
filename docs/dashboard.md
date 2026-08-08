@@ -35,7 +35,7 @@ By default it listens only on:
 http://127.0.0.1:7742
 ```
 
-The dashboard is a local control surface over existing ryk behavior. It does not replace the CLI, does not evaluate policy in frontend code, and does not add hosted telemetry, accounts, cloud sync, or external services.
+The dashboard is a local control surface over existing ryk behavior. It does not replace the CLI, does not evaluate policy in frontend code, and does not add dashboard-specific accounts, cloud sync, or external services. Release builds may send the fixed pseudonymous CLI telemetry described in [the telemetry contract](telemetry.md); the dashboard has no separate telemetry surface.
 
 ## Machine-Wide View
 
