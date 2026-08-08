@@ -205,8 +205,7 @@ pub fn appendEvent(
     var queue = try readQueue(allocator, io, &paths);
     defer queue.deinit(allocator);
     while (queue.items.items.len >= contract.max_queue_events) {
-        const dropped = queue.items.orderedRemove(0);
-        allocator.free(dropped);
+        if (!dropOldestNonActivation(allocator, &queue)) return error.TelemetryQueueFull;
     }
     const copy = try allocator.dupe(u8, event);
     queue.items.append(allocator, copy) catch |err| {
@@ -248,8 +247,7 @@ pub fn appendActivationEvent(
         return false;
     }
     while (queue.items.items.len >= contract.max_queue_events) {
-        const dropped = queue.items.orderedRemove(0);
-        allocator.free(dropped);
+        if (!dropOldestNonActivation(allocator, &queue)) return false;
     }
     const copy = try allocator.dupe(u8, event);
     queue.items.append(allocator, copy) catch |err| {
@@ -273,6 +271,22 @@ fn sameActivationInstallation(allocator: std.mem.Allocator, queued: []const u8, 
     const queued_id = activationInstallationId(queued_parsed.value) orelse return false;
     const event_id = activationInstallationId(event_parsed.value) orelse return false;
     return std.mem.eql(u8, queued_id, event_id);
+}
+
+fn dropOldestNonActivation(allocator: std.mem.Allocator, queue: *Queue) bool {
+    for (queue.items.items, 0..) |item, index| {
+        if (isActivationEvent(allocator, item)) continue;
+        const dropped = queue.items.orderedRemove(index);
+        allocator.free(dropped);
+        return true;
+    }
+    return false;
+}
+
+fn isActivationEvent(allocator: std.mem.Allocator, event: []const u8) bool {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, event, .{}) catch return false;
+    defer parsed.deinit();
+    return activationInstallationId(parsed.value) != null;
 }
 
 fn activationInstallationId(value: std.json.Value) ?[]const u8 {

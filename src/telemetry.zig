@@ -904,11 +904,11 @@ fn productEventFromPending(value: *const PendingProductEvent) product.Event {
         .setup_completed => |mode| .{ .setup_completed = .{ .mode = mode } },
         .setup_failed => |mode| .{ .setup_failed = .{ .mode = mode } },
         .feedback_submitted => |category| .{ .feedback_submitted = .{ .category = category } },
-        .update_completed => |event| .{ .update_completed = .{
-            .channel = event.channel,
-            .from_version = event.from_version[0..event.from_len],
-            .to_version = event.to_version[0..event.to_len],
-            .verification = event.verification,
+        .update_completed => .{ .update_completed = .{
+            .channel = value.update_completed.channel,
+            .from_version = value.update_completed.from_version[0..value.update_completed.from_len],
+            .to_version = value.update_completed.to_version[0..value.update_completed.to_len],
+            .verification = value.update_completed.verification,
         } },
         .update_failed => |event| .{ .update_failed = .{ .channel = event.channel, .stage = event.stage } },
     };
@@ -1402,6 +1402,44 @@ test "activation deduplication checks a full queue before eviction" {
         activation,
     )));
     try std.testing.expectEqual(@as(usize, max_queue_events), try queueCount(std.testing.allocator, std.testing.io, &environ_map));
+}
+
+test "ordinary queue append preserves an undelivered activation" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var environ_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer environ_map.deinit();
+    try environ_map.put("XDG_CONFIG_HOME", root);
+
+    const activation = try product.render(std.testing.allocator, std.testing.io, "ryk_0123456789abcdef0123456789abcdef", .{
+        .activation = .{ .host = "none" },
+    });
+    defer std.testing.allocator.free(activation);
+    const ordinary = try renderEvent(
+        std.testing.allocator,
+        std.testing.io,
+        "ryk_0123456789abcdef0123456789abcdef",
+        .{ .command = "doctor", .host = "none", .outcome = "success" },
+    );
+    defer std.testing.allocator.free(ordinary);
+
+    try store.setEnabled(std.testing.io, &environ_map, std.testing.allocator, true, false);
+    _ = try store.appendActivationEvent(std.testing.io, &environ_map, std.testing.allocator, activation);
+    for (0..max_queue_events - 1) |_| try store.appendEvent(std.testing.io, &environ_map, std.testing.allocator, ordinary);
+    try store.appendEvent(std.testing.io, &environ_map, std.testing.allocator, ordinary);
+
+    const paths = (try store.resolvePaths(std.testing.allocator, &environ_map)).?;
+    defer {
+        var owned_paths = paths;
+        owned_paths.deinit(std.testing.allocator);
+    }
+    var queue = try store.readQueue(std.testing.allocator, std.testing.io, &paths);
+    defer queue.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, max_queue_events), queue.items.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, queue.items.items[0], "\"event\":\"ryk_activation\"") != null);
 }
 
 test "malformed activation marker frees an owned installation id" {
