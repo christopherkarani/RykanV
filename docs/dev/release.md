@@ -1,41 +1,46 @@
 # Release
 
-## Primary path: Mac cut-release
+## Primary path: curl installer
 
-Ship from a clean `main` on a Mac using **`scripts/cut-release.sh`** (optional Shortcuts.app UX).
+Ship from a clean `main` on a Mac using **`scripts/cut-release.sh`**. The only
+published channel is the GitHub Release consumed by the curl installer.
 
-Full guide: [`docs/dev/cut-release-shortcut.md`](cut-release-shortcut.md).
+Full guide: [`cut-release-shortcut.md`](cut-release-shortcut.md).
 
 ```sh
-./scripts/cut-release.sh --bump patch --plan-only   # preview
-RYK_POSTHOG_PROJECT_TOKEN="<release-project-token>" ./scripts/cut-release.sh --bump patch --live # gate + build + GitHub + npm + Homebrew
+./scripts/cut-release.sh --version 1.2.10 --plan-only   # preview
+RYK_POSTHOG_PROJECT_TOKEN="<release-project-token>" ./scripts/cut-release.sh --version 1.2.10 --live
 ```
 
-Release builds require the public PostHog project token in `RYK_POSTHOG_PROJECT_TOKEN`. For a local dry-run that must keep transport disabled, set `RYK_TELEMETRY_BUILD_DISABLED=1` instead.
+Release builds require the public PostHog project token in
+`RYK_POSTHOG_PROJECT_TOKEN`. A live build also needs Docker for the Linux
+artifacts and `gh` access to publish the GitHub Release. npm is used only to
+build the dashboard when its local `dist/` directory is absent; no npm package
+is published. Homebrew and other package-manager channels are not part of the
+release.
 
 What it does:
 
-1. Preflight (clean main, Docker, `gh`, `npm`, Zig pin, Homebrew tap clone)
-2. Semver bump (patch / minor / major) and auto release notes (CHANGELOG + GH body)
-3. `./scripts/verify-pre-merge.sh`
-4. Local multi-arch build (Darwin Zig + Linux Docker) via `build-release.sh`
-5. GitHub Release with assets (including `checksums.txt`)
-6. npm: `@rykan/ryk` (rendered checksums) + integration plugins + `ryk-pi`
-7. Push formulas to `christopherkarani/homebrew-ryk`
+1. Checks clean `main`, Docker, `gh`, the Zig pin, and the telemetry token.
+2. Bumps the version and writes release notes.
+3. Runs `./scripts/verify-pre-merge.sh`.
+4. Builds the macOS, Linux, and Windows CLI archives.
+5. Verifies checksums, SBOM, telemetry contract, and release manifest.
+6. Creates the GitHub Release with the assets required by `curl | sh`.
 
-CI `release.yml` on `v*` tags **skips** when the release already has the complete archive, checksum, SBOM, package-manifest, and telemetry-contract inventory. Use **workflow_dispatch** only as a backup cut.
+CI `release.yml` is a backup path. It skips when the complete curl installer
+asset set is already attached to the tag's GitHub Release.
 
-## Legacy / lower-level scripts
+## Lower-level scripts
 
 | Script | Role |
 |--------|------|
-| `scripts/build-release.sh` | Build archives, checksums, package manifests |
+| `scripts/build-release.sh` | Build CLI archives, checksums, SBOM, and release manifest |
 | `scripts/build-linux-release-docker.sh` | Stage Linux `ryk` bins for Mac hosts |
-| `scripts/verify-release.sh` | Artifact contract |
-| `scripts/render-package-manifests.sh` | npm / Homebrew / Scoop / WinGet from checksums |
-| `scripts/update-homebrew-formula.sh` | Write tap formula + optional commit |
-| `scripts/release-dry-run.sh` | Host-only dry-run build + verify |
+| `scripts/verify-release.sh` | Verify the curl installer artifact contract |
+| `scripts/release-dry-run.sh` | Host-only dry-run build and verify |
 
 ## Product notes
 
-Keep the Zig version pinned (`.zigversion`). Generated release archives, SBOMs, and checksums under `dist/` are not committed. Never publish `packaging/npm` while checksums are still `PLACEHOLDER_*` — only publish the **rendered** tree under `dist/package-manifests/npm`.
+Keep the Zig version pinned (`.zigversion`). Generated release archives, SBOMs,
+and checksums under `dist/` are not committed.

@@ -1,8 +1,8 @@
 # Cut release (Mac Shortcuts + `scripts/cut-release.sh`)
 
-Primary way to ship ryk: **build on your Mac**, cut a GitHub Release, publish npm, push the Homebrew tap.
+Primary way to ship ryk: **build on your Mac** and cut a GitHub Release for the curl installer.
 
-GitHub Actions `release.yml` remains a **manual backup** (`workflow_dispatch`). On `v*` tag push it **no-ops** if the release already has the complete archive, checksum, SBOM, package-manifest, and telemetry-contract inventory (so the Mac cutter is not raced).
+GitHub Actions `release.yml` remains a **manual backup** (`workflow_dispatch`). On `v*` tag push it **no-ops** if the release already has the complete curl installer asset inventory (so the Mac cutter is not raced).
 
 ## Prerequisites
 
@@ -11,14 +11,7 @@ GitHub Actions `release.yml` remains a **manual backup** (`workflow_dispatch`). 
 | Zig pin | `./scripts/zig version` matches `.zigversion` |
 | Docker Desktop | `docker info` |
 | GitHub CLI | `gh auth status` (repo write + release) |
-| npm | Interactive: if not logged in, `--live` runs `npm login` (Press ENTER → browser). Needs a **TTY** — use Terminal for first login / live cuts. |
-| Homebrew tap clone | `~/code/homebrew-ryk` **or** `RYK_HOMEBREW_TAP_DIR` |
 | Clean `main` | equal to `origin/main`, no dirty files |
-
-```sh
-git clone https://github.com/christopherkarani/homebrew-ryk.git ~/code/homebrew-ryk
-# or: export RYK_HOMEBREW_TAP_DIR=/path/to/homebrew-ryk
-```
 
 ## CLI (source of truth)
 
@@ -26,31 +19,26 @@ git clone https://github.com/christopherkarani/homebrew-ryk.git ~/code/homebrew-
 # Plan only (no tests/build/publish)
 ./scripts/cut-release.sh --bump patch --plan-only
 
-# Dry-run: preflight → gate → bump → build → verify (no push/npm/brew)
+# Dry-run: preflight → gate → bump → build → verify (no push or tag)
 ./scripts/cut-release.sh --bump patch
 
 # Live cut after one human confirm (Shortcut or terminal)
 ./scripts/cut-release.sh --bump patch --live
 ./scripts/cut-release.sh --version 1.3.0 --live
 
-# Live cut but leave npm for a later manual step
-./scripts/cut-release.sh --version 1.2.9 --live --skip-npm
-
 # Resume after a mid-flight failure (no automatic rollback)
-./scripts/cut-release.sh --live --version 1.2.9 --resume-from publish-npm
+./scripts/cut-release.sh --live --version 1.2.9 --resume-from publish-git
 ```
 
 ### Release stages
 
-`preflight` → `version` → `notes` → `gate` → `bump` → `build` → `verify` → `publish-git` → `publish-npm` → `publish-homebrew` → `done`
+`preflight` → `version` → `notes` → `gate` → `bump` → `build` → `verify` → `publish-git` → `done`
 
 | Stage | What it does |
 |-------|----------------|
 | `gate` | `./scripts/verify-pre-merge.sh` |
-| `build` | Dashboard UI, Linux via Docker, `build-release.sh`, plugin packs |
+| `build` | Dashboard UI, Linux via Docker, and curl installer archives |
 | `publish-git` | Push branch; `gh release create` **with assets** (tag + checksums) |
-| `publish-npm` | Rendered `@rykan/ryk`, then opencode/openclaw plugins, then `ryk-pi` (skipped with `--skip-npm`) |
-| `publish-homebrew` | Update tap `Formula/ryk.rb`, push |
 
 Logs: `dist/cut-release-vX.Y.Z.log`  
 State: `.release-cut/state.env` (gitignored)
@@ -59,7 +47,6 @@ State: `.release-cut/state.env` (gitignored)
 
 | Variable | Default / meaning |
 |----------|-------------------|
-| `RYK_HOMEBREW_TAP_DIR` | `~/code/homebrew-ryk` |
 | `RYK_RELEASE_BRANCHES` | `main master` |
 | `RYK_DIST_DIR` | `dist` |
 | `RYK_CLI_ARTIFACT_DIR` | `.release-cli-bins` (outside `dist/` — build-release wipes `dist/`) |
@@ -101,7 +88,7 @@ PY
 
 4. **Show Alert** / **Ask for Confirmation**:
 
-   > Release ryk v{NEXT} to GitHub + npm + Homebrew from main?
+   > Release ryk v{NEXT} to GitHub for the curl installer from main?
 
 5. On confirm, **Run Shell Script**:
 
@@ -121,32 +108,28 @@ PY
 
 - Set **Shell** to `/bin/bash` or `/bin/zsh`.
 - Grant Shortcuts **Developer Tools** / full disk if `git`/`docker` fail when run from the app.
-- Pin `RYK_REPO` and `RYK_HOMEBREW_TAP_DIR` in the shell preamble if paths differ.
-- Never embed npm or GitHub tokens in the Shortcut. Prefer running `--live` from **Terminal** so `npm login` can prompt (Press ENTER → browser). Headless Shortcut shells usually have no TTY and cannot complete that prompt.
-- Once `~/.npmrc` has a token, later runs skip login (`npm whoami` succeeds).
+- Pin `RYK_REPO` in the shell preamble if the checkout path differs.
+- Never embed the PostHog or GitHub token in the Shortcut. Prefer running `--live` from **Terminal** so the release environment is explicit.
 
 ## First live cut checklist
 
 1. `./scripts/cut-release.sh --bump patch --plan-only` on a clean `main`.
 2. Optional dry-run (long): `./scripts/cut-release.sh --bump patch` — runs full gate + build; **creates a local version commit** without pushing. Prefer doing dry-run on a throwaway clone/worktree if you do not want that commit.
 3. Live: Shortcut or `./scripts/cut-release.sh --bump patch --live`.
-4. Verify: GitHub Release assets include `checksums.txt` + `ryk-v*`; `npm view @rykan/ryk version`; `brew update && brew upgrade ryk` from the tap.
+4. Verify: GitHub Release assets include `checksums.txt`, `telemetry-contract.txt`, `sbom.json`, `release-manifest.json`, and the platform archives. Test the public curl installer with `RYK_VERSION=X.Y.Z curl -fsSL https://rykanv.com/install | sh`.
 
 ## Failure recovery
 
-No automatic rollback of tags, releases, or npm publishes.
+No automatic rollback of tags or releases.
 
 ```sh
-./scripts/cut-release.sh --live --version X.Y.Z --resume-from publish-npm
-# or publish-homebrew, publish-git, …
+./scripts/cut-release.sh --live --version X.Y.Z --resume-from publish-git
 ```
 
 See the recovery block printed on failure and `.release-cut/state.env`.
 
 ## Related scripts
 
-- `scripts/build-release.sh` — archives + checksums + package manifests  
+- `scripts/build-release.sh` — archives + checksums + release inventory
 - `scripts/build-linux-release-docker.sh` — Linux bins for Mac hosts  
 - `scripts/verify-release.sh` — artifact contract  
-- `scripts/render-package-manifests.sh` — npm/Homebrew templates with real SHAs  
-- `scripts/update-homebrew-formula.sh` — tap formula writer  

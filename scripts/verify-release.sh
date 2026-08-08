@@ -3,7 +3,7 @@ set -eu
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_DIR="${1:-${RYK_DIST_DIR:-dist}}"
-RELEASE_PRODUCT="${RYK_RELEASE_PRODUCT:-all}"
+RELEASE_PRODUCT="${RYK_RELEASE_PRODUCT:-curl}"
 
 fail() {
   printf 'release verify: %s\n' "$1" >&2
@@ -224,7 +224,7 @@ require_cli_archive() {
 
 require_release_artifacts() {
   case "$RELEASE_PRODUCT" in
-    all | cli)
+    all | cli | curl)
       require_artifact "$DIST_DIR/ryk-v*-darwin-amd64.tar.gz"
       require_artifact "$DIST_DIR/ryk-v*-darwin-arm64.tar.gz"
       require_artifact "$DIST_DIR/ryk-v*-linux-amd64.tar.gz"
@@ -278,7 +278,7 @@ require_release_artifacts() {
 [ -s "$DIST_DIR/release-manifest.json" ] || fail "missing release-manifest.json"
 [ -s "$DIST_DIR/telemetry-contract.txt" ] || fail "missing telemetry-contract.txt"
 [ -s "$DIST_DIR/sbom.json" ] || fail "missing sbom.json"
-if [ "$RELEASE_PRODUCT" != "host" ]; then
+if [ "$RELEASE_PRODUCT" = "all" ]; then
   [ -s "$DIST_DIR/package-manifests/homebrew/Formula/ryk.rb" ] || fail "missing rendered Homebrew formula"
   [ -s "$DIST_DIR/package-manifests/npm/package.json" ] || fail "missing rendered npm package manifest"
   [ -s "$DIST_DIR/package-manifests/npm/bin/ryk.js" ] || fail "missing rendered npm launcher"
@@ -312,7 +312,7 @@ fi
 require_release_artifacts
 grep -q '"signing_status"' "$DIST_DIR/release-manifest.json"
 grep -q '"sbom_status"' "$DIST_DIR/release-manifest.json"
-if [ "$RELEASE_PRODUCT" != "host" ]; then
+if [ "$RELEASE_PRODUCT" = "all" ]; then
   for rendered in \
     "$DIST_DIR/package-manifests/homebrew/Formula/ryk.rb" \
     "$DIST_DIR/package-manifests/npm/package.json" \

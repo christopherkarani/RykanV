@@ -2,15 +2,15 @@
 # Mac-local release cutter for ryk (Rykan V).
 #
 # Orchestrates: preflight → version → notes → gate → bump → build → verify
-#               → publish-git → publish-npm → publish-homebrew → done
+#               → publish-git → done
 #
-# Default is dry-run (no push / tag / npm / brew). Pass --live after human confirm
+# Default is dry-run (no push or tag). Pass --live after human confirm
 # (Shortcuts.app or terminal). Resume with --resume-from PHASE after a partial cut.
 #
 # Usage:
 #   ./scripts/cut-release.sh --bump patch|minor|major [--live] [--plan-only]
 #   ./scripts/cut-release.sh --version 1.3.0 [--live]
-#   ./scripts/cut-release.sh --live --resume-from publish-npm --version 1.2.9
+#   ./scripts/cut-release.sh --live --resume-from publish-git --version 1.2.9
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,7 +23,6 @@ cd "$REPO_ROOT"
 LIVE=0
 PLAN_ONLY=0
 SKIP_GATE=0
-SKIP_NPM=0
 BUMP=""
 VERSION_ARG=""
 RESUME_FROM=""
@@ -31,11 +30,10 @@ DIST_DIR="${RYK_DIST_DIR:-dist}"
 STATE_DIR="${RYK_CUT_RELEASE_STATE_DIR:-${REPO_ROOT}/.release-cut}"
 STATE_FILE="${STATE_DIR}/state.env"
 CLI_BINS_DIR="${RYK_CLI_ARTIFACT_DIR:-${REPO_ROOT}/.release-cli-bins}"
-HOMEBREW_TAP_DIR="${RYK_HOMEBREW_TAP_DIR:-${HOME}/code/homebrew-ryk}"
 ALLOWED_BRANCHES="${RYK_RELEASE_BRANCHES:-main master}"
 LOG_FILE=""
 
-PHASES=(preflight version notes gate bump build verify publish-git publish-npm publish-homebrew done)
+PHASES=(preflight version notes gate bump build verify publish-git "done")
 COMPLETED_PHASES=()
 
 # ---------------------------------------------------------------------------
@@ -80,11 +78,10 @@ Usage:
   ./scripts/cut-release.sh --version X.Y.Z [options]
 
 Options:
-  --live              Perform irreversible publish steps (push, tag, gh, npm, brew)
+  --live              Perform irreversible publish steps (push, tag, GitHub release)
   --plan-only         Stop after version + notes; print plan (no gate/build)
   --resume-from PHASE Skip phases before PHASE (requires --version matching state)
   --skip-gate         Skip verify-pre-merge.sh (not recommended)
-  --skip-npm          Skip publish-npm (GitHub + Homebrew still run with --live)
   -h, --help          Show this help
 
 Default without --live is dry-run: runs through verify, never publishes.
@@ -118,10 +115,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-gate)
       SKIP_GATE=1
-      shift
-      ;;
-    --skip-npm)
-      SKIP_NPM=1
       shift
       ;;
     -h | --help)
@@ -246,59 +239,17 @@ validate_semver() {
 }
 
 # ---------------------------------------------------------------------------
-# npm auth (interactive login when needed)
-# ---------------------------------------------------------------------------
-# npm login blocks until the user finishes the flow (often: Press ENTER → browser
-# OAuth → token written to ~/.npmrc). Requires a real TTY for the Enter prompt.
-ensure_npm_auth() {
-  local who
-  if [[ "$SKIP_NPM" -eq 1 ]]; then
-    log "skipping npm auth (--skip-npm)"
-    return 0
-  fi
-
-  if who="$(npm whoami 2>/dev/null)" && [[ -n "$who" ]]; then
-    log "npm authenticated as ${who}"
-    return 0
-  fi
-
-  if [[ "$LIVE" -ne 1 ]]; then
-    warn "npm not authenticated (required only for --live publish)"
-    return 0
-  fi
-
-  if [[ ! -t 0 ]] || [[ ! -t 1 ]]; then
-    fail "npm is not authenticated and this is not an interactive terminal.
-  Run cut-release from Terminal (not a headless Shortcut shell), or run:
-    npm login
-  then re-run with --live. npm login needs a TTY for \"Press ENTER to open the browser\".
-  Or pass --skip-npm and publish packages later."
-  fi
-
-  log "npm not authenticated — running npm login"
-  log "When prompted, press ENTER to open the browser, complete login, then return here."
-  # Prefer web/browser flow when the installed npm supports it; fall back to default login.
-  if npm login --help 2>&1 | grep -q -- '--auth-type'; then
-    npm login --auth-type=web || npm login
-  else
-    npm login
-  fi
-
-  if ! who="$(npm whoami 2>/dev/null)" || [[ -z "$who" ]]; then
-    fail "npm login finished but npm whoami still failed — publish would fail closed"
-  fi
-  log "npm authenticated as ${who}"
-}
-
-# ---------------------------------------------------------------------------
 # preflight
 # ---------------------------------------------------------------------------
 phase_preflight() {
   log "preflight…"
   command -v git >/dev/null || fail "git is required"
   command -v gh >/dev/null || fail "gh (GitHub CLI) is required"
-  command -v npm >/dev/null || fail "npm is required"
-  command -v node >/dev/null || fail "node is required (dashboard + npm)"
+  command -v node >/dev/null || fail "node is required for release metadata"
+
+  if [[ "$PLAN_ONLY" -ne 1 && -f ryk-dashboard-ui/package.json && ! -f ryk-dashboard-ui/dist/index.html ]]; then
+    command -v npm >/dev/null || fail "npm is required only when the dashboard must be built"
+  fi
 
   if [[ "$PLAN_ONLY" -ne 1 && "${RYK_TELEMETRY_BUILD_DISABLED:-0}" != "1" && -z "${RYK_POSTHOG_PROJECT_TOKEN:-}" ]]; then
     fail "RYK_POSTHOG_PROJECT_TOKEN is required for release telemetry (or set RYK_TELEMETRY_BUILD_DISABLED=1 for a local dry-run)"
@@ -318,17 +269,6 @@ phase_preflight() {
     else
       fail "gh is not authenticated (gh auth login)"
     fi
-  fi
-
-  ensure_npm_auth
-
-  if [[ "$LIVE" -eq 1 ]]; then
-    if [[ ! -d "$HOMEBREW_TAP_DIR/.git" ]]; then
-      fail "Homebrew tap clone missing or not a git repo: $HOMEBREW_TAP_DIR
-  Clone christopherkarani/homebrew-ryk there, or set RYK_HOMEBREW_TAP_DIR."
-    fi
-  elif [[ ! -d "$HOMEBREW_TAP_DIR/.git" ]]; then
-    warn "Homebrew tap not found at $HOMEBREW_TAP_DIR (required only for --live)"
   fi
 
   if [[ ! -x "${REPO_ROOT}/scripts/zig" ]]; then
@@ -383,7 +323,7 @@ phase_preflight() {
   remote: $remote_sha"
   fi
 
-  log "preflight OK (branch=$branch, zig=$zig_ver, npm=$(npm whoami 2>/dev/null), tap=$HOMEBREW_TAP_DIR)"
+  log "preflight OK (branch=$branch, zig=$zig_ver, distribution=curl/GitHub release)"
 }
 
 # ---------------------------------------------------------------------------
@@ -472,7 +412,7 @@ phase_notes() {
     printf 'Version:   %s → %s\n' "$PREV_VERSION" "$VERSION"
     printf 'Branch:    %s\n' "$(git rev-parse --abbrev-ref HEAD)"
     printf 'Live:      no (plan-only)\n'
-    printf 'Channels:  GitHub Release + npm (CLI+plugins) + Homebrew tap push\n'
+    printf 'Channel:   GitHub Release assets for the curl installer\n'
     printf 'Gate:      ./scripts/verify-pre-merge.sh\n'
     printf 'Linux:     Docker (build-linux-release-docker.sh)\n'
     printf 'Notes:     %s\n' "$NOTES_FILE"
@@ -523,14 +463,13 @@ phase_bump() {
 
   printf '%s\n' "$VERSION" >"${REPO_ROOT}/VERSION"
 
-  set_package_json_version packaging/npm/package.json "$VERSION"
   set_package_json_version integrations/openclaw-plugin/package.json "$VERSION"
   set_package_json_version integrations/opencode-plugin/package.json "$VERSION"
   set_package_json_version ryk-pi/package.json "$VERSION"
 
   # Keep every release-facing manifest on the same hard-cut version. These
-  # files are consumed directly by package managers and are not regenerated by
-  # build-release.sh's dist-only manifest renderer.
+  # files are consumed directly by the runtime and integrations and are not
+  # regenerated by build-release.sh's dist-only manifest renderer.
   PREVIOUS_RELEASE_VERSION="$PREV_VERSION" NEXT_RELEASE_VERSION="$VERSION" node <<'NODE'
 const fs = require('fs');
 const previous = process.env.PREVIOUS_RELEASE_VERSION;
@@ -541,9 +480,6 @@ const files = [
   'integrations/codex-plugin/.codex-plugin/plugin.json',
   'integrations/claude-code-plugin/.claude-plugin/plugin.json',
   'integrations/openclaw-plugin/openclaw.plugin.json',
-  'packaging/homebrew/Formula/ryk.rb',
-  'packaging/scoop/ryk.json',
-  'packaging/winget/ryk.yaml',
 ];
 for (const file of files) {
   const source = fs.readFileSync(file, 'utf8');
@@ -553,19 +489,6 @@ for (const file of files) {
   fs.writeFileSync(file, source.replaceAll(previous, next));
 }
 NODE
-
-  # Keep packaging npm artifact URLs current (checksums stay PLACEHOLDER until render).
-  if [[ -f packaging/npm/package.json ]]; then
-    node -e '
-const fs = require("fs");
-const p = "packaging/npm/package.json";
-const v = process.argv[1];
-const j = JSON.parse(fs.readFileSync(p, "utf8"));
-const base = "https://github.com/christopherkarani/ryk/releases/download/v" + v;
-if (j.ryk) j.ryk.artifactBaseUrl = base;
-fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
-' "$VERSION"
-  fi
 
   # Prepend notes section into CHANGELOG.md (avoid duplicating if already present).
   if [[ -f CHANGELOG.md && -f "$NOTES_FILE" ]]; then
@@ -594,35 +517,14 @@ fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
     fi
   fi
 
-  # Refresh ryk-pi lockfile version pins if present (best-effort).
-  if [[ -f ryk-pi/package-lock.json ]]; then
-    (cd ryk-pi && npm install --package-lock-only --ignore-scripts >/dev/null 2>&1) \
-      || warn "ryk-pi package-lock-only update failed; commit may need manual lock refresh"
-  fi
-  for package_dir in integrations/openclaw-plugin integrations/opencode-plugin; do
-    if [[ -f "${package_dir}/package-lock.json" ]]; then
-      (cd "${package_dir}" && npm install --package-lock-only --ignore-scripts >/dev/null 2>&1) \
-        || warn "${package_dir} package-lock-only update failed; commit may need manual lock refresh"
-    fi
-  done
-
-  git add VERSION CHANGELOG.md packaging/npm/package.json \
+  git add VERSION CHANGELOG.md \
     integrations/openclaw-plugin/package.json \
     integrations/opencode-plugin/package.json \
     ryk-pi/package.json
   git add build.zig.zon integrations/hermes-plugin/plugin.yaml \
     integrations/codex-plugin/.codex-plugin/plugin.json \
     integrations/claude-code-plugin/.claude-plugin/plugin.json \
-    integrations/openclaw-plugin/openclaw.plugin.json \
-    packaging/homebrew/Formula/ryk.rb packaging/scoop/ryk.json packaging/winget/ryk.yaml
-  if [[ -f ryk-pi/package-lock.json ]]; then
-    git add ryk-pi/package-lock.json || true
-  fi
-  for package_dir in integrations/openclaw-plugin integrations/opencode-plugin; do
-    if [[ -f "${package_dir}/package-lock.json" ]]; then
-      git add "${package_dir}/package-lock.json" || true
-    fi
-  done
+    integrations/openclaw-plugin/openclaw.plugin.json
 
   if git diff --cached --quiet; then
     warn "nothing to commit for version bump (already at ${VERSION}?)"
@@ -683,18 +585,10 @@ phase_build() {
     RYK_POSTHOG_PROJECT_TOKEN="${RYK_POSTHOG_PROJECT_TOKEN:-}" \
     RYK_TELEMETRY_BUILD_DISABLED="${RYK_TELEMETRY_BUILD_DISABLED:-0}" \
     RYK_RELEASE_LIVE="$LIVE" \
+    RYK_RELEASE_PRODUCT=curl \
     RYK_CLI_ARTIFACT_DIR="$CLI_BINS_DIR" \
     RYK_DIST_DIR="$DIST_DIR" \
     ./scripts/build-release.sh
-
-  log "packaging zip plugins…"
-  RYK_VERSION="$VERSION" \
-    RYK_DIST_DIR="${DIST_DIR}/plugins" \
-    ./scripts/package-plugins.sh
-
-  log "packaging npm plugin tarballs (scan)…"
-  RYK_DIST_DIR="${DIST_DIR}/npm" ./scripts/package-npm-plugins.sh || \
-    warn "package-npm-plugins failed; continuing if verify still passes"
 }
 
 # ---------------------------------------------------------------------------
@@ -702,13 +596,7 @@ phase_build() {
 # ---------------------------------------------------------------------------
 phase_verify() {
   log "verify…"
-  RYK_RELEASE_LIVE="$LIVE" RYK_RELEASE_PRODUCT=all ./scripts/verify-release.sh "$DIST_DIR"
-
-  local npm_pkg="${DIST_DIR}/package-manifests/npm/package.json"
-  [[ -f "$npm_pkg" ]] || fail "missing rendered npm package: $npm_pkg"
-  if grep -q 'PLACEHOLDER' "$npm_pkg"; then
-    fail "rendered npm package still contains PLACEHOLDER checksums: $npm_pkg"
-  fi
+  RYK_RELEASE_LIVE="$LIVE" RYK_RELEASE_PRODUCT=curl ./scripts/verify-release.sh "$DIST_DIR"
   for f in \
     "${DIST_DIR}/checksums.txt" \
     "${DIST_DIR}/telemetry-contract.txt" \
@@ -726,7 +614,7 @@ phase_verify() {
   if [[ "$LIVE" -eq 0 ]]; then
     printf '\n=== DRY-RUN COMPLETE ===\n'
     printf 'Version %s built and verified under %s/\n' "$VERSION" "$DIST_DIR"
-    printf 'No push, tag, npm, or Homebrew publish was performed.\n'
+    printf 'No push or tag was performed.\n'
     printf 'To publish:\n'
     printf '  ./scripts/cut-release.sh --version %s --live --resume-from publish-git\n' "$VERSION"
     printf '  (or re-run full --live after resetting if you need a clean bump path)\n'
@@ -759,17 +647,7 @@ phase_publish_git() {
     "${DIST_DIR}/checksums.txt" \
     "${DIST_DIR}/telemetry-contract.txt" \
     "${DIST_DIR}/sbom.json" \
-    "${DIST_DIR}/release-manifest.json" \
-    "${DIST_DIR}/plugins/"*.zip \
-    "${DIST_DIR}/plugins/"*checksums*
-  do
-    [[ -f "$f" ]] && assets+=("$f")
-  done
-  for f in \
-    "${DIST_DIR}/package-manifests/homebrew/Formula/ryk.rb" \
-    "${DIST_DIR}/package-manifests/npm/package.json" \
-    "${DIST_DIR}/package-manifests/scoop/ryk.json" \
-    "${DIST_DIR}/package-manifests/winget/ryk.yaml"
+    "${DIST_DIR}/release-manifest.json"
   do
     [[ -f "$f" ]] && assets+=("$f")
   done
@@ -804,75 +682,6 @@ phase_publish_git() {
 }
 
 # ---------------------------------------------------------------------------
-# publish-npm
-# ---------------------------------------------------------------------------
-phase_publish_npm() {
-  [[ "$LIVE" -eq 1 ]] || fail "internal: publish-npm requires --live"
-  if [[ "$SKIP_NPM" -eq 1 ]]; then
-    log "publish-npm: skipped (--skip-npm). Publish later with:
-  ./scripts/cut-release.sh --live --version ${VERSION} --resume-from publish-npm
-  # or manually from dist/package-manifests/npm + plugin package roots"
-    return 0
-  fi
-  log "publish-npm…"
-  # Re-check after long gate/build; prompt login again if token missing/expired.
-  ensure_npm_auth
-
-  local npm_dir="${DIST_DIR}/package-manifests/npm"
-  [[ -f "${npm_dir}/package.json" ]] || fail "missing ${npm_dir}/package.json"
-  if grep -q 'PLACEHOLDER' "${npm_dir}/package.json"; then
-    fail "refusing to publish npm package with PLACEHOLDER checksums"
-  fi
-
-  log "publishing @rykan/ryk from rendered manifests…"
-  (cd "$npm_dir" && npm publish --access public)
-
-  # Integration plugins from package roots (versions already bumped).
-  for pkg in integrations/opencode-plugin integrations/openclaw-plugin; do
-    if [[ -f "${pkg}/package.json" ]]; then
-      log "publishing ${pkg}…"
-      (cd "$pkg" && npm publish --access public)
-    fi
-  done
-
-  # Pi last (depends on CLI package version pin).
-  if [[ -f ryk-pi/package.json ]]; then
-    log "publishing ryk-pi…"
-    (cd ryk-pi && npm publish --access public)
-  fi
-}
-
-# ---------------------------------------------------------------------------
-# publish-homebrew
-# ---------------------------------------------------------------------------
-phase_publish_homebrew() {
-  [[ "$LIVE" -eq 1 ]] || fail "internal: publish-homebrew requires --live"
-  log "publish-homebrew → ${HOMEBREW_TAP_DIR}…"
-
-  mkdir -p "${HOMEBREW_TAP_DIR}/Formula"
-
-  # Primary formula
-  RYK_VERSION="$VERSION" \
-    RYK_DIST_DIR="$DIST_DIR" \
-    RYK_HOMEBREW_TAP_DIR="$HOMEBREW_TAP_DIR" \
-    RYK_HOMEBREW_FORMULA="${HOMEBREW_TAP_DIR}/Formula/ryk.rb" \
-    RYK_HOMEBREW_TEMPLATE="packaging/homebrew/Formula/ryk.rb" \
-    ./scripts/update-homebrew-formula.sh "$VERSION"
-
-  (
-    cd "$HOMEBREW_TAP_DIR"
-    git add Formula/ryk.rb 2>/dev/null || git add Formula/
-    if git diff --cached --quiet; then
-      log "Homebrew tap: no formula changes to commit"
-    else
-      git commit -m "ryk ${VERSION}"
-    fi
-    git push origin HEAD
-  )
-  log "Homebrew tap pushed"
-}
-
-# ---------------------------------------------------------------------------
 # done
 # ---------------------------------------------------------------------------
 phase_done() {
@@ -883,13 +692,7 @@ phase_done() {
   printf '\n=== cut-release complete ===\n'
   printf 'Version:  v%s\n' "$VERSION"
   printf 'Release:  %s\n' "$url"
-  if [[ "$SKIP_NPM" -eq 1 ]]; then
-    printf 'npm:      SKIPPED — publish @rykan/ryk@%s (+ plugins) yourself\n' "$VERSION"
-    printf '          cd dist/package-manifests/npm && npm publish --access public\n'
-  else
-    printf 'npm:      @rykan/ryk@%s (+ plugins)\n' "$VERSION"
-  fi
-  printf 'brew:     tap %s (ryk %s)\n' "$HOMEBREW_TAP_DIR" "$VERSION"
+  printf 'Install:  curl installer downloads the GitHub Release assets\n'
   printf 'Log:      %s\n' "${LOG_FILE:-n/a}"
   printf '============================\n'
 
@@ -939,8 +742,6 @@ main() {
         fi
         phase_publish_git
         ;;
-      publish-npm) phase_publish_npm ;;
-      publish-homebrew) phase_publish_homebrew ;;
       done) phase_done ;;
       *) fail "unknown phase $name" ;;
     esac
