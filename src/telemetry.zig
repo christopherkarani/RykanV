@@ -1360,10 +1360,89 @@ test "activation queue identity repairs an unmarked state without duplicating" {
     try std.testing.expectEqual(@as(usize, 1), try queueCount(std.testing.allocator, std.testing.io, &environ_map));
 }
 
+test "activation deduplication checks a full queue before eviction" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var environ_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer environ_map.deinit();
+    try environ_map.put("XDG_CONFIG_HOME", root);
+
+    const activation = try product.render(std.testing.allocator, std.testing.io, "ryk_0123456789abcdef0123456789abcdef", .{
+        .activation = .{ .host = "none" },
+    });
+    defer std.testing.allocator.free(activation);
+    const ordinary = try renderEvent(
+        std.testing.allocator,
+        std.testing.io,
+        "ryk_0123456789abcdef0123456789abcdef",
+        .{ .command = "doctor", .host = "none", .outcome = "success" },
+    );
+    defer std.testing.allocator.free(ordinary);
+
+    try store.setEnabled(std.testing.io, &environ_map, std.testing.allocator, true, false);
+    const paths = (try store.resolvePaths(std.testing.allocator, &environ_map)).?;
+    defer {
+        var owned_paths = paths;
+        owned_paths.deinit(std.testing.allocator);
+    }
+    var items: std.ArrayList([]const u8) = .empty;
+    defer items.deinit(std.testing.allocator);
+    try items.ensureTotalCapacity(std.testing.allocator, max_queue_events);
+    try items.append(std.testing.allocator, activation);
+    for (1..max_queue_events) |_| try items.append(std.testing.allocator, ordinary);
+    try store.writeQueue(std.testing.io, std.testing.allocator, &paths, items.items);
+
+    try std.testing.expect(!(try store.appendActivationEvent(
+        std.testing.io,
+        &environ_map,
+        std.testing.allocator,
+        activation,
+    )));
+    try std.testing.expectEqual(@as(usize, max_queue_events), try queueCount(std.testing.allocator, std.testing.io, &environ_map));
+}
+
 test "malformed activation marker frees an owned installation id" {
     const state =
         "{\"schema_version\":1,\"enabled\":true,\"installation_id\":\"ryk_0123456789abcdef0123456789abcdef\",\"activation_recorded\":\"yes\"}";
     try std.testing.expectError(error.InvalidTelemetryState, store.parseState(std.testing.allocator, state));
+}
+
+test "queue rejects an overfull persisted queue without double freeing" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var environ_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer environ_map.deinit();
+    try environ_map.put("XDG_CONFIG_HOME", root);
+    try store.setEnabled(std.testing.io, &environ_map, std.testing.allocator, true, false);
+
+    const paths = (try store.resolvePaths(std.testing.allocator, &environ_map)).?;
+    defer {
+        var owned_paths = paths;
+        owned_paths.deinit(std.testing.allocator);
+    }
+    const event = try renderEvent(
+        std.testing.allocator,
+        std.testing.io,
+        "ryk_0123456789abcdef0123456789abcdef",
+        .{ .command = "doctor", .host = "none", .outcome = "success" },
+    );
+    defer std.testing.allocator.free(event);
+
+    var items: std.ArrayList([]const u8) = .empty;
+    defer items.deinit(std.testing.allocator);
+    try items.ensureTotalCapacity(std.testing.allocator, max_queue_events + 1);
+    for (0..max_queue_events + 1) |_| try items.append(std.testing.allocator, event);
+    try store.writeQueue(std.testing.io, std.testing.allocator, &paths, items.items);
+    try std.testing.expectError(
+        error.InvalidTelemetryQueue,
+        store.readQueue(std.testing.allocator, std.testing.io, &paths),
+    );
 }
 
 test "state rendering uses the bounded persisted schema" {

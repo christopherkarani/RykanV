@@ -13,38 +13,25 @@ pub fn sendQueued(
     var sender = (try store.SendLock.tryAcquire(io, &paths)) orelse return;
     defer sender.release(io);
 
-    var sent = store.Queue{};
-    defer sent.deinit(allocator);
-    const body = blk: {
-        var lock = try store.StoreLock.acquire(io, &paths);
-        defer lock.release(io);
-
-        var state = try store.readState(allocator, io, &paths);
-        defer state.deinit(allocator);
-        var queue = try store.readQueue(allocator, io, &paths);
-        defer queue.deinit(allocator);
-        if (queue.items.items.len == 0) return;
-        if (!state.state.enabled) {
-            try store.writeQueue(io, allocator, &paths, &.{});
-            return;
-        }
-
-        for (queue.items.items) |item| {
-            const copy = try allocator.dupe(u8, item);
-            errdefer allocator.free(copy);
-            try sent.items.append(allocator, copy);
-        }
-        break :blk try contract.renderBatch(allocator, sent.items.items);
-    };
-    defer allocator.free(body);
-    try postBatch(io, environ_map, allocator, body);
-
+    // Keep the store lock through the POST so an append cannot evict an event
+    // from the snapshot after it has been sent but before it is removed.
     var lock = try store.StoreLock.acquire(io, &paths);
     defer lock.release(io);
+
+    var state = try store.readState(allocator, io, &paths);
+    defer state.deinit(allocator);
     var queue = try store.readQueue(allocator, io, &paths);
     defer queue.deinit(allocator);
-    const removed = store.removeSentPrefix(allocator, &queue, &sent);
-    if (removed > 0) try store.writeQueue(io, allocator, &paths, queue.items.items);
+    if (queue.items.items.len == 0) return;
+    if (!state.state.enabled) {
+        try store.writeQueue(io, allocator, &paths, &.{});
+        return;
+    }
+
+    const body = try contract.renderBatch(allocator, queue.items.items);
+    defer allocator.free(body);
+    try postBatch(io, environ_map, allocator, body);
+    try store.writeQueue(io, allocator, &paths, &.{});
 }
 
 fn postBatch(

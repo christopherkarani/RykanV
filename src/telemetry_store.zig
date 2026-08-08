@@ -239,10 +239,6 @@ pub fn appendActivationEvent(
 
     var queue = try readQueue(allocator, io, &paths);
     defer queue.deinit(allocator);
-    while (queue.items.items.len >= contract.max_queue_events) {
-        const dropped = queue.items.orderedRemove(0);
-        allocator.free(dropped);
-    }
     for (queue.items.items) |queued| {
         if (!sameActivationInstallation(allocator, queued, event)) continue;
         loaded.state.activation_recorded = true;
@@ -250,6 +246,10 @@ pub fn appendActivationEvent(
         defer allocator.free(body);
         try writeAtomic(io, allocator, paths.state, body);
         return false;
+    }
+    while (queue.items.items.len >= contract.max_queue_events) {
+        const dropped = queue.items.orderedRemove(0);
+        allocator.free(dropped);
     }
     const copy = try allocator.dupe(u8, event);
     queue.items.append(allocator, copy) catch |err| {
@@ -423,8 +423,10 @@ pub fn readQueue(allocator: std.mem.Allocator, io: std.Io, paths: *const Paths) 
         defer parsed.deinit();
         if (!contract.validQueuedEvent(parsed.value)) return error.InvalidTelemetryQueue;
         const copy = try allocator.dupe(u8, line);
-        errdefer allocator.free(copy);
-        try queue.items.append(allocator, copy);
+        queue.items.append(allocator, copy) catch |err| {
+            allocator.free(copy);
+            return err;
+        };
         if (queue.items.items.len > contract.max_queue_events) return error.InvalidTelemetryQueue;
     }
     return queue;
