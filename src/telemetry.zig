@@ -5,6 +5,7 @@ const env_scrub = @import("sandbox/env_scrub.zig");
 const host_launch = @import("cli/host_launch.zig");
 const exit_codes = @import("cli/exit_codes.zig");
 const contract = @import("telemetry_contract.zig");
+const product = @import("telemetry_product.zig");
 const store = @import("telemetry_store.zig");
 const transport = @import("telemetry_transport.zig");
 
@@ -36,7 +37,24 @@ const queueCount = store.queueCount;
 const posthogProxyBypassed = transport.posthogProxyBypassed;
 
 const max_pending_summary_records = 48;
-const max_batch_args = 3 + 4 + 6 * max_pending_summary_records * 11;
+const max_pending_product_records = 8;
+const max_batch_args = 3 + 4 + 6 * max_pending_summary_records * 11 + max_pending_product_records * 7;
+
+const PendingProductEvent = union(enum) {
+    activation: []const u8,
+    setup_completed: []const u8,
+    setup_failed: []const u8,
+    feedback_submitted: []const u8,
+    update_completed: struct {
+        channel: []const u8,
+        from_version: [64]u8,
+        from_len: u8,
+        to_version: [64]u8,
+        to_len: u8,
+        verification: []const u8,
+    },
+    update_failed: struct { channel: []const u8, stage: []const u8 },
+};
 
 const PendingSummaries = struct {
     fm: [max_pending_summary_records]contract.FmSummary = undefined,
@@ -51,6 +69,8 @@ const PendingSummaries = struct {
     feature_len: usize = 0,
     reliability: [max_pending_summary_records]contract.ReliabilitySummary = undefined,
     reliability_len: usize = 0,
+    product: [max_pending_product_records]PendingProductEvent = undefined,
+    product_len: usize = 0,
 
     fn addFm(self: *PendingSummaries, value: contract.FmSummary) void {
         for (self.fm[0..self.fm_len]) |*existing| {
@@ -144,7 +164,40 @@ const PendingSummaries = struct {
             self.reliability_len += 1;
         }
     }
+
+    fn addProduct(self: *PendingSummaries, value: product.Event) void {
+        if (self.product_len >= max_pending_product_records) return;
+        const pending: PendingProductEvent = switch (value) {
+            .activation => |event| .{ .activation = event.host },
+            .setup_completed => |event| .{ .setup_completed = event.mode },
+            .setup_failed => |event| .{ .setup_failed = event.mode },
+            .feedback_submitted => |event| .{ .feedback_submitted = event.category },
+            .update_completed => |event| blk: {
+                var from_version: [64]u8 = undefined;
+                var to_version: [64]u8 = undefined;
+                const from_len = copyVersion(&from_version, event.from_version) orelse return;
+                const to_len = copyVersion(&to_version, event.to_version) orelse return;
+                break :blk .{ .update_completed = .{
+                    .channel = event.channel,
+                    .from_version = from_version,
+                    .from_len = from_len,
+                    .to_version = to_version,
+                    .to_len = to_len,
+                    .verification = event.verification,
+                } };
+            },
+            .update_failed => |event| .{ .update_failed = .{ .channel = event.channel, .stage = event.stage } },
+        };
+        self.product[self.product_len] = pending;
+        self.product_len += 1;
+    }
 };
+
+fn copyVersion(destination: *[64]u8, value: []const u8) ?u8 {
+    if (value.len == 0 or value.len > destination.len) return null;
+    @memcpy(destination[0..value.len], value);
+    return @intCast(value.len);
+}
 
 var pending_summaries = PendingSummaries{};
 
@@ -311,6 +364,48 @@ pub fn recordSession(host: ?[]const u8, event_type: []const u8, result: []const 
         .result = safe_result,
         .count = 1,
     });
+}
+
+/// Record the first successful protected run candidate. The worker makes the
+/// persistent once-only decision while holding the telemetry store lock.
+pub fn recordActivation(host: ?[]const u8) void {
+    if (!transportConfigured()) return;
+    pending_summaries.addProduct(.{ .activation = .{ .host = product.sanitizeHost(host) } });
+}
+
+pub fn recordSetupCompleted(auto_mode: bool) void {
+    if (!transportConfigured()) return;
+    pending_summaries.addProduct(.{ .setup_completed = .{ .mode = if (auto_mode) "auto" else "interactive" } });
+}
+
+pub fn recordSetupFailed(auto_mode: bool) void {
+    if (!transportConfigured()) return;
+    pending_summaries.addProduct(.{ .setup_failed = .{ .mode = if (auto_mode) "auto" else "interactive" } });
+}
+
+pub fn recordFeedback(category: []const u8) void {
+    if (!transportConfigured()) return;
+    if (product.sanitizeFeedbackCategory(category)) |safe_category| {
+        pending_summaries.addProduct(.{ .feedback_submitted = .{ .category = safe_category } });
+    }
+}
+
+pub fn recordUpdateCompleted(channel: []const u8, from_version: []const u8, to_version: []const u8, verification: []const u8) void {
+    if (!transportConfigured() or !validVersionToken(from_version) or !validVersionToken(to_version)) return;
+    pending_summaries.addProduct(.{ .update_completed = .{
+        .channel = product.sanitizeChannel(channel),
+        .from_version = from_version,
+        .to_version = to_version,
+        .verification = product.sanitizeVerification(verification),
+    } });
+}
+
+pub fn recordUpdateFailed(channel: []const u8, stage: []const u8) void {
+    if (!transportConfigured()) return;
+    pending_summaries.addProduct(.{ .update_failed = .{
+        .channel = product.sanitizeChannel(channel),
+        .stage = product.sanitizeUpdateStage(stage),
+    } });
 }
 
 fn normalizeDecision(value: []const u8) []const u8 {
@@ -788,6 +883,38 @@ fn appendSummaryPayload(
     try appendEvent(io, environ_map, allocator, event);
 }
 
+fn productEventFromPending(value: *const PendingProductEvent) product.Event {
+    return switch (value.*) {
+        .activation => |host| .{ .activation = .{ .host = host } },
+        .setup_completed => |mode| .{ .setup_completed = .{ .mode = mode } },
+        .setup_failed => |mode| .{ .setup_failed = .{ .mode = mode } },
+        .feedback_submitted => |category| .{ .feedback_submitted = .{ .category = category } },
+        .update_completed => |event| .{ .update_completed = .{
+            .channel = event.channel,
+            .from_version = event.from_version[0..event.from_len],
+            .to_version = event.to_version[0..event.to_len],
+            .verification = event.verification,
+        } },
+        .update_failed => |event| .{ .update_failed = .{ .channel = event.channel, .stage = event.stage } },
+    };
+}
+
+fn appendProductPayload(
+    io: std.Io,
+    environ_map: *const std.process.Environ.Map,
+    allocator: std.mem.Allocator,
+    installation_id: []const u8,
+    event: product.Event,
+) !void {
+    const body = try product.render(allocator, io, installation_id, event);
+    defer allocator.free(body);
+    if (product.isActivation(event)) {
+        _ = try store.appendActivationEvent(io, environ_map, allocator, body);
+    } else {
+        try appendEvent(io, environ_map, allocator, body);
+    }
+}
+
 fn summaryArgCount(kind: []const u8) ?usize {
     if (std.mem.eql(u8, kind, "fm")) return 11;
     if (std.mem.eql(u8, kind, "enforcement")) return 9;
@@ -829,6 +956,15 @@ fn batchWorker(
             const summary = parseSummaryArgs(argv[index .. index + group_len]) catch return exit_codes.success;
             appendSummaryPayload(io, environ_map, allocator, installation_id, summary) catch return exit_codes.success;
             index += group_len;
+            continue;
+        }
+        if (std.mem.eql(u8, argv[index], "--product")) {
+            if (index + 1 >= argv.len) return exit_codes.success;
+            const group_len = product.argCount(argv[index + 1]) orelse return exit_codes.success;
+            if (index + 1 + group_len > argv.len) return exit_codes.success;
+            const event = product.parseArgs(argv[index + 1 .. index + 1 + group_len]) catch return exit_codes.success;
+            if (product.valid(event)) appendProductPayload(io, environ_map, allocator, installation_id, event) catch return exit_codes.success;
+            index += 1 + group_len;
             continue;
         }
         return exit_codes.success;
@@ -929,7 +1065,7 @@ fn spawnBatch(
 ) !void {
     if (invocation == null and summaries.fm_len == 0 and summaries.enforcement_len == 0 and
         summaries.integration_len == 0 and summaries.session_len == 0 and summaries.feature_len == 0 and
-        summaries.reliability_len == 0) return;
+        summaries.reliability_len == 0 and summaries.product_len == 0) return;
 
     const executable = try std.process.executablePathAlloc(io, allocator);
     defer allocator.free(executable);
@@ -959,6 +1095,9 @@ fn spawnBatch(
         try appendBatchSummary(&child_argv, &child_len, &count_storage, &storage_len, .{ .feature = summary });
     for (summaries.reliability[0..summaries.reliability_len]) |summary|
         try appendBatchSummary(&child_argv, &child_len, &count_storage, &storage_len, .{ .reliability = summary });
+    for (summaries.product[0..summaries.product_len]) |*event| {
+        product.appendBatchArgs(&child_argv, &child_len, productEventFromPending(event));
+    }
 
     var child_environ = try workerEnvironment(allocator, environ_map);
     defer child_environ.deinit();
@@ -1155,6 +1294,35 @@ test "append rechecks opt-out state while holding the queue lock" {
         appendEvent(std.testing.io, &environ_map, std.testing.allocator, event),
     );
     try std.testing.expectEqual(@as(usize, 0), try queueCount(std.testing.allocator, std.testing.io, &environ_map));
+}
+
+test "activation is persisted and appended only once" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var environ_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer environ_map.deinit();
+    try environ_map.put("XDG_CONFIG_HOME", root);
+
+    const event = try product.render(std.testing.allocator, std.testing.io, "ryk_0123456789abcdef0123456789abcdef", .{
+        .activation = .{ .host = "none" },
+    });
+    defer std.testing.allocator.free(event);
+
+    try std.testing.expect(try store.appendActivationEvent(std.testing.io, &environ_map, std.testing.allocator, event));
+    try std.testing.expect(!(try store.appendActivationEvent(std.testing.io, &environ_map, std.testing.allocator, event)));
+    try std.testing.expectEqual(@as(usize, 1), try queueCount(std.testing.allocator, std.testing.io, &environ_map));
+
+    const paths = (try store.resolvePaths(std.testing.allocator, &environ_map)).?;
+    defer {
+        var owned_paths = paths;
+        owned_paths.deinit(std.testing.allocator);
+    }
+    var loaded = try store.readState(std.testing.allocator, std.testing.io, &paths);
+    defer loaded.deinit(std.testing.allocator);
+    try std.testing.expect(loaded.state.activation_recorded);
 }
 
 test "state rendering uses the bounded persisted schema" {

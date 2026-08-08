@@ -6,6 +6,7 @@ Rykan V release builds include lightweight pseudonymous product telemetry so the
 ryk telemetry status
 ryk telemetry disable
 ryk telemetry enable
+ryk feedback bug
 ```
 
 There is no first-run prompt. Missing consent state means enabled; malformed or inaccessible state fails closed. `RYK_NO_TELEMETRY=1` disables telemetry for the process and prevents queued events from being sent. Disabling telemetry also clears the local queue and installation identifier.
@@ -16,7 +17,7 @@ Only release builds compiled with the project’s PostHog token have transport e
 
 ## Events and allowed telemetry fields
 
-Every event is constructed from an explicit allowlist. The original command event is `ryk_cli_command`. The product summaries are `ryk_fm_steward_summary`, `ryk_enforcement_summary`, `ryk_integration_summary`, `ryk_session_summary`, `ryk_feature_summary`, and `ryk_reliability_summary`. Repeated fixed dimensions within one CLI process are represented by one event with a bounded `count`; no raw per-hook or per-command payload is buffered.
+Every event is constructed from an explicit allowlist. The original command event is `ryk_cli_command`. The product summaries are `ryk_fm_steward_summary`, `ryk_enforcement_summary`, `ryk_integration_summary`, `ryk_session_summary`, `ryk_feature_summary`, and `ryk_reliability_summary`. Lifecycle events are `ryk_activation`, `ryk_setup_completed`, `ryk_setup_failed`, `ryk_feedback_submitted`, `ryk_update_completed`, and `ryk_update_failed`. Repeated fixed dimensions within one CLI process are represented by one event with a bounded `count`; no raw per-hook or per-command payload is buffered.
 
 | Field | Source and type | Transformation | Purpose |
 | --- | --- | --- | --- |
@@ -43,7 +44,18 @@ Summary-specific fields are limited to these fixed dimensions:
 | `ryk_feature_summary` | `feature`, `operation`, `result`, `count` | Measure adoption of fixed CLI features and subcommands |
 | `ryk_reliability_summary` | `operation`, `failure`, `source`, `count` | Measure fixed failure classes such as evaluator, protocol, timeout, policy-load, hook, usage, and command failures |
 
-The summary source boundaries are authoritative: FM fields come from the FM classify result; enforcement fields come from the final run, hook, or evaluate decision; integration fields come from install/verification boundaries; session fields come from fixed hook host/event arguments; and feature fields come from top-level dispatch. Summary collection is process-local and is emitted by the existing background telemetry worker after the command returns.
+Lifecycle-specific fields are also fixed and allowlisted:
+
+| Event | Fields | Source and purpose |
+| --- | --- | --- |
+| `ryk_activation` | `host` | First successful protected `ryk run` after the local telemetry installation state is created; host is a fixed enum |
+| `ryk_setup_completed` | `mode` | Successful public `ryk start`, split into `auto` or `interactive` |
+| `ryk_setup_failed` | `mode` | Failed public `ryk start`, split into `auto` or `interactive` |
+| `ryk_feedback_submitted` | `category` | User-selected fixed category: `bug`, `false_positive`, `false_negative`, `missing_integration`, or `confusing` |
+| `ryk_update_completed` | `channel`, `from_version`, `to_version`, `verification` | Official installer completed and the on-PATH version was verified |
+| `ryk_update_failed` | `channel`, `stage` | Update failure at `resolve`, `parse`, `compare`, `channel`, `confirmation`, `installer`, or `verify`, including unverified installs |
+
+The source boundaries are authoritative: activation comes from the protected-run result; setup comes from public `ryk start`; update events come from `ryk update`; feedback comes from the fixed-category `ryk feedback` command; FM fields come from the FM classify result; enforcement fields come from the final run, hook, or evaluate decision; integration fields come from install/verification boundaries; session fields come from fixed hook host/event arguments; and feature fields come from top-level dispatch. Collection is process-local and is emitted by the existing background telemetry worker after the command returns. Activation state is stored locally and marked under the telemetry store lock so concurrent processes emit it at most once per local telemetry identity.
 
 ## Forbidden telemetry fields
 
@@ -54,6 +66,7 @@ The payload never serializes runtime command or host objects. It does not includ
 - policy contents, history, audit, session, replay, or dashboard records;
 - secrets, credentials, tokens, proxy credentials, or host payloads;
 - error strings, logs, stack traces, network destinations, or response bodies;
+- free-form feedback text; feedback is accepted only as one of the five fixed categories above;
 - user names, email addresses, account identifiers, or machine identifiers.
 
 The top-level command and feature classifiers exclude hook/evaluate/decide/shim, CI, machine-readable, JSON/raw, and dry-run invocation metadata so scripts do not create command-usage events. Final enforcement summaries still cover hook and evaluate decisions because those summaries contain only fixed buckets. Bare agent-hook decisions are attributed as `source=hook`, `host=other`. The telemetry command itself never records an event, including its internal workers. A user-invoked release CLI wrapper such as `ryk run -- <agent>` records only fixed command and enforcement metadata; plugin code does not add payload fields.

@@ -680,6 +680,16 @@ pub const commands =
             },
         },
         .{
+            .name = "feedback",
+            .summary = "Send fixed-category product feedback",
+            .usage = "ryk feedback <bug|false_positive|false_negative|missing_integration|confusing>",
+            .category = .advanced,
+            .details = &.{
+                "Records only the selected category; free-form feedback text is not accepted or transmitted.",
+                "Categories: bug, false_positive, false_negative, missing_integration, confusing.",
+            },
+        },
+        .{
             .name = "telemetry",
             .summary = "View or change pseudonymous usage telemetry",
             .usage = "ryk telemetry [status|enable|disable] [--json]",

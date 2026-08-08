@@ -14,6 +14,7 @@ const shell_eval = @import("shell_eval.zig");
 const build_options = @import("build_options");
 const env_util = @import("../env_util.zig");
 const tui = @import("../tui/mod.zig");
+const telemetry = @import("../telemetry.zig");
 /// Re-export: run adapters for host_keys; regenerate managed store under workspace_root.
 /// Body lives in `policy.network_discovered` (DIS-1 / DIS-7).
 pub const refreshManagedDiscovery = policy_mod.network_discovered.refreshManagedDiscovery;
@@ -58,6 +59,8 @@ pub fn runStart(
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_state.deinit();
     const allocator = gpa_state.allocator();
+    var setup_succeeded = false;
+    defer if (setup_succeeded) telemetry.recordSetupCompleted(flags.auto) else telemetry.recordSetupFailed(flags.auto);
 
     try tui.render.banner(io, stdout, build_options.version, null);
     try stdout.writeAll(
@@ -256,6 +259,7 @@ pub fn runStart(
         verification,
         policy_mode,
     );
+    setup_succeeded = true;
     return exit_codes.success;
 }
 

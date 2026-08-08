@@ -12,6 +12,7 @@ const help = @import("help.zig");
 const danger_confirmation = @import("danger_confirmation.zig");
 const suggestions = @import("suggestions.zig");
 const env_util = @import("../env_util.zig");
+const telemetry = @import("../telemetry.zig");
 
 pub const github_latest_url = "https://api.github.com/repos/christopherkarani/ryk/releases/latest";
 /// Fallback when no target version is known (should be rare — prefer tag-pinned URLs).
@@ -327,6 +328,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     const target: []const u8 = blk: {
         if (args.version) |pinned| break :blk pinned;
         const body = fetchGitHubLatest(allocator, io) catch |err| {
+            telemetry.recordUpdateFailed(@tagName(channel), "resolve");
             if (args.json) {
                 try writeJsonResult(stdout, .{
                     .status = "error",
@@ -345,6 +347,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         };
         defer allocator.free(body);
         const tag = parseGitHubLatestTag(body) catch {
+            telemetry.recordUpdateFailed(@tagName(channel), "parse");
             if (args.json) {
                 try writeJsonResult(stdout, .{
                     .status = "error",
@@ -361,6 +364,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         };
         // Validate remote tag is parseable semver before trusting it.
         _ = parseSemver(tag) catch {
+            telemetry.recordUpdateFailed(@tagName(channel), "parse");
             if (args.json) {
                 try writeJsonResult(stdout, .{
                     .status = "error",
@@ -380,6 +384,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     };
 
     const order = compareVersionStrings(current, target) catch {
+        telemetry.recordUpdateFailed(@tagName(channel), "compare");
         if (args.json) {
             try writeJsonResult(stdout, .{
                 .status = "error",
@@ -422,6 +427,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     }
 
     if (!channelAllowsInstaller(channel, args.force)) {
+        telemetry.recordUpdateFailed(@tagName(channel), "channel");
         const hint = packageManagerHint(channel);
         if (args.json) {
             try writeJsonResult(stdout, .{
@@ -457,6 +463,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         var prompt_buf: [128]u8 = undefined;
         const prompt = std.fmt.bufPrint(&prompt_buf, "Update ryk {s} → {s}?", .{ current, target }) catch "Update ryk?";
         const decision = danger_confirmation.decide(io, stdout, prompt, false, try stdin.isTty(io), null) catch |err| {
+            telemetry.recordUpdateFailed(@tagName(channel), "confirmation");
             try stderr.print("ryk update: confirmation failed: {s}\n", .{@errorName(err)});
             return exit_codes.general;
         };
@@ -478,6 +485,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     }
 
     const install_code = runOfficialInstaller(allocator, io, target, args.json, stderr) catch |err| {
+        telemetry.recordUpdateFailed(@tagName(channel), "installer");
         if (args.json) {
             try writeJsonResult(stdout, .{
                 .status = "error",
@@ -496,6 +504,7 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
     };
 
     if (install_code != 0) {
+        telemetry.recordUpdateFailed(@tagName(channel), "installer");
         if (args.json) {
             try writeJsonResult(stdout, .{
                 .status = "error",
@@ -520,6 +529,12 @@ pub fn command(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: an
         // Accept equal (exact) or newer (channel already past target).
         break :blk post_order == .equal or post_order == .newer;
     } else false;
+
+    if (verified) {
+        telemetry.recordUpdateCompleted(@tagName(channel), current, target, "verified");
+    } else {
+        telemetry.recordUpdateFailed(@tagName(channel), "verify");
+    }
 
     if (args.json) {
         try writeJsonResult(stdout, .{

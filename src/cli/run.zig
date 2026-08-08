@@ -5,6 +5,7 @@ const core = @import("ryk_core").core;
 const supervisor = core.supervisor;
 const core_api = @import("ryk_core").api;
 const env_util = @import("../env_util.zig");
+const telemetry = @import("../telemetry.zig");
 const intercept = @import("../intercept/mod.zig");
 const policy = @import("ryk_core").policy;
 const sandbox = @import("../sandbox/mod.zig");
@@ -21,7 +22,6 @@ const suggestions = @import("suggestions.zig");
 const run_os_sandbox = @import("run_os_sandbox.zig");
 const codex_mcp_sandbox = @import("codex_mcp_sandbox.zig");
 const host_mcp_sandbox = @import("host_mcp_sandbox.zig");
-const telemetry = @import("../telemetry.zig");
 
 const RunOptions = struct {
     workspace: ?[]const u8 = null,
@@ -1479,6 +1479,11 @@ fn commandWithStdioAndEnv(io: std.Io, argv: []const []const u8, stdout: anytype,
 
     const protected_session =
         boundary_active and apply_result.receipt.posture == .active and !boundary_backend_failed;
+    const protected_run_succeeded = protected_session and switch (final_status) {
+        .exited => |code| code == exit_codes.success,
+        .signal, .stopped, .unknown => false,
+    };
+    if (protected_run_succeeded) telemetry.recordActivation(trusted_host_key);
     try printSessionEnd(io, stdout, result, is_first_session, protected_session);
 
     if (required_proxy_failed) {

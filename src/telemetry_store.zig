@@ -18,6 +18,7 @@ pub const StateSource = enum { default, persisted, environment };
 pub const State = struct {
     enabled: bool,
     installation_id: ?[]u8 = null,
+    activation_recorded: bool = false,
 
     pub fn deinit(self: *State, allocator: std.mem.Allocator) void {
         if (self.installation_id) |id| allocator.free(id);
@@ -152,6 +153,7 @@ pub fn setEnabled(
     } else {
         if (loaded.state.installation_id) |id| allocator.free(id);
         loaded.state.installation_id = null;
+        loaded.state.activation_recorded = false;
     }
     const body = try renderState(allocator, &loaded.state);
     defer allocator.free(body);
@@ -209,6 +211,45 @@ pub fn appendEvent(
     errdefer allocator.free(copy);
     try queue.items.append(allocator, copy);
     try writeQueue(io, allocator, &paths, queue.items.items);
+}
+
+/// Append the activation event and mark it recorded under one store lock.
+/// This prevents concurrent CLI processes from emitting duplicate first-run
+/// events while keeping ordinary events on the existing queue path.
+pub fn appendActivationEvent(
+    io: std.Io,
+    environ_map: *const std.process.Environ.Map,
+    allocator: std.mem.Allocator,
+    event: []const u8,
+) !bool {
+    if (event.len > contract.max_event_bytes) return error.TelemetryEventTooLarge;
+    var paths = (try resolvePaths(allocator, environ_map)) orelse return error.NoConfigDirectory;
+    defer paths.deinit(allocator);
+    try ensureConfigDir(io, &paths);
+    var lock = try StoreLock.acquire(io, &paths);
+    defer lock.release(io);
+
+    var loaded = try readState(allocator, io, &paths);
+    defer loaded.deinit(allocator);
+    if (!loaded.state.enabled) return error.TelemetryDisabled;
+    if (loaded.state.activation_recorded) return false;
+
+    var queue = try readQueue(allocator, io, &paths);
+    defer queue.deinit(allocator);
+    while (queue.items.items.len >= contract.max_queue_events) {
+        const dropped = queue.items.orderedRemove(0);
+        allocator.free(dropped);
+    }
+    const copy = try allocator.dupe(u8, event);
+    errdefer allocator.free(copy);
+    try queue.items.append(allocator, copy);
+    try writeQueue(io, allocator, &paths, queue.items.items);
+
+    loaded.state.activation_recorded = true;
+    const body = try renderState(allocator, &loaded.state);
+    defer allocator.free(body);
+    try writeAtomic(io, allocator, paths.state, body);
+    return true;
 }
 
 pub fn queueCount(allocator: std.mem.Allocator, io: std.Io, environ_map: *const std.process.Environ.Map) !usize {
@@ -290,7 +331,7 @@ pub fn parseState(allocator: std.mem.Allocator, text: []const u8) !State {
     defer parsed.deinit();
     if (parsed.value != .object) return error.InvalidTelemetryState;
     const object = parsed.value.object;
-    try contract.rejectUnknownKeys(object, &.{ "schema_version", "enabled", "installation_id" });
+    try contract.rejectUnknownKeys(object, &.{ "schema_version", "enabled", "installation_id", "activation_recorded" });
     const version = object.get("schema_version") orelse return error.InvalidTelemetryState;
     if (version != .integer or version.integer != contract.schema_version) return error.InvalidTelemetryState;
     const enabled_value = object.get("enabled") orelse return error.InvalidTelemetryState;
@@ -311,7 +352,18 @@ pub fn parseState(allocator: std.mem.Allocator, text: []const u8) !State {
         allocator.free(installation_id.?);
         return error.InvalidTelemetryState;
     }
-    return .{ .enabled = enabled, .installation_id = installation_id };
+    var activation_recorded = false;
+    if (object.get("activation_recorded")) |value| {
+        activation_recorded = switch (value) {
+            .bool => |recorded| recorded,
+            else => return error.InvalidTelemetryState,
+        };
+    }
+    if (!enabled and activation_recorded) {
+        if (installation_id) |id| allocator.free(id);
+        return error.InvalidTelemetryState;
+    }
+    return .{ .enabled = enabled, .installation_id = installation_id, .activation_recorded = activation_recorded };
 }
 
 pub fn readQueue(allocator: std.mem.Allocator, io: std.Io, paths: *const Paths) !Queue {
@@ -365,7 +417,7 @@ pub fn renderState(allocator: std.mem.Allocator, state: *const State) ![]u8 {
         .{if (state.enabled) "true" else "false"},
     );
     if (state.installation_id) |id| try core.util.writeJsonString(&out.writer, id) else try out.writer.writeAll("null");
-    try out.writer.writeAll("}\n");
+    try out.writer.print(",\"activation_recorded\":{s}}}\n", .{if (state.activation_recorded) "true" else "false"});
     return try out.toOwnedSlice();
 }
 

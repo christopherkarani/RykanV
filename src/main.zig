@@ -37,9 +37,20 @@ pub fn main(init: std.process.Init) !u8 {
 
     const shim_alias = if (builtin.os.tag == .windows) ryk.intercept.commands.shimAliasFromExecutablePath(argv[0]) else null;
     const code = if (shim_alias) |alias|
-        try runWindowsExecutableShim(io, init.environ_map, allocator, alias, argv[1..], &stdout_writer.interface, &stderr_writer.interface)
+        runWindowsExecutableShim(io, init.environ_map, allocator, alias, argv[1..], &stdout_writer.interface, &stderr_writer.interface) catch |err| {
+            stdout_writer.interface.flush() catch {};
+            stderr_writer.interface.flush() catch {};
+            const telemetry_argv = [_][]const u8{alias};
+            ryk.telemetry.recordInvocation(io, init.environ_map, allocator, &telemetry_argv, ryk.cli.exit_codes.general);
+            return err;
+        }
     else
-        try ryk.cli.run(io, init.environ_map, argv[1..], &stdout_writer.interface, &stderr_writer.interface);
+        ryk.cli.run(io, init.environ_map, argv[1..], &stdout_writer.interface, &stderr_writer.interface) catch |err| {
+            stdout_writer.interface.flush() catch {};
+            stderr_writer.interface.flush() catch {};
+            ryk.telemetry.recordInvocation(io, init.environ_map, allocator, argv[1..], ryk.cli.exit_codes.general);
+            return err;
+        };
     try stdout_writer.interface.flush();
     try stderr_writer.interface.flush();
     if (shim_alias) |alias| {

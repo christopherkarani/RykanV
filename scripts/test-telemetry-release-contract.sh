@@ -71,6 +71,10 @@ wait_for_queue || fail "human command did not create a queued telemetry event"
 wait_for_event "ryk_feature_summary" || fail "feature summary was not queued"
 assert_queue_payloads
 
+ryk feedback bug >/dev/null
+wait_for_event "ryk_feedback_submitted" || fail "fixed-category feedback event was not queued"
+assert_queue_payloads
+
 integration_before="$(rg -c '"event":"ryk_integration_summary"' "$CONFIG/ryk/telemetry.queue.jsonl" || true)"
 ryk plugin doctor >/dev/null 2>/dev/null || true
 wait_for_event "ryk_integration_summary" || fail "integration summary was not queued"

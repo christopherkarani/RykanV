@@ -4,6 +4,7 @@ const build_options = @import("build_options");
 const core = @import("ryk_core").core;
 const host_launch = @import("cli/host_launch.zig");
 const exit_codes = @import("cli/exit_codes.zig");
+const product = @import("telemetry_product.zig");
 
 pub const event_name = "ryk_cli_command";
 pub const fm_summary_event_name = "ryk_fm_steward_summary";
@@ -100,6 +101,7 @@ pub fn validCommand(command_name: []const u8) bool {
     const commands = [_][]const u8{
         "run",       "start", "init",    "doctor",     "policy", "credentials", "replay",    "scan",   "packs",
         "allowlist", "allow", "unallow", "allow-once", "stop",   "disable",     "uninstall", "update", "shutdown",
+        "feedback",
     };
     for (commands) |candidate| if (std.mem.eql(u8, command_name, candidate)) return true;
     return false;
@@ -283,7 +285,7 @@ fn validFeature(value: []const u8) bool {
         "help",      "version", "run",         "start",      "init",   "doctor",  "policy",    "credentials", "replay",   "scan",   "packs",
         "allowlist", "allow",   "unallow",     "allow-once", "stop",   "disable", "uninstall", "update",      "shutdown", "plugin", "mcp",
         "tools",     "redteam", "completions", "dashboard",  "report", "ci",      "env",       "explain",     "diff",     "apply",  "discard",
-        "other",
+        "feedback",  "other",
     };
     for (features) |candidate| if (std.mem.eql(u8, value, candidate)) return true;
     return false;
@@ -495,10 +497,10 @@ fn pluginTarget(args: []const []const u8) []const u8 {
 
 fn featureName(value: []const u8) ?[]const u8 {
     const features = [_][]const u8{
-        "help",   "version",   "run",     "start",   "init",        "doctor",    "policy",  "credentials", "replay", "scan",
-        "packs",  "allowlist", "allow",   "unallow", "allow-once",  "stop",      "disable", "uninstall",   "update", "shutdown",
-        "plugin", "mcp",       "tools",   "redteam", "completions", "dashboard", "report",  "ci",          "env",    "explain",
-        "diff",   "apply",     "discard",
+        "help",     "version",   "run",   "start",   "init",       "doctor",      "policy",    "credentials", "replay", "scan",
+        "packs",    "allowlist", "allow", "unallow", "allow-once", "stop",        "disable",   "uninstall",   "update", "shutdown",
+        "feedback", "plugin",    "mcp",   "tools",   "redteam",    "completions", "dashboard", "report",      "ci",     "env",
+        "explain",  "diff",      "apply", "discard",
     };
     for (features) |feature| if (std.mem.eql(u8, value, feature)) return feature;
     return null;
@@ -597,6 +599,7 @@ pub fn rejectUnknownKeys(object: std.json.ObjectMap, allowed: []const []const u8
 }
 
 pub fn validQueuedEvent(value: std.json.Value) bool {
+    if (product.validQueuedEvent(value)) return true;
     if (value != .object) return false;
     const root = value.object;
     rejectUnknownKeys(root, &.{ "event", "properties" }) catch return false;
