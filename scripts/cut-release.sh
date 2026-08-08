@@ -175,15 +175,15 @@ mark_phase() {
 
 save_state() {
   mkdir -p "$STATE_DIR"
-  cat >"$STATE_FILE" <<EOF
-VERSION=${VERSION:-}
-PREV_VERSION=${PREV_VERSION:-}
-LIVE=${LIVE}
-COMPLETED=${COMPLETED_PHASES[*]}
-NOTES_FILE=${NOTES_FILE:-}
-LOG_FILE=${LOG_FILE:-}
-BUMP=${BUMP:-}
-EOF
+  {
+    printf 'VERSION=%s\n' "${VERSION:-}"
+    printf 'PREV_VERSION=%s\n' "${PREV_VERSION:-}"
+    printf 'LIVE=%s\n' "$LIVE"
+    printf 'COMPLETED=%q\n' "${COMPLETED_PHASES[*]}"
+    printf 'NOTES_FILE=%s\n' "${NOTES_FILE:-}"
+    printf 'LOG_FILE=%s\n' "${LOG_FILE:-}"
+    printf 'BUMP=%s\n' "${BUMP:-}"
+  } >"$STATE_FILE"
 }
 
 load_state_if_resume() {
