@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.11] - 2026-08-08
+
+## What's Changed
+* Fix release resume state quoting by @christopherkarani in https://github.com/christopherkarani/ryk/pull/114
+
+
+**Full Changelog**: https://github.com/christopherkarani/ryk/compare/v1.2.10...v1.2.11
+
 ## [1.2.10] - 2026-08-08
 
 ## What's Changed
