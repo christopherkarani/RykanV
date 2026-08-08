@@ -193,7 +193,7 @@ This plugin does not mutate host configuration, so uninstalling is safe.
 
 ## No MCP server behavior
 
-The OpenCode plugin does not add MCP server behavior or drone-specific plugin features.
+The OpenCode plugin does not add MCP server behavior.
 
 ## Strongest protection warning
 

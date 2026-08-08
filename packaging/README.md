@@ -1,29 +1,23 @@
 # Packaging
 
-The canonical CLI binary is **ryk** (Rykan V). Artifacts are `ryk-v{version}-*`.
+The canonical binary is `ryk`. Release artifacts use the form `ryk-v{version}-{os}-{arch}`.
 
-Production package templates live under:
+Package templates live under:
 
 - `homebrew/Formula/ryk.rb`
 - `scoop/ryk.json`
 - `winget/ryk.yaml`
-- `npm/package.json` (`@rykan/ryk`, bin `ryk`)
-- `docker/Dockerfile` (ENTRYPOINT `ryk`)
-- `edge/Dockerfile`
-- `systemd/edge.service`
-- `systemd/edge-bench.example.service`
-- `systemd/edge-sitl.service`
+- `npm/package.json`
+- `docker/Dockerfile`
 
-Templates use release version metadata and remain fail-closed while they contain placeholder checksums. Release automation renders publishable Homebrew, npm, Scoop, and WinGet manifests into `dist/package-manifests/` from `dist/checksums.txt`; `scripts/verify-release.sh` fails if rendered manifests are missing or still contain placeholders. The project license is Apache-2.0.
+The templates contain release-time placeholders until the build produces checksums. `scripts/build-release.sh` renders publishable manifests under `dist/package-manifests/`; `scripts/verify-release.sh` refuses missing or placeholder checksums.
 
-## Cutting a release (primary)
+## Release path
 
-Use **`scripts/cut-release.sh`** on a Mac (optional Shortcuts.app UX). See [`docs/dev/cut-release-shortcut.md`](../docs/dev/cut-release-shortcut.md) and [`docs/dev/release.md`](../docs/dev/release.md).
+Use `scripts/cut-release.sh` for a full maintainer release. Read [`docs/dev/release.md`](../docs/dev/release.md) first.
 
 ```sh
-./scripts/cut-release.sh --bump patch --live
-```
+./scripts/cut-release.sh --bump patch --plan-only
++```
 
-That path builds artifacts locally (Linux via Docker), creates the GitHub Release with assets, publishes npm from **rendered** manifests (never `PLACEHOLDER_*`), and pushes the Homebrew tap.
-
-Edge packaging is for local simulation/SITL/bench-preparation evaluation only. Package templates must not add credentials, hosted telemetry, privileged container defaults, real hardware endpoint defaults, real-flight deployment, certification claims, detect-and-avoid claims, or autopilot replacement behavior.
+Do not publish `packaging/npm` or another template directory directly. Publish only rendered manifests after the release checks pass.

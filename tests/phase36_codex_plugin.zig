@@ -145,11 +145,6 @@ test "each skill references real ryk commands" {
     }
 }
 
-test "no drone skill exists in codex plugin" {
-    const drone_skill_path = plugin_dir ++ "/skills/ryk-drone/SKILL.md";
-    try std.testing.expect(!fileExists(drone_skill_path));
-}
-
 test "no mcp skill exists in codex plugin" {
     const mcp_skill_path = plugin_dir ++ "/skills/ryk-mcp/SKILL.md";
     try std.testing.expect(!fileExists(mcp_skill_path));
@@ -289,13 +284,6 @@ test "plugin README states no MCP server behavior" {
     defer std.testing.allocator.free(content);
 
     try std.testing.expect(std.mem.indexOf(u8, content, "does not add MCP server behavior") != null);
-}
-
-test "plugin README states no drone plugin features" {
-    const content = try readFile(std.testing.allocator, readme_path);
-    defer std.testing.allocator.free(content);
-
-    try std.testing.expect(std.mem.indexOf(u8, content, "drone-specific plugin features") != null);
 }
 
 // ---------------------------------------------------------------------------

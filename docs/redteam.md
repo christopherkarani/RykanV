@@ -15,9 +15,7 @@
 - **Not** proof that PATH wrappers, host hooks, network proxy, or OS-enforced filesystem backends are active
 - A **100% score does not mean** your workspace is protected
 
-For protection grade honesty, see [protection-grades.md](protection-grades.md) and `ryk doctor` / `ryk status` (readiness checks are a separate concern).
-
-Future directions (not implemented here): `redteam policy` against workspace YAML, and live e2e that exercise daemon/host boundaries.
+For protection grade honesty, see [the compatibility matrix](compatibility.md#protection-grades-canonical) and `ryk doctor` (readiness checks are a separate concern).
 
 ## Categories
 
@@ -46,7 +44,7 @@ JSON includes a top-level `provenance` object, for example:
 | `evaluator` | `zig-in-process` (not `rust-daemon`) |
 | `real_action_attempted` | `false` |
 | `network_enforcement` | `unavailable` (installed backend not exercised) |
-| `uncovered_boundaries` | workspace policy, daemon shell, wrapper PATH, host hooks, proxy, OS FS, … |
+| `uncovered_boundaries` | workspace policy, wrapper PATH, host hooks, proxy, OS filesystem, and OS sandbox attach |
 
 ## CI Mode
 

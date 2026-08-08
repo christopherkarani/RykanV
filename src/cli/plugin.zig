@@ -1920,7 +1920,7 @@ pub fn detectOpenClawHostInstall(io: std.Io, allocator: std.mem.Allocator, openc
     };
     defer allocator.free(home);
 
-    const extension_root = try std.fs.path.join(allocator, &.{ home, ".openclaw", "extensions", "ryk"});
+    const extension_root = try std.fs.path.join(allocator, &.{ home, ".openclaw", "extensions", "ryk" });
     defer allocator.free(extension_root);
     const manifest_path = try std.fs.path.join(allocator, &.{ extension_root, "openclaw.plugin.json" });
     defer allocator.free(manifest_path);
@@ -2112,7 +2112,7 @@ pub fn resolveOpenCodeDestination(allocator: std.mem.Allocator, workspace_root: 
 }
 
 pub fn hermesUserPluginRoot(allocator: std.mem.Allocator) ![]u8 {
-    var env_map = env_util.createProcessMap(allocator) catch return std.fs.path.join(allocator, &.{ "~", ".hermes", "plugins", "ryk"});
+    var env_map = env_util.createProcessMap(allocator) catch return std.fs.path.join(allocator, &.{ "~", ".hermes", "plugins", "ryk" });
     defer env_map.deinit();
     const hermes_home = try hermesHomeFromEnvMap(allocator, &env_map);
     defer allocator.free(hermes_home);
@@ -2184,7 +2184,7 @@ pub fn runOpenClawInstall(allocator: std.mem.Allocator, plugin_dir: []const u8) 
 }
 
 pub fn runHermesEnable(allocator: std.mem.Allocator) !u8 {
-    const argv = [_][]const u8{ "hermes", "plugins", "enable", "ryk"};
+    const argv = [_][]const u8{ "hermes", "plugins", "enable", "ryk" };
     const result = try child_process.runHostCommandTimed(allocator, &argv, 10_000, null, null);
     defer child_process.deinitHostCommandResult(result, allocator);
     return if (result.timed_out) 255 else result.exit_code;
@@ -2435,7 +2435,6 @@ test "plugin doctor prints expected sections" {
     try std.testing.expect(std.mem.indexOf(u8, output, "pi …") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Plugin directories:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Host binaries:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Drone workstream:") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Platform:") != null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
@@ -2561,26 +2560,9 @@ test "plugin doctor --json emits valid JSON" {
     try std.testing.expect(parsed.value.object.get("hermes_paths") != null);
     try std.testing.expect(parsed.value.object.get("hermes_hook_smoke_passed") != null);
     try std.testing.expect(parsed.value.object.get("hermes_hook_smoke_passed").? == .bool);
-    try std.testing.expect(parsed.value.object.get("drone") == null);
     try std.testing.expect(parsed.value.object.get("warnings") != null);
     try std.testing.expect(std.mem.indexOfScalar(u8, json, 0x1b) == null);
     try std.testing.expect(std.mem.indexOf(u8, json, "ryk Plugin Doctor") == null);
-    try std.testing.expectEqualStrings("", stderr_writer.buffered());
-}
-
-test "plugin doctor plain output does not expose Edge or drone workstream state" {
-    var stdout_buf: [16384]u8 = undefined;
-    var stderr_buf: [256]u8 = undefined;
-    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-
-    const code = try doctorCommand(std.testing.io, &.{}, &stdout_writer, &stderr_writer);
-    try std.testing.expectEqual(exit_codes.success, code);
-
-    const output = stdout_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "Drone workstream") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "live control") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "edge") == null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 
@@ -3104,7 +3086,6 @@ test "plugin install opencode --scope global is accepted in dry-run" {
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 
-
 test "plugin install opencode --yes writes global plugin under HOME" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
@@ -3179,7 +3160,6 @@ test "ensureOpenCodeConfigSane repairs plugin list placeholder" {
     try std.testing.expect(std.mem.indexOf(u8, fixed, "[]") != null);
 }
 
-
 test "plugin mcp-server reports limited status honestly" {
     var stdout_buf: [4096]u8 = undefined;
     var stderr_buf: [256]u8 = undefined;
@@ -3194,23 +3174,6 @@ test "plugin mcp-server reports limited status honestly" {
     try std.testing.expect(std.mem.indexOf(u8, output, "deferred") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "not yet active") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "ryk_doctor") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "edge_safety_status") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "live drone") == null);
-    try std.testing.expectEqualStrings("", stderr_writer.buffered());
-}
-
-test "plugin mcp-server does not claim to expose drone actuation" {
-    var stdout_buf: [4096]u8 = undefined;
-    var stderr_buf: [256]u8 = undefined;
-    var stdout_writer: std.Io.Writer = .fixed(&stdout_buf);
-    var stderr_writer: std.Io.Writer = .fixed(&stderr_buf);
-
-    const code = try mcpServerCommand(std.testing.io, &.{}, &stdout_writer, &stderr_writer);
-    try std.testing.expectEqual(exit_codes.success, code);
-
-    const output = stdout_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "live drone actuation") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "MCP server is active") == null);
     try std.testing.expectEqualStrings("", stderr_writer.buffered());
 }
 

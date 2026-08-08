@@ -471,13 +471,10 @@ ryk includes comprehensive tests for credential guardrails:
 
 ```bash
 # Run all tests
-zig build test
+./scripts/zig build test
 
-# Specific credential tests
-zig build test -- src/intercept/credentials.zig
-zig build test -- src/audit/redact_bridge.zig
-zig build test -- src/intercept/env.zig
-zig build test -- src/policy/validate.zig
+# For focused iteration, use the domain slice and a test-name filter.
+./scripts/test-slice.sh intercept --filter credentials
 ```
 
 ### Synthetic Test Values

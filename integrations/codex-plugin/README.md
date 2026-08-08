@@ -18,7 +18,7 @@ The plugin is a thin integration layer. The ryk CLI remains the source of truth 
 
 1. Build ryk:
    ```bash
-   zig build
+   ./scripts/zig build
    ```
 
 2. Install the plugin locally in Codex (method depends on Codex version; consult Codex docs for the latest plugin loading mechanism).
@@ -114,7 +114,7 @@ Remove the plugin from Codex using your Codex plugin management commands. This p
 
 ## No MCP server behavior
 
-This plugin does not add MCP server behavior or drone-specific plugin features.
+This plugin does not add MCP server behavior.
 
 ## Decision mapping (honest)
 

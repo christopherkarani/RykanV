@@ -35,7 +35,7 @@ report_binary_sizes() {
     *.tar.gz) tar -xzf "$artifact" -C "$extract_dir" ;;
     *.zip) unzip -q "$artifact" -d "$extract_dir" ;;
     esac
-    for binary in ryk.exe; do
+    for binary in ryk ryk.exe; do
       path="$(find "$extract_dir" -path "*/bin/$binary" -type f | head -n 1)"
       [ -n "$path" ] || continue
       size="$(file_size_bytes "$path")"
@@ -44,7 +44,7 @@ report_binary_sizes() {
         delta=$((size - baseline))
         printf '  %s %s: %s bytes (baseline %s, delta %+d)\n' "$artifact_name" "$binary" "$size" "$baseline" "$delta"
       else
-        printf '  %s %s: %s bytes (no prior baseline — establishing)\n' "$artifact_name" "$binary" "$size"
+        printf '  %s %s: %s bytes (no prior baseline; establishing)\n' "$artifact_name" "$binary" "$size"
       fi
     done
   done
@@ -57,7 +57,7 @@ report_binary_sizes() {
 
 # Verifies release archive checksums through scripts/verify-release.sh.
 printf 'release dry-run: building artifacts into %s\n' "$DIST_DIR"
-RYK_TELEMETRY_BUILD_DISABLED=1 RYK_RELEASE_PRODUCT=host RYK_DIST_DIR="$DIST_DIR" ./scripts/build-release.sh
+RYK_RELEASE_PRODUCT=host RYK_DIST_DIR="$DIST_DIR" ./scripts/build-release.sh
 RYK_RELEASE_PRODUCT=host ./scripts/verify-release.sh "$DIST_DIR"
 RYK_DIST_DIR="$DIST_DIR" ./scripts/install-layout-smoke-test.sh
 report_binary_sizes
@@ -66,4 +66,4 @@ if [ "$(uname -s)" = "Linux" ] && command -v docker >/dev/null 2>&1; then
 fi
 
 printf 'release dry-run: passed\n'
-printf 'Limitations: no real hardware, PX4/ArduPilot SITL opt-in only, telemetry transport disabled in this dry-run, no secrets required.\n'
+printf 'Limitations: this checks local packaging and install layout only; it does not publish artifacts or exercise host-specific runtime enforcement.\n'

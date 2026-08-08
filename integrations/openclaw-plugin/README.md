@@ -189,7 +189,7 @@ This plugin does not mutate host configuration, so uninstalling is safe.
 
 ## No MCP server behavior
 
-The OpenClaw plugin does not add MCP server behavior or drone-specific plugin features.
+The OpenClaw plugin does not add MCP server behavior.
 
 ## OpenClaw Security Scan Notice
 

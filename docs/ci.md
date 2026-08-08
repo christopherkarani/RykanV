@@ -16,9 +16,9 @@ jobs:
         run: |
           echo "Install Zig 0.16.0 using your pinned toolchain action or cache"
       - name: Build
-        run: zig build
+        run: ./scripts/zig build
       - name: Test
-        run: zig build test
+        run: ./scripts/zig build test
       - name: ryk CI check
         run: ./zig-out/bin/ryk ci check --format markdown
       # Fixture engine self-test (builtin:redteam); not workspace policy assurance.

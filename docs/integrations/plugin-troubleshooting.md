@@ -17,7 +17,7 @@ This document covers common issues when installing, running, or uninstalling ryk
    ```
 2. Or build ryk from source:
    ```bash
-   zig build
+   ./scripts/zig build
    ```
 3. Use the full path:
    ```bash
@@ -216,7 +216,7 @@ Should print one JSON object with `"permission":"allow"` for safe commands.
    ```
 2. Ensure you are running from the repository root.
 3. Check stderr for specific failure reasons.
-4. Some failures may be pre-existing issues (e.g., MCP proxy stdin hang). Check the P02 handoff for known issues.
+4. Some failures may be pre-existing issues, such as an MCP proxy stdin hang. Check the command output and the relevant integration guide for known limitations.
 
 ## Fake secret redaction questions
 
@@ -258,4 +258,4 @@ Should print one JSON object with `"permission":"allow"` for safe commands.
 1. Run `ryk doctor` for a full capability report.
 2. Run `ryk plugin doctor <host> --json` for detailed plugin status.
 3. Check `docs/troubleshooting.md` for general ryk issues.
-4. Review the phase handoffs in `docs/integrations/` for known limitations.
+4. Review the relevant integration guide and `docs/compatibility.md` for known limitations.

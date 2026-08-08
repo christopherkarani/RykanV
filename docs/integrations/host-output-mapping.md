@@ -1,7 +1,7 @@
 # Host Output Mapping
 
-> Scope: P02, host hook responses for Codex and Claude Code
-> Version: 1.1.0
+> Host hook responses for Codex and Claude Code
+> Version: 1.2.9
 
 ## Overview
 
@@ -262,4 +262,4 @@ Adapters must not claim text context notes enforce approval.
 - `docs/integrations/host-decision-mapping.md`
 - `docs/integrations/ryk-cli-plugin.md`
 - `docs/integrations/plugin-security-model.md`
-- `aegis_plugin_launch_plan_v3/P02_AGENT_HOST_INTEGRATION_API.md`
+- `docs/integrations/integration-api.md`

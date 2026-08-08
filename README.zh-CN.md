@@ -70,7 +70,7 @@ ryk doctor
 
 ```sh
 ryk policy check --preset ask
-ryk policy packs
+ryk packs
 ryk test "git status"
 ryk explain "rm -rf /"
 ```
@@ -88,7 +88,7 @@ ryk packs enable containers.docker database.postgresql
 ryk packs disable containers.docker
 ```
 
-在 Git workspace 中，项目选择会写入 `.orca.toml`。脚本和诊断可以使用 `ryk packs --json`。
+在 Git workspace 中，项目选择会写入 `.ryk.toml`。脚本和诊断可以使用 `ryk packs --json`。
 
 ## 架构
 

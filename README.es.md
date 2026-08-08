@@ -70,7 +70,7 @@ Las denegaciones explícitas tienen prioridad. Los paquetes de seguridad clasifi
 
 ```sh
 ryk policy check --preset ask
-ryk policy packs
+ryk packs
 ryk test "git status"
 ryk explain "rm -rf /"
 ```
@@ -88,7 +88,7 @@ ryk packs enable containers.docker database.postgresql
 ryk packs disable containers.docker
 ```
 
-En un workspace Git, las selecciones del proyecto se guardan en `.orca.toml`. Usa `ryk packs --json` para automatización y diagnósticos.
+En un workspace Git, las selecciones del proyecto se guardan en `.ryk.toml`. Usa `ryk packs --json` para automatización y diagnósticos.
 
 ## Arquitectura
 

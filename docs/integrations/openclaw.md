@@ -74,14 +74,14 @@ openclaw plugins install clawhub:ryk-openclaw-plugin
 
 **Note:** The `clawhub:` install protocol requires a recent OpenClaw version. If your version does not support it, use the local path install or the wrapper path above.
 
-For submission details, see [openclaw-clawhub.md](openclaw-clawhub.md). For the readiness checklist, see [openclaw-clawhub-checklist.md](openclaw-clawhub-checklist.md).
+For package validation and registry guidance, see [openclaw-clawhub.md](openclaw-clawhub.md).
 
 ### Build ryk
 
 If you are installing from the ryk repository:
 
 ```bash
-zig build
+./scripts/zig build
 ```
 
 ## Verify install
@@ -200,7 +200,7 @@ Run `ryk init --preset generic-agent` to create a default policy, then validate 
 
 ### ryk binary not found
 
-Build ryk with `zig build` or ensure `./zig-out/bin/ryk` is in your PATH.
+Build ryk with `./scripts/zig build` or ensure `./zig-out/bin/ryk` is in your PATH.
 
 ### Fake secret redaction questions
 
@@ -214,7 +214,7 @@ The plugin uses synthetic test secrets in fixtures only. If you see redaction wa
 - The plugin does not collect telemetry itself. Hook and machine-readable calls are excluded from release CLI telemetry; user-invoked CLI wrappers may record only the fixed pseudonymous metadata described in [`../telemetry.md`](../telemetry.md).
 - npm package name: `ryk-openclaw-plugin`.
 - ClawHub package name: `ryk-openclaw-plugin`.
-- The OpenClaw plugin does not add MCP server behavior or drone-specific plugin features.
+- The OpenClaw plugin does not add MCP server behavior.
 - OpenClaw uses the manifest id `ryk`; the npm and ClawHub package name is `ryk-openclaw-plugin`.
 
 ## Security model
@@ -233,7 +233,3 @@ This plugin does not collect telemetry itself. Hook and machine-readable calls a
 ## No MCP behavior
 
 This plugin does not add MCP server behavior.
-
-## No drone features
-
-This plugin does not add drone-specific plugin features. The ryk OpenClaw plugin does not expose or modify drone functionality.

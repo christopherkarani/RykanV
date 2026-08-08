@@ -27,7 +27,7 @@ ryk doctor
 If `ryk` is not found in PATH, install ryk first. Build from source with Zig 0.16.0:
 
 ```bash
-zig build
+./scripts/zig build
 ```
 
 The binary will be at `./zig-out/bin/ryk`.

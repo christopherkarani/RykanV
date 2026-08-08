@@ -40,11 +40,11 @@ git clone https://github.com/christopherkarani/homebrew-ryk.git ~/code/homebrew-
 ./scripts/cut-release.sh --live --version 1.2.9 --resume-from publish-npm
 ```
 
-### Phases
+### Release stages
 
 `preflight` → `version` → `notes` → `gate` → `bump` → `build` → `verify` → `publish-git` → `publish-npm` → `publish-homebrew` → `done`
 
-| Phase | What it does |
+| Stage | What it does |
 |-------|----------------|
 | `gate` | `./scripts/verify-pre-merge.sh` |
 | `build` | Dashboard UI, Linux via Docker, `build-release.sh`, plugin packs |

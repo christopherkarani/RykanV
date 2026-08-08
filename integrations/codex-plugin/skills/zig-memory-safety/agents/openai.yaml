@@ -1,4 +1,0 @@
-interface:
-  display_name: "Zig Memory Safety"
-  short_description: "Allocator and lifetime safety for Zig"
-  default_prompt: "Use $zig-memory-safety to review this Zig change for allocator ownership and lifetime bugs."

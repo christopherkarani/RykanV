@@ -107,7 +107,7 @@ RYK_BIN="$(ryk_executable "$RYK_BIN")"
 
 if [ "$HOST" = "hermes" ] && ! ryk_supports_hermes "$RYK_BIN"; then
   echo "ryk at ${RYK_BIN} does not support Hermes hooks (upgrade required)" >&2
-  echo "Hint: build locally (zig build) or set RYK_BIN to a current ryk binary" >&2
+  echo "Hint: build locally (./scripts/zig build) or set RYK_BIN to a current ryk binary" >&2
   exit 1
 fi
 

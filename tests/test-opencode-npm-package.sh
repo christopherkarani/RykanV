@@ -74,7 +74,7 @@ fi
 
 # 7. Plugin source calls ryk
 echo "7. Plugin source calls ryk"
-if grep -q 'hook opencode' "${PACKAGE_DIR}/src/index.ts"; then
+if grep -Eq "['\"]hook['\"].*['\"]opencode['\"]" "${PACKAGE_DIR}/src/index.ts"; then
   pass "src/index.ts calls ryk hook opencode"
 else
   fail "src/index.ts missing ryk hook calls"
@@ -97,32 +97,24 @@ else
   pass "No MCP behavior in plugin source"
 fi
 
-# 10. No drone behavior in source
-echo "10. No drone behavior"
-if grep -iq 'drone' "${PACKAGE_DIR}/src/index.ts" 2>/dev/null; then
-  fail "Drone references found in plugin source"
-else
-  pass "No drone behavior in plugin source"
-fi
-
-# 11. No Zig binary bundling
-echo "11. No Zig binary bundling"
+# 10. No Zig binary bundling
+echo "10. No Zig binary bundling"
 if find "${PACKAGE_DIR}" -name 'ryk' -type f -o -name '*.zig' -type f 2>/dev/null | grep -q .; then
   fail "Potential Zig binary or source found in package"
 else
   pass "No Zig binary bundled"
 fi
 
-# 12. npm pack dry-run succeeds
-echo "12. npm pack dry-run"
+# 11. npm pack dry-run succeeds
+echo "11. npm pack dry-run"
 if (cd "${PACKAGE_DIR}" && npm pack --dry-run >/dev/null 2>&1); then
   pass "npm pack --dry-run succeeds"
 else
   fail "npm pack --dry-run failed"
 fi
 
-# 13. Package files list is minimal
-echo "13. Package file list"
+# 12. Package files list is minimal
+echo "12. Package file list"
 FILE_COUNT=$(cd "${PACKAGE_DIR}" && npm pack --dry-run 2>&1 | grep -c 'Tarball Contents' && cd "${PACKAGE_DIR}" && npm pack --dry-run 2>&1 | grep -E '^npm notice [0-9]+\.' | wc -l || echo 0)
 # Just verify it doesn't include source files
 if (cd "${PACKAGE_DIR}" && npm pack --dry-run 2>&1 | grep -q 'src/index.ts'); then
@@ -131,15 +123,15 @@ else
   pass "Package excludes source TypeScript files"
 fi
 
-# 14. Required wording in README
-echo "14. Required wording"
+# 13. Required wording in README
+echo "13. Required wording"
 if grep -q 'The strongest local protection remains running OpenCode through' "${PACKAGE_DIR}/README.md"; then
   pass "README contains required strongest protection wording"
 else
   fail "README missing required strongest protection wording"
 fi
 
-if grep -q 'does not add MCP server behavior or drone-specific plugin features' "${PACKAGE_DIR}/README.md"; then
+if grep -q 'The OpenCode plugin does not add MCP server behavior.' "${PACKAGE_DIR}/README.md"; then
   pass "README contains required limitation wording"
 else
   fail "README missing required limitation wording"

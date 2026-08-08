@@ -1,35 +1,46 @@
-# ryk Documentation
+# ryk documentation
 
-Product package docs:
+The docs describe the current CLI and its limits. When a platform detail matters, run `ryk doctor` on the machine that will run the agent.
 
-- `../packages/core/README.md`: ryk Core shared policy, decision, audit, replay, redaction, fixture, schema registry, experimental ABI skeleton, and capability contract.
-- `../packages/cli/README.md`: ryk desktop and CI AI-agent mediation contract.
+## Start here
 
-Launch docs:
+- [Install](install.md): source builds, release archives, package managers, and platform notes.
+- [Quickstart](quickstart.md): create a policy, launch an agent, inspect a session, and stop protection.
+- [Commands](commands.md): command guard, shims, session grades, and known bypasses.
+- [Compatibility](compatibility.md): protection grades and the Linux, macOS, and Windows matrix.
+- [Threat model](threat-model.md): assets, trust boundaries, and non-goals.
 
-- `install.md`: source builds, scripts, artifacts, checksums, and package templates.
-- `quickstart.md`: first policy, doctor, run, replay, and red-team commands.
-- `compatibility.md`: platform matrix, **protection grades** (canonical), and doctor / start vocabulary map.
-- `dashboard.md`: localhost dashboard launch, fixed local actions, policy editing, sessions, and denied-action timeline.
-- `threat-model.md`: assets, actors, trust boundaries, non-goals, and limitations.
-- `shell-engine/rust-parity-backlog.md`: Zig `shell_engine` checklist to regain 100% Rust pack/corpus parity after the daemon cutover.
-- `shell-engine/GOAL-parity-prompt.md`: pasteable `/goal` prompt for an agent to drive that parity to completion.
-- `policy.md`: schema, modes, priorities, examples, and CI behavior.
-- `mcp.md`: stdio MCP inspect/proxy, manifests, mediated methods, and limits.
-- `redteam.md`: fixture categories, CI mode, JSON output, and adding fixtures.
-- `agent-recipes.md`: generic local recipes and preset notes.
-- `ci.md`: GitHub Actions and artifact guidance.
-- `telemetry.md`: default-on pseudonymous CLI telemetry, opt-out controls, and the privacy allowlist.
-- `replay.md`: audit artifacts, hash-chain verification, and redaction behavior.
-- `filesystem-staging.md`, `network.md`, and `commands.md`: enforcement surfaces and limitations.
-- `compatibility.md`: consolidated platform matrix.
-- `platform-linux.md`, `platform-macos.md`, and `platform-windows.md`: platform-specific capability notes.
-- `troubleshooting.md`, `contributing-fixtures.md`, and `release.md`: operations and release references.
+## Policy and runtime behavior
 
-Developer docs:
+- [Policy reference](policy.md): modes, rules, priorities, effects, and examples.
+- [Presets](presets.md): built-in policy presets and their assumptions.
+- [Credentials](credentials.md): environment filtering, redaction, secret boundaries, and brokers.
+- [Network](network.md): host decisions, proxies, and route-enforcement limits.
+- [Filesystem staging](filesystem-staging.md): staged writes and review commands.
+- [MCP](mcp.md): stdio proxying, manifests, and mediated methods.
+- [Replay](replay.md): local audit records, redaction, and hash-chain verification.
+- [Dashboard](dashboard.md): the localhost operator view.
+- [Red-team fixtures](redteam.md): deterministic local security checks.
 
-- `presets.md`: supported policy presets and assumptions.
-- `release/checklist.md`: Phase 19 release artifact, checksum, signing, SBOM, and install checklist.
-- `dev/`: architecture contracts, security invariants, production gates, phase handoffs, and [Zig hardening plan](dev/zig-hardening-plan.md).
+## Host integrations
 
-ryk reports platform capability limits through `ryk doctor`; docs should not claim transparent sandboxing where the backend reports wrapper-only, observe-only, limited, or unavailable.
+- [Codex](integrations/codex.md)
+- [Claude Code](integrations/claude-code.md)
+- [OpenCode](integrations/opencode.md)
+- [OpenClaw](integrations/openclaw.md)
+- [Plugin compatibility](integrations/plugin-compatibility.md)
+- [Plugin security model](integrations/plugin-security-model.md)
+- [Plugin troubleshooting](integrations/plugin-troubleshooting.md)
+- [Integration API](integrations/integration-api.md)
+- [OpenClaw distribution notes](integrations/openclaw-clawhub.md)
+
+## Examples and contribution
+
+- [Agent recipes](agent-recipes.md)
+- [Contributing fixtures](contributing-fixtures.md)
+- [Example projects](../examples/README.md)
+- [Script reference](../scripts/README.md)
+- [Release process](dev/release.md)
+- [Dependency notes](dev/dependencies.md)
+
+For security reports, read [SECURITY.md](../SECURITY.md). For code and documentation changes, read [CONTRIBUTING.md](../CONTRIBUTING.md).

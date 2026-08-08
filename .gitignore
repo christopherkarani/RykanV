@@ -1,25 +1,10 @@
+# Zig and native build output
 .zig-cache/
 zig-cache/
 zig-out/
-.ryk-tmp/
-.direnv/
-.envrc.local
-dist/
-dist/work/
-dist-dry-run/
-
-# Local agent harness instructions (repo root). Keep personal/toolchain notes out of git.
-# Case variants for case-sensitive clones; macOS may treat these as one path.
-/AGENTS.md
-/Agents.md
-/agents.md
-
-# Release build artifacts (toolchain, clean tree snapshots, npm cache)
-.release-zig/
-.release-clean-*
-.release-npm-cache/
-.release-cli-bins/
-.release-cut/
+zig-pkg/
+target/
+**/target/
 *.o
 *.obj
 *.a
@@ -29,75 +14,94 @@ dist-dry-run/
 *.exe
 *.pdb
 *.dSYM/
+
+# Local runtime state and configuration
+.ryk/
+.ryk-tmp/
+.orca/
+.orca-tmp/
+.aegis/
+.edge/
+.edge/**
+.aegis-edge/
+.aegis-edge/**
+.direnv/
+.env
+.env.*
+!.env.example
+.envrc.local
 .DS_Store
 __pycache__/
 *.pyc
+*.pyo
+
+# Release and packaging output
+dist/
+dist-dry-run/
+dist-prerelease/
+.release-zig/
+.release-clean-*
+.release-npm-cache/
+.release-cli-bins/
+.release-cut/
+*.tmp
+*.bak
 events.jsonl
 summary.json
 summary.md
-.ryk/
-.edge/
-.edge/**
-.aegis/last
-.aegis/last.tmp
-.aegis/last.tmp.*
-.aegis/sessions/
-.aegis/edge/
-.aegis-edge/
-.aegis-edge/**
-.aegis-edge/last
-.aegis-edge/last.tmp
-.aegis-edge/last.tmp.*
-.aegis-edge/sessions/
+test-artifacts/
+coverage-summary.txt
+lcov.info
+junit.xml
+
+# JavaScript and dashboard output
 node_modules/
 **/node_modules/
-orca-rs/.xwin-cache/
+ryk-dashboard-ui/.next/
+ryk-dashboard-ui/dist/
+ryk-dashboard-ui/tsconfig.tsbuildinfo
 
-# --- ryk internal planning / generated plan packs ---
-aegis_phased_project/
-aegis_phased_project_reviewed/
-aegis_phased_project_final/
-aegis_plugin_launch_plan/
-aegis_plugin_launch_plan_v2/
-aegis_plugin_launch_plan_v3/
-orca_phased_project/
-orca_phased_project_reviewed/
-orca_phased_project_final/
-orca_plugin_launch_plan/
-orca_plugin_launch_plan_v2/
-orca_plugin_launch_plan_v3/
-aegis_phased_project_markdown_files.zip
-aegis_phased_project_reviewed.zip
-aegis_phased_project_final.zip
-aegis_plugin_launch_plan.zip
-aegis_plugin_launch_plan_v2.zip
-aegis_plugin_launch_plan_v3.zip
-orca_phased_project_markdown_files.zip
-orca_phased_project_reviewed.zip
-orca_phased_project_final.zip
-orca_plugin_launch_plan.zip
-orca_plugin_launch_plan_v2.zip
-orca_plugin_launch_plan_v3.zip
-*_phase_pack*.zip
-*_plan_pack*.zip
-*_launch_plan*.zip
+# Local agent, editor, and automation state
+/AGENTS.md
+/Agents.md
+/agents.md
+.agents/plugins/ryk/
+.agents/plugins/orca/
+.claude/
+.Codex/
+.grok/
+.opencode/
+.orchestrator/
+.omo/
+.pi/
+.playwright-mcp/
+.crew/
+.skynex/
+.aider.chat.history.md
+.aider.input.history
+.aider.tags.cache.v3/
+.agent-mail-project-id
+.beads/
+.ntm/
+scripts/orchestrator.sh
+scripts/validate-go-to-market.sh
 
-# --- Local planning scratch (contents ignored; planning/README.md is tracked) ---
+# Session-local planning and private project material
 planning/**
-!planning/README.md
-/plans/
+plans/
 .plan/
 .local-plans/
 scratch/
 tmp/
-*.tmp
-*.bak
-
-# --- Private/customer-facing planning collateral ---
 tasks/
 reports/
 go_to_market/
 customer_pilot/
+gtm/
+RESEARCH_FINDINGS.md
+TOON_INTEGRATION_BRIEF.md
+
+# Private release and marketplace notes
 GITHUB_RELEASE_DRAFT.md
 RELEASE_NOTES.md
 PLUGIN_RELEASE_NOTES.md
@@ -115,7 +119,7 @@ docs/integrations/repo-marketplace-install.md
 docs/integrations/plugin-postlaunch-patch-checklist.md
 docs/integrations/plugin-release-checklist.md
 
-# --- Local agent/planning exports ---
+# Local prompt and review exports
 CODEX_MASTER_PROMPT.md
 CODEX_PLUGIN_PHASE_PROMPTS.md
 CANONICAL_IMPLEMENTATION_DECISIONS.md
@@ -132,105 +136,33 @@ P06_*.md
 P07_*.md
 00_PLUGIN_LAUNCH_INDEX.md
 00_PROJECT_INDEX.md
-manifest.json
-[0-9][0-9]_*.md
 AEGIS_CLI_PLUGIN_CONTRACT.md
 RYK_CLI_PLUGIN_CONTRACT.md
 ARCHITECTURE_CONTRACTS.md
 CODEX_AGENT_CONTEXT.md
-DRONE_WORKSTREAM_GUARDRAILS.md
 FINAL_PASS_REPORT.md
 REVIEW_SUMMARY.md
 SECURITY_INVARIANTS.md
-
-# --- Playwright MCP artifacts ---
-.playwright-mcp/
-
-# --- Local agent runtime artifacts ---
-.Codex/
-.opencode/
-.pi/
-.orchestrator/
-.omo/
-.agents/plugins/orca/
-.claude/plugins/
-.claude/
-scripts/orchestrator.sh
-scripts/validate-go-to-market.sh
-
-# --- Internal integration analysis docs ---
-docs/integrations/openclaw-security-scan-analysis.md
-
-# --- Generated planning / UI collateral ---
 PROMPT_*.md
-ryk-dashboard-ui/.next/
-ryk-dashboard-ui/dist/
-ryk-dashboard-ui/node_modules/
-ryk-dashboard-ui/tsconfig.tsbuildinfo
-ryk-dashboard-ui/.DS_Store
-ryk-dashboard-ui/app/.DS_Store
-ryk-dashboard-ui/playwright-qa*.mjs
-ryk-dashboard-ui/screenshot.mjs
 
+# Local test and tool caches
 .skynex/production-gate.json
 .skynex/audit.log
+storage.sqlite3
+storage.sqlite3-*
+proptest-regressions/
+*.snap.new
+*.snap
+*.log
+e2e_*.log
+temp_*.rs
+local_backup_*/
+hello_write.txt
 
-/.crew/
-/.crew
-!.crew/artifacts/
-!.crew/graphs/
-!.crew/artifacts/.gitkeep
-!.crew/graphs/.gitkeep
-# --- Merged from orca-rs/.gitignore ---
-/target
-/target/
-/zig-pkg/
-orca-rs/target/
-**/*.rs.bk
-a.out
-rustc-ice-*.txt
-.idea/
-.vscode/
+# Workspace-specific generated files
+.orca-edge/
+playwright-qa*.mjs
+screenshot.mjs
 *.swp
 *.swo
 *~
-/dist/
-.aider.chat.history.md
-.aider.input.history
-.aider.tags.cache.v3/
-.bv/
-temp_*.rs
-.local_backup_*/
-.env
-!fixtures/**/input/.env
-.env.local
-lcov.info
-coverage-summary.txt
-tarpaulin-report.html
-test-artifacts/
-junit.xml
-proptest-regressions/
-RESEARCH_FINDINGS.md
-TOON_INTEGRATION_BRIEF.md
-cov_*.out
-*.snap.new
-sweep_*.png
-test_screenshot.png
-target-*/
-storage.sqlite3
-storage.sqlite3-*
-*.sqlite3.bak
-.rch-target/
-.rch-deploy-root/
-rch-bin/
-rch-install/
-hello_write.txt
-.agent-mail-project-id
-.beads/
-e2e_*.log
-.ntm/
-.skynex/
-
-# --- Local agent / GTM (never track) ---
-.grok/
-gtm/

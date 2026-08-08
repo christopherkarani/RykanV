@@ -11,7 +11,6 @@ const exit_codes = @import("ryk").cli.exit_codes;
 //   - Invalid and oversized input handling
 //   - Secret safety across plugin artifacts
 //   - Documentation overclaim checks
-//   - Separate workstream (drone) non-regression
 // ---------------------------------------------------------------------------
 
 const ryk_bin = "./zig-out/bin/ryk";
@@ -438,7 +437,7 @@ test "decide command safe returns allow JSON" {
     const allocator = std.testing.allocator;
 
     const result = try runRyk(allocator, &.{
-        ryk_bin,                                                                            "decide", "command", "--json",
+        ryk_bin,                                                                             "decide", "command", "--json",
         "{\"version\":1,\"host\":\"codex\",\"command\":\"git status\",\"mode\":\"strict\"}",
     }, null);
     defer allocator.free(result.stdout);
@@ -458,7 +457,7 @@ test "decide command dangerous returns block JSON" {
     const allocator = std.testing.allocator;
 
     const result = try runRyk(allocator, &.{
-        ryk_bin,                                                                          "decide", "command", "--json",
+        ryk_bin,                                                                           "decide", "command", "--json",
         "{\"version\":1,\"host\":\"codex\",\"command\":\"rm -rf /\",\"mode\":\"strict\"}",
     }, null);
     defer allocator.free(result.stdout);
@@ -478,7 +477,7 @@ test "decide file write protected path returns block or ask" {
     const allocator = std.testing.allocator;
 
     const result = try runRyk(allocator, &.{
-        ryk_bin,                                                                                                   "decide", "file", "--json",
+        ryk_bin,                                                                                                    "decide", "file", "--json",
         "{\"version\":1,\"host\":\"claude\",\"operation\":\"write\",\"path\":\".git/config\",\"mode\":\"strict\"}",
     }, null);
     defer allocator.free(result.stdout);
@@ -504,7 +503,7 @@ test "decide prompt with fake secret redacts" {
     const allocator = std.testing.allocator;
 
     const result = try runRyk(allocator, &.{
-        ryk_bin,                                                                                      "decide", "prompt", "--json",
+        ryk_bin,                                                                                       "decide", "prompt", "--json",
         "{\"version\":1,\"host\":\"codex\",\"prompt\":\"fake_p05_secret_value\",\"mode\":\"strict\"}",
     }, null);
     defer allocator.free(result.stdout);
@@ -528,7 +527,7 @@ test "decide tool returns valid JSON" {
     const allocator = std.testing.allocator;
 
     const result = try runRyk(allocator, &.{
-        ryk_bin,                                                                                                                         "decide", "tool", "--json",
+        ryk_bin,                                                                                                                          "decide", "tool", "--json",
         "{\"version\":1,\"host\":\"claude\",\"tool\":{\"name\":\"ExampleTool\",\"input\":{\"action\":\"example\"}},\"mode\":\"strict\"}",
     }, null);
     defer allocator.free(result.stdout);
@@ -798,7 +797,7 @@ test "docs include strongest protection warning" {
     }
 }
 
-test "docs state no MCP server behavior and no drone features" {
+test "docs state no MCP server behavior" {
     const files = &[_][]const u8{
         "integrations/codex-plugin/README.md",
         "integrations/claude-code-plugin/README.md",
@@ -807,7 +806,6 @@ test "docs state no MCP server behavior and no drone features" {
         const content = try readFile(std.testing.allocator, path);
         defer std.testing.allocator.free(content);
         try std.testing.expect(std.mem.indexOf(u8, content, "does not add MCP server behavior") != null);
-        try std.testing.expect(std.mem.indexOf(u8, content, "drone-specific plugin features") != null);
     }
 }
 
@@ -825,50 +823,8 @@ test "integration-api docs do not overclaim" {
 }
 
 // ---------------------------------------------------------------------------
-// 10. Separate workstream non-regression
+// 10. Plugin schema validation
 // ---------------------------------------------------------------------------
-
-test "no drone skill exists in codex plugin" {
-    const drone_skill_path = "integrations/codex-plugin/skills/aegis-drone/SKILL.md";
-    try std.testing.expect(!fileExists(drone_skill_path));
-}
-
-test "no drone skill exists in claude plugin" {
-    const drone_skill_path = "integrations/claude-code-plugin/skills/drone/SKILL.md";
-    try std.testing.expect(!fileExists(drone_skill_path));
-}
-
-test "plugin hooks do not reference drone commands" {
-    const hooks = &[_][]const u8{
-        "integrations/codex-plugin/hooks/hooks.json",
-        "integrations/claude-code-plugin/hooks/hooks.json",
-    };
-    for (hooks) |path| {
-        const content = try readFile(std.testing.allocator, path);
-        defer std.testing.allocator.free(content);
-        const lower = try std.ascii.allocLowerString(std.testing.allocator, content);
-        defer std.testing.allocator.free(lower);
-        try std.testing.expect(std.mem.indexOf(u8, lower, "drone") == null);
-    }
-}
-
-test "plugin docs do not include drone demos" {
-    const docs = &[_][]const u8{
-        "integrations/codex-plugin/README.md",
-        "integrations/claude-code-plugin/README.md",
-        "docs/integrations/codex.md",
-        "docs/integrations/claude-code.md",
-    };
-    for (docs) |path| {
-        if (!fileExists(path)) continue;
-        const content = try readFile(std.testing.allocator, path);
-        defer std.testing.allocator.free(content);
-        const lower = try std.ascii.allocLowerString(std.testing.allocator, content);
-        defer std.testing.allocator.free(lower);
-        try std.testing.expect(std.mem.indexOf(u8, lower, "drone demo") == null);
-        try std.testing.expect(std.mem.indexOf(u8, lower, "operational drone-control") == null);
-    }
-}
 
 test "common plugin schemas match current ryk host and output surfaces" {
     const hook_request = try readFile(std.testing.allocator, "integrations/common/schemas/hook-request-v1.json");
@@ -908,8 +864,6 @@ test "common plugin schemas match current ryk host and output surfaces" {
     try expectJsonStringInEnum(target_enum, "opencode");
     try expectJsonStringInEnum(target_enum, "openclaw");
     try expectJsonStringInEnum(target_enum, "hermes");
-    const request_type_enum = plugin_request_properties.get("request_type").?.object.get("enum").?.array.items;
-    try expectJsonStringNotInEnum(request_type_enum, "drone_safety_status");
     try std.testing.expect(std.mem.indexOf(u8, plugin_request, "Aegis") == null);
 
     const plugin_response = try readFile(std.testing.allocator, "integrations/common/schemas/ryk-plugin-response-v1.json");
@@ -929,7 +883,6 @@ test "common plugin schemas match current ryk host and output surfaces" {
     try std.testing.expect(plugin_response_properties.get("opencode_paths") != null);
     try std.testing.expect(plugin_response_properties.get("openclaw_paths") != null);
     try std.testing.expect(plugin_response_properties.get("hermes_paths") != null);
-    try std.testing.expect(plugin_response_properties.get("drone") == null);
     try std.testing.expect(std.mem.indexOf(u8, plugin_response, "Aegis") == null);
 }
 

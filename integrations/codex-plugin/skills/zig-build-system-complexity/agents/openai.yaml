@@ -1,4 +1,0 @@
-interface:
-  display_name: "Zig Build System Complexity"
-  short_description: "Zig build and package workflow guardrails"
-  default_prompt: "Use $zig-build-system-complexity to review this Zig build.zig/build.zig.zon change."

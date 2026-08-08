@@ -1,139 +1,55 @@
-# Plugin Security Model
+# Plugin security model
 
-> Scope: P01–P06 — Trust boundaries, sandbox expectations, and permission model for ryk plugins
-> Version: 1.1.0
+Plugins are integration layers. They call the local ryk CLI; they do not reimplement policy decisions.
 
-## Core Statement
+The strongest local protection is still the supervised process path:
 
-The strongest local protection remains:
-
-```bash
+```sh
 ryk run -- <agent-command>
 ```
 
-ryk plugins are integration layers. They are not replacements for the ryk runtime.
-
-The plugin system adds:
-- host-native skills
-- slash commands
-- lifecycle hooks
-- ryk CLI plugin commands
-- policy explanations
-- red-team shortcuts
-- replay shortcuts
-
 ## Principles
 
-1. **ryk CLI is the source of truth.** Plugins call ryk; they do not reimplement policy logic.
-2. **Strongest protection is `ryk run`.** Plugin hooks are additive, not a replacement for supervised execution.
-3. **Default deny.** If a plugin cannot verify safety, it must fail closed.
-4. **No silent mutation.** Host configs, policies, and credentials are never changed without explicit user approval.
-5. **Plugin telemetry boundary.** The plugin surface does not collect telemetry or phone home with plugin payloads. Release CLI commands have their separate fixed pseudonymous telemetry contract; hook, plugin, and machine-readable paths are excluded.
+1. The ryk CLI is the policy source of truth.
+2. A hook must fail closed when it cannot produce a safe decision.
+3. Installation previews changes before writing them.
+4. Plugin commands do not print or persist raw secrets.
+5. The plugin surface has no telemetry or hosted dependency.
 
-## Trust Boundaries
+## Trust boundaries
 
-```
-┌─────────────────────────────────────────┐
-│  Host IDE (Codex, Claude Code, OpenCode, OpenClaw, etc.)  │  ← Untrusted by default
-│  Runs arbitrary agent code                │
-├─────────────────────────────────────────┤
-│  ryk Plugin (integration package)     │  ← Semi-trusted; read-only
-│  Calls ryk CLI for decisions            │
-├─────────────────────────────────────────┤
-│  ryk CLI (`ryk plugin *`)           │  ← Trusted local surface
-│  Owns policy, audit, replay               │
-├─────────────────────────────────────────┤
-│  ryk Core (policy engine, audit)      │  ← Trusted
-│  Local-only, no network dependency        │
-└─────────────────────────────────────────┘
+```text
+Host agent or IDE
+  -> host hook or plugin package
+  -> ryk CLI
+  -> local policy, audit, and decision engine
 ```
 
-| Component | Trust Level | Notes |
-|-----------|-------------|-------|
-| ryk core CLI | trusted | source of truth |
-| ryk plugin commands | trusted if built from ryk | stable integration layer |
-| Host plugin manifest | trusted if intentionally installed | should be reviewed |
-| Hook input | untrusted | comes from agent/tool context |
-| Prompt content | untrusted | may contain secrets or injection |
-| Tool call | untrusted | may be model-generated |
-| Host hook system | partial trust | only enforces what host supports |
-| Separate repo workstreams | out of scope | must not be exposed by plugins |
+Host input, prompts, tool calls, and hook payloads are untrusted. The host can enforce only the events it exposes and actually delivers. A plugin is not a substitute for process supervision or an operating-system sandbox.
 
-## Permission Levels
+## Permission levels
 
-| Level | What It Can Do | Example |
-|-------|----------------|---------|
-| **Read-only** | Query status, read policy, check manifests | `ryk plugin doctor`, `ryk plugin manifest` |
-| **Preview** | Simulate changes without writing | `ryk plugin install --dry-run` |
-| **Mutate** | Modify host config or policy | Requires `--yes` + explicit user confirmation |
-| **Actuate** | Trigger real-world effects | **Not exposed by default** |
+| Level | Operation | Example |
+|---|---|---|
+| Read-only | Inspect local state | `ryk plugin doctor`, `ryk plugin manifest` |
+| Preview | Show a proposed change | `ryk plugin install <host> --dry-run` |
+| Mutate | Change host configuration | Requires `--yes` and explicit user approval |
+| Actuate | Trigger an external effect | Not exposed by default |
 
-## Plugin Default Behavior
+The CLI does not silently overwrite host configuration. CI mode never prompts, and `ask` must not be silently downgraded to `allow`.
 
-- `ryk plugin install` defaults to `--dry-run`.
-- `ryk plugin doctor` does not print secrets or raw env values.
-- Drone-related operations are default-deny.
+## Secret handling
 
-## Credential Handling
+- Do not print API keys, credentials, connection strings, or raw environment values.
+- Do not store credentials in plugin-specific configuration.
+- Do not forward secrets to a remote service.
+- Use synthetic values in fixtures and rotate any real credential exposed during development.
 
-- Plugins must not print credentials, API keys, or connection strings.
-- Plugins must not store credentials in plugin-specific config files.
-- Plugins must not forward credentials to remote services.
+## What this model does not promise
 
-## Host Config Mutations
+- Host hooks do not protect actions that bypass the host hook.
+- Plugins do not protect against a user approving an unsafe action.
+- Plugins do not protect against root, administrator, kernel, or host compromise.
+- A package install is not evidence that enforcement is active. Run `ryk plugin doctor <host>` and use `ryk run -- ...` when process supervision is required.
 
-- ryk plugin commands must not silently overwrite Codex, Claude Code, OpenCode, OpenClaw, or other host configs.
-- Any config change must be previewed with `--dry-run` first.
-- Any actual change requires `--yes`.
-
-## Sandboxing Expectations
-
-The plugin surface does not claim to sandbox the host IDE. It provides:
-- Policy queries
-- Audit log summaries
-- Capability reporting
-- Safe installation previews
-
-Actual sandboxing is provided by:
-- `ryk run -- <command>` for child process supervision
-- Host IDE's own extension sandbox (if any)
-- OS-level protections
-
-## Security Invariants
-
-1. Plugins call ryk; they do not reimplement ryk.
-2. Raw secrets are never persisted.
-3. Hook input is bounded.
-4. Hook stdout is host-valid.
-5. Human logs go to stderr.
-6. CI mode never prompts.
-7. Deny is not silently downgraded.
-8. Separate safety-sensitive workstreams are not exposed.
-9. Plugin demos do not require real LLMs, real secrets, or external network.
-10. Docs do not overclaim.
-
-## What Plugins Do Not Do
-
-- **No MCP server behavior included.** This plugin plan does not add MCP server mode.
-- **No drone-specific plugin features included.** Drone work is a separate workstream.
-- **Plugin telemetry boundary.** The plugin surface does not collect telemetry or phone home with plugin payloads. Release CLI commands have their separate fixed pseudonymous telemetry contract; hook, plugin, and machine-readable paths are excluded.
-- **No SaaS requirement.** No hosted dashboard, account, or monetization layer is required.
-- **No protection for agents not launched through ryk** unless the host hook catches the action.
-- **No protection against root/admin/kernel compromise.**
-- **No protection against a user approving unsafe actions.**
-
-## Rejection Criteria
-
-A plugin request is rejected if it would:
-- Expose live drone actuation tools by default
-- Auto-approve high-risk operations
-- Weaken existing safety tests or policies
-- Exfiltrate audit logs without redaction
-- Mutate policy without explicit approval
-
-## See Also
-
-- `docs/integrations/ryk-cli-plugin.md`
-- `docs/integrations/plugin-troubleshooting.md`
-- `docs/integrations/separate-workstream-guardrails.md`
-- `PLUGIN_SECURITY_MODEL.md`
+See [the CLI plugin surface](ryk-cli-plugin.md), [compatibility](plugin-compatibility.md), and [troubleshooting](plugin-troubleshooting.md).

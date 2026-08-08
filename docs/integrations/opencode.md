@@ -53,7 +53,7 @@ npm install ryk-opencode-plugin
 If you are installing from the ryk repository:
 
 ```bash
-zig build
+./scripts/zig build
 ```
 
 ### Local project install
@@ -230,7 +230,7 @@ Run `ryk init --preset generic-agent` to create a default policy, then validate 
 
 ### ryk binary not found
 
-Build ryk with `zig build` or ensure `./zig-out/bin/ryk` is in your PATH.
+Build ryk with `./scripts/zig build` or ensure `./zig-out/bin/ryk` is in your PATH.
 
 ### Fake secret redaction questions
 
@@ -241,8 +241,8 @@ The plugin uses synthetic test secrets (e.g., `fake_p05_secret_value`) in fixtur
 - Hooks are advisory; enforcement depends on OpenCode host support.
 - The strongest protection is `ryk opencode`.
 - Plugin installation is a preview/dry-run by default.
-- The plugin does not collect telemetry itself. Hook and machine-readable calls are excluded from release CLI telemetry; user-invoked CLI wrappers may record only the fixed pseudonymous metadata described in [`../telemetry.md`](../telemetry.md).
-- The OpenCode plugin does not add MCP server behavior or drone-specific plugin features.
+- No telemetry is collected.
+- The OpenCode plugin does not add MCP server behavior.
 
 ## Security model
 
@@ -253,14 +253,10 @@ The plugin uses synthetic test secrets (e.g., `fake_p05_secret_value`) in fixtur
 - Human logs go to stderr.
 - CI mode never prompts.
 
-## Plugin telemetry boundary
+## No telemetry
 
-This plugin does not collect telemetry itself. Hook and machine-readable calls are excluded from release CLI telemetry. A user-invoked release CLI wrapper may record only the fixed pseudonymous metadata described in [`../telemetry.md`](../telemetry.md); it never transmits usage content, session content, command text, or tool payloads.
+This plugin does not collect telemetry. No usage data, session content, or metadata is transmitted to any external service.
 
 ## No MCP behavior
 
 This plugin does not add MCP server behavior.
-
-## No drone features
-
-This plugin does not add drone-specific plugin features. A separate drone workstream exists in this repository under `packages/edge/`. The ryk OpenCode plugin does not expose or modify drone functionality.

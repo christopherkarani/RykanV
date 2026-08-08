@@ -49,7 +49,7 @@ x86_64) HOST_ARCH="amd64" ;;
 aarch64 | arm64) HOST_ARCH="arm64" ;;
 esac
 
-# Phase 5a artifact contract (primary):
+# Artifact contract:
 # - ryk-v{version}-darwin-amd64.tar.gz
 # - ryk-v{version}-darwin-arm64.tar.gz
 # - ryk-v{version}-linux-amd64.tar.gz
@@ -109,10 +109,6 @@ copy_cli_payload() {
     printf 'error: bundled Pi extension is missing ryk-pi/extensions/parent_ask.ts\n' >&2
     exit 1
   }
-  [ -f "orca-pi/extensions/parent_ask.ts" ] || {
-    printf 'error: bundled Pi extension is missing orca-pi/extensions/parent_ask.ts\n' >&2
-    exit 1
-  }
   mkdir -p "$root"
   cp README.md LICENSE SECURITY.md CONTRIBUTING.md "$root/"
   cp -R docs policies schemas fixtures examples packages packaging scripts integrations "$root/"
@@ -141,9 +137,6 @@ copy_cli_payload() {
     \) -prune -exec rm -rf {} +
   find "$root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
   rm -rf \
-    "$root/docs/integrations/drone-safepoint.md" \
-    "$root/docs/integrations/drone-safety.md" \
-    "$root/schemas/safety-report"* \
     "$root/.DS_Store" \
     "$root/docs/.DS_Store" \
     "$root/packages/.DS_Store" \
@@ -154,7 +147,7 @@ copy_cli_payload() {
 write_release_readme() {
   root="$1"
   title="ryk ${VERSION} Release Artifact"
-  boundary="This archive contains the canonical ryk CLI, the bundled Pi extension, and Core policy, audit, replay, redaction, schema, integration, and packaging resources. Edge runtime, drone, SITL, and customer-pilot materials are intentionally excluded."
+  boundary="This archive contains the canonical ryk CLI, the bundled Pi extension, and the local policy, audit, replay, redaction, schema, integration, and packaging resources required by the product."
   cat >"$root/README-release.md" <<EOF
 # ${title}
 
@@ -303,7 +296,7 @@ write_release_manifest() {
   fixtures_json="[\"fixtures/shell-abuse/curl-pipe-sh\", \"examples/mcp\", \"examples/network\", \"examples/policies\"]"
   docs_json="[\"README.md\", \"docs/install.md\", \"README-release.md\"]"
   target_platforms="$(target_platforms_json)"
-  safety_summary="ryk is a local CLI/runtime firewall (single brand: ryk / Rykan V); Edge artifacts are not included in CLI-only releases."
+  safety_summary="ryk provides local CLI/runtime guardrails; release archives do not include hosted enforcement or telemetry."
 
   cat >"$output" <<EOF
 {

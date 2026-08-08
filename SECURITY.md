@@ -1,35 +1,32 @@
-# Security Policy
+# Security policy
 
-## Supported Versions
+## Supported versions
 
-The v1.1.x line receives security fixes once a v1.1.0 tag is published. Do not treat older pre-release snapshots as supported security releases.
+Security fixes target the current release line identified by [`VERSION`](VERSION). Older snapshots may not receive fixes, so reproduce issues against the current checkout before reporting them.
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
-Report suspected vulnerabilities privately to the project owner. Include the affected version or commit, operating system, reproduction steps, and any generated ryk audit directory if it contains only synthetic data.
+Please use [GitHub's private security advisory form](https://github.com/christopherkarani/ryk/security/advisories/new). Include the affected version or commit, operating system, reproduction steps, and any generated ryk audit directory if it contains only synthetic data.
 
-Do not include real credentials, API keys, access tokens, private keys, customer data, or proprietary logs. Replace secrets with synthetic values such as `sk-fakeSyntheticOpenAIKey1234567890`.
+Do not include real credentials, API keys, access tokens, private keys, customer data, or proprietary logs. Replace them with synthetic values.
 
-## Safe Handling
+## Safe handling
 
-ryk security reports are handled as private by default. The project will avoid publishing exploit details until a fix or documented limitation is available. If the issue is a design limitation rather than a bug, the fix may be documentation, capability reporting, or a failing red-team fixture.
+Keep exploit details private until a fix or documented limitation is available. A design limitation may require a documentation change or a regression fixture rather than a code change.
 
-## Current Security Scope
+## Security scope
 
 ryk protects local agent runs that go through ryk-managed wrappers, shims, staging, policy checks, audit logging, and the stdio MCP proxy. It reduces blast radius and improves reviewability.
 
-ryk does not make arbitrary malicious code safe. It does not claim universal transparent filesystem or network enforcement on every operating system. Use `ryk doctor` for actual local capability status.
+ryk does not make arbitrary malicious code safe, and it does not provide universal transparent filesystem or network enforcement on every operating system. Use `ryk doctor` for local capability status and read the [compatibility matrix](docs/compatibility.md) before making an enforcement claim.
 
-## Security Regression Commands
-
-Run:
+## Regression checks
 
 ```sh
-zig build
-zig build test
-zig build fuzz
+./scripts/zig build
+./scripts/zig build test
 ./zig-out/bin/ryk redteam --ci
 ./zig-out/bin/ryk doctor
 ```
 
-Raw secrets must not appear in `events.jsonl`, `summary.json`, `summary.md`, replay output, red-team output, doctor output, generated policies, or release/install files.
+Raw secrets must not appear in `events.jsonl`, `summary.json`, `summary.md`, replay output, red-team output, doctor output, generated policies, or release files.

@@ -19,7 +19,7 @@ The plugin is a thin layer. All policy decisions are made by the ryk CLI. The pl
 ### Build ryk
 
 ```bash
-zig build
+./scripts/zig build
 ```
 
 ### Install from release artifact
@@ -45,7 +45,7 @@ zig build
 
 1. Build ryk:
    ```bash
-   zig build
+   ./scripts/zig build
    ```
 
 2. Point Claude Code to the plugin directory:
@@ -190,7 +190,7 @@ Run `ryk init --preset generic-agent` to create a default policy, then validate 
 
 ### ryk binary not found
 
-Build ryk with `zig build` or ensure `./zig-out/bin/ryk` is in your PATH.
+Build ryk with `./scripts/zig build` or ensure `./zig-out/bin/ryk` is in your PATH.
 
 ### Fake secret redaction questions
 
@@ -217,14 +217,6 @@ The marketplace catalog uses a relative path (`../claude-code-plugin`). If your 
 - Human logs go to stderr.
 - CI mode never prompts.
 
-## Separate workstream note
-
-A separate drone workstream exists in this repository under `packages/edge/`. The ryk Claude Code plugin does not expose or modify drone functionality.
-
 ## No MCP support
 
 This plugin does not add MCP server behavior.
-
-## No drone plugin support
-
-This plugin does not add drone-specific plugin features.

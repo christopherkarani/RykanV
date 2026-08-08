@@ -77,7 +77,6 @@ const exact_names = [_]ExactEntry{
     .{ .name = "create_access_token", .effect_id = "identity.auth", .matcher = "catalog.identity.auth.exact:create_access_token" },
     .{ .name = "oauth_authorize", .effect_id = "identity.auth", .matcher = "catalog.identity.auth.exact:oauth_authorize" },
     // device.control
-    .{ .name = "drone_takeoff", .effect_id = "device.control", .matcher = "catalog.device.control.exact:drone_takeoff" },
     .{ .name = "home_assistant_call", .effect_id = "device.control", .matcher = "catalog.device.control.exact:home_assistant_call" },
     // surface-aligned host tools
     .{ .name = "bash", .effect_id = "shell.exec", .matcher = "catalog.shell.exec.exact:bash" },

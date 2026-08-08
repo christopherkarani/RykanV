@@ -1,63 +1,63 @@
-# Threat Model
+# Threat model
 
-## Assets Protected
+This document describes what ryk can protect and where its guarantees stop. The relevant question is always how the agent was launched and which enforcement surfaces are active on that host.
 
-- Local environment variables passed to agent processes.
-- Secret-like values before persistent logging.
+## Assets
+
+- Environment variables passed to agent processes.
+- Secret-like values before they reach persistent logs.
 - Protected paths such as `.env`, SSH keys, cloud credentials, and browser credential stores.
-- ryk-mediated writes before they reach the workspace.
-- MCP tool calls, resource reads, prompt gets, and sampling requests that pass through the stdio proxy.
-- Host and MCP tool calls classified into effect classes (e.g. `comms.message`) when policy includes an `effects:` section — by tool name catalog, structural argument shapes, network host tags, and Zig-side shell bypass patterns (e.g. `open mailto:`). Host shell PreToolUse / Evaluate is owned by the in-process Zig `shell_engine` (85 oracle packs; default enablement matches Rust `core.*` + `system.disk`; full set available). Corpus decision parity is gated by `zig build test-shell-engine` (100% match). Residual gap: effect-class classification via Zig `shell_bypass` is separate from pack allow/deny — see [shell-engine Rust parity backlog](shell-engine/rust-parity-backlog.md).
-- **Phase 1 hard fence (default shell Evaluate):** Mode A packs only (`core.*` + `system.disk`) with structure smart checks (compound segments, wrappers, assignment/quote data masking, shell/interpreter embeds). Catastrophe classes (`rm -rf` root/home, `git reset --hard` / force-push, `mkfs` / `dd` of devices) deny with stable `rule_id`. Non-executed text (`VAR='rm -rf /'`, `echo 'rm -rf /'`) is not treated as execution. YOLO/Strict policy UX and Foundation Models steward are out of scope for this fence.
-- Audit integrity for ryk-managed sessions.
+- Writes, commands, network requests, and MCP messages that pass through ryk.
+- Audit records produced by ryk-managed sessions.
 
-## Threat Actors
+## Threat actors
 
-- Prompt-injected coding agents.
-- Malicious repository content that instructs an agent to read or expose secrets.
-- Untrusted MCP servers or tool metadata.
-- Local automation scripts launched through ryk.
+- Prompt-injected agents.
+- Malicious repository content that asks an agent to expose secrets or weaken policy.
+- Untrusted MCP servers and tool metadata.
+- Local automation launched through a protected session.
 
-## Trust Boundaries
+## Trust boundaries
 
-- The user and local OS are trusted to launch ryk intentionally.
-- Child processes are untrusted.
+- The user and local operating system launch ryk intentionally.
+- Child processes, prompts, tool calls, and MCP payloads are untrusted.
 - Policy files are trusted only after validation.
-- MCP protocol messages and manifests are untrusted inputs.
-- Audit artifacts are verified as untrusted local files during replay.
+- Audit files are treated as untrusted input during replay and verification.
 
 ## Assumptions
 
-- The protected process is launched through ryk.
-- The user does not approve unsafe actions deliberately.
-- ryk can write audit artifacts in the workspace.
-- Platform backend claims are checked with `ryk doctor`.
+- The agent is launched through ryk when process-level protection is required.
+- The user does not approve an unsafe action deliberately.
+- The host can write ryk audit data in the selected workspace.
+- Platform capability reports are checked with `ryk doctor`.
 
 ## Non-goals
 
-ryk does not promise perfect sandboxing, protection outside ryk-launched sessions, defense against root/admin/kernel compromise, or universal transparent filesystem/network interception.
+ryk does not promise perfect sandboxing, protection outside ryk-launched sessions, or defense against root, administrator, kernel, or host compromise. It cannot guarantee transparent network enforcement or transparent filesystem enforcement on a platform where the active backend does not provide those controls.
 
-## Platform Limitations
+## Protection grades
 
-Wrapper and proxy controls are not the same as OS-level enforcement. macOS and Windows currently report transparent file and network enforcement as limited. Linux capability depends on kernel and host settings.
+Wrapper, hook, proxy, and OS controls are different surfaces. `ryk doctor` reports capability and readiness; it does not prove that a particular child session attached to an OS sandbox.
 
-Protection is **graded** (`hook` | `wrapper` | `proxy` | `OS-enforced`). Canonical definitions and the map from doctor / platform reports (and the public `ryk start` **Ask on risk** default) live in [compatibility.md](compatibility.md#protection-grades-canonical).
+The public grades are:
 
-## Fail-closed Behavior
+- `hook`: host hook evaluation only.
+- `wrapper`: the host runs as a ryk-managed child process.
+- `proxy`: traffic through a ryk proxy is evaluated.
+- `OS-enforced`: the host-specific operating-system backend attached successfully.
 
-Strict and CI modes deny invalid policies, missing required backend features, unsupported ask prompts in CI, and malformed untrusted inputs where enforcement is required.
+Use the [compatibility matrix](compatibility.md) for platform details and residuals.
 
-## Known Unsupported Cases
+## Fail-closed behavior
 
-- Agents launched outside ryk.
-- Real network blocking when traffic bypasses ryk and no active OS/backend enforcement exists.
-- Transparent blocking of arbitrary filesystem calls on platforms where `doctor` reports limited or unavailable support.
-- Privileged users who intentionally bypass wrappers, shims, or audit paths.
+Strict and CI modes reject invalid policies, malformed untrusted input, unsupported approval paths, and missing backend features when the selected surface requires them. A hook cannot protect an event that the host never sends.
 
-## Host-config launch identity (F-02)
+## Known bypasses
 
-Host-config RW trees (e.g. `~/.codex`), empty-backpack defaults for agent aliases, and agent network mediation require a **trusted resolved launch binary** (realpath under an install allowlist + host-config table basename). A workspace file named `codex` / `claude` does **not** receive host login grants. Residuals: user-writable `~/.local/bin` over-trust; installs outside the allowlist get no host-config.
+- An agent launched outside ryk is outside ryk's process boundary.
+- A command or network request that bypasses the active hook, wrapper, or proxy is outside that surface.
+- Privileged users can bypass user-space controls.
+- A user can approve an unsafe action.
+- A host can treat hook output as advisory rather than blocking.
 
-## Host-config hardlink smuggle (F-03)
-
-On macOS session-attach, Seatbelt denies `file-link` then re-allows under the workspace with control-root `require-not` (same class as write carve-outs), so a child cannot hard-link host-config grant files into the workspace or plant hardlinks under `.git`/`.ryk`. Residuals: `cp` while auth is readable; same-tree host hardlinks denied; no Landlock `file-link` twin on Linux; secretless still exposes raw login files for trusted hosts until S1C/gateway (F-04).
+For implementation-specific residuals, read the platform notes and run `ryk doctor` on the machine that will run the agent.
