@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.2.10] - 2026-08-08
+
+## What's Changed
+* harden sandbox and secret-boundary enforcement across macOS and Linux
+* add agent-inference policy discovery and CLI onboarding improvements
+* add verified CLI documentation and PostHog product telemetry
+* make the checksum-verified curl installer the only active release channel
+
+**Full Changelog**: https://github.com/christopherkarani/ryk/compare/v1.2.9...v1.2.10
+
 ## [1.2.9] - 2026-07-25
 
 ## What's Changed
