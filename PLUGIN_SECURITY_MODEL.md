@@ -11,7 +11,7 @@ This document defines the trust boundaries, sandbox expectations, and permission
 2. **Strongest protection is `ryk run`.** Plugin hooks are additive, not a replacement for supervised execution.
 3. **Default deny.** If a plugin cannot verify safety, it must fail closed.
 4. **No silent mutation.** Host configs, policies, and credentials are never changed without explicit user approval.
-5. **No telemetry by default.** The plugin surface does not phone home.
+5. **Plugin telemetry boundary.** The plugin surface does not collect telemetry or phone home with plugin payloads. Release CLI commands have their separate fixed anonymous telemetry contract; hook, plugin, and machine-readable paths are excluded.
 
 ## Trust Boundaries
 

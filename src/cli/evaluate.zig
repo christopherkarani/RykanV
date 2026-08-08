@@ -12,6 +12,7 @@ const exit_codes = @import("exit_codes.zig");
 const feed_writer = @import("feed_writer.zig");
 const help = @import("help.zig");
 const rust_visibility = @import("rust_visibility.zig");
+const telemetry = @import("../telemetry.zig");
 
 const max_payload_len = 256 * 1024;
 const api_schema_version: i64 = 1;
@@ -190,10 +191,12 @@ fn evaluatePayload(
         defer if (request_id) |id| allocator.free(id);
         switch (err) {
             error.OutOfMemory => {
+                telemetry.recordReliability("evaluate", "other", "evaluate");
                 try writeInternalError(stdout, request_id, "internal allocation failure during request parsing");
                 return exit_internal_error;
             },
             else => |parse_err| {
+                telemetry.recordReliability("evaluate", "usage", "evaluate");
                 try writeInvalidInput(stdout, request_id, validationMessage(parse_err));
                 return exit_invalid_input;
             },
@@ -202,6 +205,7 @@ fn evaluatePayload(
     defer request.deinit(allocator);
 
     var parsed = evaluator(allocator, request.command, request.cwd) catch |err| {
+        telemetry.recordReliability("evaluate", telemetryFailureForDaemonError(err), "evaluate");
         recordUnavailableEvaluationBestEffort(io, allocator, request, err, feed_destination);
         try writeDaemonError(stdout, request.request_id, err);
         return exit_evaluator_error;
@@ -212,17 +216,28 @@ fn evaluatePayload(
     // so the feed reflects final allow/ask/deny (not raw engine Allow upgraded by FM).
     return writeEvaluationResponse(io, allocator, stdout, request, parsed.value.result, wire, feed_destination) catch |err| switch (err) {
         error.DaemonProtocolError => {
+            telemetry.recordReliability("evaluate", "protocol_error", "evaluate");
             try writeProtocolError(stdout, request.request_id, "daemon returned an unexpected evaluation response");
             return exit_evaluator_error;
         },
         error.OutOfMemory => {
+            telemetry.recordReliability("evaluate", "other", "evaluate");
             try writeInternalError(stdout, request.request_id, "internal allocation failure during evaluation response");
             return exit_internal_error;
         },
         else => {
+            telemetry.recordReliability("evaluate", "other", "evaluate");
             try writeInternalError(stdout, request.request_id, "failed to write evaluation response");
             return exit_internal_error;
         },
+    };
+}
+
+fn telemetryFailureForDaemonError(err: daemon.DaemonError) []const u8 {
+    return switch (err) {
+        error.DaemonStartTimeout => "timeout",
+        error.ResponseParseFailed, error.DaemonProtocolError, error.ProtocolMismatch, error.MissingHandshake, error.HandshakeMalformed => "protocol_error",
+        else => "evaluator_error",
     };
 }
 
@@ -495,6 +510,7 @@ fn writeEvaluationResponse(
     // Protocol-only shapes still fail closed before WP4 (preserve prior evaluate contract).
     switch (daemon.responseStatus(result)) {
         .error_status => {
+            telemetry.recordReliability("evaluate", "protocol_error", "evaluate");
             recordDaemonEvaluationBestEffort(io, allocator, request, result, feed_destination);
             try writeProtocolError(stdout, request.request_id, "daemon evaluator returned an error");
             return exit_evaluator_error;
@@ -546,6 +562,7 @@ fn writeEvaluationResponse(
             .host = request.host,
             .fm_client = wire.fm_client,
             .disable_fm = wire.disable_fm,
+            .telemetry_source = event_source_evaluate,
         },
     );
     defer owned.deinit(allocator);
@@ -556,6 +573,7 @@ fn writeEvaluationResponse(
     defer allocator.free(safe_reason);
 
     if (owned.fail_closed) {
+        telemetry.recordReliability("evaluate", "evaluator_error", "evaluate");
         recordProductEvaluationBestEffort(
             io,
             allocator,

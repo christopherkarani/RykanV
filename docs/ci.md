@@ -1,6 +1,6 @@
 # CI
 
-ryk has no hosted service requirement.
+ryk has no hosted policy or enforcement service requirement. The `ryk ci` and machine-output paths do not emit telemetry; see [`telemetry.md`](telemetry.md) for the separate release-build CLI telemetry contract.
 
 ## GitHub Actions Example
 

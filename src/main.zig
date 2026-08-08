@@ -42,6 +42,12 @@ pub fn main(init: std.process.Init) !u8 {
         try ryk.cli.run(io, init.environ_map, argv[1..], &stdout_writer.interface, &stderr_writer.interface);
     try stdout_writer.interface.flush();
     try stderr_writer.interface.flush();
+    if (shim_alias) |alias| {
+        const telemetry_argv = [_][]const u8{alias};
+        ryk.telemetry.recordInvocation(io, init.environ_map, allocator, &telemetry_argv, code);
+    } else {
+        ryk.telemetry.recordInvocation(io, init.environ_map, allocator, argv[1..], code);
+    }
     return code;
 }
 

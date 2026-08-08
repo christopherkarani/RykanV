@@ -19,6 +19,7 @@ Launch docs:
 - `redteam.md`: fixture categories, CI mode, JSON output, and adding fixtures.
 - `agent-recipes.md`: generic local recipes and preset notes.
 - `ci.md`: GitHub Actions and artifact guidance.
+- `telemetry.md`: default-on pseudonymous CLI telemetry, opt-out controls, and the privacy allowlist.
 - `replay.md`: audit artifacts, hash-chain verification, and redaction behavior.
 - `filesystem-staging.md`, `network.md`, and `commands.md`: enforcement surfaces and limitations.
 - `compatibility.md`: consolidated platform matrix.

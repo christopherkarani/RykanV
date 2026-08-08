@@ -159,13 +159,13 @@ cat tests/plugin-fixtures/openclaw/tool_command_safe.json \
 - **Local path install may show runtime warnings.** OpenClaw local path installs load TypeScript source directly and may show context-shape warnings depending on OpenClaw version. The npm package (with compiled `dist/index.js`) is the recommended distribution format.
 - **Hooks are advisory for informational events.** Blocking hooks depend on OpenClaw honoring thrown errors.
 - **The strongest protection remains `ryk openclaw`.**
-- **No telemetry is collected.**
+- **The plugin does not collect telemetry itself.** Hook and machine-readable calls are excluded from release CLI telemetry; user-invoked CLI wrappers may record only the fixed pseudonymous metadata described in [`../telemetry.md`](../telemetry.md).
 - **No MCP server behavior is added.**
 - **No drone-specific plugin features are added.**
 
-## No Telemetry Statement
+## Plugin Telemetry Boundary
 
-The ryk OpenClaw plugin does not collect telemetry. No usage data, session content, or metadata is transmitted to any external service.
+The ryk OpenClaw plugin does not collect telemetry itself. Hook and machine-readable calls are excluded from release CLI telemetry. A user-invoked release CLI wrapper may record only the fixed pseudonymous metadata described in [`../telemetry.md`](../telemetry.md); it never transmits usage content, session content, command text, or tool payloads.
 
 ## No MCP Behavior Statement
 

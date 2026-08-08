@@ -49,5 +49,5 @@ The `generic-agent` preset is a conservative starting point for local coding age
 
 - This skill modifies only `.ryk/policy.yaml` in the current workspace.
 - No host configuration is changed.
-- No telemetry is sent.
+- The plugin does not collect telemetry. Release CLI commands may record only fixed anonymous metadata; see [`docs/telemetry.md`](../../../../docs/telemetry.md).
 - The generated policy does not contain real secrets.

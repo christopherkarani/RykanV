@@ -75,6 +75,11 @@ pub fn build(b: *std.Build) void {
     };
     const commit = b.option([]const u8, "commit", "Source commit metadata") orelse "unknown";
     const build_date = b.option([]const u8, "build-date", "UTC build date metadata") orelse "unknown";
+    const posthog_project_token = b.option(
+        []const u8,
+        "posthog-project-token",
+        "PostHog project token for release telemetry",
+    ) orelse "";
     // Zig 0.16: filters are compile-time (passed to `zig test` as --test-filter), not runtime
     // argv on the terminal test runner. Use: ./scripts/zig build test-lib -Dtest-filter=Spinner
     const test_filter = b.option([]const u8, "test-filter", "Only run unit tests whose names contain this substring");
@@ -84,6 +89,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption([]const u8, "version", version);
     build_options.addOption([]const u8, "commit", commit);
     build_options.addOption([]const u8, "build_date", build_date);
+    build_options.addOption([]const u8, "posthog_project_token", posthog_project_token);
     const build_options_mod = build_options.createModule();
 
     const core_schema_documents = b.addOptions();

@@ -44,6 +44,7 @@ pub const ClassifyResult = struct {
     timed_out: bool,
     fallback: bool,
     model_available: bool,
+    latency_ms: ?i64 = null,
     /// When true, `deinit` frees string fields. Static fail-open results set false.
     owned: bool = true,
 
@@ -119,6 +120,7 @@ pub fn parseClassifyResponse(allocator: std.mem.Allocator, json: []const u8) Par
         .timed_out = wire.timed_out,
         .fallback = wire.fallback,
         .model_available = wire.model_available,
+        .latency_ms = wire.latency_ms,
         .owned = true,
     };
 }
@@ -141,6 +143,7 @@ pub fn fallbackContinue(why: []const u8, timed_out: bool) ClassifyResult {
         .timed_out = timed_out,
         .fallback = true,
         .model_available = false,
+        .latency_ms = null,
         .owned = false,
     };
 }

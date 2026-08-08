@@ -20,6 +20,8 @@ jobs:
         run: ./scripts/zig build test-fast
       - name: Zig shell_engine pack + corpus parity
         run: ./scripts/zig build test-shell-engine
+      - name: Token-enabled telemetry release contract
+        run: ./scripts/test-telemetry-release-contract.sh
   # Landlock (ubuntu) / Seatbelt (macos-14) attach + adversarial e2e.
   # --require-attach is single authority (packaged ryk_run + profile_hash + evidence.zig rules).
   # Thin jq checks packaged primary detail only — no third copy of unit dual-proof greps.

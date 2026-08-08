@@ -211,7 +211,7 @@ The plugin uses synthetic test secrets in fixtures only. If you see redaction wa
 - Hooks are advisory; enforcement depends on OpenClaw host support.
 - The strongest protection is `ryk openclaw`.
 - Plugin installation is a preview/dry-run by default.
-- No telemetry is collected.
+- The plugin does not collect telemetry itself. Hook and machine-readable calls are excluded from release CLI telemetry; user-invoked CLI wrappers may record only the fixed pseudonymous metadata described in [`../telemetry.md`](../telemetry.md).
 - npm package name: `ryk-openclaw-plugin`.
 - ClawHub package name: `ryk-openclaw-plugin`.
 - The OpenClaw plugin does not add MCP server behavior or drone-specific plugin features.
@@ -226,9 +226,9 @@ The plugin uses synthetic test secrets in fixtures only. If you see redaction wa
 - Human logs go to stderr.
 - CI mode never prompts.
 
-## No telemetry
+## Plugin telemetry boundary
 
-This plugin does not collect telemetry. No usage data, session content, or metadata is transmitted to any external service.
+This plugin does not collect telemetry itself. Hook and machine-readable calls are excluded from release CLI telemetry. A user-invoked release CLI wrapper may record only the fixed pseudonymous metadata described in [`../telemetry.md`](../telemetry.md); it never transmits usage content, session content, command text, or tool payloads.
 
 ## No MCP behavior
 

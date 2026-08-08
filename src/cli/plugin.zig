@@ -8,6 +8,7 @@ const sandbox = @import("ryk").sandbox;
 const exit_codes = @import("exit_codes.zig");
 const help = @import("help.zig");
 const cli = @import("mod.zig");
+const telemetry = @import("../telemetry.zig");
 const plugin_install = @import("plugin_install.zig");
 const child_process = @import("child_process.zig");
 const resource_root = @import("ryk").resource_root;
@@ -20,6 +21,19 @@ const interactive = @import("interactive.zig");
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+fn setProcessEnv(name: [*:0]const u8, value: ?[*:0]const u8) bool {
+    if (comptime builtin.os.tag == .windows) {
+        const kernel32 = struct {
+            extern "kernel32" fn SetEnvironmentVariableA(name: [*:0]const u8, value: ?[*:0]const u8) callconv(.winapi) std.os.windows.BOOL;
+        };
+        return kernel32.SetEnvironmentVariableA(name, value).toBool();
+    } else if (value) |present| {
+        return setenv(name, present, 1) == 0;
+    } else {
+        return unsetenv(name) == 0;
+    }
+}
 
 fn testDupEnvZ(name: [*:0]const u8) !?[:0]u8 {
     if (std.c.getenv(name)) |value| {
@@ -144,8 +158,22 @@ fn doctorCommand(io: std.Io, argv: []const []const u8, stdout: anytype, stderr: 
         try writeDoctorJson(stdout, report, target);
     } else {
         try writeDoctorPlain(io, allocator, stdout, report, target);
+        telemetry.recordIntegration(@tagName(target), "verify", if (doctorTargetHealthy(target, report)) "success" else "failure");
     }
     return exit_codes.success;
+}
+
+fn doctorTargetHealthy(target: DoctorTarget, report: PluginDoctorReport) bool {
+    return switch (target) {
+        .all => hostPluginInstalledFromReport("codex", report) and hostPluginInstalledFromReport("claude", report) and
+            hostPluginInstalledFromReport("opencode", report) and hostPluginInstalledFromReport("openclaw", report) and
+            hostPluginInstalledFromReport("hermes", report),
+        .codex => hostPluginInstalledFromReport("codex", report),
+        .claude => hostPluginInstalledFromReport("claude", report),
+        .opencode => hostPluginInstalledFromReport("opencode", report),
+        .openclaw => hostPluginInstalledFromReport("openclaw", report),
+        .hermes => hostPluginInstalledFromReport("hermes", report),
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -2246,6 +2274,23 @@ pub fn smokeTestHook(allocator: std.mem.Allocator, host: []const u8, event: []co
     const self_exe = try std.process.executablePathAlloc(io, allocator);
     defer allocator.free(self_exe);
     const argv = &[_][]const u8{ self_exe, "hook", host, event };
+
+    // This is an internal health probe, not a user hook invocation. Keep its
+    // child process out of product telemetry so machine-readable doctor runs
+    // remain observational and do not manufacture enforcement/session events.
+    const previous_no_telemetry = if (std.c.getenv("RYK_NO_TELEMETRY")) |value|
+        try allocator.dupeZ(u8, std.mem.span(value))
+    else
+        null;
+    defer {
+        if (previous_no_telemetry) |value| {
+            _ = setProcessEnv("RYK_NO_TELEMETRY", value.ptr);
+            allocator.free(value);
+        } else {
+            _ = setProcessEnv("RYK_NO_TELEMETRY", null);
+        }
+    }
+    if (!setProcessEnv("RYK_NO_TELEMETRY", "1")) return error.TelemetryIsolationUnavailable;
 
     const fixture = try std.Io.Dir.cwd().readFileAlloc(io, fixture_path, allocator, .limited(256 * 1024));
     defer allocator.free(fixture);

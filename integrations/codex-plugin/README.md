@@ -101,7 +101,7 @@ Remove the plugin from Codex using your Codex plugin management commands. This p
 - Hooks are advisory; they do not enforce policy independently of the host.
 - The strongest protection remains `ryk run -- <codex-command>`.
 - Plugin installation preview only; actual host plugin loading depends on Codex version.
-- No telemetry is collected.
+- The plugin does not collect telemetry itself. Hook, plugin, and machine-readable calls are excluded from release CLI telemetry; a user-invoked `ryk run -- <codex-command>` wrapper may record only the fixed anonymous CLI metadata described in [`../../docs/telemetry.md`](../../docs/telemetry.md).
 
 ## Security model
 

@@ -52,5 +52,5 @@ Then retry the replay command.
 ## Notes
 
 - This skill does not modify host configuration.
-- No telemetry is sent.
+- The plugin does not collect telemetry. Machine-readable replay calls are excluded from release CLI telemetry; see [`docs/telemetry.md`](../../../../docs/telemetry.md).
 - Replay reads local audit logs only; no external service is contacted.

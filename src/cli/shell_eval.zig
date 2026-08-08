@@ -17,6 +17,7 @@ const rust_visibility = @import("rust_visibility.zig");
 const feed_writer = @import("feed_writer.zig");
 const pack_config = @import("pack_config.zig");
 const fm_steward_client = @import("fm_steward_client.zig");
+const telemetry = @import("../telemetry.zig");
 const supervisor = core.supervisor;
 
 pub const ShellCommandEvent = struct {
@@ -1064,6 +1065,8 @@ pub const DaemonPolicyOpts = struct {
     disable_fm: bool = false,
     /// Wall budget for classify (default StewardSession 3000ms).
     fm_timeout_ms: u32 = fm_steward_client.default_timeout_ms,
+    /// Fixed telemetry source label. Never contains a command or payload.
+    telemetry_source: []const u8 = "other",
 };
 
 // ---------------------------------------------------------------------------
@@ -1083,6 +1086,7 @@ pub const FmShellContext = struct {
     /// When true, return `policy_out` without calling the client.
     disable_fm: bool = false,
     timeout_ms: u32 = fm_steward_client.default_timeout_ms,
+    telemetry_source: []const u8 = "other",
 };
 
 fn fmContextFromOpts(opts: DaemonPolicyOpts) FmShellContext {
@@ -1096,6 +1100,7 @@ fn fmContextFromOpts(opts: DaemonPolicyOpts) FmShellContext {
         .client = opts.fm_client,
         .disable_fm = opts.disable_fm,
         .timeout_ms = opts.fm_timeout_ms,
+        .telemetry_source = opts.telemetry_source,
     };
 }
 
@@ -1143,13 +1148,36 @@ pub fn applyFmSoftSeatbelt(
     const timeout = if (ctx.timeout_ms == 0) fm_steward_client.default_timeout_ms else ctx.timeout_ms;
     var classify_result = client.classify(allocator, card_json, timeout);
     defer classify_result.deinit(allocator);
+    const initial_decision = policy_out.decision;
 
     // Timeout / fallback / continue → keep soft policy (no ask-spam).
     if (classify_result.timed_out or classify_result.fallback) {
+        telemetry.recordFmDecision(
+            ctx.telemetry_source,
+            ctx.host,
+            classify_result.verdict.toWire(),
+            classify_result.fallback,
+            classify_result.timed_out,
+            classify_result.model_available,
+            classify_result.latency_ms,
+            false,
+        );
         return policy_out;
     }
     switch (classify_result.verdict) {
-        .continue_ => return policy_out,
+        .continue_ => {
+            telemetry.recordFmDecision(
+                ctx.telemetry_source,
+                ctx.host,
+                classify_result.verdict.toWire(),
+                classify_result.fallback,
+                classify_result.timed_out,
+                classify_result.model_available,
+                classify_result.latency_ms,
+                false,
+            );
+            return policy_out;
+        },
         .ask, .ask_sticky_candidate => {
             // Prefer steward explain, then why; fall back to a stable static string.
             const reason_src: []const u8 = if (classify_result.explain) |e|
@@ -1173,6 +1201,16 @@ pub fn applyFmSoftSeatbelt(
                 if (s.len > 0) sticky_effect = try allocator.dupe(u8, s);
             }
 
+            telemetry.recordFmDecision(
+                ctx.telemetry_source,
+                ctx.host,
+                classify_result.verdict.toWire(),
+                classify_result.fallback,
+                classify_result.timed_out,
+                classify_result.model_available,
+                classify_result.latency_ms,
+                initial_decision != .ask,
+            );
             return .{
                 .decision = .ask,
                 .reason = policy_out.reason,
@@ -1326,7 +1364,7 @@ pub fn decisionFromDaemonResultWithPolicy(
 ) !OwnedRunDecision {
     const ci_mode = mode == .ci;
     const use_policy = opts.command.len > 0 or opts.sticky != null or opts.permit.entries.len > 0;
-    return switch (daemon.responseStatus(result)) {
+    const final = switch (daemon.responseStatus(result)) {
         .allow => blk: {
             // WP4: engine allow still applies strict refuse when policy opts present.
             if (use_policy) {
@@ -1526,6 +1564,17 @@ pub fn decisionFromDaemonResultWithPolicy(
             "unexpected daemon response for shell command evaluation",
         ),
     };
+    if (!std.mem.eql(u8, opts.telemetry_source, "run")) {
+        telemetry.recordEnforcement(
+            opts.telemetry_source,
+            opts.host,
+            if (final.fail_closed) "error" else @tagName(final.decision.result),
+            @tagName(riskLevelFromScore(final.decision.risk_score orelse 60)),
+            opts.effect_class,
+            mode.toString(),
+        );
+    }
+    return final;
 }
 
 /// Build a fail-closed decision that owns `owned_reason` (no re-dupe).
@@ -1696,6 +1745,7 @@ pub fn evaluateCommand(
             .cwd = cwd,
             .session_id = card_session_id,
             .host = card_host,
+            .telemetry_source = if (audit_options) |ao| ao.event_source else "run",
         },
     );
     // Free owned decision if explanation allocation fails before transfer.

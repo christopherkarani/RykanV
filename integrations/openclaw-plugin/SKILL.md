@@ -62,6 +62,6 @@ Dangerous command (`rm -rf *`):
 ## Don't use ryk for
 
 - Replacing the ryk CLI (the CLI is the source of truth)
-- Telemetry collection (no telemetry is collected)
+- Telemetry collection (the plugin does not collect telemetry; release CLI telemetry follows [`docs/telemetry.md`](../../docs/telemetry.md))
 - MCP server behavior (not included)
 - Drone-specific features (not included)

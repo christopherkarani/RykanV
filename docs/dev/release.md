@@ -8,8 +8,10 @@ Full guide: [`docs/dev/cut-release-shortcut.md`](cut-release-shortcut.md).
 
 ```sh
 ./scripts/cut-release.sh --bump patch --plan-only   # preview
-./scripts/cut-release.sh --bump patch --live        # gate + build + GitHub + npm + Homebrew
+RYK_POSTHOG_PROJECT_TOKEN="<release-project-token>" ./scripts/cut-release.sh --bump patch --live # gate + build + GitHub + npm + Homebrew
 ```
+
+Release builds require the public PostHog project token in `RYK_POSTHOG_PROJECT_TOKEN`. For a local dry-run that must keep transport disabled, set `RYK_TELEMETRY_BUILD_DISABLED=1` instead.
 
 What it does:
 
@@ -21,7 +23,7 @@ What it does:
 6. npm: `@rykan/ryk` (rendered checksums) + integration plugins + `ryk-pi`
 7. Push formulas to `christopherkarani/homebrew-ryk`
 
-CI `release.yml` on `v*` tags **skips** when the release already has `checksums.txt`. Use **workflow_dispatch** only as a backup cut.
+CI `release.yml` on `v*` tags **skips** when the release already has the complete archive, checksum, SBOM, package-manifest, and telemetry-contract inventory. Use **workflow_dispatch** only as a backup cut.
 
 ## Legacy / lower-level scripts
 

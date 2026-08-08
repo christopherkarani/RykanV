@@ -277,6 +277,7 @@ require_release_artifacts() {
 [ -d "$DIST_DIR" ] || fail "missing dist dir: $DIST_DIR"
 [ -s "$DIST_DIR/checksums.txt" ] || fail "missing checksums.txt"
 [ -s "$DIST_DIR/release-manifest.json" ] || fail "missing release-manifest.json"
+[ -s "$DIST_DIR/telemetry-contract.txt" ] || fail "missing telemetry-contract.txt"
 [ -s "$DIST_DIR/sbom.json" ] || fail "missing sbom.json"
 if [ "$RELEASE_PRODUCT" != "host" ]; then
   [ -s "$DIST_DIR/package-manifests/homebrew/Formula/ryk.rb" ] || fail "missing rendered Homebrew formula"
@@ -287,6 +288,12 @@ if [ "$RELEASE_PRODUCT" != "host" ]; then
 fi
 grep -q '"products_included"' "$DIST_DIR/release-manifest.json" || fail "release-manifest.json missing products_included"
 grep -q '"ryk"' "$DIST_DIR/release-manifest.json" || fail "release-manifest.json missing ryk product"
+sed -n '1p' "$DIST_DIR/telemetry-contract.txt" | grep -qx 'telemetry_schema_version=1' || fail "invalid telemetry contract schema"
+grep -Eq '^transport=(enabled|disabled)$' "$DIST_DIR/telemetry-contract.txt" || fail "invalid telemetry contract transport"
+sed -n '3p' "$DIST_DIR/telemetry-contract.txt" | grep -qx 'endpoint=https://us.i.posthog.com/batch/' || fail "invalid telemetry contract endpoint"
+if [ "${RYK_RELEASE_LIVE:-0}" = "1" ]; then
+  sed -n '2p' "$DIST_DIR/telemetry-contract.txt" | grep -qx 'transport=enabled' || fail "live release telemetry transport is disabled"
+fi
 # Daemon product was removed; packaging is CLI + core only (Zig shell_engine in-process).
 if grep -q '"ryk-daemon"' "$DIST_DIR/release-manifest.json"; then
   fail "release-manifest.json still lists ryk-daemon product (removed from packaging)"
@@ -336,4 +343,4 @@ for plugin_version in "${HERMES_VERSION}" "${OPENCLAW_VERSION}" "${CODEX_VERSION
 done
 
 printf 'release verify: passed\n'
-printf 'Limitations: ryk release assets cover local CLI/runtime guardrails only; no hosted telemetry or cloud enforcement is included.\n'
+printf 'Limitations: ryk release assets cover local CLI/runtime guardrails and fixed pseudonymous CLI telemetry; no hosted policy sync or cloud enforcement is included.\n'

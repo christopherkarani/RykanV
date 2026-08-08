@@ -16,6 +16,21 @@ OUT_DIR="${1:-${RYK_LINUX_ARTIFACT_DIR:-${REPO_ROOT}/.release-cli-bins}}"
 VERSION="${RYK_VERSION:-$(tr -d '[:space:]' <"${REPO_ROOT}/VERSION")}"
 COMMIT="${RYK_COMMIT:-$(git -C "${REPO_ROOT}" rev-parse --short=12 HEAD)}"
 BUILD_DATE="${RYK_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+TELEMETRY_BUILD_DISABLED="${RYK_TELEMETRY_BUILD_DISABLED:-0}"
+POSTHOG_PROJECT_TOKEN="${RYK_POSTHOG_PROJECT_TOKEN:-}"
+RELEASE_LIVE="${RYK_RELEASE_LIVE:-0}"
+
+if [[ "$RELEASE_LIVE" == "1" && "$TELEMETRY_BUILD_DISABLED" == "1" ]]; then
+  echo "build-linux-release-docker: live releases cannot disable telemetry transport" >&2
+  exit 1
+fi
+if [[ "$TELEMETRY_BUILD_DISABLED" != "1" && -z "$POSTHOG_PROJECT_TOKEN" ]]; then
+  echo "build-linux-release-docker: RYK_POSTHOG_PROJECT_TOKEN is required for release binaries (or set RYK_TELEMETRY_BUILD_DISABLED=1 for a local dry-run)" >&2
+  exit 1
+fi
+if [[ "$TELEMETRY_BUILD_DISABLED" == "1" ]]; then
+  POSTHOG_PROJECT_TOKEN=""
+fi
 
 command -v docker >/dev/null 2>&1 || {
   echo "build-linux-release-docker: docker is required" >&2
@@ -44,6 +59,7 @@ for arch in amd64 arm64; do
     --build-arg "RYK_VERSION=${VERSION}" \
     --build-arg "RYK_COMMIT=${COMMIT}" \
     --build-arg "RYK_BUILD_DATE=${BUILD_DATE}" \
+    --build-arg "RYK_POSTHOG_PROJECT_TOKEN=${POSTHOG_PROJECT_TOKEN}" \
     --file "${REPO_ROOT}/packaging/docker/Dockerfile.release" \
     --output "type=local,dest=${arch_out}" \
     "${REPO_ROOT}"

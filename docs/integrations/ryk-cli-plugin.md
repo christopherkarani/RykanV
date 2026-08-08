@@ -66,7 +66,7 @@ ryk plugin install codex --path <plugin-path> --dry-run
 - Requires `--yes` for non-dry-run installation.
 - Does not mutate Codex or Claude config silently.
 - Does not store credentials.
-- Does not add telemetry.
+- Does not add its own telemetry. The plugin, hook, machine-readable, and dry-run paths are excluded from the release CLI event classifier; user-invoked commands such as `ryk run` follow the fixed pseudonymous CLI telemetry contract in [`../telemetry.md`](../telemetry.md).
 
 ### `ryk decide`
 
@@ -151,9 +151,11 @@ Plugins call ryk instead of duplicating policy logic. The strongest local protec
 ryk run -- <agent-command>
 ```
 
-## No Telemetry, No SaaS
+## Plugin Telemetry Boundary and No SaaS
 
-- No telemetry is collected by the plugin surface.
+- The plugin surface does not collect telemetry or serialize plugin payloads into analytics events.
+- `ryk plugin`, hook, decision, machine-readable, and dry-run calls are excluded from release CLI telemetry.
+- A user-invoked release CLI wrapper such as `ryk run -- <agent>` may record only fixed command metadata; it never records session content, command text, prompts, paths, or tool payloads. See [`../telemetry.md`](../telemetry.md).
 - No SaaS account, dashboard, or monetization layer is required.
 - All operations are local to the machine.
 

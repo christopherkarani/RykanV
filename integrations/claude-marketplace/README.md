@@ -39,5 +39,5 @@ This checks that the plugin directory is detected and that the ryk CLI is availa
 ## Security note
 
 - No credentials or tokens are stored in the marketplace file.
-- No telemetry is collected.
+- The plugin does not collect telemetry; release CLI telemetry follows [`docs/telemetry.md`](../../docs/telemetry.md).
 - This catalog does not claim official marketplace approval.

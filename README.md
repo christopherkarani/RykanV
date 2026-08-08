@@ -29,6 +29,8 @@ ryk is a local control layer for the coding agents engineers already use. Launch
 
 The result is a clear path from agent to action: allow, ask, deny, or observe. Sessions leave a local audit trail that you can inspect with `ryk dashboard` or `ryk replay`.
 
+Release builds include privacy-limited, pseudonymous CLI telemetry by default to help prioritize product work. It records only fixed command metadata tied to a random installation identifier, never session content or command text. Inspect or change the setting with `ryk telemetry status`, `ryk telemetry disable`, and `ryk telemetry enable`; `RYK_NO_TELEMETRY=1` is an environment-level hard disable. See [the telemetry contract](docs/telemetry.md).
+
 If you run coding agents in real repositories, [star the project](https://github.com/christopherkarani/ryk). It helps other engineers find the project and gives us a useful signal on which host integrations to prioritize.
 
 ## What you get

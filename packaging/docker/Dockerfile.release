@@ -7,6 +7,7 @@ ARG TARGETARCH
 ARG RYK_VERSION
 ARG RYK_COMMIT
 ARG RYK_BUILD_DATE
+ARG RYK_POSTHOG_PROJECT_TOKEN
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl file xz-utils \
@@ -29,6 +30,7 @@ RUN version="${RYK_VERSION}" \
       -Dversion="$version" \
       -Dcommit="$commit" \
       -Dbuild-date="$build_date" \
+      -Dposthog-project-token="$RYK_POSTHOG_PROJECT_TOKEN" \
       --prefix /tmp/ryk-cli \
     && mkdir -p "/out/linux-$TARGETARCH" \
     && test -x /tmp/ryk-cli/bin/ryk \

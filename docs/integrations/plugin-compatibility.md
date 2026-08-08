@@ -14,7 +14,7 @@ This document describes feature compatibility across the ryk CLI and host plugin
 | decision API | yes | calls CLI | calls CLI | calls CLI | calls CLI |
 | MCP server behavior | no | no | no | no | no |
 | drone plugin features | no | no | no | no | no |
-| telemetry | no | no | no | no | no |
+| telemetry | release CLI only | no | no | no | no |
 
 ## Command Compatibility
 

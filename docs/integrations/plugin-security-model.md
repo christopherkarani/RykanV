@@ -28,7 +28,7 @@ The plugin system adds:
 2. **Strongest protection is `ryk run`.** Plugin hooks are additive, not a replacement for supervised execution.
 3. **Default deny.** If a plugin cannot verify safety, it must fail closed.
 4. **No silent mutation.** Host configs, policies, and credentials are never changed without explicit user approval.
-5. **No telemetry by default.** The plugin surface does not phone home.
+5. **Plugin telemetry boundary.** The plugin surface does not collect telemetry or phone home with plugin payloads. Release CLI commands have their separate fixed pseudonymous telemetry contract; hook, plugin, and machine-readable paths are excluded.
 
 ## Trust Boundaries
 
@@ -116,7 +116,7 @@ Actual sandboxing is provided by:
 
 - **No MCP server behavior included.** This plugin plan does not add MCP server mode.
 - **No drone-specific plugin features included.** Drone work is a separate workstream.
-- **No telemetry by default.** The plugin surface does not phone home.
+- **Plugin telemetry boundary.** The plugin surface does not collect telemetry or phone home with plugin payloads. Release CLI commands have their separate fixed pseudonymous telemetry contract; hook, plugin, and machine-readable paths are excluded.
 - **No SaaS requirement.** No hosted dashboard, account, or monetization layer is required.
 - **No protection for agents not launched through ryk** unless the host hook catches the action.
 - **No protection against root/admin/kernel compromise.**

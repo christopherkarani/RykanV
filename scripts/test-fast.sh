@@ -86,5 +86,9 @@ step_begin "Quick-install / generic-agent policy matrix"
 ./scripts/quick-install-dx-verify.sh
 step_end "quick-install"
 
+step_begin "Token-enabled telemetry release contract"
+./scripts/test-telemetry-release-contract.sh
+step_end "telemetry-release-contract"
+
 total=$(( $(date +%s) - gate_start ))
 echo "[test-fast] All full fast checks passed in ${total}s."

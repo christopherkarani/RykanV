@@ -26,6 +26,21 @@ ZIG_OPTIMIZE="${RYK_ZIG_OPTIMIZE:-ReleaseSafe}"
 RELEASE_PRODUCT="${RYK_RELEASE_PRODUCT:-all}"
 CLI_ARTIFACT_DIR="${RYK_CLI_ARTIFACT_DIR:-}"
 SIGNING_STATUS="not_configured"
+TELEMETRY_BUILD_DISABLED="${RYK_TELEMETRY_BUILD_DISABLED:-0}"
+POSTHOG_PROJECT_TOKEN="${RYK_POSTHOG_PROJECT_TOKEN:-}"
+RELEASE_LIVE="${RYK_RELEASE_LIVE:-0}"
+
+if [ "$RELEASE_LIVE" = "1" ] && [ "$TELEMETRY_BUILD_DISABLED" = "1" ]; then
+  printf 'build-release: live releases cannot disable telemetry transport\n' >&2
+  exit 1
+fi
+if [ "$TELEMETRY_BUILD_DISABLED" != "1" ] && [ -z "$POSTHOG_PROJECT_TOKEN" ]; then
+  printf 'build-release: RYK_POSTHOG_PROJECT_TOKEN is required for a release build (or set RYK_TELEMETRY_BUILD_DISABLED=1 for a local dry-run)\n' >&2
+  exit 1
+fi
+if [ "$TELEMETRY_BUILD_DISABLED" = "1" ]; then
+  POSTHOG_PROJECT_TOKEN=""
+fi
 
 HOST_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 HOST_ARCH="$(uname -m)"
@@ -157,6 +172,20 @@ ${boundary}
 EOF
 }
 
+write_telemetry_contract() {
+  output="${DIST_DIR}/telemetry-contract.txt"
+  {
+    printf 'telemetry_schema_version=1\n'
+    if [ "$TELEMETRY_BUILD_DISABLED" = "1" ]; then
+      printf 'transport=disabled\n'
+    else
+      printf 'transport=enabled\n'
+    fi
+    printf 'endpoint=%s\n' 'https://us.i.posthog.com/batch/'
+  } >"$output"
+  printf 'Wrote %s\n' "$output"
+}
+
 # CLI-only archives: Zig shell_engine evaluates in-process (no ryk-daemon product binary).
 
 install_cli() {
@@ -175,6 +204,25 @@ install_cli() {
   if [ "$os" != "windows" ]; then
     chmod 0755 "$root/bin/$bin_name"
   fi
+}
+
+verify_staged_cli_telemetry() {
+  staged_path="$1"
+  if [ "$TELEMETRY_BUILD_DISABLED" = "1" ]; then
+    grep -aFq 'ryk-telemetry-transport-disabled-v1' "$staged_path" || {
+      printf 'staged ryk binary is not transport-disabled: %s\n' "$staged_path" >&2
+      exit 1
+    }
+    return 0
+  fi
+  grep -aFq 'ryk-telemetry-transport-enabled-v1' "$staged_path" || {
+    printf 'staged ryk binary is not transport-enabled: %s\n' "$staged_path" >&2
+    exit 1
+  }
+  grep -aFq "$POSTHOG_PROJECT_TOKEN" "$staged_path" || {
+    printf 'staged ryk binary does not contain the configured PostHog transport token: %s\n' "$staged_path" >&2
+    exit 1
+  }
 }
 
 build_cli_target() {
@@ -196,6 +244,7 @@ build_cli_target() {
   if [ -n "$CLI_ARTIFACT_DIR" ] && [ -f "$staged_cli" ]; then
     mkdir -p "$prefix/bin"
     cp -p "$staged_cli" "$prefix/bin/$bin_name"
+    verify_staged_cli_telemetry "$staged_cli"
   else
     "$(dirname "$0")/zig" build install-ryk \
       -Dtarget="$zig_target" \
@@ -203,8 +252,10 @@ build_cli_target() {
       -Dversion="$VERSION" \
       -Dcommit="$COMMIT" \
       -Dbuild-date="$BUILD_DATE" \
+      -Dposthog-project-token="$POSTHOG_PROJECT_TOKEN" \
       --prefix "$prefix"
   fi
+  verify_staged_cli_telemetry "$prefix/bin/$bin_name"
 
   copy_cli_payload "$root"
   write_release_readme "$root"
@@ -264,6 +315,7 @@ write_release_manifest() {
   "artifacts": [${artifact_entries}
   ],
   "checksums": "checksums.txt",
+  "telemetry_contract": "telemetry-contract.txt",
   "target_platforms": ${target_platforms},
   "required_runtime_assets": ${runtime_assets_json},
   "schemas_included": ${schemas_json},
@@ -297,6 +349,8 @@ printf '%s\n' "$(selected_targets)" | while read -r os arch zig_target ext bin_n
   [ -n "${os:-}" ] || continue
   build_cli_target "$os" "$arch" "$zig_target" "$ext" "$bin_name"
 done
+
+write_telemetry_contract
 
 if [ "${RYK_SIGNING_ENABLED:-0}" = "1" ]; then
   if [ -n "${RYK_SIGNING_COMMAND:-}" ]; then

@@ -3,10 +3,21 @@ param(
     [string]$Commit = $(if ($env:RYK_COMMIT) { $env:RYK_COMMIT } else { "unknown" }),
     [string]$BuildDate = $(if ($env:RYK_BUILD_DATE) { $env:RYK_BUILD_DATE } else { (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ") }),
     [string]$DistDir = $(if ($env:RYK_DIST_DIR) { $env:RYK_DIST_DIR } else { "dist" }),
+    [string]$PostHogProjectToken = $(if ($env:RYK_POSTHOG_PROJECT_TOKEN) { $env:RYK_POSTHOG_PROJECT_TOKEN } else { "" }),
     [switch]$ArchiveOnly
 )
 
 $ErrorActionPreference = "Stop"
+$telemetryBuildDisabled = $env:RYK_TELEMETRY_BUILD_DISABLED -eq "1"
+if ($env:RYK_RELEASE_LIVE -eq "1" -and $telemetryBuildDisabled) {
+    throw "Live releases cannot disable telemetry transport."
+}
+if (-not $telemetryBuildDisabled -and -not $PostHogProjectToken) {
+    throw "RYK_POSTHOG_PROJECT_TOKEN is required for a release build (or set RYK_TELEMETRY_BUILD_DISABLED=1 for a local dry-run)."
+}
+if ($telemetryBuildDisabled) {
+    $PostHogProjectToken = ""
+}
 
 if (-not $Version) {
     if ($env:RYK_VERSION) {
@@ -42,6 +53,22 @@ function Copy-ReleasePayload($Root) {
         Remove-Item -Force
 }
 
+function Assert-ReleaseTelemetry($Path) {
+    $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($Path))
+    if ($telemetryBuildDisabled) {
+        if (-not $text.Contains("ryk-telemetry-transport-disabled-v1")) {
+            throw "Release binary is not transport-disabled: $Path"
+        }
+        return
+    }
+    if (-not $text.Contains("ryk-telemetry-transport-enabled-v1")) {
+        throw "Release binary is not transport-enabled: $Path"
+    }
+    if (-not $text.Contains($PostHogProjectToken)) {
+        throw "Release binary does not contain the configured PostHog transport token: $Path"
+    }
+}
+
 if (Test-Path -LiteralPath $DistDir) { Remove-Item -LiteralPath $DistDir -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
 
@@ -52,7 +79,8 @@ foreach ($target in $targets) {
     $root = Join-Path $work "ryk-v$Version-$($target.Os)-$($target.Arch)"
 
     New-Item -ItemType Directory -Force -Path $prefix, $root | Out-Null
-    zig build install-ryk -Dtarget=$($target.Zig) -Doptimize=ReleaseSafe -Dversion=$Version -Dcommit=$Commit -Dbuild-date=$BuildDate --prefix $prefix
+    zig build install-ryk -Dtarget=$($target.Zig) -Doptimize=ReleaseSafe -Dversion=$Version -Dcommit=$Commit -Dbuild-date=$BuildDate -Dposthog-project-token=$PostHogProjectToken --prefix $prefix
+    Assert-ReleaseTelemetry (Join-Path $prefix "bin/$($target.Bin)")
 
     Copy-ReleasePayload $root
     New-Item -ItemType Directory -Force -Path (Join-Path $root "bin") | Out-Null
@@ -88,6 +116,15 @@ if (-not $checksumLines) {
 }
 $checksumLines | Set-Content -LiteralPath $checksumsPath -Encoding ASCII
 Write-Host "Wrote $checksumsPath"
+
+$telemetryContractPath = Join-Path $DistDir "telemetry-contract.txt"
+$transport = if ($telemetryBuildDisabled) { "disabled" } else { "enabled" }
+@(
+    "telemetry_schema_version=1"
+    "transport=$transport"
+    "endpoint=https://us.i.posthog.com/batch/"
+) | Set-Content -LiteralPath $telemetryContractPath -Encoding ASCII
+Write-Host "Wrote $telemetryContractPath"
 
 $sbomPath = Join-Path $DistDir "sbom.json"
 $sbom = [ordered]@{

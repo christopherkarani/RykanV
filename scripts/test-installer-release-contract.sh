@@ -31,6 +31,11 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+if RYK_RELEASE_LIVE=1 RYK_TELEMETRY_BUILD_DISABLED=1 RYK_VERSION="$VERSION" \
+  "$REPO_ROOT/scripts/build-release.sh" >/dev/null 2>&1; then
+  fail "live release builder accepted disabled telemetry transport"
+fi
+
 # build-release intentionally refuses to fall back to the removed legacy
 # dashboard assets. Supply a disposable bundle so this contract remains a
 # release-layout test and does not require a UI dependency install.
@@ -50,6 +55,7 @@ for target in darwin-amd64 darwin-arm64 linux-amd64 linux-arm64 windows-amd64; d
   mkdir -p "$tmp_root/cli/${target_os}-${target_arch}"
   cat > "$tmp_root/cli/${target_os}-${target_arch}/${bin_name}" <<'EOF'
 #!/usr/bin/env sh
+# ryk-telemetry-transport-disabled-v1
 printf 'ryk 0.0.0\n'
 EOF
   chmod 0755 "$tmp_root/cli/${target_os}-${target_arch}/${bin_name}"
@@ -60,6 +66,7 @@ RYK_RELEASE_PRODUCT=all \
 RYK_DIST_DIR="$tmp_root/dist" \
 RYK_VERSION="$VERSION" \
 RYK_BUILD_DATE=2026-01-01T00:00:00Z \
+RYK_TELEMETRY_BUILD_DISABLED=1 \
   "$REPO_ROOT/scripts/build-release.sh" >/dev/null
 
 for artifact in \

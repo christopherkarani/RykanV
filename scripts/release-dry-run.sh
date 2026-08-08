@@ -57,7 +57,7 @@ report_binary_sizes() {
 
 # Verifies release archive checksums through scripts/verify-release.sh.
 printf 'release dry-run: building artifacts into %s\n' "$DIST_DIR"
-RYK_RELEASE_PRODUCT=host RYK_DIST_DIR="$DIST_DIR" ./scripts/build-release.sh
+RYK_TELEMETRY_BUILD_DISABLED=1 RYK_RELEASE_PRODUCT=host RYK_DIST_DIR="$DIST_DIR" ./scripts/build-release.sh
 RYK_RELEASE_PRODUCT=host ./scripts/verify-release.sh "$DIST_DIR"
 RYK_DIST_DIR="$DIST_DIR" ./scripts/install-layout-smoke-test.sh
 report_binary_sizes
@@ -66,4 +66,4 @@ if [ "$(uname -s)" = "Linux" ] && command -v docker >/dev/null 2>&1; then
 fi
 
 printf 'release dry-run: passed\n'
-printf 'Limitations: no real hardware, PX4/ArduPilot SITL opt-in only, no hosted telemetry, no secrets required.\n'
+printf 'Limitations: no real hardware, PX4/ArduPilot SITL opt-in only, telemetry transport disabled in this dry-run, no secrets required.\n'

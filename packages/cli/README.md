@@ -13,7 +13,7 @@ ryk is the desktop and CI AI-agent runtime firewall product.
 
 - Drone or robotics command mediation.
 - MAVLink, PX4, ArduPilot, flight-controller, autopilot, or detect-and-avoid behavior.
-- SaaS, telemetry, monetization, hosted dashboards, or product claims outside local CLI behavior.
+- Hosted policy sync, monetization, or product claims outside local CLI behavior. Release builds may send the fixed pseudonymous CLI telemetry described in [`docs/telemetry.md`](../../docs/telemetry.md); Core and plugin payloads remain outside that surface.
 
 ## Current Status
 

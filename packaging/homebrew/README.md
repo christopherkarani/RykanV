@@ -14,7 +14,7 @@ This directory is the source for the `christopherkarani/homebrew-ryk` tap.
 Manual path:
 
 ```sh
-./scripts/build-release.sh
+RYK_POSTHOG_PROJECT_TOKEN="<release-project-token>" ./scripts/build-release.sh
 # Ensure release assets are uploaded to GitHub before updating the formula
 ./scripts/update-homebrew-formula.sh
 brew audit --strict --online packaging/homebrew/Formula/ryk.rb

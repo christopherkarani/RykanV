@@ -32,7 +32,7 @@ runtime_assets='[
   "integrations",
   "packaging"
 ]'
-safety_boundary="ryk assets cover local CLI/runtime guardrails only; no hosted telemetry or cloud enforcement is included."
+safety_boundary="ryk assets cover local CLI/runtime guardrails plus fixed pseudonymous CLI telemetry; no hosted policy sync or cloud enforcement is included."
 
 cat > "$OUTPUT" <<EOF
 {

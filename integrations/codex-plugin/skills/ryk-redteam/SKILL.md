@@ -44,5 +44,5 @@ The red-team suite runs synthetic fixtures against ryk policy to check:
 ## Notes
 
 - This skill does not modify host configuration.
-- No telemetry is sent.
+- The plugin does not collect telemetry. The documented CI/machine paths are excluded from release CLI telemetry; see [`docs/telemetry.md`](../../../../docs/telemetry.md).
 - Fixtures use synthetic data only; no real secrets are involved.

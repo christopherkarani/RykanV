@@ -22,6 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RYK_VERSION: ${{ github.event.inputs.version || github.ref_name }}
+      RYK_POSTHOG_PROJECT_TOKEN: ${{ secrets.RYK_POSTHOG_PROJECT_TOKEN }}
+      RYK_RELEASE_LIVE: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -47,7 +49,8 @@ jobs:
           echo "RYK_VERSION=$version" >> "$GITHUB_ENV"
 
       # Mac cut-release (scripts/cut-release.sh) is the primary publisher. When a
-      # v* tag is pushed after assets already exist (checksums.txt on the release),
+      # v* tag is pushed after assets already exist (checksums.txt and the
+      # telemetry contract on the release),
       # skip the full CI rebuild so we do not double-upload or race the Mac cutter.
       # workflow_dispatch remains a manual backup path and always runs.
       - name: Resolve skip flag
@@ -68,6 +71,8 @@ jobs:
             assets="$(gh release view "v${VER}" --repo "$GITHUB_REPOSITORY" --json assets \
               --jq '.assets[].name' 2>/dev/null || true)"
             has_checksums=0
+            has_telemetry_contract=0
+            has_telemetry_enabled=0
             has_sbom=0
             has_darwin_amd64=0
             has_darwin_arm64=0
@@ -82,6 +87,7 @@ jobs:
               [ -n "$name" ] || continue
               case "$name" in
                 checksums.txt) has_checksums=1 ;;
+                telemetry-contract.txt) has_telemetry_contract=1 ;;
                 sbom.json) has_sbom=1 ;;
                 "ryk-v${VER}-darwin-amd64.tar.gz") has_darwin_amd64=1 ;;
                 "ryk-v${VER}-darwin-arm64.tar.gz") has_darwin_arm64=1 ;;
@@ -94,16 +100,25 @@ jobs:
                 ryk.yaml) has_winget=1 ;;
               esac
             done <<< "$assets"
-            if [ "$has_checksums" = 1 ] && [ "$has_sbom" = 1 ] && \
+            if [ "$has_telemetry_contract" = 1 ]; then
+              contract_dir="$(mktemp -d)"
+              if gh release download "v${VER}" --repo "$GITHUB_REPOSITORY" \
+                --pattern telemetry-contract.txt --dir "$contract_dir" >/dev/null 2>&1 && \
+                grep -qx 'transport=enabled' "$contract_dir/telemetry-contract.txt"; then
+                has_telemetry_enabled=1
+              fi
+              rm -rf "$contract_dir"
+            fi
+            if [ "$has_checksums" = 1 ] && [ "$has_telemetry_contract" = 1 ] && [ "$has_telemetry_enabled" = 1 ] && [ "$has_sbom" = 1 ] && \
               [ "$has_darwin_amd64" = 1 ] && [ "$has_darwin_arm64" = 1 ] && \
               [ "$has_linux_amd64" = 1 ] && [ "$has_linux_arm64" = 1 ] && \
               [ "$has_windows_amd64" = 1 ] && [ "$has_homebrew" = 1 ] && \
               [ "$has_npm" = 1 ] && [ "$has_scoop" = 1 ] && [ "$has_winget" = 1 ]; then
-              echo "Release v${VER} has all five CLI artifacts, checksums.txt, sbom.json, and package manifests; skipping CI release job (Mac cut-release primary)."
+              echo "Release v${VER} has all five CLI artifacts, checksums.txt, telemetry-contract.txt, sbom.json, and package manifests; skipping CI release job (Mac cut-release primary)."
               echo "SKIP_RELEASE=1" >> "$GITHUB_ENV"
               exit 0
             fi
-            echo "Release v${VER} incomplete (checksums=${has_checksums} darwin_amd64=${has_darwin_amd64} darwin_arm64=${has_darwin_arm64} linux_amd64=${has_linux_amd64} linux_arm64=${has_linux_arm64} windows_amd64=${has_windows_amd64} sbom=${has_sbom} homebrew=${has_homebrew} npm=${has_npm} scoop=${has_scoop} winget=${has_winget}); running CI release."
+            echo "Release v${VER} incomplete (checksums=${has_checksums} telemetry_contract=${has_telemetry_contract} telemetry_enabled=${has_telemetry_enabled} darwin_amd64=${has_darwin_amd64} darwin_arm64=${has_darwin_arm64} linux_amd64=${has_linux_amd64} linux_arm64=${has_linux_arm64} windows_amd64=${has_windows_amd64} sbom=${has_sbom} homebrew=${has_homebrew} npm=${has_npm} scoop=${has_scoop} winget=${has_winget}); running CI release."
           fi
           echo "SKIP_RELEASE=0" >> "$GITHUB_ENV"
 
@@ -220,6 +235,7 @@ jobs:
             dist/ryk-v*.tar.gz
             dist/ryk-v*.zip
             dist/checksums.txt
+            dist/telemetry-contract.txt
             dist/sbom.json
             dist/release-manifest.json
             dist/package-manifests/**
@@ -251,6 +267,7 @@ jobs:
             dist/ryk-v*.tar.gz
             dist/ryk-v*.zip
             dist/checksums.txt
+            dist/telemetry-contract.txt
             dist/sbom.json
             dist/release-manifest.json
             dist/package-manifests/homebrew/Formula/ryk.rb

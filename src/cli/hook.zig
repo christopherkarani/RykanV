@@ -12,6 +12,7 @@ const shell_eval = @import("shell_eval.zig");
 const shell_engine = @import("../shell_engine/mod.zig");
 const rust_visibility = @import("rust_visibility.zig");
 const feed_writer = @import("feed_writer.zig");
+const telemetry = @import("../telemetry.zig");
 const file_policy_path = @import("file_policy_path.zig");
 const fm_steward_client = @import("fm_steward_client.zig");
 const grok_deny_reason = @import("grok_deny_reason.zig");
@@ -350,6 +351,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
             return try emitPreEvalFailClosed(
                 allocator,
                 host,
+                event,
                 stdout,
                 stderr,
                 "hook",
@@ -373,6 +375,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
             return try emitPreEvalFailClosed(
                 allocator,
                 host,
+                event,
                 stdout,
                 stderr,
                 "hook",
@@ -390,6 +393,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
             return try emitPreEvalFailClosed(
                 allocator,
                 host,
+                event,
                 stdout,
                 stderr,
                 "hook",
@@ -409,6 +413,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
             return try emitPreEvalFailClosed(
                 allocator,
                 host,
+                event,
                 stdout,
                 stderr,
                 "hook",
@@ -431,6 +436,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
                 return try emitPreEvalFailClosed(
                     allocator,
                     host,
+                    event,
                     stdout,
                     stderr,
                     "hook",
@@ -449,6 +455,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
                 return try emitPreEvalFailClosed(
                     allocator,
                     host,
+                    event,
                     stdout,
                     stderr,
                     "hook",
@@ -474,6 +481,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
                 return try emitPreEvalFailClosed(
                     allocator,
                     host,
+                    event,
                     stdout,
                     stderr,
                     "hook",
@@ -495,6 +503,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
 
         var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "OpenCode event acknowledged by ryk.", &redactions, &limitations);
         defer result.deinit(allocator);
+        telemetry.recordSession(@tagName(host), @tagName(event), "success");
         try writeHookResponse(stdout, result);
         return exit_codes.success;
     }
@@ -508,6 +517,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
 
         var result = try makeInformationalResponse(allocator, .allow, .low, "session", "informational event", "OpenClaw event acknowledged by ryk.", &redactions, &limitations);
         defer result.deinit(allocator);
+        telemetry.recordSession(@tagName(host), @tagName(event), "success");
         try writeHookResponse(stdout, result);
         return exit_codes.success;
     }
@@ -530,6 +540,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
         defer result.deinit(allocator);
         if (std.mem.eql(u8, request_event, "subagent_stop"))
             recordHermesHookActivity(io, allocator, root, request_event, hook_payload, result);
+        telemetry.recordSession(@tagName(host), @tagName(event), "success");
         try writeHookResponse(stdout, result);
         return exit_codes.success;
     }
@@ -540,6 +551,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
             return try emitPreEvalFailClosed(
                 allocator,
                 host,
+                event,
                 stdout,
                 stderr,
                 "hook",
@@ -558,6 +570,7 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
             return try emitPreEvalFailClosed(
                 allocator,
                 host,
+                event,
                 stdout,
                 stderr,
                 "hook",
@@ -569,6 +582,23 @@ fn hookCommand(io: std.Io, host: Host, event: Event, original_event_name: []cons
         return exit_codes.general;
     };
     defer result.deinit(allocator);
+
+    telemetry.recordEnforcement(
+        "hook",
+        @tagName(host),
+        result.decision.toString(),
+        @tagName(result.risk),
+        result.category,
+        loaded.mode().toString(),
+    );
+    telemetry.recordSession(
+        @tagName(host),
+        @tagName(event),
+        switch (result.decision) {
+            .block, .ask, .err => "blocked",
+            else => "success",
+        },
+    );
 
     if (host == .hermes) recordHermesHookActivity(io, allocator, root, request_event, hook_payload, result);
 
@@ -732,12 +762,16 @@ fn shouldFailClosedOnPreEval(host: Host, event: Event) bool {
 fn emitPreEvalFailClosed(
     allocator: std.mem.Allocator,
     host: Host,
+    event: Event,
     stdout: anytype,
     stderr: anytype,
     category: []const u8,
     reason: []const u8,
     message: []const u8,
 ) !u8 {
+    telemetry.recordEnforcement("hook", @tagName(host), "deny", "unknown", category, "unknown");
+    telemetry.recordReliability("hook", "hook_failure", "hook");
+    telemetry.recordSession(@tagName(host), @tagName(event), "blocked");
     var redactions: std.ArrayList(RedactionEntry) = .empty;
     var limitations: std.ArrayList([]const u8) = .empty;
     try limitations.append(allocator, try allocator.dupe(u8, "Hook enforcement is additive; does not replace ryk run supervision."));
@@ -1449,6 +1483,7 @@ fn fmShellContext(shell_cmd: []const u8, opts: HookShellFmOpts) shell_eval.FmShe
         .client = opts.client,
         .disable_fm = opts.disable_fm,
         .timeout_ms = opts.timeout_ms,
+        .telemetry_source = "hook",
     };
 }
 
@@ -3879,6 +3914,7 @@ test "hook pre-eval fail-closed Codex emits sentinel and exit 2" {
     const code = try emitPreEvalFailClosed(
         allocator,
         .codex,
+        .PreToolUse,
         &stdout_writer,
         &stderr_writer,
         "hook",
@@ -3901,6 +3937,7 @@ test "hook pre-eval fail-closed Grok emits native deny JSON reason and exit 2" {
     const code = try emitPreEvalFailClosed(
         allocator,
         .grok,
+        .PreToolUse,
         &stdout_writer,
         &stderr_writer,
         "hook",
@@ -4040,6 +4077,7 @@ test "hook pre-eval fail-closed Claude emits block JSON on stdout" {
     const code = try emitPreEvalFailClosed(
         allocator,
         .claude,
+        .PermissionRequest,
         &stdout_writer,
         &stderr_writer,
         "hook",

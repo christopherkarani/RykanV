@@ -13,7 +13,7 @@
 - Coding agents: read `Agents.md` / `AGENTS.md` → **Verification gates** (path→gate matrix, pitfalls).
 - Keep changes scoped to the active phase.
 - Do not add dependencies without documenting them in `docs/dev/dependencies.md`.
-- Do not add SaaS, telemetry, billing, monetization, cloud dashboards, or model-provider integrations unless a future phase explicitly requires them.
+- Do not add SaaS, telemetry, billing, monetization, cloud dashboards, or model-provider integrations without explicit product authorization. The current release-build telemetry contract is an authorized exception; future hosted services still require phase approval.
 
 ## Security-sensitive Work
 
