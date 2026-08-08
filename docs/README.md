@@ -6,6 +6,7 @@ The docs describe the current CLI and its limits. When a platform detail matters
 
 - [Install](install.md): source builds, release archives, package managers, and platform notes.
 - [Quickstart](quickstart.md): create a policy, launch an agent, inspect a session, and stop protection.
+- [CLI reference](cli-reference.md): verified commands, output contracts, exit statuses, and integration boundaries.
 - [Commands](commands.md): command guard, shims, session grades, and known bypasses.
 - [Compatibility](compatibility.md): protection grades and the Linux, macOS, and Windows matrix.
 - [Threat model](threat-model.md): assets, trust boundaries, and non-goals.
