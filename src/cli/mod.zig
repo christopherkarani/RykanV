@@ -544,7 +544,7 @@ fn runWithCwdUsing(
     if (std.mem.eql(u8, command, "disable")) return disable.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "uninstall")) return uninstall.command(io, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "update")) return update.command(io, argv[1..], stdout, stderr);
-    if (std.mem.eql(u8, command, "feedback")) return feedback.command(io, argv[1..], stdout, stderr);
+    if (std.mem.eql(u8, command, "feedback")) return feedback.command(io, environ_map, argv[1..], stdout, stderr);
     if (std.mem.eql(u8, command, "shutdown")) return shutdown.command(io, argv[1..], stdout, stderr);
 
     // Host launch aliases after real ryk commands (ryk wins on name collision).

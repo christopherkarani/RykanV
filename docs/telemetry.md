@@ -51,7 +51,7 @@ Lifecycle-specific fields are also fixed and allowlisted:
 | `ryk_activation` | `host` | First successful protected `ryk run` after the local telemetry installation state is created; host is a fixed enum |
 | `ryk_setup_completed` | `mode` | Successful public `ryk start`, split into `auto` or `interactive` |
 | `ryk_setup_failed` | `mode` | Failed public `ryk start`, split into `auto` or `interactive` |
-| `ryk_feedback_submitted` | `category` | User-selected fixed category: `bug`, `false_positive`, `false_negative`, `missing_integration`, or `confusing` |
+| `ryk_feedback_submitted` | `category` | User-selected fixed category: `bug`, `false_positive`, `false_negative`, `missing_integration`, or `confusing`; `ryk feedback` reports when local telemetry is unavailable or disabled |
 | `ryk_update_completed` | `channel`, `from_version`, `to_version`, `verification` | Official installer completed and the on-PATH version was verified |
 | `ryk_update_failed` | `channel`, `stage` | Update failure at `resolve`, `parse`, `compare`, `channel`, `confirmation`, `installer`, or `verify`, including unverified installs |
 

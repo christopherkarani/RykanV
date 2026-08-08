@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const core = @import("ryk_core").core;
 const contract = @import("telemetry_contract.zig");
+const product = @import("telemetry_product.zig");
 const env_util = @import("env_util.zig");
 
 pub const state_file_name = "telemetry.json";
@@ -155,10 +156,10 @@ pub fn setEnabled(
         loaded.state.installation_id = null;
         loaded.state.activation_recorded = false;
     }
+    if (!enabled) try writeQueue(io, allocator, &paths, &.{});
     const body = try renderState(allocator, &loaded.state);
     defer allocator.free(body);
     try writeAtomic(io, allocator, paths.state, body);
-    if (!enabled) try writeQueue(io, allocator, &paths, &.{});
 }
 
 pub fn ensureInstallationId(
@@ -208,8 +209,10 @@ pub fn appendEvent(
         allocator.free(dropped);
     }
     const copy = try allocator.dupe(u8, event);
-    errdefer allocator.free(copy);
-    try queue.items.append(allocator, copy);
+    queue.items.append(allocator, copy) catch |err| {
+        allocator.free(copy);
+        return err;
+    };
     try writeQueue(io, allocator, &paths, queue.items.items);
 }
 
@@ -240,9 +243,19 @@ pub fn appendActivationEvent(
         const dropped = queue.items.orderedRemove(0);
         allocator.free(dropped);
     }
+    for (queue.items.items) |queued| {
+        if (!sameActivationInstallation(allocator, queued, event)) continue;
+        loaded.state.activation_recorded = true;
+        const body = try renderState(allocator, &loaded.state);
+        defer allocator.free(body);
+        try writeAtomic(io, allocator, paths.state, body);
+        return false;
+    }
     const copy = try allocator.dupe(u8, event);
-    errdefer allocator.free(copy);
-    try queue.items.append(allocator, copy);
+    queue.items.append(allocator, copy) catch |err| {
+        allocator.free(copy);
+        return err;
+    };
     try writeQueue(io, allocator, &paths, queue.items.items);
 
     loaded.state.activation_recorded = true;
@@ -250,6 +263,27 @@ pub fn appendActivationEvent(
     defer allocator.free(body);
     try writeAtomic(io, allocator, paths.state, body);
     return true;
+}
+
+fn sameActivationInstallation(allocator: std.mem.Allocator, queued: []const u8, event: []const u8) bool {
+    var queued_parsed = std.json.parseFromSlice(std.json.Value, allocator, queued, .{}) catch return false;
+    defer queued_parsed.deinit();
+    var event_parsed = std.json.parseFromSlice(std.json.Value, allocator, event, .{}) catch return false;
+    defer event_parsed.deinit();
+    const queued_id = activationInstallationId(queued_parsed.value) orelse return false;
+    const event_id = activationInstallationId(event_parsed.value) orelse return false;
+    return std.mem.eql(u8, queued_id, event_id);
+}
+
+fn activationInstallationId(value: std.json.Value) ?[]const u8 {
+    if (value != .object or !product.validQueuedEvent(value)) return null;
+    const root = value.object;
+    const event_name = root.get("event") orelse return null;
+    if (event_name != .string or !std.mem.eql(u8, event_name.string, product.activation_event_name)) return null;
+    const properties = root.get("properties") orelse return null;
+    if (properties != .object) return null;
+    const distinct_id = properties.object.get("distinct_id") orelse return null;
+    return if (distinct_id == .string) distinct_id.string else null;
 }
 
 pub fn queueCount(allocator: std.mem.Allocator, io: std.Io, environ_map: *const std.process.Environ.Map) !usize {
@@ -348,8 +382,8 @@ pub fn parseState(allocator: std.mem.Allocator, text: []const u8) !State {
         },
         else => return error.InvalidTelemetryState,
     };
+    errdefer if (installation_id) |id| allocator.free(id);
     if (!enabled and installation_id != null) {
-        allocator.free(installation_id.?);
         return error.InvalidTelemetryState;
     }
     var activation_recorded = false;
@@ -360,7 +394,6 @@ pub fn parseState(allocator: std.mem.Allocator, text: []const u8) !State {
         };
     }
     if (!enabled and activation_recorded) {
-        if (installation_id) |id| allocator.free(id);
         return error.InvalidTelemetryState;
     }
     return .{ .enabled = enabled, .installation_id = installation_id, .activation_recorded = activation_recorded };

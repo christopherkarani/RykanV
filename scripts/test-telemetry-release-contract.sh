@@ -128,8 +128,14 @@ disabled_json="$(ryk telemetry status --json)"
 printf '%s\n' "$disabled_json" | grep -q '"enabled":false' || fail "disable did not persist"
 printf '%s\n' "$disabled_json" | grep -q '"queued_events":0' || fail "disable did not clear queued events"
 printf '%s\n' "$disabled_json" | grep -q '"installation_id_present":false' || fail "disable did not clear installation id"
+if ryk feedback bug >/dev/null 2>/dev/null; then
+  fail "feedback claimed delivery while telemetry was disabled"
+fi
 
 hard_disabled_json="$(env "XDG_CONFIG_HOME=$CONFIG" RYK_NO_TELEMETRY=1 "$PREFIX/bin/ryk" telemetry status --json)"
 printf '%s\n' "$hard_disabled_json" | grep -q '"enabled":false' || fail "hard disable did not override persisted state"
+if env "XDG_CONFIG_HOME=$CONFIG" RYK_NO_TELEMETRY=1 "$PREFIX/bin/ryk" feedback bug >/dev/null 2>/dev/null; then
+  fail "feedback claimed delivery under hard disable"
+fi
 
 printf 'test-telemetry-release-contract: passed\n'

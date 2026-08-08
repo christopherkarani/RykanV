@@ -80,6 +80,20 @@ pub fn sanitizeVerification(value: []const u8) []const u8 {
     return "unverified";
 }
 
+/// Keep update dimensions numeric and stable even when a caller supplies a
+/// prerelease/build suffix. The suffix is intentionally not sent to PostHog.
+pub fn canonicalVersion(value: []const u8, destination: *[32]u8) ?[]const u8 {
+    const without_v = if (value.len > 0 and (value[0] == 'v' or value[0] == 'V')) value[1..] else value;
+    const base_end = std.mem.indexOfAny(u8, without_v, "-+") orelse without_v.len;
+    const base = without_v[0..base_end];
+    var parts = std.mem.splitScalar(u8, base, '.');
+    const major = parseVersionComponent(parts.next() orelse return null) orelse return null;
+    const minor = parseVersionComponent(parts.next() orelse return null) orelse return null;
+    const patch = parseVersionComponent(parts.next() orelse return null) orelse return null;
+    if (parts.next() != null) return null;
+    return std.fmt.bufPrint(destination, "{d}.{d}.{d}", .{ major, minor, patch }) catch null;
+}
+
 pub fn valid(event: Event) bool {
     return switch (event) {
         .activation => |value| validHost(value.host),
@@ -317,26 +331,15 @@ fn validInstallationId(value: []const u8) bool {
 }
 
 fn validVersionToken(value: []const u8) bool {
-    if (value.len == 0 or value.len > 64) return false;
-    var component: usize = 0;
-    var saw_digit = false;
-    var suffix = false;
-    var saw_suffix = false;
-    for (value) |byte| {
-        if (suffix) {
-            if (!(std.ascii.isAlphanumeric(byte) or byte == '.' or byte == '-' or byte == '_' or byte == '+')) return false;
-            saw_suffix = true;
-        } else if (std.ascii.isDigit(byte)) {
-            saw_digit = true;
-        } else if (byte == '.' and component < 2 and saw_digit) {
-            component += 1;
-            saw_digit = false;
-        } else if ((byte == '-' or byte == '+') and component == 2 and saw_digit) {
-            suffix = true;
-            saw_digit = false;
-        } else return false;
-    }
-    return component == 2 and (saw_digit or saw_suffix);
+    var canonical: [32]u8 = undefined;
+    const normalized = canonicalVersion(value, &canonical) orelse return false;
+    return std.mem.eql(u8, normalized, value);
+}
+
+fn parseVersionComponent(value: []const u8) ?u32 {
+    if (value.len == 0) return null;
+    for (value) |byte| if (!std.ascii.isDigit(byte)) return null;
+    return std.fmt.parseInt(u32, value, 10) catch null;
 }
 
 fn validTimestamp(value: []const u8) bool {
@@ -410,6 +413,14 @@ test "product event parser only accepts fixed dimensions" {
     const invalid_feedback = try parseArgs(&.{ "feedback_submitted", "free text" });
     try std.testing.expect(!valid(invalid_feedback));
     try std.testing.expectEqual(@as(?usize, 5), argCount("update_completed"));
+    var canonical: [32]u8 = undefined;
+    try std.testing.expectEqualStrings("1.2.3", canonicalVersion("1.2.3-sk_live_123", &canonical).?);
+    try std.testing.expect(!valid(.{ .update_completed = .{
+        .channel = "curl_installer",
+        .from_version = "1.2.3-sk_live_123",
+        .to_version = "1.2.4",
+        .verification = "verified",
+    } }));
 }
 
 test "all product event names render and validate" {

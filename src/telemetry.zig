@@ -14,6 +14,8 @@ pub const schema_version = contract.schema_version;
 pub const posthog_batch_endpoint = contract.posthog_batch_endpoint;
 pub const max_queue_events = contract.max_queue_events;
 
+pub const FeedbackStatus = enum { accepted, disabled, unavailable };
+
 const StateSource = store.StateSource;
 const State = store.State;
 const LoadedState = store.LoadedState;
@@ -23,7 +25,6 @@ const validInvocation = contract.validInvocation;
 const validCommand = contract.validCommand;
 const validOutcome = contract.validOutcome;
 const validQueuedEvent = contract.validQueuedEvent;
-const validVersionToken = contract.validVersionToken;
 const validTimestamp = contract.validTimestamp;
 const validInstallationId = contract.validInstallationId;
 const renderEvent = contract.renderEvent;
@@ -383,19 +384,33 @@ pub fn recordSetupFailed(auto_mode: bool) void {
     pending_summaries.addProduct(.{ .setup_failed = .{ .mode = if (auto_mode) "auto" else "interactive" } });
 }
 
-pub fn recordFeedback(category: []const u8) void {
-    if (!transportConfigured()) return;
+pub fn recordFeedback(
+    io: std.Io,
+    environ_map: *const std.process.Environ.Map,
+    allocator: std.mem.Allocator,
+    category: []const u8,
+) FeedbackStatus {
+    if (!transportConfigured() or hardDisabled(environ_map)) return .disabled;
+    var loaded = loadEffectiveState(allocator, io, environ_map) catch return .unavailable;
+    defer loaded.deinit(allocator);
+    if (!loaded.state.enabled) return .disabled;
     if (product.sanitizeFeedbackCategory(category)) |safe_category| {
         pending_summaries.addProduct(.{ .feedback_submitted = .{ .category = safe_category } });
+        return .accepted;
     }
+    return .unavailable;
 }
 
 pub fn recordUpdateCompleted(channel: []const u8, from_version: []const u8, to_version: []const u8, verification: []const u8) void {
-    if (!transportConfigured() or !validVersionToken(from_version) or !validVersionToken(to_version)) return;
+    if (!transportConfigured()) return;
+    var from_buffer: [32]u8 = undefined;
+    var to_buffer: [32]u8 = undefined;
+    const safe_from = product.canonicalVersion(from_version, &from_buffer) orelse return;
+    const safe_to = product.canonicalVersion(to_version, &to_buffer) orelse return;
     pending_summaries.addProduct(.{ .update_completed = .{
         .channel = product.sanitizeChannel(channel),
-        .from_version = from_version,
-        .to_version = to_version,
+        .from_version = safe_from,
+        .to_version = safe_to,
         .verification = product.sanitizeVerification(verification),
     } });
 }
@@ -1323,6 +1338,32 @@ test "activation is persisted and appended only once" {
     var loaded = try store.readState(std.testing.allocator, std.testing.io, &paths);
     defer loaded.deinit(std.testing.allocator);
     try std.testing.expect(loaded.state.activation_recorded);
+}
+
+test "activation queue identity repairs an unmarked state without duplicating" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    var environ_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer environ_map.deinit();
+    try environ_map.put("XDG_CONFIG_HOME", root);
+
+    const event = try product.render(std.testing.allocator, std.testing.io, "ryk_0123456789abcdef0123456789abcdef", .{
+        .activation = .{ .host = "none" },
+    });
+    defer std.testing.allocator.free(event);
+
+    try store.appendEvent(std.testing.io, &environ_map, std.testing.allocator, event);
+    try std.testing.expect(!(try store.appendActivationEvent(std.testing.io, &environ_map, std.testing.allocator, event)));
+    try std.testing.expectEqual(@as(usize, 1), try queueCount(std.testing.allocator, std.testing.io, &environ_map));
+}
+
+test "malformed activation marker frees an owned installation id" {
+    const state =
+        "{\"schema_version\":1,\"enabled\":true,\"installation_id\":\"ryk_0123456789abcdef0123456789abcdef\",\"activation_recorded\":\"yes\"}";
+    try std.testing.expectError(error.InvalidTelemetryState, store.parseState(std.testing.allocator, state));
 }
 
 test "state rendering uses the bounded persisted schema" {
