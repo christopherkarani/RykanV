@@ -175,6 +175,7 @@ write_telemetry_contract() {
       printf 'transport=enabled\n'
     fi
     printf 'endpoint=%s\n' 'https://us.i.posthog.com/batch/'
+    printf 'lifecycle_events=%s\n' 'ryk_activation,ryk_setup_completed,ryk_setup_failed,ryk_feedback_submitted,ryk_update_completed,ryk_update_failed'
   } >"$output"
   printf 'Wrote %s\n' "$output"
 }
