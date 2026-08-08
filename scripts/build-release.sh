@@ -23,7 +23,7 @@ COMMIT="${RYK_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || printf unknown
 BUILD_DATE="${RYK_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 DIST_DIR="${RYK_DIST_DIR:-dist}"
 ZIG_OPTIMIZE="${RYK_ZIG_OPTIMIZE:-ReleaseSafe}"
-RELEASE_PRODUCT="${RYK_RELEASE_PRODUCT:-all}"
+RELEASE_PRODUCT="${RYK_RELEASE_PRODUCT:-curl}"
 CLI_ARTIFACT_DIR="${RYK_CLI_ARTIFACT_DIR:-}"
 SIGNING_STATUS="not_configured"
 TELEMETRY_BUILD_DISABLED="${RYK_TELEMETRY_BUILD_DISABLED:-0}"
@@ -67,7 +67,7 @@ windows amd64 x86_64-windows zip ryk.exe
 
 selected_targets() {
   case "$RELEASE_PRODUCT" in
-    all | cli)
+    all | cli | curl)
       printf '%s\n' "$CLI_TARGETS"
       ;;
     host)
@@ -81,7 +81,7 @@ selected_targets() {
       esac
       ;;
     *)
-      printf 'build-release: unsupported RELEASE_PRODUCT=%s (expected all, cli, or host)\n' "$RELEASE_PRODUCT" >&2
+      printf 'build-release: unsupported RELEASE_PRODUCT=%s (expected curl, cli, all, or host)\n' "$RELEASE_PRODUCT" >&2
       exit 1
       ;;
   esac
@@ -89,7 +89,7 @@ selected_targets() {
 
 target_platforms_json() {
   case "$RELEASE_PRODUCT" in
-    all | cli) printf '["darwin-amd64", "darwin-arm64", "linux-amd64", "linux-arm64", "windows-amd64"]' ;;
+    all | cli | curl) printf '["darwin-amd64", "darwin-arm64", "linux-amd64", "linux-arm64", "windows-amd64"]' ;;
     host) printf '["%s-%s"]' "$HOST_OS" "$HOST_ARCH" ;;
     *) printf '[]' ;;
   esac
@@ -113,7 +113,7 @@ copy_cli_payload() {
   cp README.md LICENSE SECURITY.md CONTRIBUTING.md "$root/"
   cp -R docs policies schemas fixtures examples packages packaging scripts integrations "$root/"
   # Runtime onboarding copies these TypeScript files directly into Pi. Keep the
-  # package source in the archive so curl and Homebrew never need npm.
+  # package source in the archive so curl installs never need npm.
   cp -R ryk-pi "$root/"
   if [ -d "ryk-dashboard-ui/dist" ]; then
     mkdir -p "$root/ryk-dashboard-ui"
@@ -359,7 +359,7 @@ else
 fi
 
 ./scripts/generate-checksums.sh "$DIST_DIR"
-if [ "$RELEASE_PRODUCT" != "host" ]; then
+if [ "$RELEASE_PRODUCT" = "all" ]; then
   RYK_DIST_DIR="$DIST_DIR" ./scripts/render-package-manifests.sh
 fi
 RYK_RELEASE_PRODUCT="$RELEASE_PRODUCT" ./scripts/generate-sbom.sh "$DIST_DIR"

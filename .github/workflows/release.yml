@@ -24,6 +24,7 @@ jobs:
       RYK_VERSION: ${{ github.event.inputs.version || github.ref_name }}
       RYK_POSTHOG_PROJECT_TOKEN: ${{ secrets.RYK_POSTHOG_PROJECT_TOKEN }}
       RYK_RELEASE_LIVE: "1"
+      RYK_RELEASE_PRODUCT: curl
     steps:
       - uses: actions/checkout@v4
 
@@ -49,8 +50,8 @@ jobs:
           echo "RYK_VERSION=$version" >> "$GITHUB_ENV"
 
       # Mac cut-release (scripts/cut-release.sh) is the primary publisher. When a
-      # v* tag is pushed after assets already exist (checksums.txt and the
-      # telemetry contract on the release),
+      # v* tag is pushed after the complete curl installer asset set already
+      # exists (checksums.txt and the telemetry contract on the release),
       # skip the full CI rebuild so we do not double-upload or race the Mac cutter.
       # workflow_dispatch remains a manual backup path and always runs.
       - name: Resolve skip flag
@@ -74,30 +75,24 @@ jobs:
             has_telemetry_contract=0
             has_telemetry_enabled=0
             has_sbom=0
+            has_release_manifest=0
             has_darwin_amd64=0
             has_darwin_arm64=0
             has_linux_amd64=0
             has_linux_arm64=0
             has_windows_amd64=0
-            has_homebrew=0
-            has_npm=0
-            has_scoop=0
-            has_winget=0
             while IFS= read -r name; do
               [ -n "$name" ] || continue
               case "$name" in
                 checksums.txt) has_checksums=1 ;;
                 telemetry-contract.txt) has_telemetry_contract=1 ;;
                 sbom.json) has_sbom=1 ;;
+                release-manifest.json) has_release_manifest=1 ;;
                 "ryk-v${VER}-darwin-amd64.tar.gz") has_darwin_amd64=1 ;;
                 "ryk-v${VER}-darwin-arm64.tar.gz") has_darwin_arm64=1 ;;
                 "ryk-v${VER}-linux-amd64.tar.gz") has_linux_amd64=1 ;;
                 "ryk-v${VER}-linux-arm64.tar.gz") has_linux_arm64=1 ;;
                 "ryk-v${VER}-windows-amd64.zip") has_windows_amd64=1 ;;
-                ryk.rb) has_homebrew=1 ;;
-                package.json) has_npm=1 ;;
-                ryk.json) has_scoop=1 ;;
-                ryk.yaml) has_winget=1 ;;
               esac
             done <<< "$assets"
             if [ "$has_telemetry_contract" = 1 ]; then
@@ -109,16 +104,15 @@ jobs:
               fi
               rm -rf "$contract_dir"
             fi
-            if [ "$has_checksums" = 1 ] && [ "$has_telemetry_contract" = 1 ] && [ "$has_telemetry_enabled" = 1 ] && [ "$has_sbom" = 1 ] && \
+            if [ "$has_checksums" = 1 ] && [ "$has_telemetry_contract" = 1 ] && [ "$has_telemetry_enabled" = 1 ] && [ "$has_sbom" = 1 ] && [ "$has_release_manifest" = 1 ] && \
               [ "$has_darwin_amd64" = 1 ] && [ "$has_darwin_arm64" = 1 ] && \
               [ "$has_linux_amd64" = 1 ] && [ "$has_linux_arm64" = 1 ] && \
-              [ "$has_windows_amd64" = 1 ] && [ "$has_homebrew" = 1 ] && \
-              [ "$has_npm" = 1 ] && [ "$has_scoop" = 1 ] && [ "$has_winget" = 1 ]; then
-              echo "Release v${VER} has all five CLI artifacts, checksums.txt, telemetry-contract.txt, sbom.json, and package manifests; skipping CI release job (Mac cut-release primary)."
+              [ "$has_windows_amd64" = 1 ]; then
+              echo "Release v${VER} has the complete curl installer artifact set; skipping CI release job (Mac cut-release primary)."
               echo "SKIP_RELEASE=1" >> "$GITHUB_ENV"
               exit 0
             fi
-            echo "Release v${VER} incomplete (checksums=${has_checksums} telemetry_contract=${has_telemetry_contract} telemetry_enabled=${has_telemetry_enabled} darwin_amd64=${has_darwin_amd64} darwin_arm64=${has_darwin_arm64} linux_amd64=${has_linux_amd64} linux_arm64=${has_linux_arm64} windows_amd64=${has_windows_amd64} sbom=${has_sbom} homebrew=${has_homebrew} npm=${has_npm} scoop=${has_scoop} winget=${has_winget}); running CI release."
+            echo "Release v${VER} incomplete (checksums=${has_checksums} telemetry_contract=${has_telemetry_contract} telemetry_enabled=${has_telemetry_enabled} sbom=${has_sbom} release_manifest=${has_release_manifest} darwin_amd64=${has_darwin_amd64} darwin_arm64=${has_darwin_arm64} linux_amd64=${has_linux_amd64} linux_arm64=${has_linux_arm64} windows_amd64=${has_windows_amd64}); running CI release."
           fi
           echo "SKIP_RELEASE=0" >> "$GITHUB_ENV"
 
@@ -179,46 +173,11 @@ jobs:
           RYK_SIGNING_ENABLED: ${{ github.event.inputs.signing_enabled || '0' }}
           RYK_SIGNING_COMMAND: ${{ secrets.RYK_SIGNING_COMMAND }}
         run: RYK_VERSION="$RYK_VERSION" RYK_COMMIT="$RYK_COMMIT" RYK_BUILD_DATE="$RYK_BUILD_DATE" ./scripts/build-release.sh
-      - name: Package plugins
-        if: env.SKIP_RELEASE != '1'
-        shell: bash
-        run: ./scripts/package-plugins.sh
-      - name: Verify plugin artifacts
-        if: env.SKIP_RELEASE != '1'
-        shell: bash
-        run: |
-          ls -la dist/plugins/
-          cat dist/plugins/ryk-plugin-checksums.txt
-      - name: Verify plugin checksums
-        if: env.SKIP_RELEASE != '1'
-        shell: bash
-        run: |
-          cd dist/plugins && shasum -a 256 -c ryk-plugin-checksums.txt
-      - name: Secret scan over plugin artifacts
-        if: env.SKIP_RELEASE != '1'
-        shell: bash
-        run: |
-          SCAN_ISSUES=0
-          for file in dist/plugins/*.zip; do
-            [ -f "$file" ] || continue
-            tmpdir="$(mktemp -d)"
-            unzip -q "$file" -d "$tmpdir"
-            if grep -riE "(api_key|apikey|secret|token|password|private_key|privkey)[[:space:]]*[:=][[:space:]]*[\"']?[a-zA-Z0-9_/-]{16,}" "$tmpdir" 2>/dev/null | grep -v "fake_" | grep -v "example" | grep -v "placeholder" | grep -v "your_"; then
-              echo "WARNING: Potential secret pattern in $file" >&2
-              SCAN_ISSUES=$((SCAN_ISSUES + 1))
-            fi
-            rm -rf "$tmpdir"
-          done
-          if [ "$SCAN_ISSUES" -gt 0 ]; then
-            echo "Secret scan found $SCAN_ISSUES potential issues. Review artifacts before release." >&2
-            exit 1
-          fi
-          echo "Secret scan passed."
       - name: Verify checksums
         if: env.SKIP_RELEASE != '1'
         shell: bash
         run: |
-          ./scripts/verify-release.sh dist
+          RYK_RELEASE_PRODUCT=curl ./scripts/verify-release.sh dist
       - name: Installed layout smoke
         if: env.SKIP_RELEASE != '1'
         shell: bash
@@ -238,9 +197,6 @@ jobs:
             dist/telemetry-contract.txt
             dist/sbom.json
             dist/release-manifest.json
-            dist/package-manifests/**
-            dist/plugins/*.zip
-            dist/plugins/ryk-plugin-checksums.txt
 
       # Attach all dist/ assets (including checksums.txt) to the GitHub Release.
       # Without this step the artifacts only land in the workflow run and never
@@ -270,12 +226,6 @@ jobs:
             dist/telemetry-contract.txt
             dist/sbom.json
             dist/release-manifest.json
-            dist/package-manifests/homebrew/Formula/ryk.rb
-            dist/package-manifests/npm/package.json
-            dist/package-manifests/scoop/ryk.json
-            dist/package-manifests/winget/ryk.yaml
-            dist/plugins/*.zip
-            dist/plugins/ryk-plugin-checksums.txt
           )
           gh release upload "v${RYK_VERSION}" \
             --repo "$GITHUB_REPOSITORY" \

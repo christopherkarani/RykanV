@@ -62,7 +62,7 @@ EOF
 done
 
 RYK_CLI_ARTIFACT_DIR="$tmp_root/cli" \
-RYK_RELEASE_PRODUCT=all \
+RYK_RELEASE_PRODUCT=curl \
 RYK_DIST_DIR="$tmp_root/dist" \
 RYK_VERSION="$VERSION" \
 RYK_BUILD_DATE=2026-01-01T00:00:00Z \
@@ -87,20 +87,13 @@ printf '%s\n' "$tar_listing" | grep "/ryk-pi/extensions/parent_ask.ts$" >/dev/nu
 zip_listing="$(unzip -Z1 "$tmp_root/dist/ryk-v${VERSION}-windows-amd64.zip")"
 printf '%s\n' "$zip_listing" | grep "/bin/ryk.exe$" >/dev/null || fail "Windows archive is missing bin/ryk.exe"
 
-for manifest in \
-  "$tmp_root/dist/package-manifests/scoop/ryk.json" \
-  "$tmp_root/dist/package-manifests/winget/ryk.yaml"; do
-  [[ -s "$manifest" ]] || fail "release builder did not render $(basename "$manifest")"
-  ! grep -q 'PLACEHOLDER' "$manifest" || fail "rendered manifest contains PLACEHOLDER: $manifest"
-done
-grep -qF "\"version\": \"${VERSION}\"" "$tmp_root/dist/package-manifests/scoop/ryk.json" ||
-  fail "rendered Scoop manifest version does not match VERSION"
-grep -qF "PackageVersion: ${VERSION}" "$tmp_root/dist/package-manifests/winget/ryk.yaml" ||
-  fail "rendered Winget manifest version does not match VERSION"
+[[ ! -d "$tmp_root/dist/package-manifests" ]] ||
+  fail "curl release unexpectedly rendered package-manager manifests"
 
-RYK_RELEASE_PRODUCT=all "$REPO_ROOT/scripts/verify-release.sh" "$tmp_root/dist" >/dev/null
+RYK_RELEASE_PRODUCT=curl "$REPO_ROOT/scripts/verify-release.sh" "$tmp_root/dist" >/dev/null
 
 assert_absent scripts/build-release.sh 'orca-pi|DUAL_PUBLISH|legacy_cli_alias|install_primary_and_alias'
+assert_absent scripts/cut-release.sh 'publish-npm|publish-homebrew|skip-npm|homebrew-ryk|npm publish|npm whoami'
 assert_absent scripts/install.sh 'LEGACY_|/orca|probe_existing_orca|dual-publish|compatibility alias'
 assert_absent scripts/install.ps1 'legacyDestination|ryk/orca|legacyArtifact|dual-name'
 assert_absent scripts/install.ps1 'ryk start'

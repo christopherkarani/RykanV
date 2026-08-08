@@ -1,23 +1,16 @@
-# Packaging
+# Packaging inputs
 
-The canonical binary is `ryk`. Release artifacts use the form `ryk-v{version}-{os}-{arch}`.
+The canonical binary is `ryk`. Release artifacts use the form
+`ryk-v{version}-{os}-{arch}` and are published on GitHub for the checksum-
+verified curl installer.
 
-Package templates live under:
+The `packaging/` tree contains build and container inputs used by the release
+build. npm, Homebrew, Scoop, and WinGet are legacy templates and are not active
+distribution channels.
 
-- `homebrew/Formula/ryk.rb`
-- `scoop/ryk.json`
-- `winget/ryk.yaml`
-- `npm/package.json`
-- `docker/Dockerfile`
-
-The templates contain release-time placeholders until the build produces checksums. `scripts/build-release.sh` renders publishable manifests under `dist/package-manifests/`; `scripts/verify-release.sh` refuses missing or placeholder checksums.
-
-## Release path
-
-Use `scripts/cut-release.sh` for a full maintainer release. Read [`docs/dev/release.md`](../docs/dev/release.md) first.
+Use `scripts/cut-release.sh` for the supported release path. Read
+[`docs/dev/release.md`](../docs/dev/release.md) first.
 
 ```sh
-./scripts/cut-release.sh --bump patch --plan-only
-+```
-
-Do not publish `packaging/npm` or another template directory directly. Publish only rendered manifests after the release checks pass.
+./scripts/cut-release.sh --version X.Y.Z --plan-only
+```

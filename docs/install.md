@@ -29,28 +29,9 @@ $env:RYK_TELEMETRY_BUILD_DISABLED = "1"
 .\scripts\install.ps1 -Version 1.2.9 -ArtifactDir .\dist -InstallDir "$env:USERPROFILE\bin"
 ```
 
-`scripts/build-release.ps1` does not produce `release-manifest.json` or rendered package manifests. Use `scripts/build-release.sh` plus `scripts/verify-release.sh` for production release verification.
+`scripts/build-release.ps1` does not produce `release-manifest.json`. Use `scripts/build-release.sh` plus `scripts/verify-release.sh` for production release verification.
 
 Do not use an install-only path without verification. Download the archive, verify `dist/checksums.txt`, inspect the install script if using it, then install.
-
-## Homebrew
-
-Homebrew distribution uses the `christopherkarani/homebrew-ryk` tap and the GitHub Release archives from `christopherkarani/ryk`.
-
-Maintainer release flow:
-
-```sh
-RYK_POSTHOG_PROJECT_TOKEN="<release-project-token>" ./scripts/build-release.sh
-brew audit --strict --online dist/package-manifests/homebrew/Formula/ryk.rb
-brew install --build-from-source dist/package-manifests/homebrew/Formula/ryk.rb
-brew test dist/package-manifests/homebrew/Formula/ryk.rb
-```
-
-User install after the tap repository is published:
-
-```sh
-brew install christopherkarani/ryk/ryk
-```
 
 ## Manual Artifact Install
 
@@ -69,23 +50,24 @@ ryk update --check  # report only
 ryk update --yes    # non-interactive
 ```
 
-`ryk update` reuses the official installer (checksums + atomic replace). Homebrew/npm installs should use `brew upgrade ryk` / `npm update -g @rykan/ryk` instead (or `ryk update --force` to override).
+`ryk update` reuses the official curl installer (checksums + atomic replace). Use `ryk update --force` only when you intentionally want to override the normal release check.
 
 The installers print a step-based receipt (brand header, phases, activation hero). They honor `NO_COLOR` and `RYK_INSTALL_QUIET=1` (non-error silence; activation line still printed) and run the canonical `doctor --fix --from-install` setup door.
 
 Windows (`scripts/install.ps1`) shares the same core contracts (checksum verify, binary + runtime install, structured failures, quiet mode, activation handoff) with a smaller surface: it does not manage `PATH` (use your profile / user PATH) and does not soft-warn on a missing dashboard UI bundle.
 
-## Package Templates
+## Release channel
 
-Templates exist under `packaging/`:
+The supported install path is the checksum-verified curl installer:
 
-- Homebrew: `packaging/homebrew/Formula/ryk.rb`
-- Scoop: `packaging/scoop/ryk.json`
-- WinGet: `packaging/winget/ryk.yaml`
-- npm wrapper: `packaging/npm/package.json`
-- Docker: `packaging/docker/Dockerfile`
+```sh
+curl -fsSL https://rykanv.com/install | sh
+```
 
-They contain release-time placeholders until artifacts and checksums are generated.
+It downloads the matching GitHub Release archive, verifies `checksums.txt`,
+installs the CLI and runtime assets, and prints the activation command. The
+`packaging/` directory contains build and container inputs; it is not a user
+installation channel.
 
 ## macOS Notes
 
